@@ -49,10 +49,21 @@ static_assert(sizeof(ErosionPushVk) == 15 * 4, "push block must match erosion.co
 
 int dropletBatchSize(int n) { return std::clamp(n * n / 64, 1024, 8192); }   // as erosion_gpu.mm
 
-enum Kernel { kDroplets, kClamp, kApplyApplied, kThermal, kApply, kKernelCount };
+enum Kernel { kDroplets, kClamp, kApplyApplied, kThermal, kApply, kWFlux, kWWater, kWErode, kWTransport, kKernelCount };
+constexpr int kFirstWater = kWFlux;
 const char* kKernelFile[kKernelCount] = {"erosion_droplets.comp.spv", "erosion_clamp.comp.spv",
                                          "erosion_apply_applied.comp.spv", "erosion_thermal.comp.spv",
-                                         "erosion_apply.comp.spv"};
+                                         "erosion_apply.comp.spv", "erosion_w_flux.comp.spv", "erosion_w_water.comp.spv",
+                                         "erosion_w_erode.comp.spv", "erosion_w_transport.comp.spv"};
+
+// Mirrors the push block of erosion_water.comp (ADR-0123).
+struct WaterPushVk {
+    int32_t n;
+    int32_t parity;
+    float cellSize, dt, gravity, rain, capacity, dissolve, deposit, evaporate, seaLevel, minTilt, maxErodeDepth;
+};
+static_assert(sizeof(WaterPushVk) == 13 * 4, "push block must match erosion_water.comp");
+constexpr uint32_t kWaterBindings = 9;
 
 struct VkErosion {
     VkInstance instance = VK_NULL_HANDLE;
@@ -60,8 +71,8 @@ struct VkErosion {
     VkDevice device = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE;
     uint32_t queueFamily = 0;
-    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout pipeLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE, waterSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout pipeLayout = VK_NULL_HANDLE, waterPipeLayout = VK_NULL_HANDLE;
     VkPipeline pipes[kKernelCount] = {};
     VkCommandPool cmdPool = VK_NULL_HANDLE;
     VkDescriptorPool descPool = VK_NULL_HANDLE;
@@ -147,6 +158,26 @@ bool ensureReady() {
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcr;
     if (vkCreatePipelineLayout(g.device, &plci, nullptr, &g.pipeLayout) != VK_SUCCESS) return false;
+    {   // the water kernels' layout: eight storage buffers, their own push block
+        VkDescriptorSetLayoutBinding wb[kWaterBindings]{};
+        for (uint32_t i = 0; i < kWaterBindings; ++i) {
+            wb[i].binding = i;
+            wb[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wb[i].descriptorCount = 1;
+            wb[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo wl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        wl.bindingCount = kWaterBindings;
+        wl.pBindings = wb;
+        if (vkCreateDescriptorSetLayout(g.device, &wl, nullptr, &g.waterSetLayout) != VK_SUCCESS) return false;
+        VkPushConstantRange wpr{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(WaterPushVk)};
+        VkPipelineLayoutCreateInfo wp{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        wp.setLayoutCount = 1;
+        wp.pSetLayouts = &g.waterSetLayout;
+        wp.pushConstantRangeCount = 1;
+        wp.pPushConstantRanges = &wpr;
+        if (vkCreatePipelineLayout(g.device, &wp, nullptr, &g.waterPipeLayout) != VK_SUCCESS) return false;
+    }
 
     for (int k = 0; k < kKernelCount; ++k) {
         const std::vector<uint32_t> code = readSpirv(std::string(RT_VULKAN_SHADER_DIR) + "/" + kKernelFile[k]);
@@ -161,7 +192,7 @@ bool ensureReady() {
         cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
         cpci.stage.module = mod;
         cpci.stage.pName = "main";
-        cpci.layout = g.pipeLayout;
+        cpci.layout = k >= kFirstWater ? g.waterPipeLayout : g.pipeLayout;
         const VkResult r = vkCreateComputePipelines(g.device, VK_NULL_HANDLE, 1, &cpci, nullptr, &g.pipes[k]);
         vkDestroyShaderModule(g.device, mod, nullptr);
         if (r != VK_SUCCESS) return false;
@@ -170,10 +201,10 @@ bool ensureReady() {
     cpi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cpi.queueFamilyIndex = g.queueFamily;
     if (vkCreateCommandPool(g.device, &cpi, nullptr, &g.cmdPool) != VK_SUCCESS) return false;
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5};
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 + kWaterBindings};
     VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    dpci.maxSets = 1;
+    dpci.maxSets = 2;
     dpci.poolSizeCount = 1;
     dpci.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(g.device, &dpci, nullptr, &g.descPool) != VK_SUCCESS) return false;
@@ -299,9 +330,29 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     if (vkAllocateCommandBuffers(g.device, &cbai, &cmd) != VK_SUCCESS) return false;
     struct FreeCmd { VkDevice d; VkCommandPool p; VkCommandBuffer c; ~FreeCmd() { vkFreeCommandBuffers(d, p, 1, &c); } } freeCmd{g.device, g.cmdPool, cmd};
-    VkCommandBufferBeginInfo cbbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &cbbi);
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkFence fence = VK_NULL_HANDLE;
+    vkCreateFence(g.device, &fci, nullptr, &fence);
+    struct FreeFence { VkDevice d; VkFence f; ~FreeFence() { vkDestroyFence(d, f, nullptr); } } freeFence{g.device, fence};
+    // CHUNKED SUBMITS: a long bake (thousands of water steps) goes in pieces, each submitted and waited
+    // on before the next is recorded -- one multi-minute submit would stall the desktop sharing the GPU.
+    // Order is still data order: a chunk starts after the previous one finished.
+    auto begin = [&] {
+        vkResetCommandBuffer(cmd, 0);
+        VkCommandBufferBeginInfo cbbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &cbbi);
+    };
+    auto submit = [&] {
+        vkEndCommandBuffer(cmd);
+        vkResetFences(g.device, 1, &fence);
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        return vkQueueSubmit(g.queue, 1, &si, fence) == VK_SUCCESS &&
+               vkWaitForFences(g.device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
+    };
+    begin();
 
     auto barrier = [&](VkPipelineStageFlags src, VkAccessFlags srcA, VkPipelineStageFlags dst, VkAccessFlags dstA) {
         VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -317,7 +368,6 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     vkCmdFillBuffer(cmd, delta.buf, 0, cells * 4, 0);
     vkCmdFillBuffer(cmd, applied.buf, 0, cells * 4, 0);
     barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, rw);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.pipeLayout, 0, 1, &set, 0, nullptr);
 
     ErosionPushVk u{};
     u.n = n;
@@ -336,21 +386,96 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     const uint32_t cellGroups = static_cast<uint32_t>((cells + 63) / 64);
     auto dispatch = [&](Kernel k, uint32_t groups) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.pipes[k]);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.pipeLayout, 0, 1, &set, 0, nullptr);
         vkCmdPushConstants(cmd, g.pipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof u, &u);
         vkCmdDispatch(cmd, groups, 1, 1);
         computeBarrier();
     };
     auto clampApply = [&] { dispatch(kClamp, cellGroups); dispatch(kApplyApplied, cellGroups); };
 
+    // 1. DROPLETS (erosion.comp)
     const int batchSize = dropletBatchSize(n);
+    int batchesInChunk = 0;
     for (int start = 0; start < p.droplets; start += batchSize) {
         u.batchStart = start;
         u.batchCount = std::min(batchSize, p.droplets - start);
         dispatch(kDroplets, static_cast<uint32_t>((u.batchCount + 63) / 64));
         clampApply();
+        if (++batchesInChunk == 256) { if (!submit()) return false; begin(); batchesInChunk = 0; }
     }
     constexpr int kResidueFlushPasses = 8;   // as the Metal host: drain what the per-batch clamps held back
     for (int it = 0; it < kResidueFlushPasses; it++) clampApply();
+
+    // 2. WATER AND SEDIMENT (erosion_water.comp, ADR-0123): Mei et al.'s pipe model on the same height
+    //    buffer, in chunks of 500 steps
+    Buf water, flux, vel, sed0, sed1, tilt, wet, relief;
+    VkDescriptorSet wset = VK_NULL_HANDLE;
+    const bool withWater = p.waterSteps > 0;
+    if (withWater) {
+        if (!makeBuffer(water, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(flux, cells * 16, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(vel, cells * 8, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(sed0, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(sed1, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(tilt, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(wet, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(relief, cells * 8, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            LOG_WARN << "[erosion] GPU water allocation failed at n=" << n << ": CPU erosion";
+            return false;
+        }
+        VkDescriptorSetAllocateInfo wai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        wai.descriptorPool = g.descPool;
+        wai.descriptorSetCount = 1;
+        wai.pSetLayouts = &g.waterSetLayout;
+        if (vkAllocateDescriptorSets(g.device, &wai, &wset) != VK_SUCCESS) return false;
+        VkDescriptorBufferInfo wi[kWaterBindings] = {{height.buf, 0, VK_WHOLE_SIZE}, {water.buf, 0, VK_WHOLE_SIZE}, {flux.buf, 0, VK_WHOLE_SIZE},
+                                                     {vel.buf, 0, VK_WHOLE_SIZE}, {sed0.buf, 0, VK_WHOLE_SIZE}, {sed1.buf, 0, VK_WHOLE_SIZE},
+                                                     {tilt.buf, 0, VK_WHOLE_SIZE}, {wet.buf, 0, VK_WHOLE_SIZE}, {relief.buf, 0, VK_WHOLE_SIZE}};
+        VkWriteDescriptorSet ww[kWaterBindings]{};
+        for (uint32_t i = 0; i < kWaterBindings; ++i) {
+            ww[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            ww[i].dstSet = wset;
+            ww[i].dstBinding = i;
+            ww[i].descriptorCount = 1;
+            ww[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ww[i].pBufferInfo = &wi[i];
+        }
+        vkUpdateDescriptorSets(g.device, kWaterBindings, ww, 0, nullptr);
+        for (Buf* bz : {&water, &flux, &vel, &sed0, &sed1, &tilt, &wet, &relief}) vkCmdFillBuffer(cmd, bz->buf, 0, bz->size, 0);
+        barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, rw);
+        WaterPushVk w{};
+        w.n = n;
+        w.cellSize = hm.worldSize > 0.0f ? hm.worldSize / static_cast<float>(n - 1) : 1.0f;
+        w.gravity = 9.81f;
+        // a gravity wave crosses no more than a quarter cell a step over ~4 m of water
+        w.dt = p.waterDt > 0.0f ? p.waterDt : 0.25f * w.cellSize / std::sqrt(9.81f * 4.0f);
+        w.rain = p.waterRain;
+        w.capacity = p.waterCapacity;
+        w.dissolve = p.waterDissolve;
+        w.deposit = p.waterDeposit;
+        w.evaporate = p.waterEvaporate;
+        w.seaLevel = p.seaLevel;
+        w.minTilt = p.waterMinTilt;
+        w.maxErodeDepth = p.waterMaxCut;
+        auto wdispatch = [&](Kernel k) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.pipes[k]);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.waterPipeLayout, 0, 1, &wset, 0, nullptr);
+            vkCmdPushConstants(cmd, g.waterPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof w, &w);
+            vkCmdDispatch(cmd, cellGroups, 1, 1);
+            computeBarrier();
+        };
+        for (int step = 0; step < p.waterSteps; ++step) {
+            w.parity = step & 1;
+            wdispatch(kWFlux);        // the pipes' flow, from the surface drop
+            wdispatch(kWTransport);   // sediment along those pipes (needs the depth the flow left from)
+            wdispatch(kWWater);       // then the depth, velocity, rain, sea; slope and relief for the next
+            wdispatch(kWErode);
+            if ((step + 1) % 500 == 0) { if (!submit()) return false; begin(); }
+        }
+        LOG_INFO << "[erosion] water: " << p.waterSteps << " steps of " << w.dt << " s on " << n << "^2 at " << w.cellSize << " m";
+    }
+
+    // 3. THERMAL (erosion.comp): slump what the water and droplets left steeper than the talus
     vkCmdFillBuffer(cmd, delta.buf, 0, cells * 4, 0);
     barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, rw);
     for (int it = 0; it < p.thermalIterations; it++) { dispatch(kThermal, cellGroups); dispatch(kApply, cellGroups); }
@@ -358,18 +483,27 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     vkCmdCopyBuffer(cmd, height.buf, staging.buf, 1, &whole);
     barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
-    vkEndCommandBuffer(cmd);
-
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    VkFence fence = VK_NULL_HANDLE;
-    vkCreateFence(g.device, &fci, nullptr, &fence);
-    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cmd;
-    const bool ok = vkQueueSubmit(g.queue, 1, &si, fence) == VK_SUCCESS &&
-                    vkWaitForFences(g.device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
-    vkDestroyFence(g.device, fence, nullptr);
+    const bool ok = submit();
+    if (wset) vkFreeDescriptorSets(g.device, g.descPool, 1, &wset);
     if (!ok) { LOG_WARN << "[erosion] GPU submit failed: CPU erosion"; return false; }
+
+    // debug: RT_EROSION_DUMP=<dir> writes the water model's maps as raw float32 n x n (water depth,
+    // wetness, suspended sediment) beside the height, for previews
+    if (withWater) if (const char* dir = std::getenv("RT_EROSION_DUMP")) {
+        auto dump = [&](Buf& b, const char* name) {
+            Buf st;
+            if (!makeBuffer(st, b.size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, host)) return;
+            begin();
+            VkBufferCopy c{0, 0, b.size};
+            vkCmdCopyBuffer(cmd, b.buf, st.buf, 1, &c);
+            if (!submit()) return;
+            void* m = nullptr;
+            vkMapMemory(g.device, st.mem, 0, b.size, 0, &m);
+            std::ofstream(std::string(dir) + "/" + name, std::ios::binary).write(static_cast<const char*>(m), static_cast<std::streamsize>(b.size));
+            vkUnmapMemory(g.device, st.mem);
+        };
+        dump(water, "water.f32"); dump(wet, "wet.f32"); dump(sed0, "sed.f32");
+    }
 
     void* src = nullptr;
     vkMapMemory(g.device, staging.mem, 0, cells * 4, 0, &src);

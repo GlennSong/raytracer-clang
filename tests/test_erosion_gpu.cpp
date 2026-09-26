@@ -225,3 +225,57 @@ TEST_CASE(erosion_gpu_speedup_bench) {
                 gpuMs, cpuMs, cpuMs / gpuMs);
     CHECK(gpuMs < cpuMs);
 }
+
+// THE WATER MODEL (ADR-0123, Mei et al. 2007 pipe model): on a V valley tilted down its length, rain runs
+// off the slopes and collects along the floor; nothing blows up (every height finite, no spike above the
+// valley's rim nor pit below its lowest point -- the relief clamp), and two runs are bit-identical.
+TEST_CASE(erosion_gpu_water_collects_in_the_valley_and_stays_bounded) {
+    ScopedSourceDir cd;
+    if (!erodeGpuAvailable()) { std::printf("    [skip] no GPU erosion available\n"); return; }
+#if !defined(RT_HAVE_VULKAN_EROSION)
+    std::printf("    [skip] the water model is Vulkan only\n");
+    return;
+#else
+    auto valley = [] {
+        Heightmap hm;
+        hm.n = 129;
+        hm.worldSize = 512.0f;   // 4 m cells
+        hm.h.resize(static_cast<std::size_t>(hm.n) * hm.n);
+        for (int z = 0; z < hm.n; ++z)
+            for (int x = 0; x < hm.n; ++x)
+                hm.set(x, z, 0.35f * std::fabs(static_cast<float>(x - 64)) * 4.0f + 0.05f * static_cast<float>(hm.n - 1 - z) * 4.0f);
+        return hm;
+    };
+    ErosionParams p;
+    p.droplets = 0;
+    p.thermalIterations = 0;
+    p.vulkan = true;
+    p.waterSteps = 3000;
+    Heightmap a = valley(), b = valley();
+    const Heightmap before = valley();
+    setenv("RT_EROSION_DUMP", "/tmp", 1);   // the maps, to read the water depth back
+    CHECK(erodeGpu(a, p));
+    unsetenv("RT_EROSION_DUMP");
+    CHECK(erodeGpu(b, p));
+    CHECK(a.h == b.h);   // deterministic
+    float lo = 1e30f, hi = -1e30f, blo = 1e30f, bhi = -1e30f;
+    for (std::size_t i = 0; i < a.h.size(); ++i) {
+        CHECK(std::isfinite(a.h[i]));
+        lo = std::min(lo, a.h[i]); hi = std::max(hi, a.h[i]);
+        blo = std::min(blo, before.h[i]); bhi = std::max(bhi, before.h[i]);
+    }
+    CHECK(hi <= bhi + 1e-3f && lo >= blo - 1e-3f);   // no spike above the rim, no pit below the floor
+    // the water stands on the floor, not the slopes
+    std::FILE* f = std::fopen("/tmp/water.f32", "rb");
+    CHECK(f != nullptr);
+    if (!f) return;
+    std::vector<float> w(a.h.size());
+    CHECK(std::fread(w.data(), sizeof(float), w.size(), f) == w.size());
+    std::fclose(f);
+    double floor = 0.0, slope = 0.0;
+    for (int z = 16; z < a.n - 16; ++z) { floor += w[static_cast<std::size_t>(z) * a.n + 64]; slope += w[static_cast<std::size_t>(z) * a.n + 32]; }
+    std::printf("    [water] mean depth on the floor %.3f m, on the slope %.3f m; heights %.1f..%.1f (was %.1f..%.1f)\n",
+                floor / (a.n - 32), slope / (a.n - 32), lo, hi, blo, bhi);
+    CHECK(floor > 5.0 * slope);
+#endif
+}

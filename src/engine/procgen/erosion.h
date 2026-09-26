@@ -49,6 +49,19 @@ struct ErosionParams {
     // Off by default so switching a Linux build to GPU erosion does not quietly re-shape every level baked
     // on the CPU sim (the two agree statistically, not bit for bit). Apple's Metal path ignores it.
     bool vulkan = false;
+    // WATER AND SEDIMENT (ADR-0123; Vulkan only, 0 steps = off): the Mei et al. 2007 pipe model after the
+    // droplets -- water that pools, spreads and floods, carries sediment and drops it where it slows. Units
+    // are metres and seconds on the grid's real cell size (Heightmap::worldSize / (n - 1)).
+    int   waterSteps = 0;
+    float waterDt = 0.0f;          // s a step; 0 = derived from the cell size
+    float waterRain = 0.002f;      // m/s on land
+    float waterCapacity = 0.6f;    // Kc
+    float waterDissolve = 0.25f;   // Ks, 1/s
+    float waterDeposit = 0.4f;     // Kd, 1/s
+    float waterEvaporate = 0.02f;  // Ke, 1/s
+    float waterMinTilt = 0.02f;
+    float waterMaxCut = 0.05f;     // m a step
+    float seaLevel = -1e30f;       // below it: the sea, held at its level
 };
 
 // Runs the GPU (Metal) port when available — same model, seconds instead of

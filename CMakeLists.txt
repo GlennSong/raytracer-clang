@@ -498,6 +498,11 @@ endif()
 # editor's "Bake level cache" button calls. Producers register from whichever producer libraries
 # are linked in; a build with none prints "no producers are registered in this build".
 # ============================================================
+# rt_erode (ADR-0123): a level's terrain through the erosion stages, grids out for tools/erosion_preview.py
+add_executable(rt_erode tools/rt_erode.cpp)
+target_link_libraries(rt_erode PRIVATE engine_core Threads::Threads)
+target_include_directories(rt_erode PRIVATE src)
+
 add_executable(rt_bake tools/rt_bake.cpp)
 target_link_libraries(rt_bake PRIVATE engine_core Threads::Threads)
 target_include_directories(rt_bake PRIVATE src)
@@ -1074,6 +1079,19 @@ function(rt_build_vulkan_shaders)
                     -o ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
             DEPENDS ${VK_SHADER_SRC_DIR}/erosion.comp
             COMMENT "glslc erosion.comp (${kernel}) -> erosion_${kernel}.comp.spv"
+            VERBATIM)
+        list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv)
+    endforeach()
+    # the water-and-sediment kernels (ADR-0123): erosion_water.comp, one module per kernel
+    foreach(kernel w_flux w_water w_erode w_transport)
+        string(TOUPPER ${kernel} KERNEL_UP)
+        add_custom_command(
+            OUTPUT ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} -DKERNEL_${KERNEL_UP}=1
+                    ${VK_SHADER_SRC_DIR}/erosion_water.comp
+                    -o ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            DEPENDS ${VK_SHADER_SRC_DIR}/erosion_water.comp
+            COMMENT "glslc erosion_water.comp (${kernel}) -> erosion_${kernel}.comp.spv"
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv)
     endforeach()

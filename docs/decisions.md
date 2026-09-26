@@ -8723,3 +8723,22 @@ It is OFF for the island. At 0.6, with gentler banks (bankSteep 1.2, bankSlope 0
 - On the RTX 3080: 1024² with 500k droplets in 59 ms, against 1137 ms on the CPU (19×).
 - Two runs are bit-identical, and the GPU and CPU agree statistically (the existing `test_erosion_gpu` cases, now run on Linux).
 - Next: the Mei et al. water-and-sediment ("pipe") model and thermal weathering as further kernels in the same context; a coarse-to-fine bake to ~2.5 m cells; and snow depth and material maps as outputs.
+
+## ADR-0123 — Water and sediment: the pipe model (Mei et al. 2007), first cut
+
+**Context.** Droplets (Beyer / Lague) carve drainage but hold no water: no lakes, pools or floodplains, and a river is as wide as the brush. Glenn wants rivers wider in places and terrain weathered more realistically. The thread he pointed at pairs the droplets with Mei, Decaudin & Hu, "Fast Hydraulic Erosion Simulation and Visualization on GPU" (PG 2007).
+
+**Decision.** `shaders/vulkan/erosion_water.comp` holds four kernels per step, run in the ADR-0122 context after the droplets and before thermal. Each kernel writes only its own cell (no atomics, deterministic):
+1. **FLUX:** each of four pipes accelerates with the water-surface drop to its neighbour, and all four are scaled down together so a cell never sends more water than it holds.
+2. **TRANSPORT:** sediment rides the same pipes at the cell's concentration, so mass is conserved exactly. A semi-Lagrangian fetch (the paper's) duplicated sediment where the flow converged and grew 500 m spikes.
+3. **WATER:** depth from net flow, velocity from the flow through the cell (CFL-capped), rain on land, the sea held at its level (a sink for water and sediment), evaporation. It records the slope and the neighbours' bed range.
+4. **ERODE:** capacity is Kc × tilt × speed × depth (up to a metre, so a film of rain on a hillside barely cuts); below it the bed is picked up, above it sediment settles. **Clamped to the neighbours' range**, so no cut goes below the lowest neighbour and no fill above the highest.
+
+Units are metres and seconds on the real cell size. Chunked submits (500 steps). `ErosionParams::waterSteps` (0 = off) and its constants. `tools/rt_erode` bakes a level's terrain with any settings and `tools/erosion_preview.py` renders it.
+
+**Consequences.**
+- river_valley, 1025² at 2.9 m, 20,000 steps: 5.5 s.
+- Braided channels, ponds, a lake with a branching delta, and valley floors widened into plains appear.
+- **Too much deposition:** valley floors fill flat, burying their relief.
+- Test: `erosion_gpu_water_collects_in_the_valley_and_stays_bounded`.
+- **Not used by any level yet.** Next: tune cut against fill; give the bed a hardness and the loose sediment its own layer, so channels stay incised; scale the droplet lifetime with resolution (at 3 m cells 32 steps only pits the surface); coarse-to-fine; a snow pass; and the maps (wetness, sediment) into the ground cover.
