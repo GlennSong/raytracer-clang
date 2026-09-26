@@ -285,3 +285,42 @@ TEST_CASE(erosion_gpu_water_collects_in_the_valley_and_stays_bounded) {
     CHECK(floor > 5.0 * slope);
 #endif
 }
+
+#include "../src/engine/procgen/stream_power.h"
+
+// MOUNTAINS FROM UPLIFT (ADR-0125): a disc of uplift on a flat, rough plain grows a drained relief -- every
+// height finite, the land mapped onto the target range, and hardly a pit left (the flood routes every cell
+// to the edge; the implicit sweep keeps each cell above its receiver).
+TEST_CASE(stream_power_grows_a_drained_relief_from_uplift) {
+    Heightmap hm;
+    hm.n = 129;
+    hm.worldSize = 5000.0f;
+    hm.h.resize(static_cast<std::size_t>(hm.n) * hm.n);
+    std::vector<float> up(hm.h.size());
+    for (int z = 0; z < hm.n; ++z)
+        for (int x = 0; x < hm.n; ++x) {
+            const float dx = static_cast<float>(x - 64), dz = static_cast<float>(z - 64);
+            const std::size_t i = static_cast<std::size_t>(z) * hm.n + x;
+            up[i] = std::max(0.0f, 1.0f - std::sqrt(dx * dx + dz * dz) / 60.0f);
+            hm.h[i] = 1.0f + 0.3f * static_cast<float>((x * 7919 + z * 104729) % 97) / 97.0f;   // rough start
+        }
+    StreamPowerParams p;
+    p.iterations = 120;
+    p.targetLo = 0.0; p.targetHi = 800.0;
+    CHECK(streamPowerErode(hm, up, p) == 120);
+    float lo = 1e30f, hi = -1e30f;
+    int pits = 0, land = 0;
+    for (int z = 1; z < hm.n - 1; ++z)
+        for (int x = 1; x < hm.n - 1; ++x) {
+            const float v = hm.get(x, z);
+            CHECK(std::isfinite(v));
+            lo = std::min(lo, v); hi = std::max(hi, v);
+            float low = 1e30f;
+            for (int k = -1; k <= 1; ++k) for (int j = -1; j <= 1; ++j) if (k || j) low = std::min(low, hm.get(x + j, z + k));
+            ++land;
+            if (low > v) ++pits;
+        }
+    std::printf("    [stream power] relief %.0f..%.0f m, %d pits of %d cells\n", lo, hi, pits, land);
+    CHECK(hi > 700.0f && lo < 100.0f);
+    CHECK(pits < land / 100);
+}

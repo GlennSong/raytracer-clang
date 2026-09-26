@@ -62,6 +62,7 @@ struct ErosionParams {
     float waterMinTilt = 0.02f;
     float waterMaxCut = 0.05f;     // m a step
     float waterRockHardness = 0.15f;   // bedrock's pick-up rate as a fraction of loose sediment's (ADR-0124)
+    float waterCreep = 1.0e-4f;        // soil creep a step (ADR-0125)
     // BREACHING (ADR-0124; 0 = off): before the water, every closed hollow whose rim stands less than this
     // (m) above its floor gets a gently falling channel cut out to the sea or the map's edge -- the way
     // overflow breaches real basins. Deeper hollows stay closed: lakes. Noise relief is full of pits, and

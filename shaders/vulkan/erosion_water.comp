@@ -22,7 +22,7 @@ layout(std430, set = 0, binding = 4) buffer Sed0   { float s0[]; };     // suspe
 layout(std430, set = 0, binding = 5) buffer Sed1   { float s1[]; };     // ... pong
 layout(std430, set = 0, binding = 6) buffer Tilt   { float tilt[]; };   // sin of the local slope
 layout(std430, set = 0, binding = 7) buffer Wet    { float wet[]; };    // accumulated water depth x time (a wetness map)
-layout(std430, set = 0, binding = 8) buffer Relief { vec2 relief[]; };  // the bed's lowest / highest 4-neighbour, for step 3's clamp
+layout(std430, set = 0, binding = 8) buffer Relief { vec4 relief[]; };  // the bed's 8-neighbour lowest / highest / mean, for step 3
 // LOOSE SEDIMENT (ADR-0124, after Stava et al. 2008's layered materials): how much of b is deposited
 // material lying on the bedrock. Water cuts it easily and bedrock slowly, and whatever settles joins it --
 // so a river re-cuts its own floodplain and stays incised instead of filling its valley flat.
@@ -43,6 +43,7 @@ layout(push_constant) uniform U {
     float minTilt;       // a floor on the slope term, so flat water still carries a little
     float maxErodeDepth; // m: no step cuts deeper than this below the water (keeps pits from running away)
     float rockHardness;  // bedrock's pick-up rate as a fraction of loose sediment's (0..1)
+    float creep;         // soil creep: each step the bed moves this fraction toward its neighbours' mean
 } u;
 
 int idx(int x, int z) { return z * u.n + x; }
@@ -122,13 +123,13 @@ void main() {
     vec2 g = vec2(br - bl, bu - bd) / (2.0 * u.cellSize);
     float t2 = dot(g, g);
     tilt[i] = sqrt(t2 / (1.0 + t2));
-    float lo = 1e30, hi = -1e30;
+    float lo = 1e30, hi = -1e30, sum = 0.0;
     for (int k = 0; k < 8; ++k) {
         int nx = clamp(x + kDir[k].x, 0, u.n - 1), nz = clamp(z + kDir[k].y, 0, u.n - 1);
         float bn = b[idx(nx, nz)];
-        lo = min(lo, bn); hi = max(hi, bn);
+        lo = min(lo, bn); hi = max(hi, bn); sum += bn;
     }
-    relief[i] = vec2(lo, hi);
+    relief[i] = vec4(lo, hi, sum * 0.125, 0.0);
 }
 #endif
 
@@ -142,7 +143,9 @@ void main() {
     float cap = u.capacity * max(tilt[i], u.minTilt) * length(v[i]);
     // shallow sheet flow carries little: scale by depth up to a metre (Mei's model has no depth term; without
     // one, the film of rain on every hillside erodes as hard as a river)
-    cap *= clamp(d[i], 0.0, 1.0);
+    // and a THRESHOLD (ADR-0125): sheet flow a few centimetres deep does not cut at all -- on a smooth slope
+    // every sheet cut its own one-cell rill, parallel and grid-aligned; only water that has gathered incises
+    cap *= smoothstep(0.05, 0.6, d[i]);
     if (b[i] < u.seaLevel) cap = 0.0;
     float db;
     float loose = soil[i];
@@ -159,10 +162,17 @@ void main() {
     // highest (the droplets' clamp, per step): what cannot be cut stays in the bed, what cannot be laid
     // stays in the water. Without it deposits grew into 500 m spikes and cuts into 390 m pits.
     float bi = b[i];
-    vec2 r = relief[i];
+    vec4 r = relief[i];
+    // SOIL CREEP (ADR-0125): a slow relaxation toward the neighbours' mean damps cell-scale rills and leaves
+    // real valleys (their curvature is gentle at this rate)
+    if (bi >= u.seaLevel) { float c = u.creep * (r.z - bi); bi += c; soil[i] = max(0.0, soil[i] + c); }
     db = clamp(db, min(0.0, r.x - bi), max(0.0, r.y - bi));
     if (db > 0.0) db = min(db, s);   // cannot lay more than it carries
-    soil[i] = max(0.0, loose + db);  // a deposit thickens the loose layer, a cut thins it (below 0: bedrock)
+    // the sea floor builds no further than a metre under the surface: sediment reaching the sea along the
+    // whole coast (not just at the rivers) piled every first sea cell up to land and grew a berm round the
+    // island; what cannot settle here washes offshore
+    if (bi < u.seaLevel) { db = min(db, max(0.0, u.seaLevel - 1.0 - bi)); s = min(s, db); }
+    soil[i] = max(0.0, soil[i] + db);   // a deposit thickens the loose layer, a cut thins it (below 0: bedrock)
     b[i] = bi + db;
     s -= db;
     if (u.parity == 0) s1[i] = max(s, 0.0); else s0[i] = max(s, 0.0);

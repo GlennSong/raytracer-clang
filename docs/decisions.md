@@ -8757,3 +8757,26 @@ Units are metres and seconds on the real cell size. Chunked submits (500 steps).
   - on a one-cell V bottom the central-difference slope sees only the down-valley fall, so the flow splits round a bar (the water test measures a band). Measuring the slope along the flow is the refinement.
 
 river_valley, 1025² at 2.9 m, coarse 257² droplets + 20k water steps: 8.8 s.
+
+## ADR-0125 — Mountains grown from uplift (stream power), not drawn with noise
+
+**Context.** Glenn asked what terrain erosion should start from. The noise relief's mountain layer (ridged noise and its own distortion) is where both the pyramid peaks and the combed striping come from, and no later erosion undid them: erosion sharpens what it is given. The literature's answer is to give erosion only the large structure and grow the rest.
+
+**Decision.**
+- **`stream_power.{h,cpp}`:** uplift against river incision, dh/dt = U − K·A^m·S (n = 1), solved as Braun & Willett 2013 (FastScape) and used for terrain by Cordonnier et al. 2016. Each iteration: uplift; a priority flood from the sea and edges that fills hollows with a tiny rise; receivers on the steepest of 8 neighbours; drainage area down the tree; an implicit sweep up it (stable at any time step); hillslope diffusion. An optional erodibility map multiplies K. The result is rescaled onto the level's land height range: the physics decides the shape, the level decides how high. It runs on the CPU (sequential down the tree): 1024², 250 iterations in 53 s.
+- **`rt_erode --stream-power N --sp-blur M`:**
+  - The **uplift** is the level's own terrain blurred over M metres (where the ranges are, none of the noise) over a base lift of all land, broken by two scales of noise. A smooth, symmetric uplift grew spurs as straight as a fishbone.
+  - The **start** is low and rough, since a smooth start drains straight downhill.
+  - **Erodibility** varies in patches (soft and hard rock).
+  - The fine grid is the grown one, upsampled **cubic** with a few metres of multi-scale roughness. Bilinear left every slope a plane, and rain on planes cut parallel one-cell rills along the grid.
+- **In the water model:**
+  - no cutting by water shallower than 5 cm (full strength at 60 cm), so only gathered water incises;
+  - **soil creep** (each step the bed moves 1e-4 toward its neighbours' mean) damps cell-scale rills;
+  - the sea floor builds to no closer than 1 m under the surface. Sediment arriving along the whole coast had grown a berm round the island.
+
+**Consequences.**
+- Island 8, 20 km, bakes in 3 min 45 s: stream power at 1024² (19.5 m), then breaching and 20,000 water steps at 4097² (4.9 m).
+- It reads like a real island range: a winding divide, irregular spurs and valleys to the sea, hills in the lowlands, a branching river net with floodplains and cut banks.
+- Test: `stream_power_grows_a_drained_relief_from_uplift`.
+- **Not in any level yet.** The ground is new, so every island city, road and interchange must be replanned on it. Hillslopes may now be too smooth (the threshold stops sheet-flow gullies), to judge in 3D.
+- Next: the pipeline into the engine (`erodedForTerrain` behind a terrain block, cached), a terrain-only island level to fly over, then snow and the material maps.

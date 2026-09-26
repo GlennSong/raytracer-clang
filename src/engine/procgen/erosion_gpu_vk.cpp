@@ -61,9 +61,9 @@ const char* kKernelFile[kKernelCount] = {"erosion_droplets.comp.spv", "erosion_c
 struct WaterPushVk {
     int32_t n;
     int32_t parity;
-    float cellSize, dt, gravity, rain, capacity, dissolve, deposit, evaporate, seaLevel, minTilt, maxErodeDepth, rockHardness;
+    float cellSize, dt, gravity, rain, capacity, dissolve, deposit, evaporate, seaLevel, minTilt, maxErodeDepth, rockHardness, creep;
 };
-static_assert(sizeof(WaterPushVk) == 14 * 4, "push block must match erosion_water.comp");
+static_assert(sizeof(WaterPushVk) == 15 * 4, "push block must match erosion_water.comp");
 constexpr uint32_t kWaterBindings = 10;
 
 struct VkErosion {
@@ -505,7 +505,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
             !makeBuffer(sed1, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(tilt, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(wet, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
-            !makeBuffer(relief, cells * 8, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+            !makeBuffer(relief, cells * 16, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
             !makeBuffer(soil, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
             LOG_WARN << "[erosion] GPU water allocation failed at n=" << n << ": CPU erosion";
             return false;
@@ -546,6 +546,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
         w.minTilt = p.waterMinTilt;
         w.maxErodeDepth = p.waterMaxCut;
         w.rockHardness = p.waterRockHardness;
+        w.creep = p.waterCreep;
         auto wdispatch = [&](Kernel k) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.pipes[k]);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.waterPipeLayout, 0, 1, &wset, 0, nullptr);
