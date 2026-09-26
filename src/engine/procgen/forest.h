@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace engine {
@@ -35,6 +36,20 @@ struct ForestSpecies {
     double weight = 1.0;
     double wet = 0.0;                  // affinity for wet ground (the maps' drainage): 1 = willow, alder
     bool understory = false;           // a bush under and around the canopy, in its own pass
+};
+
+// ROCKS (ADR-0131, Glenn: "scattered rocks"): layers placed by the same fast grid, each by what the
+// ground's maps say is there -- boulder fields on scree, outcrops on bare convex rock, erratics in the
+// open, mossy stones under the canopy, stones on the beach.
+struct RockLayer {
+    std::string family = "boulder", stone = "granite";   // the rock library's names (stylized_rock.h)
+    double size = 2.0;
+    int variants = 3;
+    int ground = 0;              // 0 scree, 1 outcrop, 2 field, 3 forest, 4 beach, 5 shore (rivers, lakes)
+    double spacing = 12.0;       // its grid
+    double density = 1.0;        // the share of grid points kept where the ground is right
+    double moss = -1.0;          // -1: the stone's default
+    double drawM = 600.0;
 };
 
 struct ForestParams {
@@ -52,6 +67,7 @@ struct ForestParams {
     double understorySpacing = 5.0;  // the understory pass's grid
     double understoryDensity = 0.35; // its share where the canopy is, doubled along the edges
     uint32_t seed = 1;
+    std::vector<RockLayer> rocks;
 };
 
 ForestParams forestFromJson(const nlohmann::json& j);
@@ -77,6 +93,17 @@ double forestCanopy(const ForestParams& p, double seaLevel, const TerrainMaps* m
 std::vector<ForestTree> placeForest(const ForestParams& p, double half, double seaLevel, const GroundCover* cover,
                                     const TerrainMaps* maps, const std::function<double(double, double)>& ground,
                                     const std::function<bool(double, double)>& exclude, int variantsPerSpecies);
+
+struct PlacedRock {
+    Vec3 pos;
+    float yaw = 0.0f, scale = 1.0f, tiltDir = 0.0f, tilt = 0.0f;
+    uint16_t layer = 0, variant = 0;
+};
+std::vector<PlacedRock> placeRocks(const ForestParams& p, double half, double seaLevel, const GroundCover* cover,
+                                   const TerrainMaps* maps, const std::function<double(double, double)>& ground,
+                                   const std::function<bool(double, double)>& exclude,
+                                   const std::function<double(double, double, double)>& shore = {},
+                                   const std::function<bool(double, double)>& excludeShore = {});   // the shore layer's own
 
 // One tree variant's impostor slot in the atlas, and the tree's measures (unit scale).
 struct ImpostorSlot {

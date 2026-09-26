@@ -38,6 +38,21 @@ ForestParams forestFromJson(const nlohmann::json& j) {
     p.seed = j.value("seed", p.seed);
     p.understorySpacing = j.value("understorySpacing", p.understorySpacing);
     p.understoryDensity = j.value("understoryDensity", p.understoryDensity);
+    if (j.contains("rocks") && j["rocks"].is_array())
+        for (const auto& r : j["rocks"]) {
+            RockLayer L;
+            L.family = r.value("family", L.family);
+            L.stone = r.value("stone", L.stone);
+            L.size = r.value("size", L.size);
+            L.variants = std::clamp(r.value("variants", L.variants), 1, 16);
+            const std::string g = r.value("ground", std::string("scree"));
+            L.ground = g == "outcrop" ? 1 : g == "field" ? 2 : g == "forest" ? 3 : g == "beach" ? 4 : g == "shore" ? 5 : 0;
+            L.spacing = r.value("spacing", L.spacing);
+            L.density = r.value("density", L.density);
+            L.moss = r.value("moss", L.moss);
+            L.drawM = r.value("draw", L.drawM);
+            p.rocks.push_back(L);
+        }
     if (j.contains("species") && j["species"].is_array())
         for (const auto& s : j["species"]) {
             ForestSpecies fs;
@@ -165,6 +180,74 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                         tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d));
                         tr.variant = static_cast<uint16_t>(best * vps + static_cast<int>(unit(h ^ 0x3131u) * fs.variants) % fs.variants);
                         parts[t].push_back(tr);
+                    }
+            });
+        for (auto& x : th) x.join();
+        for (auto& v : parts) out.insert(out.end(), v.begin(), v.end());
+    }
+    return out;
+}
+
+std::vector<PlacedRock> placeRocks(const ForestParams& p, double half, double sea, const GroundCover* cover,
+                                   const TerrainMaps* maps, const std::function<double(double, double)>& ground,
+                                   const std::function<bool(double, double)>& exclude,
+                                   const std::function<double(double, double, double)>& shore,
+                                   const std::function<bool(double, double)>& excludeShore) {
+    std::vector<PlacedRock> out;
+    const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
+    for (std::size_t li = 0; li < p.rocks.size(); ++li) {
+        const RockLayer& L = p.rocks[li];
+        const int n = static_cast<int>(std::ceil(2.0 * half / L.spacing));
+        std::vector<std::vector<PlacedRock>> parts(T);
+        std::vector<std::thread> th;
+        for (int t = 0; t < T; ++t)
+            th.emplace_back([&, t] {
+                for (int j = t; j < n; j += T)
+                    for (int i = 0; i < n; ++i) {
+                        const uint32_t h = (static_cast<uint32_t>(i) * 73856093u ^ static_cast<uint32_t>(j) * 19349663u ^ p.seed * 83492791u) + 0xB0u * static_cast<uint32_t>(li + 1);
+                        const double roll = unit(h ^ 0x51ED27u);
+                        if (roll >= L.density) continue;
+                        const double x = -half + (i + 0.1 + 0.8 * unit(h)) * L.spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * L.spacing;
+                        // the maps first (no ground sample): most of the island is the wrong ground
+                        TerrainMapSample m;
+                        if (maps) m = maps->at(x, z);
+                        const double pre = forestPrefilter(p, maps, x, z);
+                        bool ok = false;
+                        switch (L.ground) {
+                            case 0: ok = maps && m.scree > 0.25 && roll < L.density * std::min(1.0, m.scree * 1.6); break;
+                            case 1: ok = maps && m.convex > 0.1 && m.soil < 0.35; break;
+                            case 2: ok = maps && m.soil > 0.5 && pre < 0.15; break;
+                            case 3: ok = pre > 0.5; break;
+                            case 5: ok = static_cast<bool>(shore); break;
+                            default: ok = true; break;
+                        }
+                        if (!ok) continue;
+                        const double y = ground(x, z);
+                        const double alt = y - (sea > -1e29 ? sea : 0.0);
+                        if (alt < 0.3) continue;
+                        const double e = 1.5;
+                        const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
+                        const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 57.2957795;
+                        if (cover) {
+                            const Cover c = cover->at(x, z, y, std::cos(slope / 57.2957795));
+                            if (L.ground == 1 && c.rock < 0.4) continue;
+                            if (L.ground == 4 && c.sand < 0.5) continue;
+                            if (L.ground != 1 && L.ground != 0 && c.snow > 0.3) continue;
+                        }
+                        if (L.ground == 3 && forestGrounded(p, sea, cover, x, z, y, slope) < 0.3) continue;
+                        if (L.ground == 5 && roll >= L.density * shore(x, z, y)) continue;
+                        if (slope > 55.0) continue;
+                        const auto& ex = L.ground == 5 && excludeShore ? excludeShore : exclude;
+                        if (ex && ex(x, z)) continue;
+                        PlacedRock r;
+                        r.pos = Vec3(x, y, z);
+                        r.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
+                        r.scale = static_cast<float>(0.55 + 0.9 * std::pow(unit(h ^ 0x99u), 2.0));   // many small, a few big
+                        r.tiltDir = static_cast<float>(unit(h ^ 0x55u) * 6.2831853);
+                        r.tilt = static_cast<float>(unit(h ^ 0x66u) * (L.ground == 1 ? 0.1 : 0.25) + std::min(0.35, slope / 57.2957795 * 0.5));
+                        r.layer = static_cast<uint16_t>(li);
+                        r.variant = static_cast<uint16_t>(static_cast<int>(unit(h ^ 0x3131u) * L.variants) % L.variants);
+                        parts[t].push_back(r);
                     }
             });
         for (auto& x : th) x.join();

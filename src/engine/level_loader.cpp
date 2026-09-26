@@ -1917,7 +1917,91 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         r.renderLayer = engine::LayerFoliage;
         world.add<Renderable>(e, r);
     }
-    LOG_INFO << "[forest] " << trees.size() << " trees, " << nVar << " variants, " << nearGroups << " near groups, "
+    // ROCKS (ADR-0131): the forest block's rock layers, instanced per cell, bedded and tilted
+    std::size_t nRocks = 0;
+    if (!fp.rocks.empty()) {
+        // (the shore layer stands where the water meets the ground: the exclusion's water margin would
+        // keep it off, so it asks the hydrology itself and skips only the roads and pads)
+        std::function<double(double, double, double)> shoreAt;
+        if (terrain.hydro) shoreAt = [h = terrain.hydro](double x, double z, double y) { return h->isWet(x, z, 0.0) ? 0.0 : h->shore(x, z, y); };
+        auto excludeDry = [&](double x, double z) {
+            for (const RoadDeckField* d : decks) { double yy = 0; if (d->heightAt(x, z, margin, &yy)) return true; }
+            if (drawnRoad.near(x, z, margin)) return true;
+            return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
+        };
+        const std::vector<PlacedRock> rocks = placeRocks(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, shoreAt, excludeDry);
+        nRocks = rocks.size();
+        std::map<int, RenderMaterial> stoneMats;   // one texture set per stone
+        struct RV { MeshHandle mesh; RenderMaterial mat; double bed = 0.22, size = 2.0; };
+        std::vector<std::vector<RV>> rv(fp.rocks.size());
+        for (std::size_t li = 0; li < fp.rocks.size(); ++li) {
+            const RockLayer& L = fp.rocks[li];
+            StylizedRockParams rp;
+            rockFamilyFromName(L.family, rp.family);
+            rockMaterialFromName(L.stone, rp.material);
+            rp.size = L.size;
+            rp.moss = L.moss;
+            const int sk = static_cast<int>(rp.material);
+            RenderMaterial rockMat;
+            rockMat.albedo = Vec3(1, 1, 1);
+            rockMat.roughness = 1.0f; rockMat.metallic = 0.0f; rockMat.opacity = 1.0f;
+            {
+                const StoneKind kind = rp.material == RockMaterial::Sandstone ? StoneKind::Sandstone
+                                     : rp.material == RockMaterial::Basalt    ? StoneKind::Basalt
+                                                                              : StoneKind::Granite;
+                auto it = stoneMats.find(sk);
+                if (it == stoneMats.end()) {
+                    const StoneTextures stt = stoneTextures(kind, 1u);
+                    RenderMaterial m = rockMat;
+                    m.albedoMap = renderer.uploadTexture(stt.albedo.width, stt.albedo.height, stt.albedo.channels, stt.albedo.pixels.data());
+                    m.normalMap = renderer.uploadTexture(stt.normal.width, stt.normal.height, stt.normal.channels, stt.normal.pixels.data());
+                    it = stoneMats.emplace(sk, m).first;
+                }
+                rockMat = it->second;
+                rockMat.triplanarScale = 1.8f;
+                rockMat.normalStrength = 0.8f;
+                rockMat.variation = 0.6f;
+                rockMat.topAmount = static_cast<float>(rp.moss >= 0 ? rp.moss : rockDefaultMoss(rp.material));
+                rockMat.topThreshold = 0.5f;
+            }
+            for (int v = 0; v < L.variants; ++v) {
+                RV r;
+                r.mesh = assets.acquireMesh(stylizedRock(fp.seed * 31u + static_cast<uint32_t>(li * 97 + v * 13), rp),
+                                            "forest:rock:" + std::to_string(fp.seed) + ":" + std::to_string(li) + ":" + std::to_string(v));
+                r.mat = rockMat;
+                r.bed = rp.family == RockFamily::Pebbles ? 0.3 : 0.22;
+                r.size = L.size;
+                rv[li].push_back(r);
+            }
+        }
+        std::map<std::tuple<int, int, int, int>, std::vector<Mat4>> cells;   // cell x, cell z, layer, variant
+        for (const PlacedRock& r : rocks) {
+            const RV& v = rv[r.layer][r.variant];
+            const Quat q = Quat::fromAxisAngle(Vec3(std::cos(r.tiltDir), 0, std::sin(r.tiltDir)), r.tilt) * Quat::fromAxisAngle(Vec3(0, 1, 0), r.yaw);
+            const Vec3 pos(r.pos.x, r.pos.y - v.bed * v.size * r.scale, r.pos.z);
+            cells[{static_cast<int>(std::floor(r.pos.x / fp.cellM)), static_cast<int>(std::floor(r.pos.z / fp.cellM)), r.layer, r.variant}]
+                .push_back(Mat4::trs(pos, q, Vec3(r.scale, r.scale, r.scale)));
+        }
+        for (auto& [key, tf] : cells) {
+            const RV& v = rv[std::get<2>(key)][std::get<3>(key)];
+            Vec3 cen(0, 0, 0);
+            for (const Mat4& m : tf) cen = cen + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+            cen = cen / static_cast<Real>(tf.size());
+            Real spread = 0;
+            for (const Mat4& m : tf) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
+            InstanceGroup g;
+            g.mesh = v.mesh;
+            g.material = v.mat;
+            g.transforms = std::move(tf);
+            g.boundsCenter = cen;
+            g.boundsRadius = spread + v.size * 2.0;
+            g.drawDistance = fp.rocks[static_cast<std::size_t>(std::get<2>(key))].drawM;
+            g.drawClass = engine::DrawClass::Scenery;
+            g.renderLayer = engine::LayerFoliage;
+            world.add<InstanceGroup>(world.create(), g);
+        }
+    }
+    LOG_INFO << "[forest] " << nRocks << " rocks; " << trees.size() << " trees, " << nVar << " variants, " << nearGroups << " near groups, "
              << farCells.size() << " far cells (" << farVerts * 32 / 1048576 << " MB of impostor vertices) in "
              << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
 }
@@ -1955,6 +2039,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
         double colliderFriction = 0.8;
         uint32_t biomeMask = 0;      // bit per Biome where it may grow (0 = anywhere): "biome"
         int coverReq = -1;           // "cover": grass 0 / dirt 1 / sand 2 / rock 3 must be >= 0.3 here (-1 = any)
+        int groundReq = -1;          // "ground" (ADR-0131, the ground's maps): scree 0 / outcrop 1 / field 2 / forest 3
         double bedFraction = 0.0;    // sink this fraction of its height into the ground (stones)
         double tiltDeg = 0.0;        // extra random tilt (stones settle at an angle)
     };
@@ -2069,6 +2154,14 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             spCover = cv == "grass" ? 0 : cv == "dirt" ? 1 : cv == "sand" ? 2 : cv == "rock" ? 3 : -1;
             if (spCover < 0) LOG_WARN << "vegetation species: unknown cover '" << cv << "'";
         }
+        // What the ground's MAPS say must be there (ADR-0131): "ground": "scree" (below cliffs) |
+        // "outcrop" (bare convex rock) | "field" (open soil, sparse) | "forest" (under the canopy)
+        int spGround = -1;
+        if (s.contains("ground") && s["ground"].is_string()) {
+            const std::string gd = s["ground"].get<std::string>();
+            spGround = gd == "scree" ? 0 : gd == "outcrop" ? 1 : gd == "field" ? 2 : gd == "forest" ? 3 : -1;
+            if (spGround < 0) LOG_WARN << "vegetation species: unknown ground '" << gd << "'";
+        }
         // Where it grows (the ground-cover map's biomes): "biome": "beach" or ["lowland", "upland"].
         uint32_t spBiomes = 0;
         if (s.contains("biome")) {
@@ -2114,6 +2207,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             Variant var;
             var.biomeMask = spBiomes;
             var.coverReq = spCover;
+            var.groundReq = spGround;
             var.collide = spCollide;
             var.colliderRadius = spColRadius;
             var.colliderHeight = spColHeight;
@@ -2456,7 +2550,24 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 if (variantList[vi].biomeMask == 0 || (variantList[vi].biomeMask >> static_cast<uint32_t>(cv.biome) & 1u)) {
                     const int req = variantList[vi].coverReq;
                     const double w = req == 0 ? cv.grass : req == 1 ? cv.dirt : req == 2 ? cv.sand : req == 3 ? cv.rock + cv.snow : 1.0;
-                    if (w >= 0.3) fits.push_back(vi);
+                    if (w < 0.3) continue;
+                    if (const int gr = variantList[vi].groundReq; gr >= 0) {
+                        const GroundCoverParams& gp = terrain.cover->params();
+                        if (!gp.maps) continue;
+                        const TerrainMapSample ms = gp.maps->at(x, z);
+                        const double canopy = gp.forest ? forestCanopy(*gp.forest, gp.seaLevel, gp.maps.get(), x, z, pl.position.y,
+                                                                       std::atan(std::sqrt(gx * gx + gz * gz)) * 57.2957795)
+                                                        : 0.0;
+                        const double keep = static_cast<double>((static_cast<uint32_t>(std::llround(x * 7.0)) * 2654435761u ^
+                                                                 static_cast<uint32_t>(std::llround(z * 7.0)) * 40503u) & 1023u) / 1023.0;
+                        bool ok = false;
+                        if (gr == 0) ok = ms.scree > 0.3;
+                        else if (gr == 1) ok = cv.rock > 0.4 && ms.convex > 0.1;
+                        else if (gr == 2) ok = ms.soil > 0.5 && canopy < 0.2 && keep < 0.12;   // an erratic in the open
+                        else ok = canopy > 0.5 && keep < 0.25;
+                        if (!ok) continue;
+                    }
+                    fits.push_back(vi);
                 }
             if (fits.empty()) continue;
             uint64_t h = static_cast<uint64_t>(std::llround(x * 16.0)) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(std::llround(z * 16.0)) * 0xC2B2AE3D27D4EB4Full ^ vegSeed;
@@ -4282,6 +4393,7 @@ bool LevelLoader::load(const std::string& path,
                     // bare earth, raggedly); without one, the slope rule.
                     double d = cover ? cover->at(x, z, y, slopeCos).grass
                                      : std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    if (hydro && d > 0.0) d *= 1.0 - 0.85 * hydro->shore(x, z, y);   // the pebbly shore (ADR-0131)
                     if (kind == 1) {   // TALL GRASS: in drifts on open ground, thickest along forest edges
                         const double drift = std::clamp((patches.fbm2(x * 0.011 + 3.0, z * 0.011 - 5.0, 3) + 0.05) * 3.0, 0.0, 1.0);
                         double edge = 0.0;

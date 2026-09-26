@@ -440,6 +440,30 @@ bool Hydrology::isWet(double x, double z, double margin) const {
     return false;
 }
 
+double Hydrology::shore(double x, double z, double y, double* waterline) const {
+    if (waterline) *waterline = 0.0;
+    auto sm = [](double a, double b, double v) { const double t = clampd((v - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); };
+    double best = 0.0, line = 0.0;
+    double lvl = 0.0;
+    const double d = distanceToRiver(x, z, 8.0, &lvl);
+    if (d < 8.0 && lvl == lvl) {
+        const double up = y - lvl;
+        best = (1.0 - sm(1.5, 5.0, d)) * (1.0 - sm(0.6, 1.3, up));
+        line = (1.0 - sm(0.2, 0.8, d)) * (1.0 - sm(0.1, 0.3, up));
+    }
+    // lakes: by height over the lake's level near its cells (a lake's edge is where its level meets the ground)
+    if (inLake(x, z, 12.0))
+        for (const Lake& L : lakes_) {
+            if (x < L.minX - 30.0 || x > L.maxX + 30.0 || z < L.minZ - 30.0 || z > L.maxZ + 30.0) continue;
+            const double up = y - L.level;
+            if (up < -0.5 || up > 2.0) continue;
+            best = std::max(best, 1.0 - sm(0.45, 1.0, up));
+            line = std::max(line, 1.0 - sm(0.06, 0.18, up));
+        }
+    if (waterline) *waterline = line;
+    return best;
+}
+
 double Hydrology::distanceToRiver(double x, double z, double maxDist, double* level) const {
     double best = maxDist;
     if (level) *level = std::numeric_limits<double>::quiet_NaN();

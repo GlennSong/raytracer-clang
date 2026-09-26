@@ -8888,3 +8888,23 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 - **Leaf transmission:** alpha-cut cards in a LOD band get grass's backlit term, gated by the shadow map. A crown against the sun glows at its sunlit rim.
 
 **Consequences.** 1.07 M plants on island 8, placed in 3.7 s. The same 1.6 km walk ran p50 14.0 ms and p99 19.8 ms with no hitches. The forest interior reads darker than a real wood; ambient under a canopy is owed. A few trees stand in the lake margin: the placement uses the hydrology's wet test, and the drawn water extends past it.
+
+## ADR-0131 — Rocks placed by the ground's maps; pebbly shores; more clearings
+
+**Context.** Glenn: "still would like to see scattered rocks and some clearings. Would help improve frame rate", and "where the rivers and lakes meet the ground. We should have some transition ... pebbly/dirt-like". A map-aware rock scatter through `loadVegetation` (1.2 M candidates, dart-throwing on one thread) never finished loading.
+
+**Decision.**
+- **Rock layers** in the terrain's forest block (`"rocks": [{family, stone, size, variants, ground, spacing, density, draw}]`). They are placed by the forest's parallel jittered grid (`placeRocks`), rejected by the maps before any ground sample, and built from the rock library (`stylizedRock`, one stone texture set per stone). They are instanced per cell with a draw distance per layer, and bedded and tilted (more on slopes).
+- **The `ground` rules:**
+  - `scree`: `maps.scree`;
+  - `outcrop`: convex, thin-soiled, rock cover;
+  - `field`: open soil, no canopy;
+  - `forest`: under the canopy;
+  - `beach`: sand cover;
+  - `shore`: the hydrology's shore band, with its own exclusion that allows the water margin.
+
+  `loadVegetation` species take the same `"ground"` key (maps + canopy) for small scatters.
+- **`Hydrology::shore(x, z, y, &waterline)`:** a river's margin by the bank distance and the height over its level; a lake's by the height over its level. `terrainColor` turns the band into the dirt layer (its gravel), with sand only in the thin wet strip. The meadow grass thins on it; reeds keep it.
+- **Coverage:** forest coverage 0.48 → 0.42, for more clearings. The island level's ambient 0.5 → 0.75 (the forest interior was black).
+
+**Consequences.** 452 k rocks and 628 k trees and shrubs, placed in 5.4 s; the level loads in about 11 s cached. Boulder fields sit below the crags, outcrops on the ribs, erratics in the meadows, pebbles along the water. Impostor vertices fell to 77 MB.

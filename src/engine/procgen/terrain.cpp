@@ -585,6 +585,19 @@ Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
                   const Noise& noise, const TerrainParams& params, double normalX, double normalZ) {
     if (params.cover) {   // the ground-cover map: its colour, or its weights for the layered surface
         const Cover c = params.cover->at(worldX, worldZ, height, normalUp, normalX, normalZ);
+        if (params.coverWeights && params.hydro) {
+            // THE SHORE (ADR-0131): pebbly earth along rivers and lakes, gravel (the sand layer) at the line
+            double line = 0.0;
+            const double band = params.hydro->shore(worldX, worldZ, height, &line);
+            if (band > 0.0) {
+                // mostly the pebbly earth (the dirt layer's gravel); sand only in the thin wet strip
+                double sd = std::max(c.sand, 0.6 * line), dt = std::max(c.dirt, band * (1.0 - 0.6 * line));
+                const double fixed = c.rock + c.snow;
+                const double tot = sd + dt + fixed;
+                if (tot > 1.0) { const double k = std::max(0.0, 1.0 - fixed) / std::max(1e-9, sd + dt); sd *= k; dt *= k; }
+                return Vec3(std::max(0.0, 1.0 - sd - dt - fixed), dt, sd);
+            }
+        }
         return params.coverWeights ? Vec3(c.grass, c.dirt, c.sand) : c.colour;
     }
     // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band

@@ -32,7 +32,7 @@
   ]
  },
  "lighting": {
-  "ambientMultiplier": 0.5,
+  "ambientMultiplier": 0.75,
   "exposure": 0.7,
   "sun": {
    "castsShadow": true,
@@ -214,7 +214,7 @@
   "forest": {
    "seed": 8,
    "spacing": 7.5,
-   "coverage": 0.48,
+   "coverage": 0.42,
    "standScale": 650,
    "treeline": 640,
    "shoreClear": 4,
@@ -306,7 +306,99 @@
     }
    ],
    "understorySpacing": 5.0,
-   "understoryDensity": 0.3
+   "understoryDensity": 0.3,
+   "rocks": [
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 2.2,
+     "variants": 5,
+     "ground": "scree",
+     "spacing": 7,
+     "density": 0.9,
+     "draw": 700
+    },
+    {
+     "family": "slab",
+     "stone": "granite",
+     "size": 2.8,
+     "variants": 3,
+     "ground": "scree",
+     "spacing": 14,
+     "density": 0.8,
+     "draw": 700
+    },
+    {
+     "family": "pebbles",
+     "stone": "granite",
+     "size": 1.4,
+     "variants": 3,
+     "ground": "scree",
+     "spacing": 5,
+     "density": 0.7,
+     "draw": 250
+    },
+    {
+     "family": "outcrop",
+     "stone": "granite",
+     "size": 4.5,
+     "variants": 4,
+     "ground": "outcrop",
+     "spacing": 30,
+     "density": 0.7,
+     "draw": 1500
+    },
+    {
+     "family": "boulder",
+     "stone": "mossy",
+     "size": 2.0,
+     "variants": 4,
+     "ground": "field",
+     "spacing": 40,
+     "density": 0.35,
+     "draw": 600
+    },
+    {
+     "family": "boulder",
+     "stone": "mossy",
+     "size": 1.5,
+     "variants": 3,
+     "ground": "forest",
+     "spacing": 22,
+     "density": 0.5,
+     "draw": 350
+    },
+    {
+     "family": "boulder",
+     "stone": "sandstone",
+     "size": 1.8,
+     "variants": 3,
+     "ground": "beach",
+     "spacing": 35,
+     "density": 0.35,
+     "draw": 600
+    },
+    {
+     "family": "pebbles",
+     "stone": "granite",
+     "size": 1.2,
+     "variants": 4,
+     "ground": "shore",
+     "spacing": 2.5,
+     "density": 0.55,
+     "draw": 180
+    },
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 1.1,
+     "variants": 3,
+     "ground": "shore",
+     "spacing": 9,
+     "density": 0.5,
+     "draw": 350
+    }
+   ]
   }
  },
  "vehicles": [
@@ -362,86 +454,6 @@
   "width": 0.045,
   "cardRadius": 320,
   "cardSpacing": 1.6
- },
- "rocks": {
-  "clusterCount": 3000,
-  "clusterRadius": 25,
-  "count": 200000,
-  "densityScale": 0.012,
-  "densityThreshold": -0.7,
-  "maxScale": 1.35,
-  "maxSlopeDeg": 55,
-  "minScale": 0.7,
-  "region": 20000,
-  "seed": 211,
-  "spacingFactor": 0.9,
-  "species": [
-   {
-    "cover": "rock",
-    "family": "outcrop",
-    "kind": "stylized_rock",
-    "size": 4.0,
-    "stone": "granite",
-    "variants": 4
-   },
-   {
-    "biome": [
-     "upland",
-     "mountain"
-    ],
-    "family": "boulder",
-    "kind": "stylized_rock",
-    "size": 2.6,
-    "stone": "granite",
-    "variants": 4
-   },
-   {
-    "biome": [
-     "lowland",
-     "upland"
-    ],
-    "family": "boulder",
-    "kind": "stylized_rock",
-    "size": 2.6,
-    "stone": "mossy",
-    "variants": 4
-   },
-   {
-    "biome": [
-     "upland",
-     "mountain"
-    ],
-    "family": "slab",
-    "kind": "stylized_rock",
-    "size": 3.2,
-    "stone": "granite",
-    "variants": 3
-   },
-   {
-    "cover": "dirt",
-    "family": "pebbles",
-    "kind": "stylized_rock",
-    "size": 1.8,
-    "stone": "granite",
-    "variants": 4
-   },
-   {
-    "biome": "beach",
-    "family": "boulder",
-    "kind": "stylized_rock",
-    "size": 2.08,
-    "stone": "sandstone",
-    "variants": 3
-   },
-   {
-    "biome": "beach",
-    "family": "slab",
-    "kind": "stylized_rock",
-    "size": 3.2,
-    "stone": "basalt",
-    "variants": 3
-   }
-  ]
  },
  "grassLayers": [
   {

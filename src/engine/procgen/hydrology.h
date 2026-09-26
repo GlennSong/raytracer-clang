@@ -122,6 +122,11 @@ public:
     // On a sea mouth's SHELF channel (the carve carried past the coast, River::shelf) or its banks: where
     // the ocean surface must cover the carved ground, though the uncarved ground stands above the sea.
     bool onShelf(double x, double z) const;
+    // THE SHORE (ADR-0131, Glenn: "where the rivers and lakes meet the ground ... pebbly/dirt-like"): how
+    // much the ground at (x, z), height y, is a river's or lake's margin, 0..1 -- 1 within a metre or so of
+    // the water line and a few decimetres above it, fading out by ~6 m and ~1.8 m up. `waterline` gets
+    // the narrow gravel strip right at the edge (0..1).
+    double shore(double x, double z, double y, double* waterline = nullptr) const;
     // Inside a lake, or within `margin` metres of one (its drainage cells).
     bool inLake(double x, double z, double margin = 0.0) const;
     RenderMesh waterMesh(const std::vector<std::vector<Vec2>>& sea = {},
