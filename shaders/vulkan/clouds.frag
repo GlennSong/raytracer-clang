@@ -165,11 +165,16 @@ void main() {
 
     // EMPTY-RAY EARLY-OUT: probe the weather field along the slab span before
     // paying for the march — a fair sky is mostly gaps by design.
+    // (three probes -- start, middle, end -- let a cloud smaller than half the span fall between them: the
+    // ray was cleared for some pixels and marched for their neighbours, and clouds came out cut along hard
+    // lines -- the "break in the rendering" Glenn saw. Eight probes, each jittered along its eighth)
     {
-        float covA = clLocalCoverage(clWeather((camPos + dir * t0).xz));
-        float covB = clLocalCoverage(clWeather((camPos + dir * mix(t0, t1, 0.5)).xz));
-        float covC = clLocalCoverage(clWeather((camPos + dir * t1).xz));
-        if (max(covA, max(covB, covC)) < 0.02) { outColor = CLEAR; return; }
+        float cov = 0.0;
+        for (int k = 0; k < 8 && cov < 0.02; ++k) {
+            float f = (float(k) + clDither(gl_FragCoord.xy)) / 8.0;
+            cov = max(cov, clLocalCoverage(clWeather((camPos + dir * mix(t0, t1, f)).xz)));
+        }
+        if (cov < 0.02) { outColor = CLEAR; return; }
     }
 
     int viewSteps = int(u.march.x);

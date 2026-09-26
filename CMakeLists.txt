@@ -223,6 +223,7 @@ add_library(engine_core STATIC
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp
     src/engine/systems/grass_system.cpp
+    src/engine/systems/flashlight_system.cpp
     src/engine/residency.cpp
     src/engine/occlusion.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an

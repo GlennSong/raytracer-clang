@@ -6156,8 +6156,10 @@ bool LevelLoader::load(const std::string& path,
                     // third, and at the night exposure a box glowing evenly at 1.3 read as a
                     // pale slab — the far city should be a soft, tinted glow, not lit boxes.
                     engine::NightGlow ng;
-                    ng.fullEmission = Vec3(1.0, 1.0, 1.0) * 1.0;
-                    ng.nightAlbedo = 0.22f;   // the body goes dark with dusk; the window glow carries it
+                    // (it WAS 1.0 despite the note above: the far city drew as grey-white slabs at night --
+                    // Glenn: "LOD buildings are just white". Warm, and a sixth of that)
+                    ng.fullEmission = Vec3(1.0, 0.82, 0.58) * 0.16;
+                    ng.nightAlbedo = 0.08f;   // the body goes dark with dusk; the window glow carries it
                     ng.dayAlbedo = r.material.albedo;
                     world.add<engine::NightGlow>(e, ng);
                 }

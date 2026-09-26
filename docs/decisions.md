@@ -8951,3 +8951,18 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 - **The weather and maps caches ignore `trails`.**
 
 **Consequences.** Island 8: 22 trails, 118 km. The map draws them as a layer.
+
+## ADR-0135 — City feedback: sealed ground, the pass's ends, deck-to-street heights, the far city at night, whole clouds, a flashlight
+
+**Context.** Glenn, walking `island_8_nature`: "There's flowers everywhere!! In the city, it should be confined into the green spaces"; the 2-lane mountain road "crosses over itself and becomes a hot mess"; "in saltwood the mountain road in the air and doesn't connect to anything"; "cars get off the freeway and then sink into the ground and they appear"; "From a distance at night... LOD buildings are just white"; "there's still an issue with the clouds. I can see a break"; "We should give the player a flashlight as a 4th tool."
+
+**Decision.**
+- **Sealed ground:** every grass and flower layer skips the drawn roads (`DrawnRoad`, which includes sidewalks, freeways and ramps) and non-park building pads. Parks and green lots keep theirs.
+- **The pass:** `cutLoops` removes polyline self-crossings (in `finishRoad` and on the pass). The pass is still cut where it meets the freeway, but `joinPassToTowns` runs each cut end on into the nearest town's arterial. It used to stop on the freeway, and under a viaduct no interchange fit, so it ended in the air.
+- **Deck-to-street nav links:** a link with one absolute (deck) end and one ground-relative end was absolute as a whole, so cars lerped toward y = 0 and sank. `CityRenderSystem` gives the relative end the drawn ground's height.
+- **The far city at night:** the HLOD proxies' `NightGlow` was 1.0 (its own comment said 0.4) and drew as white slabs. It is now warm, at 0.16, with a night albedo of 0.08.
+- **Clouds:** the empty-ray early-out probed only 3 points, so small clouds fell between them and were cleared for some pixels, cutting clouds along hard lines. It now probes 8 jittered points.
+- **`FlashlightSystem`:** tool slot 4 toggles a warm spot from the camera, staged into `vehicleSpots` in `render()` (VehicleSystem rebuilds that list in its fixed step). On foot only.
+- **The island level** caps ambient traffic at 4000.
+
+**Consequences.** Regenerating `island_8_nature` changes its lanes scene (the pass), so its road bundle rebuilds on the next load (about 28 minutes, once).

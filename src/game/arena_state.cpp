@@ -17,6 +17,7 @@
 #include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/residency_system.h"
 #include "../engine/systems/grass_system.h"
+#include "../engine/systems/flashlight_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
 #include "../apps/citysim/city_traffic_audio.h"
@@ -201,6 +202,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
+    addSystem<FlashlightSystem>();               // tool slot 4: after VehicleSystem clears the spot list
 #else
     // physics-off build: no collider/vehicle/walker bridges; the spectate camera
     // above still follows the sim ghosts (citySys is consumed there).
