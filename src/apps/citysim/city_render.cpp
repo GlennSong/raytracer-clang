@@ -2158,7 +2158,9 @@ void CityRenderSystem::syncGroups(World& world) {
             for (std::size_t k = 0; k < cars[v]->transforms.size(); ++k) {
                 const Mat4& xf = cars[v]->transforms[k];
                 const int ai = k < ids.size() ? ids[k] : -1;
-                const bool seen = always || (ai >= 0 && nearSwap_.count(ai));
+                // near-swapped only when the slot HAS a cabin to show (a kit body without one keeps its glass
+                // opaque rather than showing an empty shell through clear glass)
+                const bool seen = always || (ai >= 0 && nearSwap_.count(ai) && cabin);
                 if (seen) {
                     if (clear) clear->transforms.push_back(xf);
                     if (cabin) cabin->transforms.push_back(xf);
@@ -2178,7 +2180,7 @@ void CityRenderSystem::syncGroups(World& world) {
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
-                if (!always && !nearSwap_.count(ai)) continue;   // behind opaque glass: nobody to see
+                if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
                 if (hasDriver && drv)

@@ -325,9 +325,65 @@ local function fleet_car(class_name, color)
     }
 end
 
--- A slot is a CLASS plus a PAINT. Adding a vehicle is a line here (and a package
--- in vehicle_classes.lua) — no C++ table to keep in step.
-local FLEET_SLOTS = {
+-- FLEET V2 (ADR-0139): a slot built by vehicle_kit.lua on the poly.* kit -- faceted, with a real gasket
+-- round each window, grille and lamp lenses. The same recipe fields as fleet_car: one opaque vertex-
+-- coloured body, the wheelset apart, the glass as its own part (drawn opaque and reflective), lamp
+-- markers and the driver's seat. No cabin yet: until it exists the city keeps these cars' glass opaque.
+local kit = require "vehicle_kit"
+local KIT_TINT = {
+  glass = { 0.16, 0.20, 0.24 }, trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 },
+  grille = { 0.06, 0.06, 0.065 }, chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 },
+  lamp_red = { 0.75, 0.06, 0.05 }, interior = { 0.35, 0.26, 0.18 }, bed = { 0.08, 0.08, 0.09 },
+  box = { 0.90, 0.90, 0.88 }, chassis = { 0.07, 0.07, 0.08 }, door = { 0.80, 0.81, 0.82 },
+  tank = { 0.78, 0.79, 0.80 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
+}
+local function kit_car(spec, color)
+  local P = kit.SPECS[spec]()
+  local car = kit.build(P, 0)
+  local shell = {}
+  for name, part in pairs(car.parts) do
+    if name ~= "glass" then
+      local col = name == "body" and color or (KIT_TINT[name] or { 0.5, 0.5, 0.5 })
+      shell[#shell + 1] = mesh.bake_height_color(part, col, col)
+    end
+  end
+  local glass = car.parts.glass and mesh.bake_height_color(car.parts.glass, KIT_TINT.glass, KIT_TINT.glass) or nil
+  local w = kit.wheel(P.wheel_r, P.wheel_w, 0)
+  local tyre = mesh.bake_height_color(w.tyre, { 0.05, 0.05, 0.055 }, { 0.05, 0.05, 0.055 })
+  local rim = mesh.bake_height_color(w.rim, { 0.72, 0.73, 0.75 }, { 0.72, 0.73, 0.75 })
+  local rimL = mesh.rotate_y(rim, math.pi)
+  local wheelParts, layout = {}, {}
+  for _, wh in ipairs(car.wheels) do
+    wheelParts[#wheelParts + 1] = mesh.translate(tyre, wh.pos)
+    wheelParts[#wheelParts + 1] = mesh.translate(wh.pos[1] > 0 and rim or rimL, wh.pos)
+    if wh.dual then
+      wheelParts[#wheelParts + 1] = mesh.translate(tyre, { wh.pos[1] - (wh.pos[1] > 0 and 1 or -1) * (wh.width + 0.03), wh.pos[2], wh.pos[3] })
+    end
+    layout[#layout + 1] = { pos = wh.pos, radius = wh.radius, width = wh.width,
+                            steered = wh.front, driven = true, hand_brake = not wh.front }
+  end
+  return {
+    body = mesh.recompute_normals(mesh.merge(shell)),
+    wheels = mesh.merge(wheelParts),
+    wheel_layout = layout,
+    lights = car.lights,
+    size = car.size,
+    class = spec,
+    glass = glass,
+    see_into = false,
+    driver_seat = car.driver_seat,
+  }
+end
+-- the catalogue size without building the meshes' materials: the faceted build is cheap, so it is simply
+-- measured (a truck's box or a pickup's bed is part of its length)
+local function kit_size(spec)
+  local car = kit.build(kit.SPECS[spec](), 0)
+  return car.size
+end
+
+-- THE CLASSIC SET: today's mesh.car bodies, kept (Glenn: "it would be nice and funny if we kept some of
+-- the current designs as a 'classic' set"). vehicle.classic[i] has the same shape as vehicle.fleet[i].
+local CLASSIC_SLOTS = {
     { class = "sedan",     color = { 0.72, 0.10, 0.10 } },   -- sedan (red)
     { class = "sedan",     color = { 0.10, 0.18, 0.52 } },   -- sedan (blue)
     { class = "sedan",     color = { 0.90, 0.90, 0.90 } },   -- sedan (white)
@@ -343,6 +399,25 @@ local FLEET_SLOTS = {
     { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow)
 }
 
+-- THE FLEET (v2): kit bodies for the cars and trucks; the city BUS stays the mesh.car bus Glenn likes,
+-- in the 13th slot (the sim's built-in table types slot 13 as the bus). Semis wait for articulated
+-- trailers (a 22 m rigid body would swing its trailer through every kerb).
+local FLEET_SLOTS = {
+    { kit = "sedan",       color = { 0.62, 0.06, 0.07 } },   -- sedan (red)
+    { kit = "sedan",       color = { 0.10, 0.18, 0.52 } },   -- sedan (blue)
+    { kit = "sedan",       color = { 0.88, 0.88, 0.88 } },   -- sedan (white)
+    { kit = "hatchback",   color = { 0.85, 0.72, 0.10 } },   -- hatchback (yellow)
+    { kit = "hatchback",   color = { 0.10, 0.45, 0.30 } },   -- hatchback (green)
+    { kit = "suv",         color = { 0.09, 0.09, 0.11 } },   -- SUV (black)
+    { kit = "suv",         color = { 0.52, 0.53, 0.56 } },   -- SUV (silver)
+    { kit = "jeep",        color = { 0.24, 0.30, 0.18 } },   -- jeep (olive)
+    { kit = "convertible", color = { 0.80, 0.12, 0.10 } },   -- convertible (red)
+    { kit = "pickup",      color = { 0.14, 0.30, 0.20 } },   -- pickup (green)
+    { kit = "step_van",    color = { 0.36, 0.22, 0.10 } },   -- parcel step van (brown)
+    { kit = "small_truck", color = { 0.90, 0.90, 0.88 } },   -- small box truck (white cab)
+    { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow), mesh.car
+}
+
 -- The fleet is DESCRIPTION up front and GEOMETRY on demand.
 --
 -- Each slot carries its catalogue entry — class and size — as plain data, which
@@ -352,15 +427,28 @@ local FLEET_SLOTS = {
 -- wants correct car SIZES must not have to pay for twelve car MESHES to get
 -- them — building them eagerly here made every headless city build do exactly
 -- that.
-vehicle.fleet = {}
-for i, slot in ipairs(FLEET_SLOTS) do
-    local c = classes.apply(slot.class)
-    local d = classes.dims(c)
-    vehicle.fleet[i] = {
-        class = slot.class,
-        size = { d.width, d.height, d.length },
-        build = function() return fleet_car(slot.class, slot.color) end,
-    }
+local function catalogue(slots)
+    local out = {}
+    for i, slot in ipairs(slots) do
+        if slot.kit then
+            out[i] = {
+                class = slot.kit,
+                size = kit_size(slot.kit),
+                build = function() return kit_car(slot.kit, slot.color) end,
+            }
+        else
+            local c = classes.apply(slot.class)
+            local d = classes.dims(c)
+            out[i] = {
+                class = slot.class,
+                size = { d.width, d.height, d.length },
+                build = function() return fleet_car(slot.class, slot.color) end,
+            }
+        end
+    end
+    return out
 end
+vehicle.fleet = catalogue(FLEET_SLOTS)
+vehicle.classic = catalogue(CLASSIC_SLOTS)
 
 return vehicle

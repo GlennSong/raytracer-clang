@@ -305,24 +305,42 @@ function kit.lamps(P, car)
       car.polys[#car.polys + 1] = kit.box_part({ gw * 2 - 0.04, 0.012, 0.03 }, { 0, y, half + 0.012 }, 2.5, "chrome")
     end
   end
+  -- LAMP LENSES stand ON the end panel: step in from the end until the body there is both wide enough for
+  -- the lens and tall enough for it under the shoulder, set the lens 4 cm below that shoulder at most, and
+  -- stand it 1.5 cm into the panel with the rest proud (a lens centred inside the body hid; one at a fixed
+  -- height poked above a low nose as a white fang)
   local lens = P.lens or {}
+  local function place(front, x, w, h, band)
+    local z = front and half or -half
+    local dz = front and -0.01 or 0.01
+    local top = band[2]
+    for _ = 1, 150 do
+      local roof = math.max(P.belt(z), P.roof(z))
+      top = math.min(band[2], roof - 0.04)
+      if P.half_width(z) * 0.97 >= math.abs(x) + w * 0.5 and top - h >= P.bottom(z) + 0.05 then break end
+      z = z + dz
+    end
+    local d = 0.045
+    local zc = front and (z + d * 0.5 - 0.015) or (z - d * 0.5 + 0.015)
+    return { x, top - h * 0.5, zc }, d
+  end
+  car.markers = car.markers or {}
   local hy = P.lamp_y
-  local hw = P.half_width(half - 0.25)
-  local hx = (lens.head_x or 0.70) * hw
-  local hwid, hhei = lens.head_w or 0.34, hy[2] - hy[1]
+  local hx = (lens.head_x or 0.70) * P.half_width(half - 0.25)
+  local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.14)
   for _, sx in ipairs({ 1, -1 }) do
-    local x = sx * hx
-    local z = surfaceZ(x + sx * hwid * 0.5, true)
-    car.polys[#car.polys + 1] = kit.box_part({ hwid, hhei, 0.08 }, { x, 0.5 * (hy[1] + hy[2]), z - 0.02 }, 1.2, "lamp")
+    local at, d = place(true, sx * hx, hwid, hhei, hy)
+    car.polys[#car.polys + 1] = kit.box_part({ hwid, hhei, d }, at, 2.5, "lamp")
+    car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_r" or "headlight_l", pos = at }
   end
   local ty = P.tail_y
   if ty[1] < P.height then
     local tx = (lens.tail_x or 0.72) * P.half_width(-half + 0.25)
-    local twid = lens.tail_w or 0.36
+    local twid, thei = lens.tail_w or 0.36, math.min(ty[2] - ty[1], 0.14)
     for _, sx in ipairs({ 1, -1 }) do
-      local x = sx * tx
-      local z = surfaceZ(x + sx * twid * 0.5, false)
-      car.polys[#car.polys + 1] = kit.box_part({ twid, ty[2] - ty[1], 0.07 }, { x, 0.5 * (ty[1] + ty[2]), z + 0.02 }, 1.2, "lamp_red")
+      local at, d = place(false, sx * tx, twid, thei, ty)
+      car.polys[#car.polys + 1] = kit.box_part({ twid, thei, d }, at, 2.5, "lamp_red")
+      car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = at }
     end
   end
 end
@@ -498,7 +516,14 @@ S.small_truck = function()
     belt = { { -1, 1.45 }, { 0.3, 1.45 }, { 0.8, 1.35 }, { 1, 1.15 } },
     lamp_y = { 0.75, 0.92 }, grille_y = { 0.50, 1.10 }, color = { 0.90, 0.90, 0.88 },
     extras = function(car)
+      local boxBack = -1.15 - boxL - 0.1
       car.polys[#car.polys + 1] = kit.box_part({ 2.25, boxH, boxL }, { 0, 0.95 + boxH * 0.5, -1.15 - boxL * 0.5 - 0.1 }, 1.0, "box")
+      -- tail lamps on the box's rear sill
+      car.markers = car.markers or {}
+      for _, sx in ipairs({ 1, -1 }) do
+        car.polys[#car.polys + 1] = kit.box_part({ 0.22, 0.14, 0.05 }, { sx * 0.90, 1.05, boxBack + 0.005 }, 2.5, "lamp_red")
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = { sx * 0.90, 1.05, boxBack + 0.01 } }
+      end
       car.polys[#car.polys + 1] = kit.box_part({ 1.0, 0.25, boxL + 1.2 }, { 0, 0.72, -1.15 - boxL * 0.5 + 0.4 }, 1.0, "trim")
     end }
 end
@@ -675,8 +700,16 @@ function kit.build(P, level, opts)
     end
   end
   local spare = car.spare and { car.spare[1], car.spare[2] - cy, car.spare[3] - cz } or nil
+  local lights = {}
+  for _, mk in ipairs(car.markers or {}) do
+    lights[#lights + 1] = { name = mk.name, pos = { mk.pos[1], mk.pos[2] - cy, mk.pos[3] - cz } }
+  end
+  -- the driver's hip point: left of centre, just behind the windshield's foot, at the sill
+  local g = P.glass or {}
+  local seatZ = (g.a_side or 0) - 0.55
+  local seat = { -P.width * 0.22, P.belt(seatZ) - 0.45 - cy, seatZ - cz }
   return { parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
-           length = hi[3] - lo[3], spare = spare, color = P.color }
+           length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat }
 end
 
 -- One wheel as poly parts: a rounded tyre (a lofted ring, subdivided), a dished rim and a hub, facing +x
@@ -694,7 +727,7 @@ function kit.wheel(r, width, level)
     end
     return pts
   end
-  local N = (level or 0) > 0 and 24 or 14
+  local N = (level or 0) > 0 and 24 or 16   -- a multiple of 4: as tall as it is long (round, not oval)
   -- tyre: outer tread band with rounded shoulders (rings along the axle), capped by the sidewalls
   local T = poly.loft{ sections = { ring(rr, N), ring(r * 0.93, N), ring(r, N), ring(r, N), ring(r * 0.93, N), ring(rr, N) },
                        stations = { -w2, -w2 * 0.92, -w2 * 0.55, w2 * 0.55, w2 * 0.92, w2 }, cap_start = false, cap_end = false }
