@@ -15,4 +15,12 @@ layout(push_constant) uniform Push {
 
 void main() {
     gl_Position = pc.lightViewProj * inModel * vec4(inPosition, 1.0);
+    // FLAG_LOD_BAND (pc.model[2].x = 1): a hard cut at the middle of each band edge, by the INSTANCE's
+    // origin (a near tree casts its shadow while it is drawn, its impostor beyond) -- pc.model[0].xyz the
+    // camera, pc.model[1] the band (in0, in1, out0, out1). A collapsed instance draws nothing.
+    if (pc.model[2].x > 0.5) {
+        const vec4 b = pc.model[1];
+        const float d = distance(inModel[3].xyz, pc.model[0].xyz);
+        if ((b.y > b.x && d < 0.5 * (b.x + b.y)) || (b.w > b.z && d >= 0.5 * (b.z + b.w))) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
+    }
 }

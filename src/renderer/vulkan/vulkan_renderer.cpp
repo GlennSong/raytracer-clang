@@ -4882,6 +4882,10 @@ bool VulkanRenderer::Impl::createShadowPipeline() {
         VkPipelineLayoutCreateInfo al = layoutInfo;
         al.setLayoutCount = 1;
         al.pSetLayouts = &materialSetLayout;
+        VkPushConstantRange alphaRange = pushRange;   // the fragment stage reads the band too
+        alphaRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        al.pushConstantRangeCount = 1;
+        al.pPushConstantRanges = &alphaRange;
         VkShaderModule av = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_shadow_alpha.vert.spv");
         VkShaderModule af = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_shadow_alpha.frag.spv");
         if (av && af && vkCreatePipelineLayout(device, &al, nullptr, &shadowAlphaLayout) == VK_SUCCESS) {
@@ -5010,8 +5014,17 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
                 }
                 ShadowPush push;
                 std::memcpy(push.lightViewProj, cpuGlobals.cascadeVP[c], sizeof(push.lightViewProj));
-                // (the shadow shader reads the model per instance; this slot is unused)
-                vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT,
+                // The model slot (the shaders read the model per instance) carries the LOD band cut:
+                // [0] the camera, [1] the band (features[3]), [2].x the flag
+                std::memset(push.model, 0, sizeof(push.model));
+                if (item.push.surfaceFlags[1] & RenderMaterial::FLAG_LOD_BAND) {
+                    push.model[0] = static_cast<float>(frameEye.x);
+                    push.model[1] = static_cast<float>(frameEye.y);
+                    push.model[2] = static_cast<float>(frameEye.z);
+                    for (int k = 0; k < 4; ++k) push.model[4 + k] = item.push.features[12 + k];
+                    push.model[8] = 1.0f;
+                }
+                vkCmdPushConstants(cmd, layout, cut ? (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT) : VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(ShadowPush), &push);
                 const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
                 const VkDeviceSize offs[2] = {0, 0};

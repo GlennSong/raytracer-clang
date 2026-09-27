@@ -718,13 +718,16 @@ void main() {
     if ((pc.surfaceFlags.y & (1u << 19)) != 0u) {
         const vec4 b = pc.features[3];
         const float d = distance(inWorldPos, g.cameraPosition.xyz);
-        float vis = 1.0;
-        if (b.y > b.x) vis *= smoothstep(b.x, b.y, d);
-        if (b.w > b.z) vis *= 1.0 - smoothstep(b.z, b.w, d);
         // a 4x4 Bayer threshold: the band reads as a fine screen-door, not noise
         const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
         const ivec2 q = ivec2(gl_FragCoord.xy) & 3;
-        if (vis <= (bayer[q.y * 4 + q.x] + 0.5) / 16.0) discard;
+        const float thr = (bayer[q.y * 4 + q.x] + 0.5) / 16.0;
+        // COMPLEMENTARY edges: a fade-OUT keeps the pixels under its threshold, a fade-IN those above
+        // (1 - thr), so a model fading out and its impostor fading in over the same band split every
+        // pixel between them. Both testing the same threshold kept the same pixels and dropped the rest:
+        // mid-band half the pixels showed neither -- a see-through ring of trees (review, #rendering).
+        if (b.y > b.x && smoothstep(b.x, b.y, d) <= 1.0 - thr) discard;
+        if (b.w > b.z && 1.0 - smoothstep(b.z, b.w, d) <= thr) discard;
     }
     // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
     const bool emissiveTint = (pc.surfaceFlags.y & 32u) != 0u;

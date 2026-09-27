@@ -12,8 +12,11 @@ layout(push_constant) uniform Push {
 } pc;
 
 layout(location = 0) out vec2 outTexcoord;
+layout(location = 1) out vec3 outWorldPos;
 
 void main() {
     outTexcoord = inTexcoord;
-    gl_Position = pc.lightViewProj * inModel * vec4(inPosition, 1.0);
+    const vec4 world = inModel * vec4(inPosition, 1.0);
+    outWorldPos = world.xyz;
+    gl_Position = pc.lightViewProj * world;
 }
