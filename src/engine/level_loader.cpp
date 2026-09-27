@@ -1836,7 +1836,6 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         sl.halfW = half;
         sl.height = var.tree.height * 1.03;
         sl.crownBase = var.tree.crownBase;
-        sl.crownRadius = var.tree.crownRadius;
         const double eps = 0.5;
         sl.u0 = (i * cw + eps) / aw; sl.u1 = ((i + 1) * cw - eps) / aw;
         sl.v0 = eps / ah; sl.v1 = (sh - eps) / ah;
@@ -2077,14 +2076,6 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         }
     }
     const std::size_t nColliders = natureColliders.shapes.size();
-    if (std::getenv("RT_NATURE_COLLIDER_TRACE")) {   // a few big rocks, for probes (#55)
-        int shown = 0;
-        for (const NatureCollider& c : natureColliders.shapes)
-            if (!c.capsule && c.half.y > 0.9 && shown < 6) {
-                LOG_INFO << "[nature colliders] rock at (" << c.centre.x << ", " << c.centre.z << ") top " << c.centre.y + c.half.y;
-                ++shown;
-            }
-    }
     world.add<NatureColliders>(world.create(), std::move(natureColliders));
     LOG_INFO << "[forest] " << nColliders << " collision shapes (trunks, rocks) for streaming; " << nRocks << " rocks; " << trees.size() << " trees, " << nVar << " variants, " << nearGroups << " near groups, "
              << farCells.size() << " far cells (" << farVerts * 32 / 1048576 << " MB of impostor vertices) in "

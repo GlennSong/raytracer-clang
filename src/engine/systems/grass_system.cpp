@@ -100,16 +100,6 @@ void GrassSystem::update(FrameContext& ctx) {
     ctx.world.each<GrassField>([&](Entity, GrassField& f) { if (!f.clumps.empty() && f.ground) fields.push_back(&f); });
     if (fields.empty()) return;
     const Vec3 cam = ctx.view.camera.position;
-    static const bool stats = [] { const char* e = std::getenv("RT_GRASS_STATS"); return e && e[0] == '1'; }();
-    if (stats) {   // RT_GRASS_STATS=1: fields, tiles committed, groups, jobs in flight -- every 120 frames
-        static long frame = 0;
-        if (++frame % 120 == 0) {
-            std::size_t groups = 0, committed = 0;
-            for (const auto& [k, t] : tiles_) { groups += t.groups.size(); committed += t.lod >= 0; }
-            std::fprintf(stderr, "[grass] %zu fields, %zu tiles (%zu committed), %zu groups, %d in flight, camera (%.0f, %.0f)\n",
-                         fields.size(), tiles_.size(), committed, groups, inFlight_, cam.x, cam.z);
-        }
-    }
     // the layers: tile size, and the band of distances a tile must reach into to be wanted
     struct Layer { double T, inner, reach; bool on; };
     std::vector<Layer> layers;

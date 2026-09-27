@@ -109,7 +109,6 @@ private:
     int riding_ = -1;          // agent index of the vehicle we are aboard, or -1
     engine::Vec3 seat_{0, 0, 0};   // where we put the player last step
     bool seated_ = false;          // seat_ is meaningful
-    bool wasAboard_ = false;   // for the one-shot log on boarding/alighting
     Hud hud_;
     bool boardEdge_ = false;   // E pressed since the last fixed step
 };

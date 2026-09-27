@@ -484,7 +484,6 @@ bool realSpeciesFromName(const std::string& name, RealSpecies& out) {
     return false;
 }
 const char* realSpeciesName(RealSpecies s) { return kNames[std::min<int>(static_cast<int>(s), static_cast<int>(RealSpecies::Count) - 1)]; }
-bool realSpeciesIsConifer(RealSpecies s) { return s == RealSpecies::Spruce || s == RealSpecies::Fir || s == RealSpecies::Pine; }
 
 RealTree realTree(RealSpecies species, uint32_t seed, double height) {
     RealTree t;

@@ -43,6 +43,5 @@ build-visionos-dev/
 # citywalk director decision log: per-run telemetry written to the repo root by
 # tools/citywalk.py (ADR-0091), never checked in.
 citywalk-log.jsonl
-# Python bytecode. Three .pyc files predate this line and are still tracked;
-# untracking them is separate work.
+# Python bytecode.
 __pycache__/

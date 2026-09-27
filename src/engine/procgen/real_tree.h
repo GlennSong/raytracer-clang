@@ -30,7 +30,6 @@ namespace engine {
 enum class RealSpecies : uint8_t { Spruce = 0, Fir, Pine, Oak, Beech, Birch, Maple, Aspen, Willow, Alder, Shrub, Count };
 bool realSpeciesFromName(const std::string& name, RealSpecies& out);
 const char* realSpeciesName(RealSpecies s);
-bool realSpeciesIsConifer(RealSpecies s);
 
 struct RealTree {
     RenderMesh bark;      // tubes; vertex colour is the bark (linear); white material

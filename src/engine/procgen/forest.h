@@ -78,10 +78,6 @@ struct ForestTree {
     uint16_t variant = 0;          // index into the global variant list (species-major)
 };
 
-// The density at a point, 0..1 (height y is the ground there, slopeDeg its slope).
-double forestDensity(const ForestParams& p, double seaLevel, const GroundCover* cover, const TerrainMaps* maps,
-                     double x, double z, double y, double slopeDeg);
-
 // The canopy's cover at a point, 0..1, WITHOUT asking the ground cover (the cover asks this, to lay
 // leaf and needle litter under the trees): the density's stands, soil, shore, treeline and slope.
 double forestCanopy(const ForestParams& p, double seaLevel, const TerrainMaps* maps, double x, double z, double y,
@@ -115,7 +111,7 @@ Seat seatOnGround(const std::function<double(double, double)>& ground, double x,
 struct ImpostorSlot {
     double u0 = 0, v0 = 0, u1 = 1, v1 = 1;     // side picture
     double tu0 = 0, tv0 = 0, tu1 = 1, tv1 = 1; // top picture
-    double halfW = 1.0, height = 1.0, crownBase = 0.0, crownRadius = 1.0;
+    double halfW = 1.0, height = 1.0, crownBase = 0.0;
 };
 
 // Append `t`'s impostor (two crossed side cards + a top card) to `mesh`, world space. `colour` is the

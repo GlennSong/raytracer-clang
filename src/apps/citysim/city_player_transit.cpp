@@ -208,11 +208,6 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
     if (riding_ >= static_cast<int>(agents.size())) { riding_ = -1; return; }
     engine::Mat4 pose;
     if (sim.isBus(riding_) && city_.busFrame(riding_, &pose)) {
-        // RT_RIDE_TRACE=1 (#37): the bus frame the rider rides in, every step -- position and its up axis
-        static const bool trace = std::getenv("RT_RIDE_TRACE") != nullptr;
-        if (trace)
-            LOG_INFO << "[ride] " << pose.m[0][3] << " " << pose.m[1][3] << " " << pose.m[2][3] << " up " << pose.m[0][1] << " "
-                     << pose.m[1][1] << " " << pose.m[2][1] << " fwd " << pose.m[0][2] << " " << pose.m[2][2] << " dt " << dt;
         rideBus(world, dt, in, player, *pt, *cc, pose, busInteract);
         return;
     }
@@ -492,8 +487,6 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
             const Vec3 eye(w.x, w.y + (sat ? kSeatedEye : kStandingEye), w.z);
             engine::CameraState& cam = ctx.view.camera;
             const Vec3 shift = eye - cam.position;
-            static const bool trace = std::getenv("RT_RIDE_TRACE") != nullptr;
-            if (trace) LOG_INFO << "[ride eye] off by " << shift.length() << " m before the correction";
             // only the first-person eye (a detached or third-person view has its own offset)
             if (shift.length() < 1.0) {
                 cam.position = cam.position + shift;

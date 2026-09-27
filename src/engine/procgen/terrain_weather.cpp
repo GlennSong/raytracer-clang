@@ -170,7 +170,6 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
     WeatherParams p;
     p.res = w.value("res", p.res);
     p.roughnessM = w.value("roughness", p.roughnessM);
-    p.cragM = w.value("crags", p.cragM);
     p.shapeKeep = w.value("shapeKeep", p.shapeKeep);
     p.shapeScaleM = w.value("shapeScale", p.shapeScaleM);
     p.plainHeightM = w.value("plainHeight", p.plainHeightM);
@@ -384,28 +383,6 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
         return p1 + 0.5 * t * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0)));
     };
     const Noise rough(seed * 104729u + 5u);
-    // CRAGS (Glenn: "the mountains seem to have no detail"): the grown grid is ~20 m, cubic between -- smooth
-    // up close. Mountain ground takes cragM of warped ridged noise (420/155/57 m), by height and steepness,
-    // before the water: the water then cuts gullies down it and fills the hollows, so it reads as rock
-    std::vector<float> steep(coarse.h.size(), 0.0f);
-    for (int z = 1; z < cn - 1; ++z)
-        for (int x = 1; x < cn - 1; ++x) {
-            const double gx = (coarse.get(x + 1, z) - coarse.get(x - 1, z)) / (2.0 * cellM), gz = (coarse.get(x, z + 1) - coarse.get(x, z - 1)) / (2.0 * cellM);
-            const double sl = std::sqrt(gx * gx + gz * gz);
-            steep[static_cast<std::size_t>(z) * cn + x] = static_cast<float>(std::clamp((sl - 0.15) / 0.45, 0.0, 1.0));
-        }
-    auto ridged = [&](double wx, double wz) {
-        double sum = 0.0, amp = 1.0, f = 1.0 / 420.0, norm = 0.0;
-        for (int o = 0; o < 3; ++o) {
-            const double qx = wx * f + 0.8 * rough.fbm2(wx * f * 0.5 + 17.0, wz * f * 0.5, 2), qz = wz * f + 0.8 * rough.fbm2(wx * f * 0.5, wz * f * 0.5 - 9.0, 2);
-            const double r = 1.0 - std::abs(rough.noise2(qx + o * 31.7, qz - o * 12.9));
-            sum += amp * (r * r * r - 0.3);   // sharp crests, broad hollows
-            norm += amp;
-            amp *= 0.55;
-            f *= 2.7;
-        }
-        return sum / norm;
-    };
     const double fineCell = tp.size / w.res;
     for (int z = 0; z < hm.n; ++z)
         for (int x = 0; x < hm.n; ++x) {
@@ -420,15 +397,6 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
             }
             double hv = cr(rows[0], rows[1], rows[2], rows[3], tz);
             if (hv > base0 + 0.5) hv += w.roughnessM * rough.fbm2(x * fineCell * 0.02 + 0.3, z * fineCell * 0.02 - 0.7, 4);
-            if (w.cragM > 0.0) {
-                const double hUp = std::clamp((hv - base0 - w.plainHeightM - w.reliefRampM) / (2.0 * w.reliefRampM), 0.0, 1.0);
-                if (hUp > 0.0) {
-                    const double st = (steep[static_cast<std::size_t>(z1) * cn + x1] * (1 - tx) + steep[static_cast<std::size_t>(z1) * cn + x1 + 1] * tx) * (1 - tz)
-                                    + (steep[static_cast<std::size_t>(z1 + 1) * cn + x1] * (1 - tx) + steep[static_cast<std::size_t>(z1 + 1) * cn + x1 + 1] * tx) * tz;
-                    const double m = hUp * hUp * (3.0 - 2.0 * hUp) * (0.35 + 0.65 * st);
-                    hv += w.cragM * m * ridged(x * fineCell, z * fineCell);
-                }
-            }
             hm.set(x, z, static_cast<float>(hv));
         }
     }

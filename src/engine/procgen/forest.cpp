@@ -104,12 +104,6 @@ double forestGrounded(const ForestParams& p, double sea, const GroundCover* cove
 }
 }  // namespace
 
-double forestDensity(const ForestParams& p, double sea, const GroundCover* cover, const TerrainMaps* maps,
-                     double x, double z, double y, double slopeDeg) {
-    const double a = forestPrefilter(p, maps, x, z);
-    return a <= 0.0 ? 0.0 : a * forestGrounded(p, sea, cover, x, z, y, slopeDeg);
-}
-
 double forestCanopy(const ForestParams& p, double sea, const TerrainMaps* maps, double x, double z, double y,
                     double slopeDeg) {
     const double a = forestPrefilter(p, maps, x, z);

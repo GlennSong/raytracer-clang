@@ -35,7 +35,6 @@ struct WeatherParams {
     StreamPowerParams grow;
     ErosionParams water;
     double roughnessM = 2.5;
-    double cragM = 0.0;   // "crags": m of ridged rock detail on steep mountain ground (see the fine grid)
     // KEEP THE SHAPE (ADR-0126, Glenn: "I feel like we lose some of the shape?"): stream power grows a narrow
     // divide over wide low foothills -- real, but not the island the level drew. The result keeps the
     // ORIGINAL terrain below `shapeScaleM` (its broad masses and plateaus) and takes the grown terrain's

@@ -557,8 +557,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                  << "% within 120 m, about a block); "
                  << static_cast<int>(100.0 * sim_.buses().streetShare(nav_) + 0.5)
                  << "% of streets have a bus on them";
-        busStopBenches_.clear();
-        for (const Vec3& sp : stopPositions) busStopBenches_.emplace_back(sp.x, sp.z);
         for (std::size_t k = 0; k < stopPositions.size() && k < 4; ++k)
             LOG_INFO << "[citysim]   stop furniture " << k << " at ("
                      << stopPositions[k].x << ", " << stopPositions[k].y << ", "
@@ -2367,50 +2365,6 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     ctx.settings.setDouble("citysim.hour", built_ ? sim_.clockHours() : -1.0);
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
-    // RT_BUS_STOP_AUDIT=1 (#36): every bus standing at a stop, how far its nearest stop furniture is --
-    // a bench across the street reads 10-20 m, one beside the doors a few
-    static const bool busAudit = std::getenv("RT_BUS_STOP_AUDIT") != nullptr;
-    if (busAudit && built_ && !busStopBenches_.empty()) {
-        static double tAcc = 0;
-        static std::vector<double> dists;
-        static int aligned = 0;   // bench on the bus's right (the kerb), level with its doors (|along| < 3 m)
-        static std::vector<std::pair<int, double>> lastSeen;   // bus -> last logged time (log each dwell once)
-        tAcc += ctx.frameDelta;
-        const auto& agents = sim_.agents();
-        for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
-            if (!sim_.isBus(i) || agents[static_cast<std::size_t>(i)].busDwell <= 0) continue;
-            bool seen = false;
-            for (auto& ls : lastSeen) if (ls.first == i) { seen = tAcc - ls.second < 15.0; if (!seen) ls.second = tAcc; }
-            if (seen) continue;
-            if (std::none_of(lastSeen.begin(), lastSeen.end(), [&](const auto& ls) { return ls.first == i; })) lastSeen.push_back({i, tAcc});
-            const Vec2 p = agents[static_cast<std::size_t>(i)].pos;
-            double best = 1e30;
-            Vec2 nb = p;
-            for (const Vec2& b : busStopBenches_) if ((b - p).length() < best) { best = (b - p).length(); nb = b; }
-            dists.push_back(best);
-            // along / across the bus (+across = its right, the kerb it should pull in to)
-            const Vec2 h = agents[static_cast<std::size_t>(i)].heading;
-            const double hl = std::max(1e-9, std::sqrt(h.x * h.x + h.y * h.y));
-            const Vec2 hd(h.x / hl, h.y / hl), rt(hd.y, -hd.x);
-            const Vec2 d = nb - p;
-            const double along = d.x * hd.x + d.y * hd.y, across = d.x * rt.x + d.y * rt.y;
-            aligned += std::fabs(along) < 3.0 && across > 0.0 && across < 12.0;
-            LOG_INFO << "[bus audit]   bus " << i << " at (" << p.x << ", " << p.y << "): bench " << best << " m, along "
-                     << along << ", right " << across;
-        }
-        if (tAcc > 20.0 && !dists.empty()) {
-            std::vector<double> d = dists;
-            std::sort(d.begin(), d.end());
-            int near6 = 0;
-            for (double v : d) near6 += v <= 6.0;
-            LOG_INFO << "[bus audit] " << d.size() << " dwells: bench on the kerb side and level with the doors for " << aligned << " ("
-                     << 100 * aligned / static_cast<int>(d.size()) << "%); within 6 m " << near6 << ", median " << d[d.size() / 2] << " m";
-            dists.clear();
-            aligned = 0;
-            tAcc = 0;
-            lastSeen.clear();
-        }
-    }
     // Semicolon flips the city-plan layer (blocks + lots) — and switches the
     // master on when it was off, so the key works standalone on web (no ImGui
     // panel there).

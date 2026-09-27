@@ -74,15 +74,6 @@ void NatureColliderSystem::fixedUpdate(FrameContext& ctx) {
         }
         budget -= static_cast<int>(idx.size());
     }
-    static const bool trace = std::getenv("RT_NATURE_COLLIDER_TRACE") != nullptr;
-    if (trace) {
-        static int n = 0;
-        if (++n % 120 == 0) {
-            std::size_t b = 0;
-            for (const auto& [k, v] : live_) b += v.size();
-            LOG_INFO << "[nature colliders] " << live_.size() << " cells, " << b << " bodies round (" << at.x << ", " << at.z << ")";
-        }
-    }
 }
 
 void NatureColliderSystem::onStop(FrameContext&) {

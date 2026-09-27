@@ -1741,6 +1741,5 @@ void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vecto
     }
 }
 
-int removeSelfCrossings(std::vector<Vec2>& points) { return cutLoops(points); }
 
 }  // namespace engine
