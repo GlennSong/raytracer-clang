@@ -3767,6 +3767,9 @@ bool LevelLoader::load(const std::string& path,
     // Terrain is parsed once into params + noise so vegetation can scatter on
     // the same surface it generates.
     GrownLots preLots;   // lots grown by the terrain pre-pass (reused below)
+    // THE CITY'S SEALED LOTS for the grass (#48): every building's footprint, its paved lot, and plazas --
+    // captured here because preLots is MOVED into the city's entity pass before the scatter runs
+    auto sealedLotPolys = std::make_shared<std::vector<engine::Poly2>>();
     if (root.contains("terrain")) {
         TerrainParams terrainParams = readTerrainParams(root["terrain"]);
         terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
@@ -3838,6 +3841,14 @@ bool LevelLoader::load(const std::string& path,
             preLots = growCityLots(lotInputs, preNets, root["citysim"], levelDir, lotGround,
                                    levelGround, freewayROWp, lotGroundWith,
                                    lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
+            for (const engine::LotBuilding& lb : preLots.lots) {
+                if (lb.type == "park" || lb.type == "green") {
+                    if (lb.recipe == "plaza" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
+                    continue;
+                }
+                if (lb.pavedLot.size() >= 3) sealedLotPolys->push_back(lb.pavedLot);
+                if (lb.plan.size() >= 3) sealedLotPolys->push_back(lb.plan);
+            }
             // BLOCK GRADING CASCADE (ADR-0075 P2, re-enabled roads-v2.1 R4):
             // the old attempt extracted faces from the GRAPH (none on a
             // tree-like terrain-gated metro); the LOT PLAN's own block
@@ -4396,19 +4407,17 @@ bool LevelLoader::load(const std::string& path,
                 }
             };
             auto sealedPads = std::make_shared<PadIndex>();
-            if (preLots.grown)
-                for (const engine::LotBuilding& lb : preLots.lots) {
-                    if (lb.pad.size() < 3 || lb.type == "park" || lb.type == "green") continue;
+            for (const engine::Poly2& poly : *sealedLotPolys) {
                     const int k = static_cast<int>(sealedPads->polys.size());
-                    sealedPads->polys.push_back(lb.pad);
+                    sealedPads->polys.push_back(poly);
                     double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
-                    for (const engine::Vec2& v : lb.pad) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+                    for (const engine::Vec2& v : poly) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
                     const double kb = sealedPads->kBin;
                     for (int j = static_cast<int>(std::floor(z0 / kb)); j <= static_cast<int>(std::floor(z1 / kb)); ++j)
                         for (int i = static_cast<int>(std::floor(x0 / kb)); i <= static_cast<int>(std::floor(x1 / kb)); ++i)
                             sealedPads->bins[PadIndex::key(i, j)].push_back(k);
                 }
-            LOG_INFO << "[grass] sealed ground: " << sealedRoads->tris.size() << " road triangles, " << sealedPads->polys.size() << " building pads";
+            LOG_INFO << "[grass] sealed ground: " << sealedRoads->tris.size() << " road triangles, " << sealedPads->polys.size() << " lot polygons (buildings, paved lots, plazas)";
             const std::shared_ptr<const PadIndex> padsRO = sealedPads;
             auto plantGrass = [&](const json& gj, const std::string& tag) {
                 GrassField gf;
