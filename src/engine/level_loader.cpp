@@ -2027,23 +2027,16 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             // to the ground's own normal (a few degrees of jitter on top), and bedded to the LOWEST ground
             // under its footprint, so no edge hangs in the air.
             const double foot = 0.5 * std::max(v.hi.x - v.lo.x, v.hi.z - v.lo.z) * r.scale;
-            const double e = std::max(0.5, 0.6 * foot);
-            const double gx = (groundAt(r.pos.x + e, r.pos.z) - groundAt(r.pos.x - e, r.pos.z)) / (2 * e);
-            const double gz = (groundAt(r.pos.x, r.pos.z + e) - groundAt(r.pos.x, r.pos.z - e)) / (2 * e);
-            const Vec3 nrm = normalize(Vec3(-gx, 1.0, -gz));
+            const Seat seat = seatOnGround(groundAt, r.pos.x, r.pos.z, foot, v.bed * v.size * r.scale * 0.6);
+            const Vec3 nrm = seat.normal;
             const Vec3 axis = cross(Vec3(0, 1, 0), nrm);
             const double al = axis.length();
             const Quat toGround = al > 1e-6 ? Quat::fromAxisAngle(axis * (1.0 / al), std::acos(std::clamp(nrm.y, -1.0, 1.0))) : Quat();
             const double jitter = std::min(0.12, static_cast<double>(r.tilt) * 0.4);   // a little of its own settle
             const Quat q = toGround * Quat::fromAxisAngle(Vec3(std::cos(r.tiltDir), 0, std::sin(r.tiltDir)), jitter) *
                            Quat::fromAxisAngle(Vec3(0, 1, 0), r.yaw);
-            double low = r.pos.y;
-            for (int k = 0; k < 8; ++k) {
-                const double a = k * 0.785398;
-                low = std::min(low, groundAt(r.pos.x + foot * std::cos(a), r.pos.z + foot * std::sin(a)));
-            }
-            // bed from the lowest point; the mesh's own bottom (lo.y) sits that far below the pivot's ground
-            const Vec3 pos(r.pos.x, low - v.bed * v.size * r.scale * 0.6, r.pos.z);
+            // the mesh's own bottom (lo.y, scaled) stands on the seat's base plane
+            const Vec3 pos = Vec3(r.pos.x, seat.baseY, r.pos.z) - nrm * (v.lo.y * r.scale);
             cells[{static_cast<int>(std::floor(r.pos.x / fp.cellM)), static_cast<int>(std::floor(r.pos.z / fp.cellM)), r.layer, r.variant}]
                 .push_back(Mat4::trs(pos, q, Vec3(r.scale, r.scale, r.scale)));
             // a collider for a rock you could stand on or walk into (not pebbles): its mesh box, a little inside

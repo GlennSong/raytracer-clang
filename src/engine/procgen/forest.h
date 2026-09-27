@@ -105,6 +105,12 @@ std::vector<PlacedRock> placeRocks(const ForestParams& p, double half, double se
                                    const std::function<double(double, double, double)>& shore = {},
                                    const std::function<bool(double, double)>& excludeShore = {});   // the shore layer's own
 
+// SEATING A ROCK on the ground (#54): the ground's normal across the footprint (radius `foot`), and the height
+// y0 of the rock's base plane at its centre -- tilted with it, nowhere above the ground over the footprint
+// (centre + 8 points) and `bed` below it where it rides highest. The mesh's bottom goes on that plane.
+struct Seat { Vec3 normal{0, 1, 0}; double baseY = 0.0; };
+Seat seatOnGround(const std::function<double(double, double)>& ground, double x, double z, double foot, double bed);
+
 // One tree variant's impostor slot in the atlas, and the tree's measures (unit scale).
 struct ImpostorSlot {
     double u0 = 0, v0 = 0, u1 = 1, v1 = 1;     // side picture

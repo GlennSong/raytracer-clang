@@ -2,6 +2,7 @@
 #include "../src/engine/procgen/stylized_tree.h"
 #include "../src/engine/procgen/real_tree.h"
 #include "../src/engine/procgen/trails.h"
+#include "../src/engine/procgen/forest.h"
 #include "../src/engine/procgen/ground_cover.h"
 #include "../src/engine/procgen/ground_layers.h"
 #include "../src/engine/procgen/stylized_rock.h"
@@ -351,5 +352,23 @@ TEST_CASE(trail_network_measures_distance_to_the_nearest_path) {
     CHECK(t.distance(50, 40, 10) == 10.0);
     const engine::TrailNetwork e({});
     CHECK(e.empty() && e.distance(0, 0, 5) == 5.0);
+}
+
+// #54 (review): a rock is seated on its base plane, tilted with the ground -- on an even 35-degree slope
+// exactly `bed` below the ground at its centre (not sunk by the downhill drop), and on bumpy ground nowhere
+// floating over the footprint.
+TEST_CASE(rock_seat_follows_the_slope_without_burying_or_floating) {
+    const double g = std::tan(35.0 * 3.14159265 / 180.0);
+    auto plane = [g](double x, double) { return 100.0 + g * x; };
+    const engine::Seat s = engine::seatOnGround(plane, 10.0, 5.0, 1.5, 0.2);
+    CHECK(std::abs(s.baseY - (plane(10.0, 5.0) - 0.2)) < 1e-6);
+    CHECK(std::abs(s.normal.y - std::cos(35.0 * 3.14159265 / 180.0)) < 1e-3);
+    auto bumpy = [g](double x, double z) { return 100.0 + g * x + 0.3 * std::sin(x * 2.1) * std::cos(z * 1.7); };
+    const engine::Seat b = engine::seatOnGround(bumpy, 3.0, -2.0, 1.5, 0.1);
+    for (int k = 0; k < 8; ++k) {   // the base plane is at or below the ground at every footprint sample
+        const double a = k * 0.785398, dx = 1.5 * std::cos(a), dz = 1.5 * std::sin(a);
+        const double planeY = b.baseY - (b.normal.x * dx + b.normal.z * dz) / b.normal.y;
+        CHECK(planeY <= bumpy(3.0 + dx, -2.0 + dz) + 1e-9);
+    }
 }
 

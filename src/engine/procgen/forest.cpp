@@ -256,6 +256,22 @@ std::vector<PlacedRock> placeRocks(const ForestParams& p, double half, double se
     return out;
 }
 
+Seat seatOnGround(const std::function<double(double, double)>& ground, double x, double z, double foot, double bed) {
+    Seat st;
+    const double e = std::max(0.5, 0.6 * foot);
+    const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e);
+    const double gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
+    st.normal = normalize(Vec3(-gx, 1.0, -gz));
+    double y0 = ground(x, z);
+    for (int k = 0; k < 8; ++k) {
+        const double a = k * 0.785398, dx = foot * std::cos(a), dz = foot * std::sin(a);
+        const double rise = -(st.normal.x * dx + st.normal.z * dz) / std::max(0.2, st.normal.y);   // the plane above its centre
+        y0 = std::min(y0, ground(x + dx, z + dz) - rise);
+    }
+    st.baseY = y0 - bed;
+    return st;
+}
+
 void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s, double colour) {
     const double sc = t.scale;
     const double hw = s.halfW * sc, H = s.height * sc;
