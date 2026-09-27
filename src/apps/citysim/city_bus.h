@@ -35,6 +35,10 @@ namespace citysim {
 struct BusStop {
     int node = -1;              // nav node this stop sits on
     engine::Vec2 pos{0, 0};
+    // Which visit of the route's pathNodes this stop is (the loop may pass a node twice), set when the
+    // route is built: pathNodes[pathIndex - 1] -> node is the street the bus ARRIVES by, where it stands
+    // and where the stop's furniture belongs (#36). -1: not on the route's path.
+    int pathIndex = -1;
 };
 
 // A closed loop. The bus drives stops in order and wraps, for ever.
@@ -46,7 +50,7 @@ struct BusRoute {
     // bus route (Glenn: "those do not look like bus routes. Buses tend to stop
     // at consecutive streets").
     std::vector<engine::Vec2> path;
-    std::vector<int> pathNodes;   // the same, as nav node ids
+    std::vector<int> pathNodes;   // the same, as nav node ids -- an OPEN loop (the last node is not the first again)
     // How far round the loop each stop is (metres from the first path node),
     // and the loop's length: a ride's distance is the arc FORWARD from the
     // boarding stop, because a loop only runs one way.

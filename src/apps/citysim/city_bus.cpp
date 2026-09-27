@@ -138,6 +138,7 @@ void BusNetwork::buildRegional(const engine::NavGraph& nav) {
         if (route.pathNodes.empty()) route.pathNodes.push_back(a0);
         route.stopArc.push_back(metres);
         route.stops.push_back(picks[order[k]]);
+        route.stops.back().pathIndex = static_cast<int>(route.pathNodes.size()) - 1;   // a0 is the path's last node here
         const engine::Route leg = engine::findRoute(nav, a0, b0, /*onFoot=*/false);
         if (leg.links.empty()) return;   // a place the car router cannot reach: no regional route
         for (int li : leg.links) {
@@ -397,10 +398,13 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
                 if (have.node == nd) { already = true; break; }
             if (already) continue;
             if (isHub) route.hubStops.push_back(static_cast<int>(route.stops.size()));
-            route.stops.push_back({nd, nav.nodes[static_cast<std::size_t>(nd)]});
+            route.stops.push_back({nd, nav.nodes[static_cast<std::size_t>(nd)], static_cast<int>(k)});
             route.stopArc.push_back(arc);
             since = 0;
         }
+        // an OPEN loop, as the regional builder leaves it: the sweep ends back on its first node
+        // (the drawn `path` keeps the closing point for maps)
+        if (route.pathNodes.size() > 1 && route.pathNodes.back() == route.pathNodes.front()) route.pathNodes.pop_back();
         route.loopLength = arc;   // the path closes back onto its first node
         if (!route.valid()) continue;
 

@@ -115,10 +115,11 @@ int buildBusStopProps(
         const BusRoute& route = net.route(r);
         const std::vector<int>& pn = route.pathNodes;
         for (const BusStop& stop : route.stops) {
-            // the node the route reaches this stop from (its path is a loop)
+            // the node the route reaches THIS visit from: the stop's own place on the path (an open loop,
+            // so the first node's predecessor is the last)
             int prev = -1;
-            for (std::size_t k = 0; k < pn.size(); ++k)
-                if (pn[k] == stop.node) { prev = pn[(k + pn.size() - 1) % pn.size()]; break; }
+            if (stop.pathIndex >= 0 && !pn.empty() && static_cast<std::size_t>(stop.pathIndex) < pn.size())
+                prev = pn[(static_cast<std::size_t>(stop.pathIndex) + pn.size() - 1) % pn.size()];
             int in = -1;
             if (prev >= 0 && prev < nav.nodeCount())
                 for (int li : nav.outLinks[static_cast<std::size_t>(prev)])
