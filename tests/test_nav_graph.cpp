@@ -156,3 +156,32 @@ TEST_CASE(nav_junction_knot_merges_into_one_intersection) {
     NavGraph plain = buildNavGraph(straightRoad());
     for (Real s : plain.nodeSpread) CHECK(s == 0.0);
 }
+
+// #35: a deck-to-street link knows WHICH end is the deck even after the nav merges junction knots and
+// compacts its nodes (the loader used to look the ends up in the road graph by the nav's indices, read
+// other nodes' flags, lifted real decks by the ground height, and cars flew).
+TEST_CASE(nav_links_carry_per_end_deck_flags_through_node_compaction) {
+    RoadGraph g;
+    // a junction knot (three nodes within the merge radius, each with a spur) ahead of the ramp, so the
+    // compaction renumbers every later node
+    g.nodes = {{Vec2(0, 0)}, {Vec2(3, 0)}, {Vec2(0, 3)}, {Vec2(-40, 0)}, {Vec2(3, -40)}, {Vec2(0, 43)},
+               {Vec2(60, 0)}, {Vec2(100, 0)}};
+    g.edges = {RoadEdge{0, 1, 8, RoadClass::Local, 0}, RoadEdge{0, 2, 8, RoadClass::Local, 0},
+               RoadEdge{1, 2, 8, RoadClass::Local, 0}, RoadEdge{0, 3, 8, RoadClass::Local, 0},
+               RoadEdge{1, 4, 8, RoadClass::Local, 0}, RoadEdge{2, 5, 8, RoadClass::Local, 0},
+               RoadEdge{1, 6, 8, RoadClass::Local, 0}, RoadEdge{6, 7, 8, RoadClass::Ramp, 0}};
+    g.nodes[7].elev = 12.0;   // the deck end, absolute
+    g.nodes[7].elevAbsolute = true;
+    const NavGraph nav = buildNavGraph(g);
+    CHECK(nav.nodeCount() < static_cast<int>(g.nodes.size()));   // the knot merged: indices moved
+    int mixed = 0;
+    for (const NavLink& L : nav.links) {
+        if (!L.elevAbsolute) continue;
+        ++mixed;
+        const Vec2 pa = nav.nodes[static_cast<std::size_t>(L.from)], pb = nav.nodes[static_cast<std::size_t>(L.to)];
+        // exactly the end at x = 100 is the deck
+        CHECK(L.elevAbsA == (pa.x > 90.0));
+        CHECK(L.elevAbsB == (pb.x > 90.0));
+    }
+    CHECK(mixed >= 1);
+}

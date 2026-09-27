@@ -261,6 +261,8 @@ NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
         l.elevA = elev[a];
         l.elevB = elev[b];
         l.elevAbsolute = elevAbs[a] || elevAbs[b];
+        l.elevAbsA = elevAbs[a] != 0;
+        l.elevAbsB = elevAbs[b] != 0;
         int idx = static_cast<int>(g.links.size());
         g.links.push_back(l);
         g.outLinks[a].push_back(idx);

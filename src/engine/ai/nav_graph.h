@@ -31,6 +31,10 @@ struct NavLink {
     // positions traffic continuously (layer stays for legacy bridges).
     Real elevA = 0, elevB = 0;
     bool elevAbsolute = false;          // elevA/B are absolute deck Y
+    // ...per end (a deck-to-street link has one absolute end and one ground-relative end; the loader
+    // resolves the relative one to absolute from the ground -- nav node indices are compacted, so the
+    // road graph's nodes cannot be looked up by a link's from/to)
+    bool elevAbsA = false, elevAbsB = false;
     // One-way link (freeway carriageway / ramp): its LANES span the full
     // link width centred on the chain, not the right half of a two-way road.
     bool oneWay = false;

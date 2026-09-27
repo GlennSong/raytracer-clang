@@ -237,8 +237,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         int mixed = 0;
         for (engine::NavLink& L : nav_.links) {
             if (!L.elevAbsolute || L.from < 0 || L.to < 0) continue;
-            const bool absA = combined.nodes[static_cast<std::size_t>(L.from)].elevAbsolute;
-            const bool absB = combined.nodes[static_cast<std::size_t>(L.to)].elevAbsolute;
+            // the link's own per-end flags: the nav's nodes are compacted (junction knots merged), so
+            // looking them up in `combined` by index read other nodes' flags and lifted real decks by the
+            // ground height -- cars flew (Glenn: "Agent driven cars are flying up into the sky now", #35)
+            const bool absA = L.elevAbsA, absB = L.elevAbsB;
             if (absA == absB) continue;
             const engine::Vec2 pa = nav_.nodes[static_cast<std::size_t>(L.from)], pb = nav_.nodes[static_cast<std::size_t>(L.to)];
             if (!absA) L.elevA = groundAt(pa.x, pa.y) + L.layer * kLayerClearance + L.elevA;
