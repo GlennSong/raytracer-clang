@@ -2997,6 +2997,7 @@ void checkSelRange(lua_State* L, const PolyMesh& m, const std::vector<int>& sel)
 }
 
 // poly.section(corners, radius | {radii}, segs) -> {{x,y},...}: a rounded 2-D polygon (CCW seen from +z)
+// poly.section(corners, radius | {radii}, segs | {segs per corner; 0 = one sharp point})
 int l_poly_section(lua_State* L) {
     const auto corners = checkPts2(L, 1);
     std::vector<double> radii;
@@ -3006,7 +3007,15 @@ int l_poly_section(lua_State* L) {
     } else {
         radii.push_back(luaL_optnumber(L, 2, 0.0));
     }
-    pushPts2(L, roundedPolygon(corners, radii, static_cast<int>(luaL_optinteger(L, 3, 3))));
+    std::vector<int> segsPer;
+    int segs = 3;
+    if (lua_istable(L, 3)) {
+        const int n = static_cast<int>(luaL_len(L, 3));
+        for (int i = 1; i <= n; ++i) { lua_geti(L, 3, i); segsPer.push_back(static_cast<int>(luaL_checkinteger(L, -1))); lua_pop(L, 1); }
+    } else {
+        segs = static_cast<int>(luaL_optinteger(L, 3, 3));
+    }
+    pushPts2(L, roundedPolygon(corners, radii, segs, segsPer));
     return 1;
 }
 // poly.resample(pts, n) -> n points evenly by arc length from the bottom centre
@@ -3119,6 +3128,14 @@ int l_poly_inset(lua_State* L) {
     pushSel(L, inset(m, sel, luaL_checknumber(L, 3)));
     return 1;
 }
+// P:inset_region(sel, amount) -> sel: the region as one panel, shrunk inside its outline
+int l_poly_inset_region(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushSel(L, insetRegion(m, sel, luaL_checknumber(L, 3)));
+    return 1;
+}
 // P:assign(sel, { group=, mat=, color={r,g,b} })
 int l_poly_assign(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
@@ -3206,6 +3223,26 @@ int l_poly_map(lua_State* L) {
     }
     return 0;
 }
+// P:stats([sliver]) -> { faces, points, triangles, corners, creases, slivers, worst }
+int l_poly_stats(lua_State* L) {
+    const PolyStats st = polyStats(checkPoly(L, 1), luaL_optnumber(L, 2, 0.02));
+    lua_createtable(L, 0, 7);
+    lua_pushinteger(L, st.faces); lua_setfield(L, -2, "faces");
+    lua_pushinteger(L, st.points); lua_setfield(L, -2, "points");
+    lua_pushinteger(L, st.triangles); lua_setfield(L, -2, "triangles");
+    lua_pushinteger(L, st.corners); lua_setfield(L, -2, "corners");
+    lua_pushinteger(L, st.creases); lua_setfield(L, -2, "creases");
+    lua_pushinteger(L, st.slivers); lua_setfield(L, -2, "slivers");
+    lua_pushnumber(L, st.worst); lua_setfield(L, -2, "worst");
+    if (st.worstFace >= 0) {
+        const PolyMesh& m = checkPoly(L, 1);
+        pushVec3(L, m.faceCentroid(st.worstFace)); lua_setfield(L, -2, "worst_at");
+        lua_pushinteger(L, st.worstFace); lua_setfield(L, -2, "worst_face");
+        lua_pushstring(L, m.groups[static_cast<std::size_t>(m.faces[static_cast<std::size_t>(st.worstFace)].group)].c_str());
+        lua_setfield(L, -2, "worst_group");
+    }
+    return 1;
+}
 int l_poly_closed(lua_State* L) { lua_pushboolean(L, isClosed(checkPoly(L, 1))); return 1; }
 int l_poly_volume(lua_State* L) { lua_pushnumber(L, signedVolume(checkPoly(L, 1))); return 1; }
 int l_poly_face_count(lua_State* L) { lua_pushinteger(L, static_cast<lua_Integer>(checkPoly(L, 1).faces.size())); return 1; }
@@ -3240,6 +3277,7 @@ void registerPolyMetatable(lua_State* L) {
         lua_setfield(L, -2, "__gc");
         static const luaL_Reg kMethods[] = {
             {"select", l_poly_select}, {"extrude", l_poly_extrude}, {"inset", l_poly_inset},
+            {"inset_region", l_poly_inset_region}, {"stats", l_poly_stats},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
             {"crease_corners", l_poly_crease_corners},

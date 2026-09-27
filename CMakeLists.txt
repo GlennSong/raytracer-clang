@@ -688,6 +688,7 @@ add_executable(run_tests
     tests/test_atmosphere.cpp
     tests/test_scatter.cpp
     tests/test_polymesh.cpp
+    tests/test_vehicle_kit.cpp
     tests/test_terrain_route.cpp
     tests/test_sdf.cpp
     tests/test_city.cpp

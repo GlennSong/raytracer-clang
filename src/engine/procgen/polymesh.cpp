@@ -83,13 +83,15 @@ void PolyMesh::append(const PolyMesh& o) {
 
 // --- sections and loft ----------------------------------------------------------------------------------
 
-std::vector<Vec2> roundedPolygon(const std::vector<Vec2>& c, const std::vector<double>& radii, int segs) {
+std::vector<Vec2> roundedPolygon(const std::vector<Vec2>& c, const std::vector<double>& radii, int segsAll,
+                                 const std::vector<int>& segsPer) {
     const std::size_t n = c.size();
     std::vector<Vec2> out;
     if (n < 3) return c;
-    segs = std::max(segs, 1);
     for (std::size_t i = 0; i < n; ++i) {
         const Vec2 p = c[i], a = c[(i + n - 1) % n], b = c[(i + 1) % n];
+        const int segs = segsPer.empty() ? std::max(segsAll, 1) : std::max(segsPer[std::min(i, segsPer.size() - 1)], 0);
+        if (segs == 0) { out.push_back(p); continue; }   // a sharp corner: exactly one point
         // EVERY corner emits exactly segs + 1 points, so sections built from the same corner list always
         // correspond point for point (a recipe indexes faces by corner). A corner with no radius, or a
         // straight one, gets its points spread over a millimetre along its edges.
@@ -100,10 +102,15 @@ std::vector<Vec2> roundedPolygon(const std::vector<Vec2>& c, const std::vector<d
         const double cosT = std::clamp(ua.x * ub.x + ua.y * ub.y, -1.0, 1.0);
         const double theta = std::acos(cosT);              // the corner's interior angle
         if (r <= 1e-9 || la < 1e-6 || lb < 1e-6 || theta < 1e-3 || theta > 3.1405) {
-            const double dd = std::min({1e-3, 0.25 * la, 0.25 * lb});
-            for (int s2 = 0; s2 <= segs; ++s2) {
-                const double t = static_cast<double>(s2) / segs;   // from the incoming edge to the outgoing
-                out.push_back(t < 0.5 ? p + ua * (dd * (1 - 2 * t)) : p + ub * (dd * (2 * t - 1)));
+            // a SHARP corner: its points split evenly either side of it along the two edges -- a chamfer of
+            // at most a few centimetres that a crease keeps crisp. Symmetric (a mirrored corner mirrors),
+            // and at a real spacing, so the loft grows no sliver strips.
+            const double d = std::min({0.05, 0.3 * la, 0.3 * lb});
+            const int k = segs + 1, h = k / 2;
+            for (int s2 = 0; s2 < k; ++s2) {
+                if (k % 2 == 1 && s2 == h) { out.push_back(p); continue; }
+                if (s2 < h) out.push_back(p + ua * (d * static_cast<double>(h - s2) / h));
+                else out.push_back(p + ub * (d * static_cast<double>(s2 - (k - h) + 1) / h));
             }
             continue;
         }
@@ -180,6 +187,147 @@ PolyMesh loft(const std::vector<std::vector<Vec2>>& sections, const std::vector<
             f.v = {id(k, i), id(k, i + 1), id(k + 1, i + 1), id(k + 1, i)};
             m.faces.push_back(f);
         }
+    // CAPS WITHOUT SLIVERS. A section symmetric about x = 0 closes as a modeller would: a narrow RIM of
+    // faces just inside the ring (inner points merged wherever they fall closer than kMinGap, with a
+    // triangle at each merge), then a LADDER of quads across the simplified inner outline, each rung
+    // joining a point to its mirror. A ring with closely spaced points (a shoulder, a sill ledge) would
+    // otherwise make full-width rungs millimetres tall. Asymmetric sections fall back to one n-gon.
+    constexpr double kMinGap = 0.05;
+    auto symCap = [&](std::size_t k, bool reverse, const std::string& groupName) -> bool {
+        const std::vector<Vec2>& ring = sections[k];
+        const double tol = 1e-4;
+        std::vector<int> mir(n, -1);
+        for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t j = 0; j < n; ++j)
+                if (std::fabs(ring[j].x + ring[i].x) < tol && std::fabs(ring[j].y - ring[i].y) < tol) { mir[i] = static_cast<int>(j); break; }
+            if (mir[i] < 0) return false;
+        }
+        // the ring's size sets the rim width
+        double minX = 1e30, maxX = -1e30, minY = 1e30, maxY = -1e30;
+        for (const Vec2& q : ring) { minX = std::min(minX, q.x); maxX = std::max(maxX, q.x); minY = std::min(minY, q.y); maxY = std::max(maxY, q.y); }
+        const double rim = std::min(0.04, 0.08 * std::min(maxX - minX, maxY - minY));
+        // inner points: each ring point moved inward along its 2-D bisector (CCW ring: inward = left)
+        std::vector<Vec2> inner(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const Vec2 pp = ring[(i + n - 1) % n], p = ring[i], nx = ring[(i + 1) % n];
+            Vec2 e0 = p - pp, e1 = nx - p;
+            const double l0 = e0.length(), l1 = e1.length();
+            e0 = l0 > 1e-12 ? e0 / l0 : e1 / std::max(1e-12, l1);
+            e1 = l1 > 1e-12 ? e1 / l1 : e0;
+            const Vec2 i0(-e0.y, e0.x), i1(-e1.y, e1.x);   // left normals (inward for a CCW ring)
+            Vec2 bi = i0 + i1;
+            const double bl = bi.length();
+            bi = bl > 1e-9 ? bi / bl : i0;
+            inner[i] = p + bi * (rim / std::max(0.4, i0.x * bi.x + i0.y * bi.y));
+        }
+        // merge runs of inner points closer than kMinGap: group[i] -> a merged inner point. Done on the
+        // right half and mirrored so the merged outline stays symmetric.
+        std::vector<int> group(n, -1);
+        std::vector<Vec2> gpts;
+        std::vector<std::size_t> order(n);
+        // start the walk at a point whose predecessor is far away, so no group straddles the start
+        std::size_t start = 0;
+        for (std::size_t i = 0; i < n; ++i)
+            if ((inner[i] - inner[(i + n - 1) % n]).length() >= kMinGap) { start = i; break; }
+        for (std::size_t s2 = 0; s2 < n; ++s2) order[s2] = (start + s2) % n;
+        for (std::size_t s2 = 0; s2 < n; ++s2) {
+            const std::size_t i = order[s2];
+            if (group[i] >= 0) continue;
+            if (ring[i].x < -tol) continue;   // left points follow their mirror
+            // a new group from i, taking following right-side points within kMinGap of its first point
+            const int gid = static_cast<int>(gpts.size());
+            Vec2 acc = inner[i];
+            int cnt = 1;
+            group[i] = gid;
+            for (std::size_t t = s2 + 1; t < n; ++t) {
+                const std::size_t j = order[t];
+                if (ring[j].x < -tol || group[j] >= 0) break;
+                // join while close, or while nearly LEVEL with the group's first point: the ladder's rungs
+                // must stand at least ~kMinGap apart, however far a horizontal ledge runs sideways
+                const Vec2 dd = inner[j] - inner[i];
+                if (dd.length() >= kMinGap && std::fabs(dd.y) >= kMinGap) break;
+                group[j] = gid;
+                acc = acc + inner[j];
+                ++cnt;
+            }
+            Vec2 c = acc / static_cast<double>(cnt);
+            if (std::fabs(ring[i].x) <= tol) c.x = 0;   // an axis point stays on the axis
+            gpts.push_back(c);
+        }
+        // mirror groups for the left side
+        std::vector<int> mirGroup(gpts.size(), -1);
+        const std::size_t rightGroups = gpts.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            if (ring[i].x >= -tol) continue;
+            const int rg = group[static_cast<std::size_t>(mir[i])];
+            if (rg < 0) return false;
+            if (std::fabs(gpts[static_cast<std::size_t>(rg)].x) <= tol) { group[i] = rg; continue; }
+            if (mirGroup[static_cast<std::size_t>(rg)] < 0) {
+                mirGroup[static_cast<std::size_t>(rg)] = static_cast<int>(gpts.size());
+                gpts.push_back(Vec2(-gpts[static_cast<std::size_t>(rg)].x, gpts[static_cast<std::size_t>(rg)].y));
+            }
+            group[i] = mirGroup[static_cast<std::size_t>(rg)];
+        }
+        (void)rightGroups;
+        // the inner outline in ring order (consecutive duplicates removed)
+        std::vector<int> outline;
+        for (std::size_t s2 = 0; s2 < n; ++s2) {
+            const int gg = group[(start + s2) % n];
+            if (outline.empty() || outline.back() != gg) outline.push_back(gg);
+        }
+        while (outline.size() > 1 && outline.front() == outline.back()) outline.pop_back();
+        if (outline.size() < 4) return false;
+        const int base = static_cast<int>(m.pts.size());
+        for (const Vec2& q : gpts) m.pts.push_back(Vec3(q.x, q.y, stations[k]));
+        const int g = m.groupId(groupName), gRim = m.groupId(groupName + "_rim");
+        auto face = [&](std::vector<int> v, int gid) {
+            PolyMesh::Face f;
+            f.v = std::move(v);
+            if (reverse) std::reverse(f.v.begin(), f.v.end());
+            f.group = gid;
+            m.faces.push_back(f);
+        };
+        // the rim (its own group, "<cap>_rim"): ring edge (i, i+1) against inner (group[i], group[i+1])
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::size_t j = (i + 1) % n;
+            const int gi = base + group[i], gj = base + group[j];
+            if (gi == gj) face({id(k, i), id(k, j), gi}, gRim);
+            else face({id(k, i), id(k, j), gj, gi}, gRim);
+        }
+        // the ladder across the inner outline: pair each right-side outline point with its mirror
+        std::vector<int> mirOf(gpts.size(), -1);
+        for (std::size_t q = 0; q < gpts.size(); ++q)
+            for (std::size_t r2 = 0; r2 < gpts.size(); ++r2)
+                if (std::fabs(gpts[r2].x + gpts[q].x) < tol && std::fabs(gpts[r2].y - gpts[q].y) < tol) { mirOf[q] = static_cast<int>(r2); break; }
+        std::size_t os = 0;
+        const std::size_t on = outline.size();
+        for (std::size_t q = 0; q < on; ++q)
+            if (gpts[static_cast<std::size_t>(outline[q])].x > tol && gpts[static_cast<std::size_t>(outline[(q + on - 1) % on])].x <= tol) { os = q; break; }
+        std::vector<int> rightChain;
+        for (std::size_t q = 0; q < on; ++q) {
+            const int gg = outline[(os + q) % on];
+            if (gpts[static_cast<std::size_t>(gg)].x > tol) rightChain.push_back(gg); else break;
+        }
+        if (rightChain.size() < 2 && on > 4) return false;
+        const int before = outline[(os + on - 1) % on], after = outline[(os + rightChain.size()) % on];
+        if (std::fabs(gpts[static_cast<std::size_t>(before)].x) <= tol)
+            face({base + before, base + rightChain.front(), base + mirOf[static_cast<std::size_t>(rightChain.front())]}, g);
+        for (std::size_t q = 0; q + 1 < rightChain.size(); ++q) {
+            const int r0 = rightChain[q], r1 = rightChain[q + 1];
+            face({base + r0, base + r1, base + mirOf[static_cast<std::size_t>(r1)], base + mirOf[static_cast<std::size_t>(r0)]}, g);
+        }
+        if (std::fabs(gpts[static_cast<std::size_t>(after)].x) <= tol)
+            face({base + rightChain.back(), base + after, base + mirOf[static_cast<std::size_t>(rightChain.back())]}, g);
+        return true;
+    };
+    if (capStart && n > 4 && symCap(0, true, "cap_start")) {   // a quad ring is its own best cap
+        for (std::size_t i = 0; i < n; ++i) m.setCrease(id(0, i), id(0, i + 1), capCrease);
+        capStart = false;
+    }
+    if (capEnd && n > 4 && symCap(R - 1, false, "cap_end")) {
+        for (std::size_t i = 0; i < n; ++i) m.setCrease(id(R - 1, i), id(R - 1, i + 1), capCrease);
+        capEnd = false;
+    }
     if (capStart) {   // at the lowest z the outside is -z: reverse the CCW(+z) order
         PolyMesh::Face f;
         for (std::size_t i = n; i-- > 0;) f.v.push_back(id(0, i));
@@ -293,6 +441,44 @@ std::vector<int> inset(PolyMesh& m, const std::vector<int>& sel, double amount) 
         inner.push_back(f);
     }
     return inner;
+}
+
+std::vector<int> insetRegion(PolyMesh& m, const std::vector<int>& sel, double amount) {
+    if (sel.empty()) return sel;
+    extrude(m, sel, 0.0);   // duplicates the region's points in place; its outline grows a (flat) ring
+    std::unordered_set<long long> de;
+    std::unordered_map<int, Vec3> nsum;
+    for (int f : sel) {
+        const auto& v = m.faces[static_cast<std::size_t>(f)].v;
+        const Vec3 fn = m.faceNormal(f);
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            de.insert(dkey(v[i], v[(i + 1) % v.size()]));
+            nsum[v[i]] = nsum[v[i]] + fn;
+        }
+    }
+    std::unordered_map<int, int> next, prev;
+    for (long long k : de) {
+        const int a = static_cast<int>(k >> 32), b = static_cast<int>(k & 0xffffffff);
+        if (de.count(dkey(b, a))) continue;
+        next[a] = b;
+        prev[b] = a;
+    }
+    std::vector<std::pair<int, Vec3>> moves;
+    for (const auto& [v, w] : next) {
+        const auto ip = prev.find(v);
+        if (ip == prev.end()) continue;
+        const Vec3 p = m.pts[static_cast<std::size_t>(v)];
+        const Vec3 n = normalize(nsum[v]);
+        const Vec3 e0 = normalize(p - m.pts[static_cast<std::size_t>(ip->second)]);
+        const Vec3 e1 = normalize(m.pts[static_cast<std::size_t>(w)] - p);
+        const Vec3 i0 = normalize(cross(n, e0)), i1 = normalize(cross(n, e1));   // the region lies to the left
+        Vec3 b = i0 + i1;
+        const double bl = b.length();
+        b = bl > 1e-9 ? b / bl : i0;
+        moves.push_back({v, b * (amount / std::max(0.3, dot(b, i0)))});
+    }
+    for (const auto& [v, d] : moves) m.pts[static_cast<std::size_t>(v)] = m.pts[static_cast<std::size_t>(v)] + d;
+    return sel;
 }
 
 void creaseBorder(PolyMesh& m, const std::vector<int>& sel, float s) {
@@ -519,6 +705,31 @@ std::vector<int> selectWhere(const PolyMesh& m, const std::function<bool(const V
     for (std::size_t i = 0; i < m.faces.size(); ++i)
         if (pred(m.faceCentroid(static_cast<int>(i)), m.faceNormal(static_cast<int>(i)))) s.push_back(static_cast<int>(i));
     return s;
+}
+
+PolyStats polyStats(const PolyMesh& m, double sliver) {
+    PolyStats st;
+    st.faces = static_cast<int>(m.faces.size());
+    st.points = static_cast<int>(m.pts.size());
+    st.corners = static_cast<int>(m.corners.size());
+    st.creases = static_cast<int>(m.creases.size());
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        const auto& v = m.faces[f].v;
+        st.triangles += static_cast<int>(v.size()) - 2;
+        double per = 0;
+        Vec3 acc(0, 0, 0);
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const Vec3& a = m.pts[static_cast<std::size_t>(v[i])];
+            const Vec3& b = m.pts[static_cast<std::size_t>(v[(i + 1) % v.size()])];
+            per += (b - a).length();
+            acc = acc + cross(a, b);
+        }
+        const double area = 0.5 * std::fabs(dot(acc, m.faceNormal(static_cast<int>(f))));
+        const double r = 4.0 * M_PI * area / std::max(1e-12, per * per);
+        if (r < st.worst) { st.worst = r; st.worstFace = static_cast<int>(f); }
+        st.slivers += r < sliver;
+    }
+    return st;
 }
 
 bool isClosed(const PolyMesh& m) {

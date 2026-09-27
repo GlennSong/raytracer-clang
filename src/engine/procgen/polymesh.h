@@ -64,7 +64,10 @@ struct PolyMesh {
 
 // A 2-D polygon (x lateral, y up; CCW seen from +z) with each corner rounded by radii[i] (one value =
 // all corners) in `segs` steps. A radius is clamped to what the two adjacent edges allow.
-std::vector<Vec2> roundedPolygon(const std::vector<Vec2>& corners, const std::vector<double>& radii, int segs);
+// `segsPer` (optional, one per corner) overrides `segs` corner by corner: 0 makes that corner exactly one
+// sharp point. Sections built with the same corner list and counts correspond point for point.
+std::vector<Vec2> roundedPolygon(const std::vector<Vec2>& corners, const std::vector<double>& radii, int segs,
+                                 const std::vector<int>& segsPer = {});
 
 // Resample a closed polygon to `n` points evenly by arc length, starting at the point where the
 // polygon crosses x = 0 at its lowest y (so every section of a symmetric body starts at the same
@@ -87,6 +90,10 @@ std::vector<int> extrude(PolyMesh& m, const std::vector<int>& sel, double dist, 
 // bisector, clamped), the ring between becomes quads with the face's group. Returns the inner faces.
 std::vector<int> inset(PolyMesh& m, const std::vector<int>& sel, double amount);
 
+// Region inset: the region `sel` as ONE panel shrinks inside its own outline by `amount` (its interior
+// points stay), a ring of quads between. For grilles, doors, panels spanning several faces.
+std::vector<int> insetRegion(PolyMesh& m, const std::vector<int>& sel, double amount);
+
 // Crease every edge on the outline of the region `sel` (edges with exactly one face in it).
 void creaseBorder(PolyMesh& m, const std::vector<int>& sel, float sharpness);
 // Crease every edge of every face in `sel`.
@@ -105,6 +112,12 @@ PolyMesh subdivide(const PolyMesh& m, int levels);
 std::vector<int> selectAll(const PolyMesh& m);
 std::vector<int> selectGroup(const PolyMesh& m, const std::string& group);
 std::vector<int> selectWhere(const PolyMesh& m, const std::function<bool(const Vec3& centroid, const Vec3& normal)>& pred);
+
+// Mesh quality (Glenn: "we definitely don't want wasted triangles in the runtime"): face count, triangles
+// after triangulation, and the worst face's roundness 4*pi*area/perimeter^2 (1 a circle, 0.785 a square,
+// -> 0 a sliver) with the count of faces under `sliver`.
+struct PolyStats { int faces = 0, points = 0, triangles = 0, corners = 0, creases = 0, slivers = 0; double worst = 1.0; int worstFace = -1; };
+PolyStats polyStats(const PolyMesh& m, double sliver = 0.02);
 
 // Topology checks (tests and recipe asserts).
 bool isClosed(const PolyMesh& m);        // every edge in exactly two faces, in opposite directions

@@ -4,6 +4,7 @@
 #include "../src/engine/procgen/polymesh.h"
 
 #include <cmath>
+#include <cstdio>
 
 using namespace engine;
 
@@ -140,4 +141,56 @@ TEST_CASE(polymesh_corners_hold_through_subdivision) {
     for (const Vec3& p : s.pts) kept += std::fabs(std::fabs(p.x) - 0.5) < 1e-9 && std::fabs(p.y - 0.5) < 1e-9 && std::fabs(std::fabs(p.z) - 0.5) < 1e-9;
     CHECK(kept == 4);
     CHECK(isClosed(s));
+}
+
+namespace {
+// the worst face's "roundness": 4*pi*area / perimeter^2 (1 for a circle, ~0.785 for a square, -> 0 for a sliver)
+double worstRoundness(const PolyMesh& m) {
+    double worst = 1.0;
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        const auto& v = m.faces[f].v;
+        double per = 0, area2 = 0;
+        const Vec3 n = m.faceNormal(static_cast<int>(f));
+        Vec3 acc(0, 0, 0);
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const Vec3& a = m.pts[static_cast<std::size_t>(v[i])];
+            const Vec3& b = m.pts[static_cast<std::size_t>(v[(i + 1) % v.size()])];
+            per += (b - a).length();
+            acc = acc + cross(a, b);
+        }
+        area2 = std::fabs(dot(acc, n));
+        worst = std::min(worst, 4.0 * M_PI * (0.5 * area2) / std::max(1e-12, per * per));
+    }
+    return worst;
+}
+}  // namespace
+
+// No slivers (Glenn: "degenerate looking triangles in the rear ... we don't want wasted triangles"): a
+// car-like section with sharp corners, lofted and capped, has no face thinner than a sensible bound, and
+// its caps are rows of quads, not one polygon.
+TEST_CASE(polymesh_car_section_loft_has_no_slivers_and_ladder_caps) {
+    const std::vector<Vec2> corners = {Vec2(-0.8, 0.15), Vec2(0.8, 0.15), Vec2(0.9, 0.6), Vec2(0.88, 0.95),
+                                       Vec2(0.8, 0.97), Vec2(0.65, 1.4), Vec2(-0.65, 1.4), Vec2(-0.8, 0.97),
+                                       Vec2(-0.88, 0.95), Vec2(-0.9, 0.6)};
+    const auto sec = roundedPolygon(corners, {0.1, 0.1, 0.4, 0.0, 0.0, 0.15, 0.15, 0.0, 0.0, 0.4}, 3);
+    std::vector<std::vector<Vec2>> secs;
+    std::vector<double> st;
+    for (int i = 0; i <= 10; ++i) { secs.push_back(sec); st.push_back(-2.0 + 0.4 * i); }   // car-like station spacing
+    PolyMesh b = loft(secs, st, true, true, 0.3f);
+    CHECK(isClosed(b));
+    CHECK(signedVolume(b) > 0);
+    std::size_t maxSides = 0;
+    for (const auto& f : b.faces) maxSides = std::max(maxSides, f.v.size());
+    CHECK(maxSides <= 4u);   // the caps are quads (and at most a triangle where the ring crosses the axis)
+    const PolyMesh s = subdivide(b, 1);
+    CHECK(isClosed(s));
+    const double r = worstRoundness(s);
+    std::printf("    worst face roundness %.4f over %zu faces\n", r, s.faces.size());
+    CHECK(r > 0.02);
+    // a region inset of the whole cap stays closed and one panel
+    PolyMesh g = b;
+    const auto cap = selectGroup(g, "cap_end");
+    CHECK(cap.size() > 4);
+    insetRegion(g, cap, 0.08);
+    CHECK(isClosed(g));
 }

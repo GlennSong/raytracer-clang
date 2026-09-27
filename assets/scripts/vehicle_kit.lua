@@ -31,10 +31,12 @@ end
 --   1 bottom-left   2 bottom-right   3 side-right (widest)   4 shoulder-right   5 glass-base-right
 --   6 roof-right    7 roof-left      8 glass-base-left       9 shoulder-left    10 side-left
 local CORNERS = 10
-local SEGS = 3                        -- fillet steps per corner: every corner emits SEGS + 1 points
-local PER = SEGS + 1                  -- points per corner
--- which corner-to-corner run a section point belongs to (its point index is (corner-1)*PER + j)
+-- which corner-to-corner run a face belongs to
 local RUN = { bottom = { 1, 2 }, side_r = { 2, 4 }, glass_r = { 5, 6 }, roof = { 6, 7 }, glass_l = { 7, 8 }, side_l = { 8, 10 } }
+-- FILLET STEPS BY RADIUS: a sharp corner is one point, a small radius two, a big one four. A tiny radius
+-- stepped four times left millimetre strips down the whole body (the fleet test's slivers). The radii are
+-- the same at every station, so every section still has the same count.
+local function segsFor(r) if r <= 0.025 then return 0 elseif r <= 0.07 then return 1 else return 3 end end
 
 -- One section at station z, from the profile `P` (all heights from the ground, metres).
 local function section(P, z)
@@ -56,7 +58,9 @@ local function section(P, z)
   }
   local r = P.radii
   local radii = { r.bottom, r.bottom, r.side, r.shoulder, r.glass, r.roof, r.roof, r.glass, r.shoulder, r.side }
-  return poly.section(corners, radii, SEGS), inCabin
+  local segs = {}
+  for i, rr in ipairs(radii) do segs[i] = segsFor(rr) end
+  return poly.section(corners, radii, segs), inCabin
 end
 
 -- Build a body from profile `P`. Returns the (unsubdivided) poly and a few facts the recipe needs.
@@ -78,10 +82,20 @@ function kit.body(P)
   -- the quads of a run between two corners: quad i joins section points i and i+1 (1-based). `straight`
   -- takes only the flat stretch between the two corners' fillets (the glass, not the pillar edges);
   -- otherwise the fillets are included
+  -- where each corner's points start (1-based), from the per-corner fillet counts
+  local rr = P.radii
+  local radiiList = { rr.bottom, rr.bottom, rr.side, rr.shoulder, rr.glass, rr.roof, rr.roof, rr.glass, rr.shoulder, rr.side }
+  local first, last = {}, {}
+  local at = 1
+  for c = 1, CORNERS do
+    first[c] = at
+    at = at + segsFor(radiiList[c]) + 1
+    last[c] = at - 1
+  end
   local function run(name, straight)
     local a, b = RUN[name][1], RUN[name][2]
     local out = {}
-    local i0, i1 = straight and a * PER or (a - 1) * PER + 1, straight and (b - 1) * PER + 1 - 1 or b * PER - 1
+    local i0, i1 = straight and last[a] or first[a], straight and first[b] - 1 or last[b] - 1
     for i = i0, i1 do out[#out + 1] = i end
     return out
   end
@@ -152,7 +166,7 @@ function kit.body(P)
   -- THE GRILLE: the nose cap, inset from its rim and set in
   local nose = B:select{ group = "cap_end" }
   if #nose > 0 and P.grille ~= false then
-    local g = B:inset(nose, P.grille_margin or 0.10)
+    local g = B:inset_region(nose, P.grille_margin or 0.012)   -- the inner ladder, inside the cap's rim
     local before = B:face_count()
     B:extrude(g, -0.03)
     local walls = {}
@@ -205,7 +219,7 @@ function kit.profile(o)
   for z = -half + 0.45, half - 0.45, step do add(z) end
   table.sort(zs)
   local dedup = {}
-  for _, z in ipairs(zs) do if #dedup == 0 or z - dedup[#dedup] > 0.03 then dedup[#dedup + 1] = z end end
+  for _, z in ipairs(zs) do if #dedup == 0 or z - dedup[#dedup] > (o.min_station or 0.06) then dedup[#dedup + 1] = z end end
   P.stations = dedup
 
   local tp = o.taper or { 0.16, 0.12, 0.55 }
@@ -247,9 +261,9 @@ function kit.profile(o)
 end
 
 -- helpers for recipes' post hooks
-local function concat(...)
-  local out = {}
-  for _, t in ipairs({ ... }) do for _, v in ipairs(t) do out[#out + 1] = v end end
+local function concat(...)   -- a union: each face once
+  local out, seen = {}, {}
+  for _, t in ipairs({ ... }) do for _, v in ipairs(t) do if not seen[v] then seen[v] = true; out[#out + 1] = v end end end
   return out
 end
 -- sink the top of the body between z0 and z1 into a tub (a cockpit, a bed) `depth` deep, lined with `mat`
@@ -397,8 +411,11 @@ S.step_van = function() return kit.profile{
   taper = { 0.04, 0.01, 0.25 }, tuck = 0.05, arch_gap = 0.06,
   radii = { bottom = 0.04, side = 0.05, shoulder = 0.03, glass = 0.02, roof = 0.08 },
   lamp_y = { 1.02, 1.18 }, grille_y = { 0.55, 1.0 }, tail_y = { 0.9, 1.2 },
-  cap_crease = 1.5, color = { 0.36, 0.22, 0.10 },
-  windows = { side = { edge = 2.5, corner = 3 }, windshield = { edge = 2.5, corner = 2.5 }, back = { edge = 2.5, corner = 3 } } } end
+  cap_crease = 1.5, color = { 0.36, 0.22, 0.10 }, grille = false,
+  windows = { side = { edge = 2.5, corner = 3 }, windshield = { edge = 2.5, corner = 2.5 }, back = { edge = 2.5, corner = 3 } },
+  extras = function(car)   -- a flat van's grille is a panel on its nose, not a recess
+    car.polys[#car.polys + 1] = kit.box_part({ 1.30, 0.42, 0.05 }, { 0, 0.78, 3.15 + 0.01 }, 2.5, "grille")
+  end } end
 
 -- the cab of a truck whose body is a separate part (small box truck, semi tractor)
 local function truck_cab(o)
@@ -440,6 +457,12 @@ S.semi = function()
       car.polys[#car.polys + 1] = kit.box_part({ trW, trH, trL }, { 0, 1.25 + trH * 0.5, zt }, 1.0, "trailer")
       car.trailer_axles = { zt - trL * 0.5 + 1.6, zt - trL * 0.5 + 2.9 }
     end }
+end
+
+-- The body cage (the unsubdivided poly) and its subdivided form, for inspection and tests.
+function kit.poly(P, level)
+  local B = kit.body(P)
+  return B, B:subdivide(level or 1)
 end
 
 -- The whole car at `level` subdivisions, as { parts = { [mat] = Mesh }, wheels = {...}, size = {W,H,L} }
