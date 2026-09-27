@@ -124,3 +124,20 @@ TEST_CASE(polymesh_to_parts_splits_by_material_in_engine_winding) {
         CHECK(agree == total);
     }
 }
+
+// A window's corners stay corners (vertex sharpness) while its outline between them stays smooth.
+TEST_CASE(polymesh_corners_hold_through_subdivision) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    PolyMesh a = c;
+    creaseCorners(a, selectAll(a), 40.0, 0.0f);   // nothing: an all-faces region has no outline
+    CHECK(a.corners.empty());
+    const auto top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    creaseCorners(c, top, 40.0, PolyMesh::kInfCrease);
+    CHECK(c.corners.size() == 4);   // the top face's four corners
+    const PolyMesh s = subdivide(c, 3);
+    int kept = 0;
+    for (const Vec3& p : s.pts) kept += std::fabs(std::fabs(p.x) - 0.5) < 1e-9 && std::fabs(p.y - 0.5) < 1e-9 && std::fabs(std::fabs(p.z) - 0.5) < 1e-9;
+    CHECK(kept == 4);
+    CHECK(isClosed(s));
+}

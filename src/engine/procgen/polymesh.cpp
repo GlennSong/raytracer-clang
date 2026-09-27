@@ -42,6 +42,14 @@ void PolyMesh::setCrease(int a, int b, float s) {
     if (s <= 0.0f) creases.erase(ekey(a, b));
     else creases[ekey(a, b)] = s;
 }
+float PolyMesh::corner(int v) const {
+    const auto it = corners.find(v);
+    return it == corners.end() ? 0.0f : it->second;
+}
+void PolyMesh::setCorner(int v, float s) {
+    if (s <= 0.0f) corners.erase(v);
+    else corners[v] = s;
+}
 Vec3 PolyMesh::faceCentroid(int f) const {
     Vec3 c(0, 0, 0);
     for (int i : faces[static_cast<std::size_t>(f)].v) c = c + pts[static_cast<std::size_t>(i)];
@@ -70,6 +78,7 @@ void PolyMesh::append(const PolyMesh& o) {
         faces.push_back(std::move(f));
     }
     for (const auto& [e, s] : o.creases) setCrease(e.first + base, e.second + base, s);
+    for (const auto& [v, s] : o.corners) setCorner(v + base, s);
 }
 
 // --- sections and loft ----------------------------------------------------------------------------------
@@ -153,7 +162,7 @@ std::vector<Vec2> resampleClosed(const std::vector<Vec2>& poly, int n) {
 }
 
 PolyMesh loft(const std::vector<std::vector<Vec2>>& sections, const std::vector<double>& stations, bool capStart,
-              bool capEnd) {
+              bool capEnd, float capCrease) {
     PolyMesh m;
     const std::size_t R = std::min(sections.size(), stations.size());
     if (R < 2) return m;
@@ -176,14 +185,14 @@ PolyMesh loft(const std::vector<std::vector<Vec2>>& sections, const std::vector<
         for (std::size_t i = n; i-- > 0;) f.v.push_back(id(0, i));
         f.group = m.groupId("cap_start");
         m.faces.push_back(f);
-        for (std::size_t i = 0; i < n; ++i) m.setCrease(id(0, i), id(0, i + 1), 1.0f);
+        for (std::size_t i = 0; i < n; ++i) m.setCrease(id(0, i), id(0, i + 1), capCrease);
     }
     if (capEnd) {
         PolyMesh::Face f;
         for (std::size_t i = 0; i < n; ++i) f.v.push_back(id(R - 1, i));
         f.group = m.groupId("cap_end");
         m.faces.push_back(f);
-        for (std::size_t i = 0; i < n; ++i) m.setCrease(id(R - 1, i), id(R - 1, i + 1), 1.0f);
+        for (std::size_t i = 0; i < n; ++i) m.setCrease(id(R - 1, i), id(R - 1, i + 1), capCrease);
     }
     return m;
 }
@@ -308,6 +317,31 @@ void creaseFaces(PolyMesh& m, const std::vector<int>& sel, float s) {
     }
 }
 
+void creaseCorners(PolyMesh& m, const std::vector<int>& sel, double angleDeg, float s) {
+    std::unordered_set<long long> de;
+    for (int f : sel) {
+        const auto& v = m.faces[static_cast<std::size_t>(f)].v;
+        for (std::size_t i = 0; i < v.size(); ++i) de.insert(dkey(v[i], v[(i + 1) % v.size()]));
+    }
+    // the outline as next/prev along its directed boundary edges
+    std::unordered_map<int, int> next, prev;
+    for (long long k : de) {
+        const int a = static_cast<int>(k >> 32), b = static_cast<int>(k & 0xffffffff);
+        if (de.count(dkey(b, a))) continue;
+        next[a] = b;
+        prev[b] = a;
+    }
+    const double cosLim = std::cos(angleDeg * M_PI / 180.0);
+    for (const auto& [v, w] : next) {
+        const auto ip = prev.find(v);
+        if (ip == prev.end()) continue;
+        const Vec3 d0 = m.pts[static_cast<std::size_t>(v)] - m.pts[static_cast<std::size_t>(ip->second)];
+        const Vec3 d1 = m.pts[static_cast<std::size_t>(w)] - m.pts[static_cast<std::size_t>(v)];
+        if (d0.lengthSquared() < 1e-14 || d1.lengthSquared() < 1e-14) continue;
+        if (dot(normalize(d0), normalize(d1)) < cosLim) m.setCorner(v, s);
+    }
+}
+
 void mirrorX(PolyMesh& m, double eps) {
     const int n = static_cast<int>(m.pts.size());
     std::vector<int> map(static_cast<std::size_t>(n));
@@ -328,6 +362,9 @@ void mirrorX(PolyMesh& m, double eps) {
     for (const auto& [e, s] : m.creases)
         if (e.first < n && e.second < n) add.push_back({{map[static_cast<std::size_t>(e.first)], map[static_cast<std::size_t>(e.second)]}, s});
     for (const auto& [e, s] : add) m.setCrease(e.first, e.second, s);
+    std::vector<std::pair<int, float>> addC;
+    for (const auto& [v, s] : m.corners) if (v < n) addC.push_back({map[static_cast<std::size_t>(v)], s});
+    for (const auto& [v, s] : addC) m.setCorner(v, s);
     // an edge lying ON the seam was a boundary (sharp) on the half; welded, it is interior -- leave it smooth
 }
 
@@ -416,6 +453,12 @@ PolyMesh subdivideOnce(const PolyMesh& m) {
         const double w = std::clamp(sharpSum / static_cast<double>(sharp.size()), 0.0, 1.0);
         vp[static_cast<std::size_t>(i)] = smoothV + (sharpV - smoothV) * w;
     }
+    // vertex corners override: a corner stays put (sharpness >= 1), or blends toward it
+    for (const auto& [i, s] : m.corners) {
+        if (i < 0 || i >= nv) continue;
+        const double w = std::clamp(static_cast<double>(s), 0.0, 1.0);
+        vp[static_cast<std::size_t>(i)] = vp[static_cast<std::size_t>(i)] + (m.pts[static_cast<std::size_t>(i)] - vp[static_cast<std::size_t>(i)]) * w;
+    }
     // assemble: vertex points, then edge points, then face points
     out.pts = vp;
     const int eBase = static_cast<int>(out.pts.size());
@@ -437,6 +480,8 @@ PolyMesh subdivideOnce(const PolyMesh& m) {
             out.faces.push_back(q);
         }
     }
+    for (const auto& [i, s] : m.corners)
+        if (s > 1.0f) out.setCorner(i, s >= PolyMesh::kInfCrease ? PolyMesh::kInfCrease : s - 1.0f);
     // child creases: each half of a creased edge keeps sharpness - 1
     for (std::size_t e = 0; e < edges.size(); ++e) {
         const float s = edges[e].s;

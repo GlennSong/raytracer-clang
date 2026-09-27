@@ -3014,7 +3014,7 @@ int l_poly_resample(lua_State* L) {
     pushPts2(L, resampleClosed(checkPts2(L, 1), static_cast<int>(luaL_checkinteger(L, 2))));
     return 1;
 }
-// poly.loft{ sections=, stations=, cap_start=true, cap_end=true } -> Poly
+// poly.loft{ sections=, stations=, cap_start=true, cap_end=true, cap_crease=1 } -> Poly
 int l_poly_loft(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     std::vector<std::vector<Vec2>> secs;
@@ -3034,7 +3034,8 @@ int l_poly_loft(lua_State* L) {
         if (sct.size() != secs[0].size()) return luaL_error(L, "poly.loft: every section needs the same point count (poly.resample)");
     lua_getfield(L, 1, "cap_start"); const bool c0 = lua_isnil(L, -1) || lua_toboolean(L, -1); lua_pop(L, 1);
     lua_getfield(L, 1, "cap_end"); const bool c1 = lua_isnil(L, -1) || lua_toboolean(L, -1); lua_pop(L, 1);
-    pushPoly(L, std::make_shared<PolyMesh>(loft(secs, st, c0, c1)));
+    const float cc = static_cast<float>(optField(L, 1, "cap_crease", 1.0));
+    pushPoly(L, std::make_shared<PolyMesh>(loft(secs, st, c0, c1, cc)));
     return 1;
 }
 // poly.box{sx, sy, sz} -> Poly centred on the origin
@@ -3145,6 +3146,14 @@ int l_poly_crease_border(lua_State* L) {
     creaseBorder(m, sel, static_cast<float>(luaL_optnumber(L, 3, PolyMesh::kInfCrease)));
     return 0;
 }
+// P:crease_corners(sel, angle_deg, sharpness): corners where the region's outline turns by > angle
+int l_poly_crease_corners(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    creaseCorners(m, sel, luaL_optnumber(L, 3, 40.0), static_cast<float>(luaL_optnumber(L, 4, PolyMesh::kInfCrease)));
+    return 0;
+}
 int l_poly_crease_faces(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
@@ -3233,6 +3242,7 @@ void registerPolyMetatable(lua_State* L) {
             {"select", l_poly_select}, {"extrude", l_poly_extrude}, {"inset", l_poly_inset},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
+            {"crease_corners", l_poly_crease_corners},
             {"mirror_x", l_poly_mirror_x}, {"subdivide", l_poly_subdivide}, {"copy", l_poly_copy},
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},

@@ -44,6 +44,10 @@ struct PolyMesh {
     std::vector<std::string> groups{"default"};
     std::vector<std::string> mats{"body"};
     std::map<std::pair<int, int>, float> creases;   // undirected (min, max) -> sharpness
+    // VERTEX corners: a vertex with sharpness >= 1 keeps its place through that many subdivision levels
+    // (the Catmull-Clark corner rule), fractional blends -- a window's corner stays a corner while the
+    // outline between corners stays smooth.
+    std::map<int, float> corners;
 
     int groupId(const std::string& name);            // adds if new
     int matId(const std::string& name);
@@ -51,6 +55,8 @@ struct PolyMesh {
     int findMat(const std::string& name) const;
     float crease(int a, int b) const;
     void setCrease(int a, int b, float s);
+    float corner(int v) const;
+    void setCorner(int v, float s);
     Vec3 faceCentroid(int f) const;
     Vec3 faceNormal(int f) const;                    // unit (Newell), outward for a CCW face
     void append(const PolyMesh& other);              // groups/materials matched by name
@@ -68,8 +74,9 @@ std::vector<Vec2> resampleClosed(const std::vector<Vec2>& poly, int n);
 // A loft: ring k is sections[k] placed at z = stations[k] (each section's points in XY, all the same
 // count, CCW seen from +z). Quads join consecutive rings; `capStart`/`capEnd` close the first and last
 // ring with one polygon each (group "cap_start"/"cap_end"). Stations ascend (tail at the lowest z).
+// `capCrease` is the sharpness of the rim where a cap meets the sides (0 = let subdivision round it).
 PolyMesh loft(const std::vector<std::vector<Vec2>>& sections, const std::vector<double>& stations,
-              bool capStart, bool capEnd);
+              bool capStart, bool capEnd, float capCrease = 1.0f);
 
 // Region extrude: the faces in `sel` move out by `dist` along each vertex's averaged face normal (or
 // along `dir` if it is non-zero); their boundary grows side walls (group of the face they border).
@@ -84,6 +91,8 @@ std::vector<int> inset(PolyMesh& m, const std::vector<int>& sel, double amount);
 void creaseBorder(PolyMesh& m, const std::vector<int>& sel, float sharpness);
 // Crease every edge of every face in `sel`.
 void creaseFaces(PolyMesh& m, const std::vector<int>& sel, float sharpness);
+// Mark as corners the vertices where the outline of region `sel` turns by more than `angleDeg`.
+void creaseCorners(PolyMesh& m, const std::vector<int>& sel, double angleDeg, float sharpness);
 
 // Mirror across x = 0 and weld points within `eps` of the plane. Faces straddling nothing: the input is
 // one half with its seam on x = 0.
