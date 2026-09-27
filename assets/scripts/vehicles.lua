@@ -220,10 +220,12 @@ local function fleet_car(class_name, color)
     local d = classes.dims(c)
     local car = mesh.car(forms.car_params(c, d, { color = color, lod = FLEET_LOD }))
 
-    -- ONE opaque instanced mesh per slot: painted shell + lamp housings + the
-    -- DARK-TINTED glass merged in. Ambient traffic cannot afford a transparent
-    -- pass per car, and the tint (~0.16,0.20,0.24) reads as glass at traffic
-    -- distance — exactly the role the box fleet's dark glass slabs played.
+    -- The opaque shell: painted body + lamp housings. The GLASS and the
+    -- INTERIOR are their own parts for every slot (fleet v2, Glenn: "the opaque
+    -- with reflection and the swap to hero car for ones nearby the player"): the
+    -- city draws the glass OPAQUE with a reflective glass material for traffic
+    -- at large -- no transparent pass per car -- and, for the few cars nearest
+    -- the player, CLEAR with the interior and a driver behind it.
     local shell = { car.body }
     if car.lamp then shell[#shell + 1] = car.lamp end
     -- A BUS IS MEANT TO BE SEEN INTO (Glenn: "we should see the npcs sitting
@@ -231,11 +233,7 @@ local function fleet_car(class_name, color)
     -- shell and its glass stays a separate, CLEAR part; 24 buses can afford the
     -- transparent pass that hundreds of cars cannot.
     local seeInto = (c.form == "bus")
-    if seeInto then
-      if car.interior then shell[#shell + 1] = car.interior end
-    elseif car.glass then
-      shell[#shell + 1] = car.glass
-    end
+    if seeInto and car.interior then shell[#shell + 1] = car.interior end
 
     -- WHEELS. mesh.car deliberately emits no wheel part (real wheels are placed
     -- per-vehicle by the physics spec), so the fleet bakes its own — ROUND ones:
@@ -316,10 +314,14 @@ local function fleet_car(class_name, color)
         -- by construction rather than by a transcribed table.
         size = { d.width, d.height, d.length },
         class = class_name,
-        glass = seeInto and car.glass or nil,
+        glass = car.glass,
+        -- the saloon is in the shell of a see-into vehicle; the others carry it
+        -- apart, drawn only while they are near the player
+        interior = (not seeInto) and car.interior or nil,
+        see_into = seeInto,
         seats = seeInto and seats or nil,
         doors = seeInto and doors or nil,
-        driver_seat = seeInto and driver_seat or nil,
+        driver_seat = driver_seat,
     }
 end
 

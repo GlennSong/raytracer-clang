@@ -9007,3 +9007,14 @@ The same review corrected ADR-0135's flashlight: it now lives in its own per-fra
 | cars more than 5 cm off | 3.8% | 1.1% |
 
 **Consequences.** Every drawn (K-tier) car costs about four surface queries per frame (not yet timed on the island). Physics cars (`physicalCars`) are unchanged; a hand-off between tiers now meets the same surface.
+
+## ADR-0138 — Fleet glass: opaque and reflective at large, clear near the player
+
+**Context.** Agent cars had "opaque windows" (Glenn). The fleet recipe merged dark-tinted glass into each slot's single opaque shell, to avoid a transparent pass for hundreds of instanced cars. Only the bus had clear glass and a cabin. The player's car, from the same `mesh.car` generator at LOD high, has both, so the two looked like different vehicles.
+
+**Decision.**
+- **Recipe.** Every fleet slot publishes its glass as a part. An ordinary car also publishes its cabin as a separate part and a driver seat. The bus (`see_into`) keeps its saloon in the shell, as before.
+- **Opaque glass.** The city draws each slot's glass as an opaque instanced group with a glass material: near-mirror smooth (roughness 0.03, metallic 0.15), sky-leaning over the mesh's own tint. It reads as glass and costs one opaque draw per slot, with no transparency.
+- **Near swap.** The 12 moving cars nearest the player (entering at 50 m, leaving at 58 m) draw the clear glass, their cabin and their driver instead, from the same body instance, so nothing pops. Buses (and later taxis and convertibles) are always see-through.
+
+**Consequences.** One more instanced group per slot, plus the cabin and clear groups, which are only filled for up to 12 cars. `fleet_bus_is_a_bus_you_can_see_into` now asserts the new contract.

@@ -54,9 +54,13 @@ struct CarBodyRecipe {
     std::vector<Attachment> lights;
     Vec3 size{0, 0, 0};
     std::string className;
-    // SEE-THROUGH GLASS, for a vehicle you are meant to look into (the bus).
-    // Empty for ordinary traffic, whose dark glass is merged into `mesh`.
+    // THE GLASS, its own part for every slot. A see-into vehicle (the bus: `seeInto`) always draws it
+    // clear; ordinary traffic draws it opaque and reflective, and clear only near the player (fleet v2).
     RenderMesh glass;
+    // The cabin, apart from the shell for ordinary traffic (drawn only near the player); a see-into
+    // vehicle has it in `mesh` and leaves this empty.
+    RenderMesh interior;
+    bool seeInto = false;
     // Seat hip points (body-local), for drawing people IN the vehicle: the
     // driver, and one per passenger seat. Empty when the recipe has none.
     std::vector<Vec3> seats;

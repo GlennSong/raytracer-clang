@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace citysim {
@@ -497,6 +498,14 @@ private:
     // points people are drawn on. The people themselves are instanced: one
     // driver group, three rider groups for a little variety of dress.
     std::vector<engine::Entity> carGlassGroups_;
+    // FLEET V2 GLASS. Per slot: the same glass OPAQUE with a reflective glass material (traffic at large),
+    // the cabin apart from the shell, and whether the slot is always seen into (the bus). An ordinary car
+    // near the player draws clear glass + cabin + driver instead of the opaque glass (the near swap).
+    std::vector<engine::Entity> carGlassOpaqueGroups_;
+    std::vector<engine::Entity> carInteriorGroups_;
+    std::vector<char> carSeeInto_;
+    // The agents drawn see-through this bake (nearest the player, with hysteresis).
+    std::unordered_set<int> nearSwap_;
     std::vector<std::vector<engine::Vec3>> carSeats_;
     std::vector<std::vector<engine::Vec3>> carDoors_;
     std::vector<engine::Vec3> carDriverSeat_;

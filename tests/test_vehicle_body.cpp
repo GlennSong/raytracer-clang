@@ -433,10 +433,12 @@ TEST_CASE(drivable_spec_rests_the_wheels_where_they_are_drawn) {
 // THE CITY BUS (Glenn, 2026-09-18: "build an actual bus model with an interior
 // and exterior and have it look like a city bus", "we should see the npcs
 // sitting on the bus. There should be a driver"). The bus slot is the only one
-// meant to be seen into: it publishes CLEAR glass as its own part, a driver's
-// seat front-left, and a saloon's worth of passenger seats with a gap on the
-// kerb side where the middle door is. Every other slot keeps its glass merged
-// dark and publishes no seats, so ordinary traffic pays nothing for this.
+// ALWAYS seen into (`seeInto`): its saloon is in its shell, and it publishes a
+// driver's seat front-left and a saloon's worth of passenger seats with a gap on
+// the kerb side where the middle door is. Since fleet v2 every slot publishes its
+// GLASS as a part (drawn opaque and reflective, clear near the player) and an
+// ordinary car publishes its CABIN apart and a driver's seat, but no passenger
+// seats: nobody rides in ambient traffic.
 TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
     VehiclesVM a;
     CHECK(a.loaded);
@@ -445,12 +447,17 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         CarBodyRecipe body;
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
+        CHECK(!body.glass.vertices.empty());
         if (body.className != "bus") {
-            CHECK(body.glass.vertices.empty());
+            CHECK(!body.seeInto);
+            CHECK(!body.interior.vertices.empty());
+            CHECK(body.hasDriverSeat);
             CHECK(body.seats.empty());
             continue;
         }
         ++buses;
+        CHECK(body.seeInto);
+        CHECK(body.interior.vertices.empty());   // the saloon rides in the shell
         const Real W = body.size.x, H = body.size.y, L = body.size.z;
         CHECK(!body.glass.vertices.empty());
         CHECK(body.hasDriverSeat);

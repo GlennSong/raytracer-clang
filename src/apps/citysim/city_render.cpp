@@ -780,6 +780,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carChassis_.clear();
     carWheels_.clear();
     carGlassGroups_.clear();
+    carGlassOpaqueGroups_.clear();
+    carInteriorGroups_.clear();
+    carSeeInto_.clear();
+    nearSwap_.clear();
     carSeats_.clear();
     carDoors_.clear();
     carDriverSeat_.clear();
@@ -797,7 +801,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             MeshHandle mh{}, chassisMh{};
             std::vector<LampMarker> lights;
             std::vector<CarWheel> wheels;
-            engine::RenderMesh glassMesh;
+            engine::RenderMesh glassMesh, interiorMesh;
+            bool seeInto = false;
             std::vector<Vec3> seats, doors;
             Vec3 driverSeat(0, 0, 0);
             bool hasDriver = false;
@@ -832,6 +837,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         for (const engine::Attachment& att : recipe.lights)
                             lights.push_back({att.name, att.pos});
                         glassMesh = std::move(recipe.glass);
+                        interiorMesh = std::move(recipe.interior);
+                        seeInto = recipe.seeInto;
                         seats = recipe.seats;
                         doors = recipe.doors;
                         driverSeat = recipe.driverSeat;
@@ -861,13 +868,15 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             carLights_.push_back(std::move(lights));
             carChassis_.push_back(chassisMh);
             carWheels_.push_back(std::move(wheels));
-            // Clear glass, for a vehicle meant to be seen into.
+            // The glass, clear (a see-into vehicle always; any other car while it is near the player) and
+            // opaque (traffic at large), and the cabin a near car shows through it.
             {
-                Entity ge{};
+                Entity ge{}, go{}, gi{};
                 if (assets && !glassMesh.vertices.empty()) {
+                    const MeshHandle gh = assets->acquireMesh(glassMesh, "city:carglass" + std::to_string(v));
                     ge = world.create();
                     InstanceGroup gg;
-                    gg.mesh = assets->acquireMesh(glassMesh, "city:carglass" + std::to_string(v));
+                    gg.mesh = gh;
                     engine::RenderMaterial gm;
                     gm.albedo = Vec3(1, 1, 1);
                     gm.metallic = 0.0f;
@@ -877,8 +886,39 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     gg.renderLayer = engine::LayerSim;
                     gg.drawClass = engine::DrawClass::SimBody;
                     world.add<InstanceGroup>(ge, gg);
+                    if (!seeInto) {
+                        // OPAQUE GLASS that reads as glass: dark, near-mirror smooth, so the sky and the street
+                        // show in it (Fresnel does the rest at grazing angles) -- no transparent pass per car.
+                        go = world.create();
+                        InstanceGroup og;
+                        og.mesh = gh;
+                        engine::RenderMaterial om;
+                        om.albedo = Vec3(1.0, 1.05, 1.12);   // x the glass mesh's own dark tint, a little toward the sky
+                        om.metallic = 0.15f;
+                        om.roughness = 0.03f;
+                        og.material = om;
+                        og.renderLayer = engine::LayerSim;
+                        og.drawClass = engine::DrawClass::SimBody;
+                        world.add<InstanceGroup>(go, og);
+                    }
+                }
+                if (assets && !seeInto && !interiorMesh.vertices.empty()) {
+                    gi = world.create();
+                    InstanceGroup ig;
+                    ig.mesh = assets->acquireMesh(interiorMesh, "city:carcabin" + std::to_string(v));
+                    engine::RenderMaterial im;
+                    im.albedo = Vec3(1, 1, 1);
+                    im.metallic = 0.0f;
+                    im.roughness = 0.9f;
+                    ig.material = im;
+                    ig.renderLayer = engine::LayerSim;
+                    ig.drawClass = engine::DrawClass::SimBody;
+                    world.add<InstanceGroup>(gi, ig);
                 }
                 carGlassGroups_.push_back(ge);
+                carGlassOpaqueGroups_.push_back(go);
+                carInteriorGroups_.push_back(gi);
+                carSeeInto_.push_back(seeInto ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
                 carDriverSeat_.push_back(driverSeat);
@@ -1834,8 +1874,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // marker, which sits exactly on the end face, so half of it poked
         // through into the saloon -- tail lights glowing inside the bus
         // (Glenn). Out by half the lens depth, it sits flush on the outside.
-        const bool seeInto = v < static_cast<int>(carGlassGroups_.size()) &&
-                             carGlassGroups_[static_cast<std::size_t>(v)].valid();
+        const bool seeInto = v < static_cast<int>(carSeeInto_.size()) && carSeeInto_[static_cast<std::size_t>(v)] != 0;
         for (const LampMarker& m : markers) {
             const bool isHead = m.name.rfind("headlight", 0) == 0;
             const bool isTail = m.name.rfind("taillight", 0) == 0;
@@ -2084,21 +2123,62 @@ void CityRenderSystem::syncGroups(World& world) {
         if (drv) drv->transforms.clear();
         for (InstanceGroup* r : rid) if (r) r->transforms.clear();
         busDrawnPose_.clear();
+        // THE NEAR SWAP (fleet v2): the kNearCount moving cars nearest the player, within kNearIn m (kept
+        // until kNearOut, so a car at the edge does not flicker), draw clear glass, their cabin and driver.
+        {
+            constexpr Real kNearIn = 50.0, kNearOut = 58.0;
+            constexpr std::size_t kNearCount = 12;
+            std::vector<std::pair<Real, int>> cand;
+            if (sim_.hasTierCenter()) {
+                const Vec2 c = sim_.tierCenter();
+                const auto& ags = sim_.agents();
+                for (std::size_t v = 0; v < cars.size() && v < carSeeInto_.size(); ++v) {
+                    if (!cars[v] || carSeeInto_[v]) continue;
+                    for (int ai : carAgentIds_[v]) {
+                        if (ai < 0) continue;
+                        const Real d = (ags[static_cast<std::size_t>(ai)].pos - c).length();
+                        if (d < (nearSwap_.count(ai) ? kNearOut : kNearIn)) cand.push_back({d, ai});
+                    }
+                }
+            }
+            std::sort(cand.begin(), cand.end());
+            nearSwap_.clear();
+            for (std::size_t i = 0; i < cand.size() && i < kNearCount; ++i) nearSwap_.insert(cand[i].second);
+        }
         for (std::size_t v = 0; v < cars.size() && v < carGlassGroups_.size(); ++v) {
             if (!cars[v]) continue;
-            if (carGlassGroups_[v].valid())
-                if (InstanceGroup* g = world.get<InstanceGroup>(carGlassGroups_[v])) {
-                    g->transforms = cars[v]->transforms;
-                    refreshBounds(g);
+            const bool always = carSeeInto_[v] != 0;
+            const std::vector<int>& ids = carAgentIds_[v];
+            InstanceGroup* clear = carGlassGroups_[v].valid() ? world.get<InstanceGroup>(carGlassGroups_[v]) : nullptr;
+            InstanceGroup* opaque = carGlassOpaqueGroups_[v].valid() ? world.get<InstanceGroup>(carGlassOpaqueGroups_[v]) : nullptr;
+            InstanceGroup* cabin = carInteriorGroups_[v].valid() ? world.get<InstanceGroup>(carInteriorGroups_[v]) : nullptr;
+            if (clear) clear->transforms.clear();
+            if (opaque) opaque->transforms.clear();
+            if (cabin) cabin->transforms.clear();
+            for (std::size_t k = 0; k < cars[v]->transforms.size(); ++k) {
+                const Mat4& xf = cars[v]->transforms[k];
+                const int ai = k < ids.size() ? ids[k] : -1;
+                const bool seen = always || (ai >= 0 && nearSwap_.count(ai));
+                if (seen) {
+                    if (clear) clear->transforms.push_back(xf);
+                    if (cabin) cabin->transforms.push_back(xf);
+                } else if (opaque) {
+                    opaque->transforms.push_back(xf);
+                } else if (clear) {
+                    clear->transforms.push_back(xf);   // a slot with no opaque form keeps its clear glass
                 }
+            }
+            refreshBounds(clear);
+            refreshBounds(opaque);
+            refreshBounds(cabin);
             const std::vector<Vec3>& seats = carSeats_[v];
             const bool hasDriver = carHasDriver_[v] != 0;
             if (seats.empty() && !hasDriver) continue;
-            const std::vector<int>& ids = carAgentIds_[v];
             const int n = static_cast<int>(seats.size());
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
+                if (!always && !nearSwap_.count(ai)) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
                 if (hasDriver && drv)
