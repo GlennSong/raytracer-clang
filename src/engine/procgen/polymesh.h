@@ -119,6 +119,11 @@ std::vector<int> selectWhere(const PolyMesh& m, const std::function<bool(const V
 struct PolyStats { int faces = 0, points = 0, triangles = 0, corners = 0, creases = 0, slivers = 0; double worst = 1.0; int worstFace = -1; };
 PolyStats polyStats(const PolyMesh& m, double sliver = 0.02);
 
+// The first surface a ray from `o` along `d` meets (faces fanned into triangles, either side). Placement
+// rules use it to set parts ON the finished body -- a lamp, a mirror, a handle -- rather than on a guess
+// from the profile. Returns false on a miss; `t` along d, the face's unit normal, the face index.
+bool raycast(const PolyMesh& m, const Vec3& o, const Vec3& d, double& t, Vec3& normal, int& face);
+
 // Topology checks (tests and recipe asserts).
 bool isClosed(const PolyMesh& m);        // every edge in exactly two faces, in opposite directions
 double signedVolume(const PolyMesh& m);  // > 0 for an outward-facing closed mesh

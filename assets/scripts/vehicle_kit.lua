@@ -279,7 +279,7 @@ kit.tub = tub
 
 -- LAMP LENSES: separate rounded parts set onto the nose and tail at the profile's lamp bands (a lens
 -- reads as an object; carving it out of the body's faces gave a fang). P.lamps = false for none.
-function kit.lamps(P, car)
+function kit.lamps(P, car, S)
   if P.lamps == false then return end
   local half = P.length * 0.5
   local function surfaceZ(x, front)   -- the nose / tail face where the body is at least |x| wide
@@ -305,44 +305,75 @@ function kit.lamps(P, car)
       car.polys[#car.polys + 1] = kit.box_part({ gw * 2 - 0.04, 0.012, 0.03 }, { 0, y, half + 0.012 }, 2.5, "chrome")
     end
   end
-  -- LAMP LENSES stand ON the end panel: step in from the end until the body there is both wide enough for
-  -- the lens and tall enough for it under the shoulder, set the lens 4 cm below that shoulder at most, and
-  -- stand it 1.5 cm into the panel with the rest proud (a lens centred inside the body hid; one at a fixed
-  -- height poked above a low nose as a white fang)
-  local lens = P.lens or {}
-  local function place(front, x, w, h, band)
-    local z = front and half or -half
-    local dz = front and -0.01 or 0.01
-    local top = band[2]
-    for _ = 1, 150 do
-      local roof = math.max(P.belt(z), P.roof(z))
-      top = math.min(band[2], roof - 0.04)
-      if P.half_width(z) * 0.97 >= math.abs(x) + w * 0.5 and top - h >= P.bottom(z) + 0.05 then break end
-      z = z + dz
-    end
-    local d = 0.045
-    local zc = front and (z + d * 0.5 - 0.015) or (z - d * 0.5 + 0.015)
-    return { x, top - h * 0.5, zc }, d
-  end
+  -- LAMP LENSES, by the placement grammar (kit.attach): each is cast onto the FINISHED body and set into
+  -- the surface it meets, facing along that surface's normal -- never buried in, or floating off, a body
+  -- whose real shape differs from the profile's guess
+  if not S then return end
   car.markers = car.markers or {}
-  local hy = P.lamp_y
+  local lens = P.lens or {}
+  local hy, ty = P.lamp_y, P.tail_y
   local hx = (lens.head_x or 0.70) * P.half_width(half - 0.25)
   local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.14)
   for _, sx in ipairs({ 1, -1 }) do
-    local at, d = place(true, sx * hx, hwid, hhei, hy)
-    car.polys[#car.polys + 1] = kit.box_part({ hwid, hhei, d }, at, 2.5, "lamp")
-    car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_r" or "headlight_l", pos = at }
+    local part, at = kit.attach(S, { from = { sx * hx, hy[2] - hhei * 0.5, half + 1.0 }, dir = { 0, 0, -1 },
+                                     size = { hwid, hhei, 0.045 }, embed = 0.012, mat = "lamp" })
+    if part then
+      car.polys[#car.polys + 1] = part
+      car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_r" or "headlight_l", pos = at }
+    end
   end
-  local ty = P.tail_y
   if ty[1] < P.height then
     local tx = (lens.tail_x or 0.72) * P.half_width(-half + 0.25)
     local twid, thei = lens.tail_w or 0.36, math.min(ty[2] - ty[1], 0.14)
     for _, sx in ipairs({ 1, -1 }) do
-      local at, d = place(false, sx * tx, twid, thei, ty)
-      car.polys[#car.polys + 1] = kit.box_part({ twid, thei, d }, at, 2.5, "lamp_red")
-      car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = at }
+      local part, at = kit.attach(S, { from = { sx * tx, ty[2] - thei * 0.5, -half - 1.0 }, dir = { 0, 0, 1 },
+                                       size = { twid, thei, 0.045 }, embed = 0.012, mat = "lamp_red" })
+      if part then
+        car.polys[#car.polys + 1] = part
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = at }
+      end
     end
   end
+end
+
+-- a box part whose local +z faces `normal` (its local +y kept as near world up as it can be), centred at `at`
+function kit.oriented_box(size, at, normal, mat)
+  local B = poly.box(size)
+  B:crease_faces(B:select{}, 3)
+  B:assign(B:select{}, { mat = mat or "trim" })
+  local nl = math.sqrt(normal[1] ^ 2 + normal[2] ^ 2 + normal[3] ^ 2)
+  local n = { normal[1] / nl, normal[2] / nl, normal[3] / nl }
+  -- right = up x n, then up' = n x right
+  local rt = { 1 * n[3] - 0 * n[2], 0 * n[1] - 0 * n[3], 0 * n[2] - 1 * n[1] }
+  local rl = math.sqrt(rt[1] ^ 2 + rt[2] ^ 2 + rt[3] ^ 2)
+  if rl < 1e-6 then rt = { 1, 0, 0 } else rt = { rt[1] / rl, rt[2] / rl, rt[3] / rl } end
+  local up = { n[2] * rt[3] - n[3] * rt[2], n[3] * rt[1] - n[1] * rt[3], n[1] * rt[2] - n[2] * rt[1] }
+  B:map(function(x, y, z)
+    return at[1] + x * rt[1] + y * up[1] + z * n[1],
+           at[2] + x * rt[2] + y * up[2] + z * n[2],
+           at[3] + x * rt[3] + y * up[3] + z * n[3]
+  end)
+  return B
+end
+
+-- THE PLACEMENT GRAMMAR. A rule sets a part ON a finished surface: cast from `from` along `dir`; on a miss
+-- step the origin by `step` (default 2 cm down) up to `tries` times; at the hit, orient the part to the
+-- surface normal and sink it `embed` into the surface (the rest stands proud). Returns the part and its
+-- centre, or nil when nothing was hit. Lamps use it; mirrors, handles, badges and grilles can.
+function kit.attach(S, rule)
+  local o = { rule.from[1], rule.from[2], rule.from[3] }
+  local step = rule.step or { 0, -0.02, 0 }
+  for _ = 1, rule.tries or 12 do
+    local hit, nrm = S:raycast(o, rule.dir)
+    if hit then
+      local d = rule.size[3]
+      local e = rule.embed or 0.01
+      local at = { hit[1] + nrm[1] * (d * 0.5 - e), hit[2] + nrm[2] * (d * 0.5 - e), hit[3] + nrm[3] * (d * 0.5 - e) }
+      return kit.oriented_box(rule.size, at, nrm, rule.mat), at, nrm
+    end
+    o = { o[1] + step[1], o[2] + step[2], o[3] + step[3] }
+  end
+  return nil
 end
 
 -- a separate rounded box part (truck boxes, trailers, signs): poly parts in ground space. `bevel` is the
@@ -672,7 +703,7 @@ function kit.build(P, level, opts)
   local lo, hi = S:bounds()
   -- extras (boxes, trailer, sign) join before the centring, in ground space
   local car = { polys = {}, height = hi[2] }
-  kit.lamps(P, car)
+  kit.lamps(P, car, S)
   if P.extras then P.extras(car) end
   for _, x in ipairs(car.polys) do S:append(x) end
   lo, hi = S:bounds()

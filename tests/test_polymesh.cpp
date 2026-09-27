@@ -199,3 +199,15 @@ TEST_CASE(polymesh_car_section_loft_has_no_slivers_and_ladder_caps) {
     insetRegion(g, cap, 0.08);
     CHECK(isClosed(g));
 }
+
+// Placement rules set parts on the finished surface: a ray finds the first face it meets and its normal.
+TEST_CASE(polymesh_raycast_finds_the_surface_and_its_normal) {
+    PolyMesh c = cube();
+    double t = 0;
+    Vec3 n;
+    int f = -1;
+    CHECK(raycast(c, Vec3(0.1, 0.2, 5.0), Vec3(0, 0, -1), t, n, f));
+    CHECK_APPROX(t, 4.5, 1e-9);            // the +z face at z = 0.5
+    CHECK_APPROX(n.z, 1.0, 1e-9);
+    CHECK(!raycast(c, Vec3(2.0, 0.0, 5.0), Vec3(0, 0, -1), t, n, f));   // beside the cube: a miss
+}

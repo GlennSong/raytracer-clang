@@ -732,6 +732,36 @@ std::vector<int> selectWhere(const PolyMesh& m, const std::function<bool(const V
     return s;
 }
 
+bool raycast(const PolyMesh& m, const Vec3& o, const Vec3& d, double& tOut, Vec3& nOut, int& fOut) {
+    double best = 1e30;
+    int hit = -1;
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        const auto& v = m.faces[f].v;
+        for (std::size_t i = 1; i + 1 < v.size(); ++i) {
+            const Vec3& a = m.pts[static_cast<std::size_t>(v[0])];
+            const Vec3& b = m.pts[static_cast<std::size_t>(v[i])];
+            const Vec3& c = m.pts[static_cast<std::size_t>(v[i + 1])];
+            const Vec3 e1 = b - a, e2 = c - a, pv = cross(d, e2);
+            const double det = dot(e1, pv);
+            if (std::fabs(det) < 1e-12) continue;
+            const double inv = 1.0 / det;
+            const Vec3 tv = o - a;
+            const double u = dot(tv, pv) * inv;
+            if (u < 0 || u > 1) continue;
+            const Vec3 qv = cross(tv, e1);
+            const double w = dot(d, qv) * inv;
+            if (w < 0 || u + w > 1) continue;
+            const double t = dot(e2, qv) * inv;
+            if (t > 1e-9 && t < best) { best = t; hit = static_cast<int>(f); }
+        }
+    }
+    if (hit < 0) return false;
+    tOut = best;
+    nOut = m.faceNormal(hit);
+    fOut = hit;
+    return true;
+}
+
 PolyStats polyStats(const PolyMesh& m, double sliver) {
     PolyStats st;
     st.faces = static_cast<int>(m.faces.size());

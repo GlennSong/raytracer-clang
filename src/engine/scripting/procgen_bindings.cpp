@@ -3247,6 +3247,19 @@ int l_poly_stats(lua_State* L) {
     }
     return 1;
 }
+// P:raycast({o}, {d}) -> hit {x,y,z}, normal {x,y,z}, face | nil
+int l_poly_raycast(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const Vec3 o = checkVec3(L, 2), d = checkVec3(L, 3);
+    double t = 0;
+    Vec3 n;
+    int f = -1;
+    if (!raycast(m, o, d, t, n, f)) { lua_pushnil(L); return 1; }
+    pushVec3(L, o + d * t);
+    pushVec3(L, n);
+    lua_pushinteger(L, f);
+    return 3;
+}
 int l_poly_closed(lua_State* L) { lua_pushboolean(L, isClosed(checkPoly(L, 1))); return 1; }
 int l_poly_volume(lua_State* L) { lua_pushnumber(L, signedVolume(checkPoly(L, 1))); return 1; }
 int l_poly_face_count(lua_State* L) { lua_pushinteger(L, static_cast<lua_Integer>(checkPoly(L, 1).faces.size())); return 1; }
@@ -3281,7 +3294,7 @@ void registerPolyMetatable(lua_State* L) {
         lua_setfield(L, -2, "__gc");
         static const luaL_Reg kMethods[] = {
             {"select", l_poly_select}, {"extrude", l_poly_extrude}, {"inset", l_poly_inset},
-            {"inset_region", l_poly_inset_region}, {"stats", l_poly_stats},
+            {"inset_region", l_poly_inset_region}, {"stats", l_poly_stats}, {"raycast", l_poly_raycast},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
             {"crease_corners", l_poly_crease_corners},
