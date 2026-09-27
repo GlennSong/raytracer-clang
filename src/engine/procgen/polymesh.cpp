@@ -445,6 +445,20 @@ std::vector<int> inset(PolyMesh& m, const std::vector<int>& sel, double amount) 
 
 std::vector<int> insetRegion(PolyMesh& m, const std::vector<int>& sel, double amount) {
     if (sel.empty()) return sel;
+    // NEVER FOLD: no outline point moves further than 35% of the shortest region edge it touches, so where
+    // the region narrows (a window's end, a tight corner) the inset narrows with it instead of crossing over
+    std::unordered_map<int, double> shortest;
+    for (int f : sel) {
+        const auto& v = m.faces[static_cast<std::size_t>(f)].v;
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const int a = v[i], b = v[(i + 1) % v.size()];
+            const double l = (m.pts[static_cast<std::size_t>(a)] - m.pts[static_cast<std::size_t>(b)]).length();
+            for (int x : {a, b}) {
+                auto it = shortest.find(x);
+                if (it == shortest.end() || l < it->second) shortest[x] = l;
+            }
+        }
+    }
     extrude(m, sel, 0.0);   // duplicates the region's points in place; its outline grows a (flat) ring
     std::unordered_set<long long> de;
     std::unordered_map<int, Vec3> nsum;
@@ -475,7 +489,16 @@ std::vector<int> insetRegion(PolyMesh& m, const std::vector<int>& sel, double am
         Vec3 b = i0 + i1;
         const double bl = b.length();
         b = bl > 1e-9 ? b / bl : i0;
-        moves.push_back({v, b * (amount / std::max(0.3, dot(b, i0)))});
+        double dist = amount / std::max(0.3, dot(b, i0));
+        // `v` is the moved copy; its original's shortest edge is the same length (extrude(0) moved nothing)
+        const auto sh = shortest.find(v);
+        double lim = sh != shortest.end() ? sh->second : 1e30;
+        for (const auto& [orig, len] : shortest)
+            if (sh == shortest.end() && (m.pts[static_cast<std::size_t>(orig)] - p).lengthSquared() < 1e-14) { lim = len; break; }
+        // an ACUTE corner would send its point far along the bisector (amount / cos) and across the region;
+        // cap it -- the band pinches a little at a sharp corner rather than folding
+        dist = std::min({dist, 1.5 * amount, 0.35 * lim});
+        moves.push_back({v, b * dist});
     }
     for (const auto& [v, d] : moves) m.pts[static_cast<std::size_t>(v)] = m.pts[static_cast<std::size_t>(v)] + d;
     return sel;

@@ -3240,6 +3240,10 @@ int l_poly_stats(lua_State* L) {
         lua_pushinteger(L, st.worstFace); lua_setfield(L, -2, "worst_face");
         lua_pushstring(L, m.groups[static_cast<std::size_t>(m.faces[static_cast<std::size_t>(st.worstFace)].group)].c_str());
         lua_setfield(L, -2, "worst_group");
+        const auto& wv = m.faces[static_cast<std::size_t>(st.worstFace)].v;
+        lua_createtable(L, static_cast<int>(wv.size()), 0);
+        for (std::size_t i = 0; i < wv.size(); ++i) { pushVec3(L, m.pts[static_cast<std::size_t>(wv[i])]); lua_seti(L, -2, static_cast<lua_Integer>(i + 1)); }
+        lua_setfield(L, -2, "worst_pts");
     }
     return 1;
 }

@@ -99,11 +99,12 @@ function kit.body(P)
     for i = i0, i1 do out[#out + 1] = i end
     return out
   end
+  -- `pred(zm, k, z0, z1)`: zm the row's middle, z0/z1 its two stations
   local function faces(runName, pred, straight)
     local sel = {}
     for k = 1, #stations - 1 do
       local zm = 0.5 * (stations[k] + stations[k + 1])
-      if pred(zm, k) then
+      if pred(zm, k, stations[k], stations[k + 1]) then
         for _, i in ipairs(run(runName, straight)) do
           if i < n then sel[#sel + 1] = face(k, i) end
         end
@@ -115,67 +116,41 @@ function kit.body(P)
   local G = P.glass
   -- WINDSHIELD and BACKLIGHT: the roof run between the cowl and the A-pillar top, and between the
   -- C-pillar top and the deck
-  local windshield = faces("roof", function(z) return z < G.cowl and z > G.a_top end, true)
-  local backlight = faces("roof", function(z) return z > G.deck and z < G.c_top end, true)
+  -- a glass row counts only when BOTH its stations lie inside the window's span: a row straddling the
+  -- cowl has one end where the greenhouse has collapsed to nothing, and insetting it folds it over
+  local function inside(z0, z1, lo, hi) return z0 >= lo - 1e-6 and z1 <= hi + 1e-6 end
+  local windshield = faces("roof", function(_, _, z0, z1) return inside(z0, z1, G.a_top, G.cowl) end, true)
+  local backlight = faces("roof", function(_, _, z0, z1) return inside(z0, z1, G.deck, G.c_top) end, true)
   -- SIDE GLASS: the glass runs between the A and C pillars, less the B-pillar band
-  local function sideOK(z)
-    if not (z < G.a_side and z > G.c_side) then return false end
+  local function sideOK(z, _, z0, z1)
+    if not inside(z0, z1, G.c_side, G.a_side) then return false end
     for _, pz in ipairs(G.pillars or {}) do if math.abs(z - pz) < (G.pillar_half or 0.09) then return false end end
     return true
   end
   local sideR = faces("glass_r", sideOK, true)
   local sideL = faces("glass_l", sideOK, true)
-  -- the runs' corner points belong to the pillars: drop the first and last point of each run's band
-  local glass = {}
-  for _, s in ipairs({ windshield, backlight, sideR, sideL }) do for _, f in ipairs(s) do glass[#glass + 1] = f end end
-  B:assign(glass, { mat = "glass", group = "glass" })
+  -- each window its own group (so it can be found again after subdivision) and the glass material; its
+  -- SHAPE is set here on the cage -- the outline creased and its corners as square as the spec asks --
+  -- and its DETAIL (gasket, reveal) after subdivision, in kit.detail. The WINDOW SHAPE CONTROL is per
+  -- window type (P.windows.windshield / side / back = { edge =, corner =, gasket =, depth = }):
+  --   edge    crease of the window outline (1 soft .. 3 crisp)
+  --   corner  vertex sharpness where the outline turns (0 round, 1 slightly eased, 3+ square)
+  local W = P.windows or {}
+  local function window(sel, group, spec)
+    if #sel == 0 then return end
+    spec = spec or {}
+    B:assign(sel, { mat = "glass", group = group })
+    B:crease_border(sel, spec.edge or 2.0)
+    if (spec.corner or 0) > 0 then B:crease_corners(sel, 35, spec.corner) end
+  end
+  window(windshield, "win_front", W.windshield)
+  window(backlight, "win_back", W.back)
+  window(sideR, "win_side_r", W.side)
+  window(sideL, "win_side_l", W.side)
 
   -- the underside and the arches: dark
   local under = faces("bottom", function() return true end, true)
   B:assign(under, { mat = "trim", group = "underbody" })
-
-  -- set the glass IN: a shallow region extrude whose side walls become a dark reveal. The WINDOW SHAPE
-  -- CONTROL is per window type (P.windows.windshield / side / back = { edge =, corner =, depth = }):
-  --   edge    crease of the glass outline and of the body's opening (0.5 soft .. 3 crisp)
-  --   corner  vertex sharpness where the outline turns (0 round, 1 slightly eased, 3+ square)
-  local W = P.windows or {}
-  local function setIn(sel, spec, wallMat)
-    if #sel == 0 then return end
-    spec = spec or {}
-    local edge, corner = spec.edge or 0.8, spec.corner or 0.0
-    local before = B:face_count()
-    B:extrude(sel, -(spec.depth or 0.02))
-    local walls = {}
-    for f = before, B:face_count() - 1 do walls[#walls + 1] = f end
-    B:assign(walls, { mat = wallMat })
-    local opening = {}
-    for _, f in ipairs(sel) do opening[#opening + 1] = f end
-    for _, f in ipairs(walls) do opening[#opening + 1] = f end
-    B:crease_border(sel, edge)          -- the glass's own edge
-    B:crease_border(opening, edge)      -- the body's opening
-    if corner > 0 then
-      B:crease_corners(sel, 35, corner)
-      B:crease_corners(opening, 35, corner)
-    end
-  end
-  setIn(windshield, W.windshield, "trim")
-  setIn(backlight, W.back, "trim")
-  setIn(sideR, W.side, "trim")
-  setIn(sideL, W.side, "trim")
-
-  -- THE GRILLE: the nose cap, inset from its rim and set in
-  local nose = B:select{ group = "cap_end" }
-  if #nose > 0 and P.grille ~= false then
-    local g = B:inset_region(nose, P.grille_margin or 0.012)   -- the inner ladder, inside the cap's rim
-    local before = B:face_count()
-    B:extrude(g, -0.03)
-    local walls = {}
-    for f = before, B:face_count() - 1 do walls[#walls + 1] = f end
-    B:assign(g, { mat = "grille" })
-    B:assign(walls, { mat = "trim" })
-    B:crease_border(g, 1.5)
-    B:crease_corners(g, 35, 2)
-  end
 
   -- the recipe's own operations (a convertible's cockpit, a pickup's bed, a van's rear door)
   if P.post then P.post(B, { faces = faces, P = P }) end
@@ -295,6 +270,20 @@ function kit.lamps(P, car)
       z = z + dz
     end
     return z
+  end
+  -- THE GRILLE: a separate panel on the flat nose cap, sized from the grille band and the nose, with
+  -- horizontal bars (a recess into the cap traced the cap's merged rim and sawed its edge)
+  if P.grille ~= false then
+    local gy = P.grille_y
+    local gw = (P.grille_w or 0.62) * P.half_width(half)
+    local gh = gy[2] - gy[1]
+    local cy = 0.5 * (gy[1] + gy[2])
+    car.polys[#car.polys + 1] = kit.box_part({ gw * 2, gh, 0.04 }, { 0, cy, half - 0.005 }, 2.5, "grille")
+    local bars = math.max(2, math.floor(gh / 0.06))
+    for i = 1, bars do
+      local y = gy[1] + gh * (i - 0.5) / bars
+      car.polys[#car.polys + 1] = kit.box_part({ gw * 2 - 0.04, 0.012, 0.03 }, { 0, y, half + 0.012 }, 2.5, "chrome")
+    end
   end
   local lens = P.lens or {}
   local hy = P.lamp_y
@@ -459,10 +448,38 @@ S.semi = function()
     end }
 end
 
--- The body cage (the unsubdivided poly) and its subdivided form, for inspection and tests.
+-- DETAIL AFTER SUBDIVISION: the gasket round each window (a flat rubber band at body level), the glass
+-- pushed in behind it (a dark reveal), and the grille set into the nose. Added to the SMOOTH mesh, so no
+-- later smoothing can pull these centimetre features out of shape -- they stay exactly as built.
+function kit.detail(S, P)
+  local W = P.windows or {}
+  local function setIn(group, spec)
+    local sel = S:select{ group = group }
+    if #sel == 0 then return end
+    spec = spec or {}
+    local before = S:face_count()
+    S:inset_region(sel, spec.gasket or 0.016)
+    local band = {}
+    for f = before, S:face_count() - 1 do band[#band + 1] = f end
+    S:assign(band, { mat = "gasket", group = group .. "_gasket" })
+    local before2 = S:face_count()
+    S:extrude(sel, -(spec.depth or 0.012))
+    local walls = {}
+    for f = before2, S:face_count() - 1 do walls[#walls + 1] = f end
+    S:assign(walls, { mat = "trim", group = group .. "_reveal" })
+  end
+  setIn("win_front", W.windshield)
+  setIn("win_back", W.back)
+  setIn("win_side_r", W.side)
+  setIn("win_side_l", W.side)
+  return S
+end
+
+-- The body cage (the unsubdivided poly) and its finished form (subdivided + detailed), for inspection
+-- and tests.
 function kit.poly(P, level)
   local B = kit.body(P)
-  return B, B:subdivide(level or 1)
+  return B, kit.detail(B:subdivide(level or 1), P)
 end
 
 -- The whole car at `level` subdivisions, as { parts = { [mat] = Mesh }, wheels = {...}, size = {W,H,L} }
@@ -470,7 +487,7 @@ end
 function kit.build(P, level, opts)
   opts = opts or {}
   local B = kit.body(P)
-  local S = B:subdivide(level or 1)
+  local S = kit.detail(B:subdivide(level or 1), P)
   local lo, hi = S:bounds()
   -- extras (boxes, trailer, sign) join before the centring, in ground space
   local car = { polys = {}, height = hi[2] }

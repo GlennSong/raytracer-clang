@@ -41,7 +41,11 @@ TEST_CASE(fleet_v2_every_body_is_closed_lean_and_sliver_free) {
         local cs = cage:stats(0.015)
         report[#report + 1] = { name = name, closed = cage:closed(), tris = st.triangles, slivers = st.slivers,
                                 worst = st.worst, corners = cs.corners, cage_worst = cs.worst,
-                                at = cs.worst_at, grp = cs.worst_group, cage_slivers = cs.slivers }
+                                at = cs.worst_at, grp = cs.worst_group, cage_slivers = cs.slivers,
+                                at1 = st.worst_at, grp1 = st.worst_group, pts1 = st.worst_pts, cpts = cs.worst_pts }
+        if name == "step_van" or name == "semi" then
+          for _, q in ipairs(st.worst_pts or {}) do print(string.format("      lod1 worst pt %.4f %.4f %.4f", q[1], q[2], q[3])) end
+        end
       end
     )LUA", &err);
     if (!ran) std::printf("    run error: %s\n", err.c_str());
@@ -50,9 +54,10 @@ TEST_CASE(fleet_v2_every_body_is_closed_lean_and_sliver_free) {
     const bool checked = k.vm.doString(R"LUA(
       failures = 0
       for _, r in ipairs(report) do
-        print(string.format("    %-12s closed %-5s lod1 %6d tris  slivers %d  worst %.3f  corners %d | cage slivers %d worst %.4f in %s at (%.2f %.2f %.2f)", r.name,
-                            tostring(r.closed), r.tris, r.slivers, r.worst, r.corners, r.cage_slivers, r.cage_worst, r.grp or "?",
-                            r.at and r.at[1] or 0, r.at and r.at[2] or 0, r.at and r.at[3] or 0))
+        print(string.format("    %-12s closed %-5s lod1 %6d tris  slivers %d  worst %.3f in %s at (%.2f %.2f %.2f)  corners %d | cage slivers %d worst %.4f in %s", r.name,
+                            tostring(r.closed), r.tris, r.slivers, r.worst, r.grp1 or "?",
+                            r.at1 and r.at1[1] or 0, r.at1 and r.at1[2] or 0, r.at1 and r.at1[3] or 0,
+                            r.corners, r.cage_slivers, r.cage_worst, r.grp or "?"))
         if not r.closed then failures = failures + 1 end
         if r.tris > 30000 then failures = failures + 1 end        -- LOD 1 (traffic) budget per body
         if r.slivers > 0 then failures = failures + 1 end

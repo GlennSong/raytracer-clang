@@ -14,6 +14,7 @@ local MATS = {
   glass    = material.new{ roughness = 0.04, metallic = 0.15 },
   trim     = material.new{ roughness = 0.60, metallic = 0.0 },
   grille   = material.new{ roughness = 0.45, metallic = 0.6 },
+  gasket   = material.new{ roughness = 0.75, metallic = 0.0 },
   interior = material.new{ roughness = 0.85, metallic = 0.0 },
   bed      = material.new{ roughness = 0.80, metallic = 0.1 },
   box      = material.new{ roughness = 0.55, metallic = 0.1 },
@@ -25,7 +26,7 @@ local MATS = {
   chrome   = material.new{ roughness = 0.25, metallic = 0.8 },
 }
 local COLOR = {
-  glass = { 0.12, 0.15, 0.18 }, trim = { 0.04, 0.04, 0.045 }, grille = { 0.10, 0.10, 0.11 }, interior = { 0.42, 0.30, 0.20 },
+  glass = { 0.12, 0.15, 0.18 }, trim = { 0.04, 0.04, 0.045 }, grille = { 0.06, 0.06, 0.065 }, chrome = { 0.75, 0.76, 0.78 }, gasket = { 0.025, 0.025, 0.028 }, interior = { 0.42, 0.30, 0.20 },
   bed = { 0.08, 0.08, 0.09 }, box = { 0.92, 0.92, 0.90 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
   lamp = { 0.95, 0.95, 0.92 }, lamp_red = { 0.8, 0.05, 0.05 },
 }
