@@ -182,6 +182,26 @@ TEST_CASE(nav_links_carry_per_end_deck_flags_through_node_compaction) {
         // exactly the end at x = 100 is the deck
         CHECK(L.elevAbsA == (pa.x > 90.0));
         CHECK(L.elevAbsB == (pb.x > 90.0));
+        // the street end already knows its height above the ground; the deck end waits for the ground
+        if (!L.elevAbsA) CHECK_APPROX(L.aboveA, L.elevA, 1e-9);
+        if (!L.elevAbsB) CHECK_APPROX(L.aboveB, L.elevB, 1e-9);
     }
     CHECK(mixed >= 1);
+}
+
+// Road heights have one convention for the sim's same-level tests: a relative end's height above the ground
+// includes its grade-separation layer (an old layered bridge rides kLayerClearance over the street).
+TEST_CASE(nav_links_carry_height_above_ground_with_the_layer_lift) {
+    RoadGraph g;
+    g.nodes = {{Vec2(0, 0)}, {Vec2(50, 0)}, {Vec2(100, 0)}};
+    g.nodes[1].elev = 1.5;
+    g.edges = {RoadEdge{0, 1, 8, RoadClass::Local, 1}, RoadEdge{1, 2, 8, RoadClass::Local, 0}};
+    const NavGraph nav = buildNavGraph(g);
+    int layered = 0;
+    for (const NavLink& L : nav.links) {
+        CHECK_APPROX(L.aboveA, L.layer * kLayerClearance + L.elevA, 1e-9);
+        CHECK_APPROX(L.aboveB, L.layer * kLayerClearance + L.elevB, 1e-9);
+        layered += L.layer == 1;
+    }
+    CHECK(layered >= 1);
 }

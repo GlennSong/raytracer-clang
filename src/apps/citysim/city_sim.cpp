@@ -2776,15 +2776,10 @@ void CitySim::refreshPose(Agent& a) {
         // node elevations along the link; layer keeps legacy bridges lifted
         const engine::NavLink& EL = nav_->links[li];
         const Real et = L > 1e-9 ? s / L : 0.0;
-        if (EL.elevAbsolute) {
-            a.deckY = EL.elevA + (EL.elevB - EL.elevA) * et;
-            a.elevation = a.deckY;   // sensors gate on RELATIVE height; an
-                                     // absolute deck vs a street reads > 3 m
-        } else {
-            a.deckY = -1e30;
-            a.elevation = EL.layer * kLayerClearance +
-                          EL.elevA + (EL.elevB - EL.elevA) * et;
-        }
+        // one convention for the same-level tests: height ABOVE THE GROUND on every link (NavLink::aboveA/B,
+        // resolved at load); the absolute Y only draws the car on a deck
+        a.elevation = EL.aboveA + (EL.aboveB - EL.aboveA) * et;
+        a.deckY = EL.elevAbsolute ? EL.elevA + (EL.elevB - EL.elevA) * et : Real(-1e30);
         a.grade = (EL.elevB - EL.elevA) / std::max(Real(1), EL.length);
     }
 
@@ -3905,8 +3900,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     int lastLink = a.route.links.back();
     // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
     // arrivals at ground level, under their own road.
-    a.elevation = nav_->links[lastLink].layer * kLayerClearance +
-                  nav_->links[lastLink].elevB;
+    a.elevation = nav_->links[lastLink].aboveB;
     // A DIRECTED AGENT ARRIVES AND WAITS (ADR-0091). Its plan belongs to the
     // director, so the goal table does not get to chain the next trip — it
     // stands where it was sent until told otherwise. restNode still moves, so

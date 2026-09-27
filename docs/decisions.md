@@ -8966,3 +8966,17 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 - **The island level** caps ambient traffic at 4000.
 
 **Consequences.** Regenerating `island_8_nature` changes its lanes scene (the pass), so its road bundle rebuilds on the next load (about 28 minutes, once).
+
+## ADR-0136 — One road-height convention: both forms resolved once, at load
+
+**Context.** A review of ADR-0135 found two readings of a nav link's height in use. An absolute (deck) link stored the carriageway's world Y, and the sim compared it against street cars' height above the ground. On a deck-to-street link that made a car at the ramp foot see street traffic tens of metres away, and the ramp-foot gate never met the street's. The ADR-0135 fix only patched the one end it could see.
+
+**Decision.** Every `NavLink` carries both forms at both ends:
+- `elevA/B`, the absolute Y on an absolute link, draws the car (`deckY`);
+- `aboveA/B`, the height above the ground, is what every same-level test compares (`Agent::elevation`, including on arrival).
+
+`buildNavGraph` fills `above` for relative ends (layer lift included). `kLayerClearance` moved to `nav_graph.h` for this. `CityRenderSystem`, which owns the ground, resolves the absolute ends at load. It also turns a mixed link's relative end absolute, so both of that link's ends are drawn in one form. The per-end deck flags stay as they are, and `elevAbsolute` still means "a deck".
+
+The same review corrected ADR-0135's flashlight: it now lives in its own per-frame `SceneLighting::toolSpots`, rebuilt in `render()`. Staging it in `vehicleSpots` stacked beams on frames with no fixed step.
+
+**Consequences.** Headless sims (tests, citywalk) get exact heights for relative links. Their absolute links read 0 above ground until something with the ground resolves them, which is the old behaviour for decks.

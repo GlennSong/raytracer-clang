@@ -228,26 +228,30 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     nav_ = engine::buildNavGraph(combined);
     if (nav_.linkCount() == 0) return false;
-    // MIXED LINKS (Glenn: "cars get off the freeway and then sink into the ground and they appear"): a
-    // link from a ramp's last deck node (absolute Y) to a street node (height ABOVE the ground, usually 0)
-    // was marked absolute as a whole, so a car lerped from the deck toward y = 0 -- sea level -- along it,
-    // sank through the terrain, and popped back up on the next street link. The street end takes its
-    // absolute height from the drawn ground here, where the ground is known.
+    // HEIGHTS RESOLVED ONCE, where the ground is known (review of #35 / the ramp-foot sink): every link end
+    // gets its ABSOLUTE carriageway Y (elevA/B on an absolute link -- what draws the car) and its height
+    // ABOVE THE GROUND (aboveA/B -- what the sim's same-level tests compare). A deck-to-street link (one
+    // absolute end, one relative) was absolute as a whole: cars lerped toward y = 0 and sank, and on it the
+    // sim compared an absolute Y against street cars' heights above ground, so a car at a ramp foot saw
+    // street traffic tens of metres away. Now both forms are exact at both ends of every link.
     {
         int mixed = 0;
         for (engine::NavLink& L : nav_.links) {
-            if (!L.elevAbsolute || L.from < 0 || L.to < 0) continue;
-            // the link's own per-end flags: the nav's nodes are compacted (junction knots merged), so
-            // looking them up in `combined` by index read other nodes' flags and lifted real decks by the
-            // ground height -- cars flew (Glenn: "Agent driven cars are flying up into the sky now", #35)
-            const bool absA = L.elevAbsA, absB = L.elevAbsB;
-            if (absA == absB) continue;
+            if (L.from < 0 || L.to < 0) continue;
             const engine::Vec2 pa = nav_.nodes[static_cast<std::size_t>(L.from)], pb = nav_.nodes[static_cast<std::size_t>(L.to)];
-            if (!absA) L.elevA = groundAt(pa.x, pa.y) + L.layer * kLayerClearance + L.elevA;
-            if (!absB) L.elevB = groundAt(pb.x, pb.y) + L.layer * kLayerClearance + L.elevB;
-            ++mixed;
+            const Real ga = groundAt(pa.x, pa.y), gb = groundAt(pb.x, pb.y);
+            const Real lift = L.layer * kLayerClearance;
+            // above the ground: a relative end's own height (+ the layer lift), an absolute end's over its ground
+            L.aboveA = L.elevAbsA ? L.elevA - ga : lift + L.elevA;
+            L.aboveB = L.elevAbsB ? L.elevB - gb : lift + L.elevB;
+            if (L.elevAbsolute && L.elevAbsA != L.elevAbsB) {   // mixed: the relative end becomes absolute too
+                if (!L.elevAbsA) L.elevA = ga + L.aboveA;
+                if (!L.elevAbsB) L.elevB = gb + L.aboveB;
+                L.elevAbsA = L.elevAbsB = true;
+                ++mixed;
+            }
         }
-        if (mixed) LOG_INFO << "[citysim] " << mixed << " deck-to-street links given the street end's ground height";
+        if (mixed) LOG_INFO << "[citysim] " << mixed << " deck-to-street links resolved to absolute heights at both ends";
     }
 
     // Connectivity truth (device: "I don't see the freeway connected yet"):

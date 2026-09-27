@@ -18,6 +18,13 @@ namespace engine {
 // is the straight segment from->to: the source RoadGraph is already finely
 // sampled (netGraph collapses straight runs and keeps bends as chains of short
 // edges), so a curved road is a *chain* of NavLinks and each link is straight.
+// How high one grade-separation LAYER sits above the one below (m). A legacy
+// bridge link carries `layer > 0` instead of an absolute deck elevation, so
+// everything that places geometry on such a link — the sim's agent height, the
+// render bridge's decals, parked cars and bay outlines — must lift by the same
+// amount. Shared so those readings cannot drift apart.
+constexpr double kLayerClearance = 5.8;
+
 struct NavLink {
     int from = 0;                       // NavGraph node index (tail)
     int to = 0;                         // NavGraph node index (head)
@@ -35,6 +42,11 @@ struct NavLink {
     // resolves the relative one to absolute from the ground -- nav node indices are compacted, so the
     // road graph's nodes cannot be looked up by a link's from/to)
     bool elevAbsA = false, elevAbsB = false;
+    // The carriageway's height ABOVE THE GROUND at each end -- what the sim's same-level tests compare (a car
+    // on a deck and one on the street under it, cars on a hill). Filled when the graph is built from the
+    // road's relative heights; the owner of the ground (CityRenderSystem) resolves the absolute ends and
+    // re-derives these at load, so every link carries both forms and nobody mixes them.
+    Real aboveA = 0, aboveB = 0;
     // One-way link (freeway carriageway / ramp): its LANES span the full
     // link width centred on the chain, not the right half of a two-way road.
     bool oneWay = false;
