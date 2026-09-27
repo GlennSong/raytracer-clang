@@ -8979,4 +8979,6 @@ Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Pe
 
 The same review corrected ADR-0135's flashlight: it now lives in its own per-frame `SceneLighting::toolSpots`, rebuilt in `render()`. Staging it in `vehicleSpots` stacked beams on frames with no fixed step.
 
+**Drawn deck under deck cars (Glenn, in game: "they do sink into the onramp a little bit").** A nav link knows only its two ends, and the straight line between them cuts under a ramp's vertical curves. `RoadDeckField::heightNear(x, z, margin, refY, window)` answers with the drawn surface closest to a height (pads, spines, bank included). `CityRenderSystem::deckSurfaceNear` asks it with the car's lerped deck Y and a 2 m window, well under a grade separation, so it never finds the street below or the freeway above. Deck cars and `deckYAt` sit on it, and deck cars take their pitch from it a wheelbase fore and aft. `heightAt` and `heightNear` share one enumeration of the surfaces (`surfacesAt`). The sim's own heights are unchanged.
+
 **Consequences.** Headless sims (tests, citywalk) get exact heights for relative links. Their absolute links read 0 above ground until something with the ground resolves them, which is the old behaviour for decks.

@@ -9,6 +9,7 @@
 #include "triangulate.h"          // triangulateWithHoles (robust hole-aware ear clip)
 #include "polygon.h"              // pointInPolygon, centroid
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <array>
 #include <climits>
@@ -884,13 +885,11 @@ double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
     return depth;
 }
 
-bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) const {
+void RoadDeckField::surfacesAt(double x, double z, double margin,
+                               const std::function<void(double y, bool pad, int layer, double d)>& fn) const {
     const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
                         (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);
-    // Pads first: inside a pad the drawn triangle IS the surface.
     if (auto pit = padCells_.find(k); pit != padCells_.end()) {
-        bool found = false;
-        double best = -1e30;
         for (int ti : pit->second) {
             const Tri& t = pads[ti];
             const double d1 = (x - t.b.x) * (t.a.z - t.b.z) - (t.a.x - t.b.x) * (z - t.b.z);
@@ -903,23 +902,12 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
             if (std::fabs(den) < 1e-12) continue;
             const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
             const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
-            const double y = w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y;
-            if (!found || y > best) { best = y; found = true; }   // stacked pads: the top
+            fn(w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y, true, 0, 0.0);
         }
-        if (found) { *outY = best; return true; }
     }
     auto it = cells_.find(k);
-    if (it == cells_.end()) return false;
+    if (it == cells_.end()) return;
     const Vec2 q(x, z);
-    // WHICH DECK, WHEN TWO ARE STACKED HERE. Everything that asks this question in 2-D is at
-    // GRADE — a parked car, a painted bay, a crosswalk decal, a signal pole — while moving
-    // traffic reads its own link's profile (CityRenderSystem::deckYAt). So a lower LAYER wins
-    // outright over a nearer one: the street under an overpass is the surface, not the deck
-    // eight metres above it. Within a layer it is the nearest spine, as before. Every lattice
-    // city is one layer, so this changes nothing there; a lane-built city with a freeway over
-    // its streets was reading the freeway (metro_lanes: cars ±1 m off, 161 samples past 25 cm).
-    int bestLayer = INT_MAX;
-    double bestD = 1e30, bestY = 0.0;
     for (const Seg& sg : it->second) {
         const UnionSpine& sp = spines[sg.spine];
         const Vec2& a = sp.points[sg.i];
@@ -933,10 +921,7 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
                               ? sp.hw[sg.i] + (sp.hw[sg.i + 1] - sp.hw[sg.i]) * t
                               : sp.halfWidth;
         if (d > hw + margin) continue;
-        if (sp.layer > bestLayer || (sp.layer == bestLayer && d >= bestD)) continue;
-        bestLayer = sp.layer;
-        bestD = d;
-        bestY = sp.yAbs[sg.i] + (sp.yAbs[sg.i + 1] - sp.yAbs[sg.i]) * t;
+        double y = sp.yAbs[sg.i] + (sp.yAbs[sg.i + 1] - sp.yAbs[sg.i]) * t;
         // Superelevation: the lattice banks the deck by signedLateral *
         // crossSlope, lateral measured along `left` = fwd rotated +90 in XZ
         // (road_lattice.cpp, rings[i].left), + rising to the left.
@@ -944,12 +929,43 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
             const double cs = sp.crossSlope[sg.i] + (sp.crossSlope[sg.i + 1] - sp.crossSlope[sg.i]) * t;
             const Vec2 fwd = ab * (1.0 / std::sqrt(L2));
             const Vec2 left(-fwd.y, fwd.x);
-            bestY += dot(q - a, left) * cs;
+            y += dot(q - a, left) * cs;
         }
+        fn(y, false, sp.layer, d);
     }
+}
+
+bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) const {
+    // Pads first: inside a pad the drawn triangle IS the surface (stacked pads: the top).
+    // WHICH DECK, WHEN TWO ARE STACKED HERE. Everything that asks this question in 2-D is at
+    // GRADE — a parked car, a painted bay, a crosswalk decal, a signal pole — while moving
+    // traffic asks heightNear with its own level. So a lower LAYER wins outright over a nearer
+    // one: the street under an overpass is the surface, not the deck eight metres above it.
+    // Within a layer it is the nearest spine. Every lattice city is one layer, so this changes
+    // nothing there; a lane-built city with a freeway over its streets was reading the freeway
+    // (metro_lanes: cars ±1 m off, 161 samples past 25 cm).
+    bool pad = false;
+    double padY = -1e30;
+    int bestLayer = INT_MAX;
+    double bestD = 1e30, bestY = 0.0;
+    surfacesAt(x, z, margin, [&](double y, bool isPad, int layer, double d) {
+        if (isPad) { if (!pad || y > padY) padY = y; pad = true; return; }
+        if (layer > bestLayer || (layer == bestLayer && d >= bestD)) return;
+        bestLayer = layer; bestD = d; bestY = y;
+    });
+    if (pad) { *outY = padY; return true; }
     if (bestD > 1e29) return false;
     *outY = bestY;
     return true;
+}
+
+bool RoadDeckField::heightNear(double x, double z, double margin, double refY, double window, double* outY) const {
+    double best = window;
+    bool found = false;
+    surfacesAt(x, z, margin, [&](double y, bool, int, double) {
+        if (std::fabs(y - refY) < best) { best = std::fabs(y - refY); *outY = y; found = true; }
+    });
+    return found;
 }
 
 }  // namespace engine

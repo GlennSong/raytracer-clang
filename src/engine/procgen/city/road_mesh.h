@@ -180,6 +180,11 @@ struct RoadDeckField {
     // (half-width + margin). False off every road — the caller falls back
     // to its terrain.
     bool heightAt(double x, double z, double margin, double* outY) const;
+    // The drawn surface at (x, z) CLOSEST TO `refY`, within `window` metres of it -- for traffic that
+    // knows its own level (a car on a ramp between two decks, #35): its link's lerped height finds the
+    // deck it is on, and the drawn profile (vertical curves, bank) places it. False when no deck here
+    // lies within the window.
+    bool heightNear(double x, double z, double margin, double refY, double window, double* outY) const;
     // How far INSIDE the built asphalt (x, z) lies, in metres: the distance in
     // from the nearest spine's edge — interior segments only, so a point past
     // a chain's end (a cul-de-sac cap) is outside — or, inside a junction
@@ -193,6 +198,10 @@ struct RoadDeckField {
     bool empty() const { return spines.empty() && pads.empty(); }
 
 private:
+    // Every drawn surface over (x, z): pad triangles (pad = true) and spines within half-width + margin
+    // (their layer and centreline distance d). heightAt and heightNear choose among these.
+    void surfacesAt(double x, double z, double margin,
+                    const std::function<void(double y, bool pad, int layer, double d)>& fn) const;
     struct Seg { int spine; int i; };        // spine segment (i, i+1)
     std::unordered_map<long long, std::vector<Seg>> cells_;
     std::unordered_map<long long, std::vector<int>> padCells_;

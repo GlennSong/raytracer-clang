@@ -430,6 +430,10 @@ private:
     // lands on the deck the mesher actually built rather than on the raw
     // terrain beside it (#25). Falls back to the ground for an unknown link.
     Real deckYAt(int link, Real station, engine::Vec2 p) const;
+    // A deck car's height: the drawn deck closest to its link's lerped height `refY` (within 2 m, so
+    // never the street under it or the freeway over it), else `refY` itself. The lerp between nav ends
+    // cuts under a ramp's vertical curves; the drawn profile does not (#35).
+    Real deckSurfaceNear(Real x, Real z, Real refY) const;
 
     CityRenderParams params_;
     engine::NavGraph nav_;

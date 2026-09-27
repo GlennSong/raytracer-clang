@@ -104,8 +104,18 @@ Real CityRenderSystem::deckYAt(int link, Real station, Vec2 p) const {
                        ? std::clamp(station / L.length, Real(0), Real(1))
                        : Real(0);
     const Real e = L.elevA + (L.elevB - L.elevA) * t;
-    if (L.elevAbsolute) return e;
+    if (L.elevAbsolute) return deckSurfaceNear(p.x, p.y, e);
     return groundAt(p.x, p.y) + L.layer * kLayerClearance + e;
+}
+
+Real CityRenderSystem::deckSurfaceNear(Real x, Real z, Real refY) const {
+    constexpr double kWindow = 2.0;   // well under a grade separation (kLayerClearance 5.8 m)
+    double bestY = refY, bestDy = kWindow;
+    for (const engine::RoadDeckField& f : decks_) {
+        double y;
+        if (f.heightNear(x, z, 0.5, refY, bestDy, &y)) { bestDy = std::fabs(y - refY); bestY = y; }
+    }
+    return static_cast<Real>(bestY);
 }
 
 bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
@@ -1477,7 +1487,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     Real halfH = bodyH * 0.5;
     // Absolute deck (corridor): the deck Y IS the surface; ground-relative
     // placement hovered/sank between chain nodes on hills (device).
-    Real y = (a.deckY > -1e29) ? a.deckY + halfH
+    Real y = (a.deckY > -1e29) ? deckSurfaceNear(x, z, a.deckY) + halfH
                                : groundAt(x, z) + a.elevation + halfH;
     Real yaw = std::atan2(drawHeading.x, drawHeading.y); // box local +Z -> travel heading
     // Cars sit NORMAL to the road plane (device: a world-upright box on a
@@ -1491,9 +1501,17 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         // instead — all four wheels track the ramp (device feedback).
         Vec2 f = drawHeading;
         const Real fl = f.length();
-        if (fl > 1e-6 && std::fabs(a.grade) > 1e-4) {
+        Real grade = a.grade;
+        if (fl > 1e-6 && a.deckY > -1e29) {   // the drawn deck a wheelbase fore and aft (its vertical curves)
+            constexpr Real kHalfBase = 1.4;
+            const Vec2 u = f * (1.0 / fl);
+            const Real yF = deckSurfaceNear(x + u.x * kHalfBase, z + u.y * kHalfBase, a.deckY + a.grade * kHalfBase);
+            const Real yB = deckSurfaceNear(x - u.x * kHalfBase, z - u.y * kHalfBase, a.deckY - a.grade * kHalfBase);
+            grade = (yF - yB) / (2 * kHalfBase);
+        }
+        if (fl > 1e-6 && std::fabs(grade) > 1e-4) {
             f = f * (1.0 / fl);
-            Vec3 fw = normalize(Vec3(f.x, a.grade, f.y));
+            Vec3 fw = normalize(Vec3(f.x, grade, f.y));
             Vec3 rt(f.y, 0, -f.x);
             Vec3 up = normalize(cross(fw, rt));
             if (up.y < 0) up = up * -1;

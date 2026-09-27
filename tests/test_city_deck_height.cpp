@@ -284,3 +284,46 @@ TEST_CASE(parked_cars_and_bay_paint_sit_on_the_road_deck) {
     CHECK(drivenMin > -0.05);
     CHECK(drivenMax < 0.12);
 }
+
+// #35: traffic on a ramp asks for the drawn deck NEAR its own level. A ramp crests over a street (the
+// ramp's drawn profile is a curve; its nav link only knows the two ends, so the straight line between them
+// cuts under the crest). heightNear must find the ramp's curve from the lerped height, never the street
+// below; heightAt (for things at grade) still answers the street.
+TEST_CASE(deck_field_height_near_finds_the_ramp_curve_not_the_street_under_it) {
+    using namespace engine;
+    RoadDeckField d;
+    {   // the street: flat at y = 0, along x
+        UnionSpine s;
+        for (int i = 0; i <= 10; ++i) { s.points.push_back(Vec2(i * 10.0, 0.0)); s.yAbs.push_back(0.0); s.hw.push_back(4.0); }
+        s.halfWidth = 4.0;
+        s.layer = 0;
+        d.spines.push_back(std::move(s));
+    }
+    {   // the ramp over it: ends at 6 m, cresting at 7 m mid-way (a parabola)
+        UnionSpine s;
+        for (int i = 0; i <= 10; ++i) {
+            const double u = i / 10.0;
+            s.points.push_back(Vec2(i * 10.0, 0.0));
+            s.yAbs.push_back(6.0 + 4.0 * u * (1.0 - u));
+            s.hw.push_back(4.0);
+        }
+        s.halfWidth = 4.0;
+        s.layer = 1;
+        d.spines.push_back(std::move(s));
+    }
+    d.buildIndex();
+    double y = -1;
+    // the nav lerp says 6.0 at the crest; the drawn ramp is at 7.0 there
+    CHECK(d.heightNear(50.0, 0.0, 0.5, 6.0, 2.0, &y));
+    CHECK_APPROX(y, 7.0, 1e-6);
+    // a car at the street's level finds the street
+    CHECK(d.heightNear(50.0, 0.0, 0.5, 0.3, 2.0, &y));
+    CHECK_APPROX(y, 0.0, 1e-6);
+    // nothing within the window: no answer (the caller keeps its own height)
+    CHECK(!d.heightNear(50.0, 0.0, 0.5, 3.5, 2.0, &y));
+    // off every road: no answer
+    CHECK(!d.heightNear(50.0, 30.0, 0.5, 6.0, 2.0, &y));
+    // heightAt is unchanged: the lower layer (the street) wins
+    CHECK(d.heightAt(50.0, 0.0, 0.5, &y));
+    CHECK_APPROX(y, 0.0, 1e-6);
+}
