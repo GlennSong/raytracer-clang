@@ -682,6 +682,7 @@ struct CitySimConfig {
     bool showPlan = false;               // boot with block/lot outlines on
                                          // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips
+    bool ambientBus = false;             // a test lab's ambient rotation includes the bus body (wheel_lab)
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's
     // `"agents"` script (an agents.lua-style file resolved by level_loader).

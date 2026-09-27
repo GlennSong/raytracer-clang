@@ -98,6 +98,7 @@ struct CityRenderParams {
     bool adaptiveRate = true;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
+    bool ambientBus = false;               // ambient rotation includes the bus body (wheel_lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
     // whose archetype tables replace the sim's built-ins at build. Loaded from
     // the level's citysim block; used only in scripting builds; "" = built-ins.
@@ -434,6 +435,14 @@ private:
     // lerped height `refY`, so never the street under it or the freeway over it), else `refY` itself.
     // The lerp between nav ends cuts under a ramp's vertical curves; the drawn profile does not (#35).
     Real deckSurfaceNear(Real x, Real z, Real refY) const;
+    // The fleet slot agent `ai` is DRAWN with (the ambient rotation, the bus override): the one mesh,
+    // lamps and wheel set that car wears. -1 when there is no drawable slot.
+    int drawSlotFor(int ai) const;
+    // The drawn road surface under (px, pz) for car `a`, `along` metres ahead of its centre: on a deck, the
+    // deck it is on (deckSurfaceNear from its link's height); on the ground, the road or ground at ITS level
+    // (the terrain + its layer lift as the reference), so an overpass or a stacked junction pad above never
+    // answers for a street car (wheel_lab: groundAt's top-pad rule read the freeway 8 m up).
+    Real carSurfaceAt(const Agent& a, Real px, Real pz, Real along) const;
 
     CityRenderParams params_;
     engine::NavGraph nav_;

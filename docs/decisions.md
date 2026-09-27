@@ -8984,3 +8984,26 @@ The same review corrected ADR-0135's flashlight: it now lives in its own per-fra
 `heightNear` does not take the surface nearest `refY`. On island 8, ramp link 19802 runs 54 m in a straight line from 23.4 to 28.9 m, while the drawn ramp crests up to 1.46 m above that line. The ramp also overlaps the freeway it runs beside, and the freeway was the nearer height. The rule is: of the surfaces within 3 m of `refY` (never a stacked level), a junction pad, else the road the point is most inside (largest half-width minus distance). A 5-minute audit near the ramp (`ground? x z r` with `RT_GROUND_DUMP`, 109 ramp and freeway car samples) put the worst car at −1.33 m before and −0.07 m after, with none now past 0.1 m.
 
 **Consequences.** Headless sims (tests, citywalk) get exact heights for relative links. Their absolute links read 0 above ground until something with the ground resolves them, which is the old behaviour for decks.
+
+## ADR-0137 — Cars rest on their four wheels; the wheel lab
+
+**Context.** After ADR-0136, cars were placed by one surface sample at their centre. Cars on raised roads got pitch only; street cars got a four-point tilt. Glenn asked for the rule to be "make sure the 4 wheels are on the ground", and for a scene that tests it in isolation.
+
+**The scene.** `assets/levels/wheel_lab.json` is the lanes `ring_city` graph: a two-carriageway freeway loop, 8 ramps, arterial and local streets, two hills and a valley. It has 13 wandering drivers, one per fleet slot. `citysim.ambientBus` is a test-only switch that puts the bus in the ambient rotation, since a wandering driver never parks. The clock is held at noon and every car runs the full sim. The probe is `ground? 0 0 700` with `RT_GROUND_DUMP`, which now records each tyre's contact point against the surface under it (`carSurfaceAt`).
+
+**Decision.**
+- **Placement.** `agentPose` takes the fleet recipe's wheel set (`drawSlotFor`, `carWheels_`) and queries the surface under each contact patch. It fits a least-squares plane for pitch and roll, and after the tilt smoothing sets the height so the lowest tyre touches. None sinks; on a crest one tyre floats by the plane's residual.
+- **Picking the road** (`RoadDeckField::heightOn`). Prefer spines of the car's own nav class, then the one it is most inside, then a junction pad only within 1.5 m of that road. A deck car also keeps its 3 m window around its link's height; a street car goes by class alone.
+- **What this replaces.** The old centre rule's `groundAt` ("the lower layer wins") cannot separate a street from the overpass in a lanes scene, because both are layer 1. It drew street cars 8.6 m up on the freeway. A terrain-height reference failed in the valley, because the drawn road runs 3 m under the sampled terrain.
+- **A/B.** `RT_FOUR_WHEELS=0` restores the old placement.
+
+**Measured** (wheel lab, 1170 car samples each, the same traffic and measurement):
+
+| tyre gap to the road | old | four-wheel |
+|---|---|---|
+| worst 1% sunk | -0.118 m | -0.003 m |
+| worst 1% floating | +0.227 m | +0.051 m |
+| worst tyre | +8.65 m | +0.18 m |
+| cars more than 5 cm off | 3.8% | 1.1% |
+
+**Consequences.** Every drawn (K-tier) car costs about four surface queries per frame (not yet timed on the island). Physics cars (`physicalCars`) are unchanged; a hand-off between tiers now meets the same surface.

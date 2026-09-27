@@ -411,9 +411,13 @@ public:
     // ordinary rotation it broke 692 parking-band checks, because one car in
     // thirteen became a bus and no bay is that long. The sim and the renderer
     // both go through this, so a body and its mesh can never disagree.
+    // A test lab can put the bus in the ambient rotation (citysim.ambientBus) to drive it over every
+    // road with the rest -- a wandering driver never parks, so the bay problem above does not arise.
+    bool ambientBus = false;
     int ambientSlotFor(int i) const {
         const int n = fleetSize();
         if (n <= 0) return 0;
+        if (ambientBus) return ((i % n) + n) % n;
         int usable = 0;
         for (int s2 = 0; s2 < n; ++s2)
             if (fleetBody(s2).type != VehicleType::Bus) ++usable;

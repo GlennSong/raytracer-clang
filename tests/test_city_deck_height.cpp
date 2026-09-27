@@ -352,3 +352,29 @@ TEST_CASE(deck_field_height_near_prefers_the_road_the_car_is_inside_over_a_neare
     CHECK(d.heightNear(50.0, -12.0, 0.5, 27.1, 3.0, &y));
     CHECK_APPROX(y, 27.00, 1e-6);
 }
+
+// Wheel lab: in a lanes scene the street and the freeway over it are both layer 1, so "the lower layer
+// wins" cannot tell them apart and a street car under the overpass was drawn 8.6 m up on it. A car's own
+// road CLASS picks the road; a junction pad counts only near that road's height.
+TEST_CASE(deck_field_height_on_picks_the_car_s_own_road_class_under_an_overpass) {
+    using namespace engine;
+    RoadDeckField d;
+    auto straight = [&](Vec2 a, Vec2 b, double y, double hw, RoadClass k) {
+        UnionSpine s;
+        for (int i = 0; i <= 10; ++i) { s.points.push_back(a + (b - a) * (i / 10.0)); s.yAbs.push_back(y); s.hw.push_back(hw); }
+        s.halfWidth = hw;
+        s.layer = 1;
+        s.klass = k;
+        d.spines.push_back(std::move(s));
+    };
+    straight(Vec2(0, -50), Vec2(0, 50), 0.2, 6.0, RoadClass::Arterial);    // the street
+    straight(Vec2(-50, 1), Vec2(50, 1), 8.8, 10.0, RoadClass::Freeway);    // the freeway over it, nearer the car
+    d.pads.push_back(RoadDeckField::Tri{Vec3(-5, 8.8, -5), Vec3(5, 8.8, -5), Vec3(0, 8.8, 5)});   // a freeway pad above
+    d.buildIndex();
+    const RoadClass art = RoadClass::Arterial, fwy = RoadClass::Freeway;
+    double y = -1;
+    CHECK(d.heightOn(0.5, 0.8, 0.5, &art, 0.0, 1e9, &y));   // a street car, no height to go by
+    CHECK_APPROX(y, 0.2, 1e-6);
+    CHECK(d.heightOn(0.5, 0.8, 0.5, &fwy, 8.5, 3.0, &y));   // a freeway car on the deck above
+    CHECK_APPROX(y, 8.8, 1e-6);
+}

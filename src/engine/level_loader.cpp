@@ -5229,6 +5229,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.dormantAgents = cs.value("dormancy", cfg.dormantAgents);
         cfg.showPlan = cs.value("showPlan", false);
         cfg.wander = cs.value("wander", cfg.wander);
+        cfg.ambientBus = cs.value("ambientBus", cfg.ambientBus);
         // Scripted goal tables (ADR-0064): `"agents": "agents.lua"` names a
         // goal-table script; its TEXT rides the config so the citysim bridge
         // (scripting builds only) can install the tables at build. Missing

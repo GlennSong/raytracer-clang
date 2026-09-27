@@ -886,7 +886,7 @@ double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
 }
 
 void RoadDeckField::surfacesAt(double x, double z, double margin,
-                               const std::function<void(double y, bool pad, int layer, double d, double hw)>& fn) const {
+                               const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn) const {
     const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
                         (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);
     if (auto pit = padCells_.find(k); pit != padCells_.end()) {
@@ -902,7 +902,7 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
             if (std::fabs(den) < 1e-12) continue;
             const double w0 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / den;
             const double w1 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / den;
-            fn(w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y, true, 0, 0.0, 0.0);
+            fn(w0 * t.a.y + w1 * t.b.y + (1.0 - w0 - w1) * t.c.y, true, 0, 0.0, 0.0, RoadClass::Local);
         }
     }
     auto it = cells_.find(k);
@@ -931,7 +931,7 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
             const Vec2 left(-fwd.y, fwd.x);
             y += dot(q - a, left) * cs;
         }
-        fn(y, false, sp.layer, d, hw);
+        fn(y, false, sp.layer, d, hw, sp.klass);
     }
 }
 
@@ -948,7 +948,7 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
     double padY = -1e30;
     int bestLayer = INT_MAX;
     double bestD = 1e30, bestY = 0.0;
-    surfacesAt(x, z, margin, [&](double y, bool isPad, int layer, double d, double) {
+    surfacesAt(x, z, margin, [&](double y, bool isPad, int layer, double d, double, RoadClass) {
         if (isPad) { if (!pad || y > padY) padY = y; pad = true; return; }
         if (layer > bestLayer || (layer == bestLayer && d >= bestD)) return;
         bestLayer = layer; bestD = d; bestY = y;
@@ -960,25 +960,36 @@ bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) co
 }
 
 bool RoadDeckField::heightNear(double x, double z, double margin, double refY, double window, double* outY) const {
-    // Among the surfaces within `window` of refY (which rules out a stacked level), the road the point is
-    // MOST INSIDE in plan: a junction pad outright, else the largest (half-width - distance). Not the one
-    // nearest refY -- a ramp alongside the freeway overlaps it, and the caller's refY (a lerp between nav
-    // ends) can be off by more than the two differ (#35: 1.46 m on island 8, and the freeway won).
-    bool found = false, padHit = false;
-    double bestDepth = -1e30;
-    surfacesAt(x, z, margin, [&](double y, bool pad, int, double d, double hw) {
+    return heightOn(x, z, margin, nullptr, refY, window, outY);
+}
+
+bool RoadDeckField::heightOn(double x, double z, double margin, const RoadClass* klass, double refY, double window,
+                             double* outY) const {
+    // THE ROAD, then its height. Of the spines within `window` of refY (a stacked level is never in it), one
+    // of the caller's class when there is one -- the ramp, not the freeway it runs beside; the street, not
+    // the overpass -- the one the point is MOST INSIDE (half-width - distance). Not the one nearest refY: a
+    // lerp between nav ends can be further off than two roads are apart (#35: 1.46 m on island 8, and the
+    // freeway won). A junction pad then answers if one lies within 1.5 m of that road (stacked pads, the
+    // nearer); with no spine, a pad within the window.
+    struct Pick { bool have = false; bool match = false; double depth = -1e30, y = 0; } sp;
+    std::vector<double> pads;
+    surfacesAt(x, z, margin, [&](double y, bool pad, int, double d, double hw, RoadClass k) {
         if (std::fabs(y - refY) > window) return;
-        if (pad) {
-            if (!padHit || std::fabs(y - refY) < std::fabs(*outY - refY)) *outY = y;   // stacked pads: nearest
-            padHit = found = true;
-            return;
-        }
-        if (padHit || hw - d <= bestDepth) return;
-        bestDepth = hw - d;
-        *outY = y;
-        found = true;
+        if (pad) { pads.push_back(y); return; }
+        const bool m = klass && k == *klass;
+        if (sp.have && (sp.match && !m)) return;
+        if (sp.have && sp.match == m && hw - d <= sp.depth) return;
+        sp.have = true; sp.match = m; sp.depth = hw - d; sp.y = y;
     });
-    return found;
+    const double ref = sp.have ? sp.y : refY;
+    const double padWin = sp.have ? 1.5 : window;
+    double best = padWin;
+    bool padHit = false;
+    for (double y : pads)
+        if (std::fabs(y - ref) <= best) { best = std::fabs(y - ref); *outY = y; padHit = true; }
+    if (padHit) return true;
+    if (sp.have) { *outY = sp.y; return true; }
+    return false;
 }
 
 }  // namespace engine

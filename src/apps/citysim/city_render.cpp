@@ -119,6 +119,29 @@ Real CityRenderSystem::deckSurfaceNear(Real x, Real z, Real refY) const {
     return refY;
 }
 
+int CityRenderSystem::drawSlotFor(int ai) const {
+    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size()) || drawVariantCount() <= 0) return -1;
+    const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
+    int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
+    if (v >= drawVariantCount()) v %= drawVariantCount();
+    if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < drawVariantCount()) v = busVariant_;
+    return v;
+}
+
+Real CityRenderSystem::carSurfaceAt(const Agent& a, Real px, Real pz, Real along) const {
+    const int li = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())
+                       ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+    const engine::RoadClass* klass = li >= 0 && li < nav_.linkCount() ? &nav_.links[static_cast<std::size_t>(li)].klass : nullptr;
+    const bool deck = a.deckY > -1e29;
+    // a deck car knows its level (the link's height, 3 m either way); a street car goes by its class alone
+    const double refY = deck ? a.deckY + a.grade * along : 0.0, window = deck ? 3.0 : 1e9;
+    for (const engine::RoadDeckField& f : decks_) {
+        double y;
+        if (f.heightOn(px, pz, 0.5, klass, refY, window, &y)) return static_cast<Real>(y);
+    }
+    return deck ? static_cast<Real>(refY) : groundAt(px, pz) + a.elevation;
+}
+
 bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
                                       Vec2& outHeading) const {
     if (agentId < 0 || agentId >= static_cast<int>(sim_.agents().size()))
@@ -187,6 +210,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busMaxWalk = c.busMaxWalk;
         params_.physicalCars = c.physicalCars;
         params_.wander = c.wander;
+        params_.ambientBus = c.ambientBus;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
         debugWidgets_ = c.debugWidgets;
@@ -476,6 +500,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 #endif
 
     sim_.setJunctionPad(sidewalk_);
+    sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body
     sim_.build(nav_, carCount, pedCount, params_.seed);
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
@@ -1491,6 +1516,65 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     Real y = (a.deckY > -1e29) ? deckSurfaceNear(x, z, a.deckY) + halfH
                                : groundAt(x, z) + a.elevation + halfH;
     Real yaw = std::atan2(drawHeading.x, drawHeading.y); // box local +Z -> travel heading
+    // FOUR WHEELS ON THE ROAD (#35 follow-up, Glenn: "we'd have to make sure the 4 wheels are on the
+    // ground"). The drawn surface under each tyre's contact patch (the deck the car is on, or the road
+    // and ground), a plane fitted through them for pitch and roll, then the height that puts the LOWEST
+    // tyre on the surface -- none sinks; on a crest or a twist one floats by the plane's residual, as a
+    // real car's would. One rule for decks, ramps, streets and hills.
+    // RT_FOUR_WHEELS=0: the older centre-sample placement below, for A/B (wheel_lab)
+    static const bool fourWheels = [] { const char* e = std::getenv("RT_FOUR_WHEELS"); return !(e && e[0] == '0'); }();
+    if (car && fourWheels) {
+        const int slot = agentIdx >= 0 ? drawSlotFor(agentIdx) : -1;
+        const std::vector<CarWheel>* wheels =
+            slot >= 0 && slot < static_cast<int>(carWheels_.size()) && carWheels_[static_cast<std::size_t>(slot)].size() >= 3
+                ? &carWheels_[static_cast<std::size_t>(slot)] : nullptr;
+        const Real fl = drawHeading.length();
+        if (wheels && fl > 1e-6) {
+            const Vec2 f = drawHeading * (1.0 / fl);
+            const Vec2 r(f.y, -f.x);                  // +X, the car's right
+            auto surface = [&](Real px, Real pz, Real along) { return carSurfaceAt(a, px, pz, along); };
+            // least squares y = c + gx * lx + gz * lz over the contacts (lx right, lz forward)
+            struct C { Real lx, lz, h; Vec3 local; };
+            C cs[8];
+            int n = 0;
+            for (const CarWheel& w : *wheels) {
+                if (n == 8) break;
+                const Vec3 local(w.pos.x, w.pos.y - w.radius, w.pos.z);
+                const Real wx = x + r.x * local.x + f.x * local.z, wz = z + r.y * local.x + f.y * local.z;
+                cs[n++] = {local.x, local.z, surface(wx, wz, local.z), local};
+            }
+            Real sx = 0, sz = 0, sh = 0;
+            for (int i = 0; i < n; ++i) { sx += cs[i].lx; sz += cs[i].lz; sh += cs[i].h; }
+            sx /= n; sz /= n; sh /= n;
+            Real xx = 0, zz = 0, xz = 0, xh = 0, zh = 0;
+            for (int i = 0; i < n; ++i) {
+                const Real dx = cs[i].lx - sx, dz = cs[i].lz - sz, dh = cs[i].h - sh;
+                xx += dx * dx; zz += dz * dz; xz += dx * dz; xh += dx * dh; zh += dz * dh;
+            }
+            const Real det = xx * zz - xz * xz;
+            Real gx = 0, gz = 0;   // roll and pitch slopes
+            if (std::fabs(det) > 1e-9) { gx = (xh * zz - zh * xz) / det; gz = (zh * xx - xh * xz) / det; }
+            Vec3 fw = normalize(Vec3(f.x, gz, f.y));
+            Vec3 rt = normalize(Vec3(r.x, gx, r.y));
+            Vec3 up = normalize(cross(fw, rt));
+            if (up.y < 0) up = up * -1;
+            up = smoothedUp(up);
+            fw = normalize(Vec3(f.x, 0, f.y) - up * dot(Vec3(f.x, 0, f.y), up));
+            rt = normalize(cross(up, fw));
+            // the height at which the lowest tyre just touches
+            Real cy = -1e30;
+            for (int i = 0; i < n; ++i) {
+                const Real dy = rt.y * cs[i].local.x + up.y * cs[i].local.y + fw.y * cs[i].local.z;
+                cy = std::max(cy, cs[i].h - dy);
+            }
+            Mat4 m;   // columns: X = right, Y = up, Z = forward
+            m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
+            m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
+            m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
+            m.m[0][3] = x; m.m[1][3] = cy; m.m[2][3] = z;
+            return m;
+        }
+    }
     // Cars sit NORMAL to the road plane (device: a world-upright box on a
     // graded street floats its nose or buries its tail). Sample the drive
     // surface a wheelbase fore/aft and a track left/right, build the tilted
@@ -1706,11 +1790,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // The SAME slot the body is drawn with (syncGroups). This used
         // vehicle % count, a different model's lamps: a bus wore a sedan's,
         // whose tail lights sit 2.3 m behind centre -- inside the saloon.
-        int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
-        if (v >= drawVariantCount()) v %= drawVariantCount();
-        if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
-            busVariant_ < drawVariantCount())
-            v = busVariant_;
+        const int v = drawSlotFor(static_cast<int>(ai));
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
@@ -2461,10 +2541,24 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                         const int link = ag.leg >= 0 && ag.leg < static_cast<int>(ag.route.links.size())
                                              ? ag.route.links[static_cast<std::size_t>(ag.leg)] : -1;
                         std::fprintf(fp, "%s{\"id\":%d,\"x\":%.2f,\"z\":%.2f,\"link\":%d,\"deckY\":%.3f,\"elev\":%.3f,"
-                                         "\"bottom\":%.3f,\"up\":[%.3f,%.3f,%.3f],\"phys\":%d,\"ground\":%.3f,\"decks\":[",
+                                         "\"bottom\":%.3f,\"up\":[%.3f,%.3f,%.3f],\"phys\":%d,\"ground\":%.3f,",
                                      first ? "" : ",", i, ag.pos.x, ag.pos.y, link, ag.deckY > -1e29 ? ag.deckY : -999.0, ag.elevation,
                                      m.m[1][3] - bodyH * 0.5, m.m[0][1], m.m[1][1], m.m[2][1], pp != physPose_.end() ? 1 : 0,
                                      groundAt(ag.pos.x, ag.pos.y));
+                        {   // each tyre's contact point (drawn) vs the surface under it: + floats, - sinks
+                            const int slot = drawSlotFor(i);
+                            std::fprintf(fp, "\"slot\":%d,\"wheels\":[", slot);
+                            if (slot >= 0 && slot < static_cast<int>(carWheels_.size())) {
+                                bool fw = true;
+                                for (const CarWheel& w : carWheels_[static_cast<std::size_t>(slot)]) {
+                                    const Vec3 c = m.transformPoint(Vec3(w.pos.x, w.pos.y - w.radius, w.pos.z));
+                                    const Real s = carSurfaceAt(ag, c.x, c.z, w.pos.z);
+                                    std::fprintf(fp, "%s%.3f", fw ? "" : ",", c.y - s);
+                                    fw = false;
+                                }
+                            }
+                            std::fprintf(fp, "],\"decks\":[");
+                        }
                         bool f2 = true;
                         for (const engine::RoadDeckField& f : decks_) {
                             double y;
