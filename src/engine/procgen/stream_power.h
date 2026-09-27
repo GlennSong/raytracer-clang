@@ -19,6 +19,9 @@
 
 namespace engine {
 
+// Bump when the solver's output changes for the same inputs: every weathered ground folds it (ADR-0126).
+constexpr const char* kStreamPowerCodeTag = "2026-09-26.1";
+
 struct StreamPowerParams {
     int    iterations = 250;
     double dt = 5.0e4;         // years a step (the implicit sweep is stable at any dt)

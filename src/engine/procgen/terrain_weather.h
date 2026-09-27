@@ -74,8 +74,15 @@ WeatherParams weatherFromJson(const nlohmann::json& weather, const nlohmann::jso
 // Grow and weather `tp`'s land. `grownOut` (optional) gets the fine grid before the water.
 Heightmap weatherTerrain(const TerrainParams& tp, uint32_t seed, const WeatherParams& w, Heightmap* grownOut = nullptr);
 
-// The pipeline's code tag (the maps' cache key folds it too: a regrown ground must not keep old maps).
-const char* weatherCodeTag();
+// WHAT SHAPES THE WEATHERED GROUND -- one answer for every cache downstream of it (review of ADR-0126..0134):
+// the terrain block minus what is computed ON the ground (rivers) or only paints or stands on it (groundCover,
+// material, cdlod, forest, trails).
+nlohmann::json groundShapingBlock(const nlohmann::json& terrainBlock);
+// The weathered ground's CONTENT KEY: the shaping block, the weathering and stream-power code tags, the erosion
+// backend the bake would run on, and a fingerprint of the relief the block produces (so a change to the relief
+// code is caught without a tag bump). The weather cache, the ground maps and the baked-ground pyramid all fold
+// this one key -- a downstream cache folds the upstream key, it does not re-list upstream tags.
+std::string weatheredGroundKey(const nlohmann::json& terrainBlock);
 
 // The same, through the disk cache (cache/terrain/weather_<hash>.bin). Returns the fine grid.
 Heightmap weatheredTerrainCached(const nlohmann::json& terrainBlock);

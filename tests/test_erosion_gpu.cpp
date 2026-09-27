@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "../src/engine/procgen/terrain_weather.h"
 
 #include "../src/engine/procgen/erosion.h"
 #include "../src/engine/procgen/erosion_gpu.h"
@@ -323,4 +324,23 @@ TEST_CASE(stream_power_grows_a_drained_relief_from_uplift) {
     std::printf("    [stream power] relief %.0f..%.0f m, %d pits of %d cells\n", lo, hi, pits, land);
     CHECK(hi > 700.0f && lo < 100.0f);
     CHECK(pits < land / 100);
+}
+
+// (review) The weathered ground's one content key: what only paints or stands on the ground leaves it alone;
+// what shapes the ground changes it.
+TEST_CASE(weathered_ground_key_folds_what_shapes_the_ground_and_nothing_else) {
+    nlohmann::json tb = {{"seed", 8}, {"size", 2000.0}, {"resolution", 64}, {"seaLevel", 0.0},
+                         {"weather", {{"res", 256}, {"grow", {{"res", 64}, {"iterations", 10}}}}}};
+    const std::string k0 = engine::weatheredGroundKey(tb);
+    nlohmann::json paint = tb;
+    paint["groundCover"] = {{"rockSlopeDeg", 50}};
+    paint["forest"] = {{"coverage", 0.3}};
+    paint["trails"] = nlohmann::json::array({nlohmann::json::array({{0, 0}, {10, 10}})});
+    CHECK(engine::weatheredGroundKey(paint) == k0);
+    nlohmann::json shape = tb;
+    shape["weather"]["roughness"] = 3.0;
+    CHECK(engine::weatheredGroundKey(shape) != k0);
+    nlohmann::json seed = tb;
+    seed["seed"] = 9;
+    CHECK(engine::weatheredGroundKey(seed) != k0);
 }

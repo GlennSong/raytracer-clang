@@ -134,7 +134,37 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
 }
 }  // namespace
 
-const char* weatherCodeTag() { return kWeatherCodeTag; }
+nlohmann::json groundShapingBlock(const nlohmann::json& tjIn) {
+    nlohmann::json tj = tjIn;
+    for (const char* k : {"rivers", "groundCover", "cdlod", "material", "forest", "trails"}) tj.erase(k);
+    return tj;
+}
+
+std::string weatheredGroundKey(const nlohmann::json& tjIn) {
+    const nlohmann::json tj = groundShapingBlock(tjIn);
+    std::uint64_t key = 1469598103934665603ULL;
+    auto foldBytes = [&](const void* data, std::size_t n) {
+        const unsigned char* b = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < n; ++i) { key ^= b[i]; key *= 1099511628211ULL; }
+    };
+    auto fold = [&](const std::string& s) { foldBytes(s.data(), s.size()); };
+    fold(kWeatherCodeTag);
+    fold(kStreamPowerCodeTag);
+    fold(tj.dump());
+    // the backend the water / breach stage would run on (a Vulkan and a CPU bake differ)
+    if (tj.contains("weather") && tj["weather"].is_object()) {
+        const WeatherParams wp = weatherFromJson(tj["weather"], tj);
+        fold(erosionBackendTag(&wp.water));
+    }
+    // the relief itself, coarsely: a change to the relief code shows here even with no tag bumped
+    TerrainParams tp = readTerrainParams(tj);
+    tp.resolution = 32;
+    const Heightmap coarse = bakeHeightmap(tp, Noise(tj.value("seed", 0u)));
+    foldBytes(coarse.h.data(), coarse.h.size() * sizeof(float));
+    char hex[17];
+    std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(key));
+    return hex;
+}
 
 WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj) {
     WeatherParams p;
@@ -173,11 +203,13 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
     ErosionParams& e = p.water;
     e.vulkan = true;
     e.droplets = 0;
-    e.thermalIterations = wa.value("thermal", 16);
+    // the GPU water / breach / thermal stage is OPT-IN (ADR-0122: the backends agree only statistically, so
+    // a default must not move a level's ground): 0 unless the level's "water" block asks
+    e.thermalIterations = wa.value("thermal", 0);
     e.talus = tj.value("erodeTalus", e.talus);
     e.seed = tj.value("seed", 0u) + 1234u;
-    e.waterSteps = wa.value("steps", 20000);
-    e.breachDepth = wa.value("breach", 25.0f);
+    e.waterSteps = wa.value("steps", 0);
+    e.breachDepth = wa.value("breach", 0.0f);
     e.waterDeposit = wa.value("deposit", 0.15f);
     e.waterRockHardness = wa.value("rockHardness", e.waterRockHardness);
     e.waterCreep = wa.value("creep", e.waterCreep);
@@ -414,16 +446,9 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
 }
 
 Heightmap weatheredTerrainCached(const nlohmann::json& tjIn) {
-    nlohmann::json tj = tjIn;
-    tj.erase("rivers");   // computed ON this ground
-    // ...and what only paints or draws it: retuning the cover's palette must not rebake the ground
-    for (const char* k : {"groundCover", "cdlod", "material", "forest", "trails"}) tj.erase(k);
-    std::uint64_t key = 1469598103934665603ULL;
-    auto fold = [&](const std::string& s) { for (unsigned char c : s) { key ^= c; key *= 1099511628211ULL; } };
-    fold(kWeatherCodeTag);
-    fold(tj.dump());
+    const nlohmann::json tj = groundShapingBlock(tjIn);
     char path[256];
-    std::snprintf(path, sizeof path, "cache/terrain/weather_%016llx.bin", static_cast<unsigned long long>(key));
+    std::snprintf(path, sizeof path, "cache/terrain/weather_%s.bin", weatheredGroundKey(tjIn).c_str());
     Heightmap hm;
     if (std::getenv("RT_NOCACHE") == nullptr)
         if (std::FILE* f = std::fopen(path, "rb")) {

@@ -1,4 +1,5 @@
 #include "erosion.h"
+#include "../../log.h"
 #include "erosion_gpu.h"
 #include "../mesh_builder.h"
 
@@ -81,6 +82,9 @@ void erode(Heightmap& hm, const ErosionParams& p) {
     // through to the reference CPU sim below, unchanged.
 #if defined(RT_HAVE_VULKAN_EROSION)
     if (p.vulkan && !forceCpuErosion() && erodeGpu(hm, p)) return;   // opt-in per terrain (ADR-0122)
+    // the water model and breaching exist only on the Vulkan backend: say so rather than bake without them
+    if (p.waterSteps > 0 || p.breachDepth > 0.0f)
+        LOG_WARN << "[erosion] water steps / breach asked of the CPU backend, which has neither: the ground bakes without them";
 #else
     if (!forceCpuErosion() && erodeGpu(hm, p)) return;
 #endif

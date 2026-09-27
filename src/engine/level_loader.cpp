@@ -1573,13 +1573,20 @@ static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     // carve, the road bundle and every flatten (grading, pads). It hashed the whole level before, so a
     // tweak to the lighting, or the editor handing the loader its re-serialised document of the same level,
     // rebuilt the island's 345 MB ground from scratch
-    h = fnv1aStr(root.contains("terrain") ? root["terrain"].dump() : std::string(), h);
+    // (the block minus what only paints the ground or stands on it -- a cover-palette or forest tweak must not
+    // rebuild the 345 MB pyramid; rivers and trails stay: the carve and the trail refine shape the heights)
+    if (root.contains("terrain")) {
+        nlohmann::json tb = root["terrain"];
+        for (const char* k : {"groundCover", "material", "forest"}) tb.erase(k);
+        h = fnv1aStr(tb.dump(), h);
+    }
     // the river carve's own code tag: only levels with rivers re-bake when it changes
     if (p.hydro) h = fnv1aStr(std::string("hydro/") + kHydroCarveCodeTag, h);
     // ...and the weathered ground's (ADR-0126): a regrown ground under an unchanged terrain block kept the
     // OLD pyramid, metres off the new ground -- the player, placed on the new one, stood under the drawn
     // (and collided) old one and fell through the world (Glenn: "there's a lot of falling through the floor")
-    if (root.contains("terrain") && root["terrain"].contains("weather")) h = fnv1aStr(std::string("weather/") + weatherCodeTag(), h);
+    // the weathered ground: its own content key, not a re-listed tag (it folds the backend and the relief)
+    if (root.contains("terrain") && root["terrain"].contains("weather")) h = fnv1aStr(std::string("weather/") + weatheredGroundKey(root["terrain"]), h);
 #ifdef RT_ROADS_LANES
     if (g_lanes.bundle) h = fnv1aStr(g_lanes.bundle->manifest().value("key", std::string()), h);
 #endif

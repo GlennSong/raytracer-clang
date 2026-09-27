@@ -134,20 +134,15 @@ TerrainMaps computeTerrainMaps(const Heightmap& hmIn, double seaLevel) {
 
 std::shared_ptr<const TerrainMaps> weatheredMapsFor(const nlohmann::json& tjIn) {
     if (!tjIn.contains("weather") || !tjIn["weather"].is_object()) return nullptr;
-    nlohmann::json tj = tjIn;
-    tj.erase("rivers");
-    tj.erase("groundCover");   // the cover reads the maps; its palette does not change them
-    tj.erase("forest");        // ...nor does the forest standing on them
-    tj.erase("trails");        // ...nor the paths over them
+    // keyed on the weathered ground's own content key (the one list of what shapes it), plus the maps' code
     static std::mutex mu;
     static std::map<std::string, std::shared_ptr<const TerrainMaps>> memo;
-    const std::string key = tj.dump();
+    const std::string key = weatheredGroundKey(tjIn);
     std::lock_guard<std::mutex> lock(mu);
     if (auto it = memo.find(key); it != memo.end()) return it->second;
     std::uint64_t h = 1469598103934665603ULL;
     auto fold = [&](const std::string& s) { for (unsigned char c : s) { h ^= c; h *= 1099511628211ULL; } };
     fold(kMapsCodeTag);
-    fold(weatherCodeTag());
     fold(key);
     char path[256];
     std::snprintf(path, sizeof path, "cache/terrain/maps_%016llx.bin", static_cast<unsigned long long>(h));
