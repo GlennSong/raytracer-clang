@@ -184,7 +184,9 @@ function kit.profile(o)
   local r = o.r
   local P = { name = o.name, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
               windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin,
-              rear_window = o.rear_window, level = o.level, grille_w = o.grille_w, open_top = o.open_top }
+              rear_window = o.rear_window, level = o.level, grille_w = o.grille_w, open_top = o.open_top,
+              cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating,
+              hip_back = o.hip_back, interior = o.interior }
   P.axles = o.axles or { -(half - o.ro), half - o.fo }
   P.wheel_r = r
   P.wheel_w = o.wheel_w or 0.21
@@ -513,7 +515,7 @@ S.pickup = function() return kit.profile{
   post = function(B, ctx) kit.tub(B, ctx, -2.70, -0.74, 0.48, "bed") end } end
 
 S.step_van = function() return kit.profile{
-  name = "step_van", L = 6.30, W = 2.30, H = 2.85, clear = 0.30, r = 0.42, fo = 0.85, ro = 1.35,
+  name = "step_van", cabin_back = 1.25, rear_seat = false, truck_seating = true, hip_back = 0.95, L = 6.30, W = 2.30, H = 2.85, clear = 0.30, r = 0.42, fo = 0.85, ro = 1.35,
   glass = { cowl = 2.70, a_top = 2.45, c_top = -3.12, deck = -3.14, a_side = 2.45, c_side = 1.55, pillars = {} },
   belt = { { -1, 1.30 }, { -0.97, 1.40 }, { 0.6, 1.40 }, { 0.85, 1.38 }, { 1, 1.25 } },
   roof_drop = { 0.02, 0.02 }, roof_arch = 0.0, ws_exp = 1.0, bl_exp = 1.0, roof_w = { 0.95, 0.95 }, glass_w = 0.985,
@@ -534,6 +536,7 @@ local function truck_cab(o)
     roof_w = { 0.90, 0.90 }, glass_w = 0.97, taper = { 0.10, 0.02, 0.35 }, tuck = 0.06, arch_gap = 0.08,
     radii = { bottom = 0.05, side = 0.12, shoulder = 0.06, glass = 0.03, roof = 0.12 },
     lamp_y = o.lamp_y, grille_y = o.grille_y, tail_y = { 9, 9 }, cap_crease = 1.0, color = o.color,
+    truck_seating = true, rear_seat = false, hip_back = 0.95,
     windows = { side = { edge = 2.5, corner = 3 }, windshield = { edge = 2, corner = 2.5 }, back = { edge = 2.5, corner = 3 } },
     extras = o.extras }
 end
@@ -579,7 +582,8 @@ local function semi(trailer)
     taper = { 0.12, 0.02, 0.6 }, tuck = 0.05, arch_gap = 0.10,
     radii = { bottom = 0.03, side = 0.10, shoulder = 0.06, glass = 0.03, roof = 0.12 },
     lamp_y = { 1.05, 1.22 }, grille_y = { 0.75, 1.62 }, grille_w = 0.72, tail_y = { 9, 9 },
-    cap_crease = 2.0, color = { 0.55, 0.06, 0.06 },
+    cap_crease = 2.0, color = { 0.55, 0.06, 0.06 }, truck_seating = true, rear_seat = false, hip_back = 1.0,
+    cabin_back = -1.4,
     windows = { side = { edge = 3, corner = 3 }, windshield = { edge = 3, corner = 2.5 }, back = { edge = 3, corner = 3 } },
     extras = function(car)
       local add = function(x) car.polys[#car.polys + 1] = x end
@@ -686,6 +690,74 @@ function kit.detail(S, P)
   return S
 end
 
+-- THE INTERIOR (ADR-0140), in the body's ground space, as polys by material:
+--   liner   the body's own sheet metal round the cabin (roof, pillars, door panels) copied 4 cm inward and
+--           flipped to face in (poly:extract) -- through clear glass you see a lined cabin, not the far
+--           side of an empty shell
+--   carpet  the floor pan; seat: two buckets and (P.rear_seat ~= false, room behind) a bench;
+--   dash    a shelf under the windshield with an instrument hood; steer: a wheel on a column; a console
+-- Seats from real proportions: the front hip point ~1.15 m behind the windshield's foot, ~0.27 m above
+-- the floor (higher and more upright in a truck). Returns the polys and the driver's hip point.
+function kit.interior(P, S)
+  local G = P.glass or {}
+  local W = P.width
+  local truck = P.truck_seating or false
+  local zFront = G.cowl
+  local zBack = P.cabin_back or math.max(G.deck, (G.c_side or G.deck) - 0.25)
+  local hipZ = zFront - (P.hip_back or 1.15)
+  local floorY = P.bottom(hipZ) + 0.12
+  local hipY = floorY + (truck and 0.36 or 0.27)
+  local polys = {}
+  local function add(x) polys[#polys + 1] = x end
+  -- the liner: painted faces round the cabin, above the floor
+  if not P.open_top then
+    local sel = S:select{ mat = "body", where = function(c)
+      return c[3] < zFront and c[3] > zBack and c[2] > floorY + 0.10 end }
+    if #sel > 0 then
+      local L = S:extract(sel, -0.04, true)
+      L:assign(L:select{}, { mat = "liner" })
+      add(L)
+    end
+  end
+  -- the floor
+  add(kit.box_part({ W - 0.25, 0.04, zFront - zBack - 0.1 }, { 0, floorY, 0.5 * (zFront + zBack) }, 3, "carpet"))
+  -- seats
+  local function seat(x, z, w)
+    add(kit.box_part({ w, 0.12, 0.50 }, { x, hipY - 0.05, z + 0.08 }, 3, "seat"))
+    add(kit.tilted_box({ w, 0.62, 0.10 }, { x, hipY + 0.30, z - 0.22 }, truck and -8 or -18, "seat"))
+    add(kit.box_part({ w * 0.55, 0.16, 0.10 }, { x, hipY + 0.70, z - 0.33 }, 3, "seat"))   -- head restraint
+  end
+  local dx = W * 0.22
+  seat(-dx, hipZ, 0.50)
+  seat(dx, hipZ, 0.50)
+  local rearZ = hipZ - 0.85
+  if P.rear_seat ~= false and rearZ - 0.35 > zBack then seat(0, rearZ, W * 0.66) end
+  -- the dashboard, an instrument hood before the driver, the console between the front seats
+  local dashY = P.belt(zFront) - 0.10
+  add(kit.box_part({ W - 0.30, 0.18, 0.42 }, { 0, dashY, zFront - 0.24 }, 3, "dash"))
+  add(kit.box_part({ 0.38, 0.08, 0.16 }, { -dx, dashY + 0.12, zFront - 0.36 }, 3, "dash"))
+  add(kit.box_part({ 0.20, 0.22, 0.60 }, { 0, floorY + 0.13, hipZ + 0.25 }, 3, "dash"))
+  -- the steering wheel: a ring of short spokes-and-rim boxes on a column, facing the driver
+  local wc = { -dx, hipY + (truck and 0.45 or 0.38), hipZ + (truck and 0.45 or 0.52) }
+  local rim, n = 0.18, 10
+  for i = 0, n - 1 do
+    local a = 2 * math.pi * i / n
+    local seg = kit.oriented_box({ 0.12, 0.028, 0.028 }, { 0, 0, 0 }, { 0, 0, 1 }, "steer")
+    local c, sn = math.cos(a + math.pi * 0.5), math.sin(a + math.pi * 0.5)
+    local tilt = math.rad(truck and 60 or 25)   -- the wheel's plane leans back from vertical
+    local px, py = rim * math.cos(a), rim * math.sin(a)
+    seg:map(function(x, y, z)
+      local rx, ry = x * c - y * sn, x * sn + y * c   -- tangent along the rim
+      rx, ry = rx + px, ry + py
+      local ty, tz = ry * math.cos(tilt), -ry * math.sin(tilt) + z
+      return wc[1] + rx, wc[2] + ty, wc[3] + tz
+    end)
+    add(seg)
+  end
+  add(kit.tilted_box({ 0.05, 0.05, 0.45 }, { wc[1], wc[2] - 0.06, wc[3] + 0.24 }, truck and 0 or 20, "steer"))
+  return polys, { -dx, hipY, hipZ }
+end
+
 -- The body cage (the unsubdivided poly) and its finished form (subdivided + detailed), for inspection
 -- and tests.
 function kit.poly(P, level)
@@ -704,6 +776,8 @@ function kit.build(P, level, opts)
   -- extras (boxes, trailer, sign) join before the centring, in ground space
   local car = { polys = {}, height = hi[2] }
   kit.lamps(P, car, S)
+  local cabinPolys, hip = {}, nil
+  if P.interior ~= false then cabinPolys, hip = kit.interior(P, S) end
   if P.extras then P.extras(car) end
   for _, x in ipairs(car.polys) do S:append(x) end
   lo, hi = S:bounds()
@@ -713,6 +787,13 @@ function kit.build(P, level, opts)
   -- FACETED (Glenn: "I do like how the city bus's low poly style looks"): at level 0 every facet is flat
   -- shaded; a subdivided body smooths within 40 degrees
   local parts = S:to_parts{ autosmooth = level > 0 and 40 or 8 }
+  local cabin = nil
+  if #cabinPolys > 0 then
+    local I = cabinPolys[1]
+    for i = 2, #cabinPolys do I:append(cabinPolys[i]) end
+    I:translate{ 0, -cy, -cz }
+    cabin = I:to_parts{ autosmooth = 8 }
+  end
   -- wheels: round, at the axles, just inside the body sides
   local r = P.wheel_r
   local ww = P.wheel_w
@@ -735,12 +816,17 @@ function kit.build(P, level, opts)
   for _, mk in ipairs(car.markers or {}) do
     lights[#lights + 1] = { name = mk.name, pos = { mk.pos[1], mk.pos[2] - cy, mk.pos[3] - cz } }
   end
-  -- the driver's hip point: left of centre, just behind the windshield's foot, at the sill
+  -- the driver's hip point: the interior's own driver seat (or a guess when there is no interior)
   local g = P.glass or {}
-  local seatZ = (g.a_side or 0) - 0.55
-  local seat = { -P.width * 0.22, P.belt(seatZ) - 0.45 - cy, seatZ - cz }
+  local seat
+  if hip then seat = { hip[1], hip[2] - cy, hip[3] - cz }
+  else
+    local seatZ = (g.cowl or 0) - 1.15
+    seat = { -P.width * 0.22, P.bottom(seatZ) + 0.39 - cy, seatZ - cz }
+  end
   return { parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
-           length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat }
+           length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat,
+           cabin = cabin }
 end
 
 -- One wheel as poly parts: a rounded tyre (a lofted ring, subdivided), a dished rim and a hub, facing +x

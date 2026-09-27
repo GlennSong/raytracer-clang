@@ -211,3 +211,14 @@ TEST_CASE(polymesh_raycast_finds_the_surface_and_its_normal) {
     CHECK_APPROX(n.z, 1.0, 1e-9);
     CHECK(!raycast(c, Vec3(2.0, 0.0, 5.0), Vec3(0, 0, -1), t, n, f));   // beside the cube: a miss
 }
+
+// A cabin's inner skin is the body's own inside: the region copied, offset inward and flipped.
+TEST_CASE(polymesh_extract_offsets_and_flips_a_region) {
+    PolyMesh c = cube();
+    const auto top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    const PolyMesh in = extractOffset(c, top, -0.1, true);
+    CHECK(in.faces.size() == 1);
+    CHECK(in.pts.size() == 4);
+    for (const Vec3& p : in.pts) CHECK_APPROX(p.y, 0.4, 1e-9);   // 10 cm inside the top
+    CHECK(in.faceNormal(0).y < -0.9);                             // facing down, into the box
+}

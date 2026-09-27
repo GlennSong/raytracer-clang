@@ -449,7 +449,9 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
         CHECK(!body.glass.vertices.empty());
         if (body.className != "bus") {
-            CHECK(!body.seeInto);
+            // an open car (the convertible) is seen into like the bus; every other car shows its cabin only
+            // near the player
+            CHECK(!body.seeInto || body.className == "convertible");
             // fleet v2 kit bodies carry no cabin yet (the city keeps their glass opaque); mesh.car ones do
             CHECK(body.hasDriverSeat);
             CHECK(body.seats.empty());

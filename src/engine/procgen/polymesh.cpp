@@ -506,6 +506,30 @@ std::vector<int> insetRegion(PolyMesh& m, const std::vector<int>& sel, double am
     return sel;
 }
 
+PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double offset, bool flip) {
+    PolyMesh out;
+    out.groups = m.groups;
+    out.mats = m.mats;
+    std::unordered_map<int, Vec3> nsum;
+    for (int f : sel) {
+        const Vec3 n = m.faceNormal(f);
+        for (int i : m.faces[static_cast<std::size_t>(f)].v) nsum[i] = nsum[i] + n;
+    }
+    std::unordered_map<int, int> remap;
+    for (const auto& [i, n] : nsum) {
+        const double l = n.length();
+        remap[i] = static_cast<int>(out.pts.size());
+        out.pts.push_back(m.pts[static_cast<std::size_t>(i)] + (l > 1e-12 ? n / l : Vec3(0, 0, 0)) * offset);
+    }
+    for (int f : sel) {
+        PolyMesh::Face g = m.faces[static_cast<std::size_t>(f)];
+        for (int& i : g.v) i = remap[i];
+        if (flip) std::reverse(g.v.begin(), g.v.end());
+        out.faces.push_back(std::move(g));
+    }
+    return out;
+}
+
 void creaseBorder(PolyMesh& m, const std::vector<int>& sel, float s) {
     std::unordered_set<long long> de;
     for (int f : sel) {

@@ -337,6 +337,10 @@ local KIT_TINT = {
   box = { 0.90, 0.90, 0.88 }, chassis = { 0.07, 0.07, 0.08 }, door = { 0.80, 0.81, 0.82 },
   tank = { 0.78, 0.79, 0.80 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
 }
+local KIT_CABIN = {
+  liner = { 0.55, 0.53, 0.50 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.22, 0.20, 0.19 },
+  dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 },
+}
 local function kit_car(spec, color)
   local P = kit.SPECS[spec]()
   local car = kit.build(P, 0)
@@ -362,7 +366,21 @@ local function kit_car(spec, color)
     layout[#layout + 1] = { pos = wh.pos, radius = wh.radius, width = wh.width,
                             steered = wh.front, driven = true, hand_brake = not wh.front }
   end
+  -- the cabin: a near car shows it through clear glass; an OPEN car (the convertible) always does, so
+  -- its cabin rides in the shell and it is a see-into vehicle like the bus
+  local cabinParts = {}
+  for name, part in pairs(car.cabin or {}) do
+    local col = KIT_CABIN[name] or { 0.3, 0.3, 0.3 }
+    cabinParts[#cabinParts + 1] = mesh.bake_height_color(part, col, col)
+  end
+  local open = P.open_top or false
+  local interior = nil
+  if #cabinParts > 0 then
+    if open then for _, cp in ipairs(cabinParts) do shell[#shell + 1] = cp end
+    else interior = mesh.merge(cabinParts) end
+  end
   return {
+    interior = interior,
     body = mesh.recompute_normals(mesh.merge(shell)),
     wheels = mesh.merge(wheelParts),
     wheel_layout = layout,
@@ -370,7 +388,7 @@ local function kit_car(spec, color)
     size = car.size,
     class = spec,
     glass = glass,
-    see_into = false,
+    see_into = open,
     driver_seat = car.driver_seat,
   }
 end

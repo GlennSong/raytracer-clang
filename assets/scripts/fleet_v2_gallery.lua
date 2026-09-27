@@ -11,7 +11,12 @@ local ORDER = opts.only or { "sedan", "taxi", "hatchback", "suv", "jeep", "conve
 local m = model.new()
 local MATS = {
   body     = material.new{ roughness = 0.30, metallic = 0.55 },
-  glass    = material.new{ roughness = 0.04, metallic = 0.15 },
+  glass    = material.new{ roughness = 0.04, metallic = 0.0, opacity = 0.30, two_sided = true },
+  liner    = material.new{ roughness = 0.90, metallic = 0.0 },
+  carpet   = material.new{ roughness = 0.95, metallic = 0.0 },
+  seat     = material.new{ roughness = 0.80, metallic = 0.0 },
+  dash     = material.new{ roughness = 0.70, metallic = 0.0 },
+  steer    = material.new{ roughness = 0.60, metallic = 0.0 },
   trim     = material.new{ roughness = 0.60, metallic = 0.0 },
   grille   = material.new{ roughness = 0.45, metallic = 0.6 },
   gasket   = material.new{ roughness = 0.75, metallic = 0.0 },
@@ -29,7 +34,8 @@ local MATS = {
   chrome   = material.new{ roughness = 0.25, metallic = 0.8 },
 }
 local COLOR = {
-  glass = { 0.12, 0.15, 0.18 }, trim = { 0.04, 0.04, 0.045 }, grille = { 0.06, 0.06, 0.065 }, chrome = { 0.75, 0.76, 0.78 }, gasket = { 0.025, 0.025, 0.028 }, interior = { 0.42, 0.30, 0.20 },
+  glass = { 0.60, 0.66, 0.70 }, liner = { 0.55, 0.53, 0.50 }, carpet = { 0.10, 0.10, 0.11 },
+  seat = { 0.22, 0.20, 0.19 }, dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 }, trim = { 0.04, 0.04, 0.045 }, grille = { 0.06, 0.06, 0.065 }, chrome = { 0.75, 0.76, 0.78 }, gasket = { 0.025, 0.025, 0.028 }, interior = { 0.42, 0.30, 0.20 },
   bed = { 0.08, 0.08, 0.09 }, chassis = { 0.07, 0.07, 0.08 }, tank = { 0.78, 0.79, 0.80 }, door = { 0.80, 0.81, 0.82 }, box = { 0.92, 0.92, 0.90 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
   lamp = { 0.95, 0.95, 0.92 }, lamp_red = { 0.8, 0.05, 0.05 },
 }
@@ -47,6 +53,14 @@ for i, name in ipairs(ORDER) do
   for part, mm in pairs(car.parts) do
     local col = part == "body" and (car.color or { 0.5, 0.5, 0.5 }) or (COLOR[part] or { 0.5, 0.5, 0.5 })
     m:add(mesh.translate(mesh.bake_height_color(mm, col, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
+  end
+  for part, mm in pairs(car.cabin or {}) do
+    local col = COLOR[part] or { 0.4, 0.4, 0.4 }
+    m:add(mesh.translate(mesh.bake_height_color(mm, col, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
+  end
+  if car.driver_seat and car.cabin then
+    local ds = car.driver_seat
+    m:add(mesh.translate(mesh.occupant{ back_angle = 22 }, { x + ds[1], ds[2] + car.lift, ds[3] + zoff }), MATS.seat)
   end
   local wheel = kit.wheel(P.wheel_r, P.wheel_w, level)
   local tyre = mesh.bake_height_color(wheel.tyre, { 0.05, 0.05, 0.055 }, { 0.05, 0.05, 0.055 })

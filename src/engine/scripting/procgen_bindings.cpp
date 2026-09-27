@@ -3260,6 +3260,14 @@ int l_poly_raycast(lua_State* L) {
     lua_pushinteger(L, f);
     return 3;
 }
+// P:extract(sel, offset, flip) -> a new Poly: the region copied, offset along its normals, optionally flipped
+int l_poly_extract(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushPoly(L, std::make_shared<PolyMesh>(extractOffset(m, sel, luaL_checknumber(L, 3), lua_toboolean(L, 4) != 0)));
+    return 1;
+}
 int l_poly_closed(lua_State* L) { lua_pushboolean(L, isClosed(checkPoly(L, 1))); return 1; }
 int l_poly_volume(lua_State* L) { lua_pushnumber(L, signedVolume(checkPoly(L, 1))); return 1; }
 int l_poly_face_count(lua_State* L) { lua_pushinteger(L, static_cast<lua_Integer>(checkPoly(L, 1).faces.size())); return 1; }
@@ -3295,6 +3303,7 @@ void registerPolyMetatable(lua_State* L) {
         static const luaL_Reg kMethods[] = {
             {"select", l_poly_select}, {"extrude", l_poly_extrude}, {"inset", l_poly_inset},
             {"inset_region", l_poly_inset_region}, {"stats", l_poly_stats}, {"raycast", l_poly_raycast},
+            {"extract", l_poly_extract},
             {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
             {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
             {"crease_corners", l_poly_crease_corners},

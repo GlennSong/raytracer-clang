@@ -9044,3 +9044,24 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
 - The kit is general hard-surface modelling; nothing in it is car-specific.
 - Tests cover closure and volume through every op, crease behaviour and engine winding.
 - Blender-built kitbash assets stay an option for later (Glenn), not this path.
+
+## ADR-0140 — Fleet v2: faceted kit bodies in traffic, placement by surface, interiors
+
+**Context.** ADR-0139's kit produced subdivided bodies. Glenn preferred the bus's low-poly look ("maybe we should stick with the faceted look"), wanted the new bodies in traffic, the lamps visible ("either build the lights into the chassis or nudge the lights ... something with a shape grammar to define where parts go?") and interiors.
+
+**Decision.**
+- **Faceted by default.** Bodies build at cage level and flat-shade, at 1.4k–3.7k triangles each. Arch stations sit every 15° round each semicircle, so the arches read as curves. Subdivision stays available per spec (`P.level`).
+- **Traffic.** `vehicles.lua` `kit_car` builds the 12 car and truck slots from `vehicle_kit.lua`. The mesh.car bus keeps slot 13, and the old fleet is kept as `vehicle.classic`. Semis wait for articulated trailers.
+- **Placement grammar.**
+  - `poly:raycast` finds a surface and its normal on the finished body.
+  - `kit.attach` casts a part onto it, orients the part to the normal and sinks it a set depth.
+  - Lamp lenses and their city markers are placed this way (a guess from the profile curves buried them).
+- **Interiors (`kit.interior`).**
+  - A liner: the cabin's own sheet metal, copied 4 cm inward and flipped (`poly:extract`).
+  - A floor, bucket seats and an optional bench, from real hip-point proportions (upright in trucks).
+  - A dashboard with an instrument hood, a steering wheel on a column, and a console.
+  - The driver's seat point comes from the seats. The near swap now shows kit cars' cabins. The open convertible is see-into like the bus.
+- **Quality gates.**
+  - `test_vehicle_kit`: every body is closed, within budget and sliver-free.
+  - The fleet contract tests: four lamp markers on the body, round wheels, see-into only for the bus and the convertible.
+  - The wheel-lab tyre probe with the new fleet: 98.7% of cars within 5 cm.

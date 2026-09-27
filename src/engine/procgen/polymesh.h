@@ -94,6 +94,11 @@ std::vector<int> inset(PolyMesh& m, const std::vector<int>& sel, double amount);
 // points stay), a ring of quads between. For grilles, doors, panels spanning several faces.
 std::vector<int> insetRegion(PolyMesh& m, const std::vector<int>& sel, double amount);
 
+// Copy the faces of region `sel` into a NEW poly, every point moved `offset` along its averaged face normal
+// (negative = inward) and, with `flip`, the winding reversed so the copy faces the other way. A cabin's
+// headliner and door cards are the body's own inside, offset in and flipped to face the cabin.
+PolyMesh extractOffset(const PolyMesh& m, const std::vector<int>& sel, double offset, bool flip);
+
 // Crease every edge on the outline of the region `sel` (edges with exactly one face in it).
 void creaseBorder(PolyMesh& m, const std::vector<int>& sel, float sharpness);
 // Crease every edge of every face in `sel`.
