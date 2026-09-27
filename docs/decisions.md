@@ -9018,3 +9018,29 @@ The same review corrected ADR-0135's flashlight: it now lives in its own per-fra
 - **Near swap.** The 12 moving cars nearest the player (entering at 50 m, leaving at 58 m) draw the clear glass, their cabin and their driver instead, from the same body instance, so nothing pops. Buses (and later taxis and convertibles) are always see-through.
 
 **Consequences.** One more instanced group per slot, plus the cabin and clear groups, which are only filled for up to 12 cars. `fleet_bus_is_a_bus_you_can_see_into` now asserts the new contract.
+
+## ADR-0139 — The polymesh kit: hard-surface modelling in the engine
+
+**Context.** Glenn asked for more realistic vehicles, built by the engine and not imported. His question: "how can we better generate car meshes that aren't just cubes on wheels? Are there meshing techniques or operations ... some kind of geometry node set". `mesh.car` sweeps one profile scaled along the car; each new shape needed C++. Glenn also asked whether the tools are general purpose, for example the objects in a café. They are.
+
+**Decision.** `procgen/polymesh.{h,cpp}` is an editable polygon mesh (faces with a group, a material and a colour; edges with a crease sharpness) plus the operations a box-modeller uses:
+- `roundedPolygon` and `loft`: a body from different rounded cross-sections. Every corner emits `segs + 1` points, so sections correspond and a recipe can index faces by corner.
+- `extrude`: region extrude, with side walls.
+- `inset`: per face.
+- `creaseBorder` / `creaseFaces`.
+- `mirrorX`: with a welded seam.
+- `subdivide`: Catmull-Clark with sharp, semi-sharp and corner creases. The level is the LOD.
+- selection helpers, `isClosed` and `signedVolume`.
+- `toParts`: one RenderMesh per material, in the engine's winding, with angle-limited smoothing, box UVs and tangents.
+
+Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the poly object:
+- editing: `select` (group, mat, box, normal, `where`), `extrude`, `inset`, `assign`, `crease_*`, `mirror_x`, `subdivide`;
+- shaping and copying: `map`, `copy`, `append`, `translate`, `scale`;
+- queries and output: `closed`, `volume`, `bounds`, `to_parts`.
+
+`assets/scripts/vehicle_kit.lua` is the first recipe library: a body is one loft of ten-corner sections shaped by profile curves, with glass and lamps set in behind trim reveals. `assets/levels/fleet_gallery.json` shows the bodies.
+
+**Consequences.**
+- The kit is general hard-surface modelling; nothing in it is car-specific.
+- Tests cover closure and volume through every op, crease behaviour and engine winding.
+- Blender-built kitbash assets stay an option for later (Glenn), not this path.

@@ -100,6 +100,7 @@ add_library(engine_core STATIC
     src/engine/procgen/terrain_weather.cpp
     src/engine/procgen/terrain_maps.cpp
     src/engine/procgen/real_tree.cpp
+    src/engine/procgen/polymesh.cpp
     src/engine/procgen/forest.cpp
     src/engine/procgen/trails.cpp
     src/engine/procgen/rock.cpp
@@ -686,6 +687,7 @@ add_executable(run_tests
     tests/test_planet.cpp
     tests/test_atmosphere.cpp
     tests/test_scatter.cpp
+    tests/test_polymesh.cpp
     tests/test_terrain_route.cpp
     tests/test_sdf.cpp
     tests/test_city.cpp
