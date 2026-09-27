@@ -203,7 +203,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
-    addSystem<FlashlightSystem>();               // tool slot 4: after VehicleSystem clears the spot list
+    addSystem<FlashlightSystem>();               // tool slot 4: its beam, staged in render() before RenderSystem
 #else
     // physics-off build: no collider/vehicle/walker bridges; the spectate camera
     // above still follows the sim ghosts (citySys is consumed there).

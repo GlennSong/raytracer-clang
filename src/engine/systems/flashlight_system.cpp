@@ -19,9 +19,10 @@ void FlashlightSystem::update(FrameContext& ctx) {
     }
 }
 
-// the beam is staged in RENDER, not update: VehicleSystem rebuilds the spot list in its fixed step, which runs
-// after every update in a frame and cleared it. RenderSystem, registered after this, reads it next.
+// the beam is staged in RENDER, after the fixed steps, into its own list (SceneLighting::toolSpots), rebuilt
+// every frame here; RenderSystem, registered after this, merges it
 void FlashlightSystem::render(FrameContext& ctx) {
+    ctx.view.lighting.toolSpots.clear();
     if (!on_) return;
     // on foot only: at the wheel the car's own headlights are the light
     bool driving = false;
@@ -37,7 +38,7 @@ void FlashlightSystem::render(FrameContext& ctx) {
     const Vec3 at = c.position + right * 0.25 - Vec3(0, 0.3, 0) + fwd * 0.3;
     SpotLight beam(at, fwd, Vec3(1.0, 0.93, 0.8), /*intensity=*/140.0f, /*inner=*/0.2f, /*outer=*/0.42f);
     beam.range = 60.0f;
-    ctx.view.lighting.vehicleSpots.push_back(beam);
+    ctx.view.lighting.toolSpots.push_back(beam);
 }
 
 }  // namespace engine

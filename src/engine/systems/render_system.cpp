@@ -170,6 +170,11 @@ void RenderSystem::render(FrameContext& ctx) {
             for (const SpotLight& s : coneSpots)
                 withLamps.spotLights.push_back(s);
         }
+        if (!ctx.view.lighting.toolSpots.empty()) {   // the flashlight (FlashlightSystem)
+            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
+            for (const SpotLight& s : ctx.view.lighting.toolSpots)
+                withLamps.spotLights.push_back(s);
+        }
         // Interior room lights (ADR-0080), staged by BuildingInteriorSystem
         // for the streamed interior around the player — always on, not
         // dusk-gated: a roofed room is sun-blind at noon too.

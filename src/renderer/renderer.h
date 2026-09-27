@@ -534,6 +534,10 @@ struct SceneLighting {
     // RenderSystem merges them into the frame's lights ON A COPY, like the
     // street lamps, so authored spot lights are never displaced. Never saved.
     std::vector<SpotLight> vehicleSpots;
+    // Spots a hand-held TOOL casts (the flashlight): owned and rebuilt every frame by the tool's own
+    // render() -- separate from vehicleSpots, which VehicleSystem rebuilds only in fixed steps (a frame
+    // with none kept the old list, and a beam appended to it every frame stacked up)
+    std::vector<SpotLight> toolSpots;
     // Transient interior room lights (ADR-0080): BuildingInteriorSystem
     // clears and refills this every fixed step with warm ceiling lights for
     // the streamed interior nearest the player; RenderSystem merges them into
