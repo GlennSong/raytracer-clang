@@ -327,3 +327,28 @@ TEST_CASE(deck_field_height_near_finds_the_ramp_curve_not_the_street_under_it) {
     CHECK(d.heightAt(50.0, 0.0, 0.5, &y));
     CHECK_APPROX(y, 0.0, 1e-6);
 }
+
+// #35, measured on island 8: a ramp runs alongside the freeway and their drawn decks overlap at the edge.
+// The car's lerped height (1.46 m under the ramp's crest) was nearer the FREEWAY's surface, and a
+// nearest-height rule put the car on the freeway, 1.3 m inside the ramp. The road the car is inside wins.
+TEST_CASE(deck_field_height_near_prefers_the_road_the_car_is_inside_over_a_nearer_height) {
+    using namespace engine;
+    RoadDeckField d;
+    auto straight = [&](double z, double y, double hw, int layer) {
+        UnionSpine s;
+        for (int i = 0; i <= 10; ++i) { s.points.push_back(Vec2(i * 10.0, z)); s.yAbs.push_back(y); s.hw.push_back(hw); }
+        s.halfWidth = hw;
+        s.layer = layer;
+        d.spines.push_back(std::move(s));
+    };
+    straight(0.0, 28.41, 4.75, 1);    // the ramp, the car in its lane
+    straight(-12.0, 27.00, 8.0, 1);   // the freeway beside it; its edge reaches under the ramp's lane
+    d.buildIndex();
+    double y = -1;
+    // the car 1.5 m right of the ramp's centre: inside both decks (freeway edge at z = -4 + 0.5 margin)
+    CHECK(d.heightNear(50.0, -3.8, 0.5, 26.95, 3.0, &y));
+    CHECK_APPROX(y, 28.41, 1e-6);
+    // on the freeway proper it is the freeway
+    CHECK(d.heightNear(50.0, -12.0, 0.5, 27.1, 3.0, &y));
+    CHECK_APPROX(y, 27.00, 1e-6);
+}

@@ -109,13 +109,14 @@ Real CityRenderSystem::deckYAt(int link, Real station, Vec2 p) const {
 }
 
 Real CityRenderSystem::deckSurfaceNear(Real x, Real z, Real refY) const {
-    constexpr double kWindow = 2.0;   // well under a grade separation (kLayerClearance 5.8 m)
-    double bestY = refY, bestDy = kWindow;
+    // 3 m: past the lerp's worst error on a curved ramp (1.5 m measured) and well under a grade
+    // separation (kLayerClearance 5.8 m)
+    constexpr double kWindow = 3.0;
     for (const engine::RoadDeckField& f : decks_) {
         double y;
-        if (f.heightNear(x, z, 0.5, refY, bestDy, &y)) { bestDy = std::fabs(y - refY); bestY = y; }
+        if (f.heightNear(x, z, 0.5, refY, kWindow, &y)) return static_cast<Real>(y);
     }
-    return static_cast<Real>(bestY);
+    return refY;
 }
 
 bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
@@ -2414,29 +2415,140 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         const std::string q = ctx.settings.getString("ground.query", "");
         if (!q.empty()) {
             ctx.settings.setString("ground.query", "");
-            double qx = 0, qz = 0;
-            if (std::sscanf(q.c_str(), "%lf %lf", &qx, &qz) == 2) {
-                char buf[256];
+            double qx = 0, qz = 0, qr = 0;
+            const int nq = std::sscanf(q.c_str(), "%lf %lf %lf", &qx, &qz, &qr);
+            if (nq == 3 && qr > 0) {   // `ground? x z r`: dump nav links + deck spines within r to RT_GROUND_DUMP (JSON)
+                const char* path = std::getenv("RT_GROUND_DUMP");
+                if (FILE* fp = path ? std::fopen(path, "w") : nullptr) {
+                    auto near = [&](engine::Vec2 p) { return (p - engine::Vec2(qx, qz)).length() < qr; };
+                    std::fprintf(fp, "{\"links\":[");
+                    bool first = true;
+                    for (int li = 0; li < nav_.linkCount(); ++li) {
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        if (L.from < 0 || L.to < 0) continue;
+                        const engine::Vec2 a = nav_.nodes[static_cast<std::size_t>(L.from)], b = nav_.nodes[static_cast<std::size_t>(L.to)];
+                        if (!near(a) && !near(b)) continue;
+                        std::fprintf(fp, "%s{\"id\":%d,\"a\":[%.2f,%.2f],\"b\":[%.2f,%.2f],\"abs\":[%d,%d],\"elev\":[%.2f,%.2f],\"cls\":%d}",
+                                     first ? "" : ",", li, a.x, a.y, b.x, b.y, L.elevAbsA ? 1 : 0, L.elevAbsB ? 1 : 0, L.elevA, L.elevB,
+                                     static_cast<int>(L.klass));
+                        first = false;
+                    }
+                    std::fprintf(fp, "],\"spines\":[");
+                    first = true;
+                    for (const engine::RoadDeckField& f : decks_)
+                        for (const engine::UnionSpine& sp : f.spines) {
+                            bool any = false;
+                            for (const engine::Vec2& p : sp.points) any = any || near(p);
+                            if (!any) continue;
+                            std::fprintf(fp, "%s{\"layer\":%d,\"pts\":[", first ? "" : ",", sp.layer);
+                            for (std::size_t i = 0; i < sp.points.size(); ++i)
+                                std::fprintf(fp, "%s[%.2f,%.2f,%.2f,%.2f]", i ? "," : "", sp.points[i].x, sp.points[i].y,
+                                             i < sp.yAbs.size() ? sp.yAbs[i] : 0.0, i < sp.hw.size() ? sp.hw[i] : sp.halfWidth);
+                            std::fprintf(fp, "]}");
+                            first = false;
+                        }
+                    std::fprintf(fp, "],\"cars\":[");
+                    first = true;   // every car in the area: where it is DRAWN vs every deck surface under it
+                    const auto& ags = sim_.agents();
+                    for (int i = 0; i < static_cast<int>(ags.size()); ++i) {
+                        const Agent& ag = ags[static_cast<std::size_t>(i)];
+                        if (ag.mode != Agent::Mode::Driver || ag.released || !near(ag.pos)) continue;
+                        const auto pp = physPose_.find(i);
+                        const engine::Mat4 m = pp != physPose_.end() ? pp->second : agentPose(ag, i);
+                        Real bodyH = params_.carSize.y;
+                        if (ag.vehicle >= 0 && ag.vehicle < static_cast<int>(sim_.vehicles().size()))
+                            bodyH = sim_.vehicles()[static_cast<std::size_t>(ag.vehicle)].height;
+                        const int link = ag.leg >= 0 && ag.leg < static_cast<int>(ag.route.links.size())
+                                             ? ag.route.links[static_cast<std::size_t>(ag.leg)] : -1;
+                        std::fprintf(fp, "%s{\"id\":%d,\"x\":%.2f,\"z\":%.2f,\"link\":%d,\"deckY\":%.3f,\"elev\":%.3f,"
+                                         "\"bottom\":%.3f,\"up\":[%.3f,%.3f,%.3f],\"phys\":%d,\"ground\":%.3f,\"decks\":[",
+                                     first ? "" : ",", i, ag.pos.x, ag.pos.y, link, ag.deckY > -1e29 ? ag.deckY : -999.0, ag.elevation,
+                                     m.m[1][3] - bodyH * 0.5, m.m[0][1], m.m[1][1], m.m[2][1], pp != physPose_.end() ? 1 : 0,
+                                     groundAt(ag.pos.x, ag.pos.y));
+                        bool f2 = true;
+                        for (const engine::RoadDeckField& f : decks_) {
+                            double y;
+                            for (double w : {0.5, 3.0})   // at the car, and a little wider (the lane's edge)
+                                if (f.heightAt(ag.pos.x, ag.pos.y, w, &y)) { std::fprintf(fp, "%s%.3f", f2 ? "" : ",", y); f2 = false; }
+                        }
+                        std::fprintf(fp, "]}");
+                        first = false;
+                    }
+                    std::fprintf(fp, "]}\n");
+                    std::fclose(fp);
+                    ctx.settings.setString("ground.result", std::string("dumped ") + path);
+                } else {
+                    ctx.settings.setString("ground.result", "err set RT_GROUND_DUMP to a writable path");
+                }
+            } else if (nq >= 2) {
                 const double carved = heightAt_ ? heightAt_(qx, qz) : 0.0;
-                double deckY = -1e30;
-                int li = nav_.nearestLink(engine::Vec2(qx, qz));
+                char buf[512];
+                std::snprintf(buf, sizeof buf, "%.1f %.1f carved=%.2f lifted=%.2f drawn=%.2f", qx, qz, carved,
+                              carved + roadLift_, groundAt(qx, qz));
+                std::string out = buf;
+                // every drawn surface over the point (which deck, at what height)
+                for (const engine::RoadDeckField& f : decks_) {
+                    double y;
+                    if (f.heightAt(qx, qz, 0.5, &y)) { std::snprintf(buf, sizeof buf, " deckAt=%.2f", y); out += buf; }
+                }
+                {   // the nearest drawn deck spine within 40 m (is this road in the field at all, how wide)
+                    std::size_t nSp = 0;
+                    double bd = 40.0, by = 0, bhw = 0; int bl = -1;
+                    for (const engine::RoadDeckField& f : decks_) {
+                        nSp += f.spines.size();
+                        for (const engine::UnionSpine& sp : f.spines)
+                            for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+                                const engine::Vec2 a = sp.points[i], ab = sp.points[i + 1] - a;
+                                const double L2 = ab.lengthSquared();
+                                double t = L2 < 1e-12 ? 0.0 : dot(engine::Vec2(qx, qz) - a, ab) / L2;
+                                t = std::clamp(t, 0.0, 1.0);
+                                const double d = (a + ab * t - engine::Vec2(qx, qz)).length();
+                                if (d < bd && sp.yAbs.size() == sp.points.size()) {
+                                    bd = d; bl = sp.layer;
+                                    by = sp.yAbs[i] + (sp.yAbs[i + 1] - sp.yAbs[i]) * t;
+                                    bhw = sp.hw.size() == sp.points.size() ? sp.hw[i] : sp.halfWidth;
+                                }
+                            }
+                    }
+                    std::snprintf(buf, sizeof buf, " | decks=%zu spines=%zu nearestSpine d=%.2f y=%.2f hw=%.2f layer=%d",
+                                  decks_.size(), nSp, bl >= 0 ? bd : -1.0, by, bhw, bl);
+                    out += buf;
+                }
+                // the nearest nav link, both height forms
+                const int li = nav_.nearestLink(engine::Vec2(qx, qz));
                 if (li >= 0) {
                     const engine::NavLink& L = nav_.links[li];
                     const engine::Vec2 a = nav_.nodes[L.from], b = nav_.nodes[L.to];
                     const engine::Vec2 ab(b.x - a.x, b.y - a.y);
                     const double len2 = ab.x * ab.x + ab.y * ab.y;
-                    double t = len2 > 1e-9
-                                   ? std::clamp(((qx - a.x) * ab.x +
-                                                 (qz - a.y) * ab.y) / len2,
-                                                0.0, 1.0)
-                                   : 0.0;
-                    deckY = deckYAt(li, static_cast<engine::Real>(t),
-                                    engine::Vec2(qx, qz));
+                    const double t = len2 > 1e-9 ? std::clamp(((qx - a.x) * ab.x + (qz - a.y) * ab.y) / len2, 0.0, 1.0) : 0.0;
+                    std::snprintf(buf, sizeof buf,
+                                  " | link=%d t=%.2f len=%.1f abs=%d(%d,%d) layer=%d elev=%.2f..%.2f above=%.2f..%.2f deckYAt=%.2f",
+                                  li, t, L.length, L.elevAbsolute ? 1 : 0, L.elevAbsA ? 1 : 0, L.elevAbsB ? 1 : 0, L.layer,
+                                  L.elevA, L.elevB, L.aboveA, L.aboveB,
+                                  deckYAt(li, static_cast<engine::Real>(t * L.length), engine::Vec2(qx, qz)));
+                    out += buf;
                 }
-                std::snprintf(buf, sizeof buf,
-                              "%.1f %.1f carved=%.2f lifted=%.2f deckY=%.2f link=%d",
-                              qx, qz, carved, carved + roadLift_, deckY, li);
-                ctx.settings.setString("ground.result", buf);
+                // the cars within 15 m: their link, sim heights, and where they are DRAWN (bottom of the body)
+                const auto& agents = sim_.agents();
+                int shown = 0;
+                for (int i = 0; i < static_cast<int>(agents.size()) && shown < 6; ++i) {
+                    const Agent& ag = agents[static_cast<std::size_t>(i)];
+                    if (ag.mode != Agent::Mode::Driver || ag.released) continue;
+                    if ((ag.pos - engine::Vec2(qx, qz)).length() > 15.0) continue;
+                    const auto pp = physPose_.find(i);
+                    const engine::Mat4 m = pp != physPose_.end() ? pp->second : agentPose(ag, i);
+                    Real bodyH = params_.carSize.y;
+                    if (ag.vehicle >= 0 && ag.vehicle < static_cast<int>(sim_.vehicles().size()))
+                        bodyH = sim_.vehicles()[static_cast<std::size_t>(ag.vehicle)].height;
+                    std::snprintf(buf, sizeof buf,
+                                  " | car %d at (%.1f, %.1f) link=%d deckY=%.2f elevation=%.2f grade=%.3f bottom=%.2f drawn=%.2f%s",
+                                  i, ag.pos.x, ag.pos.y, ag.leg >= 0 && ag.leg < static_cast<int>(ag.route.links.size()) ? ag.route.links[static_cast<std::size_t>(ag.leg)] : -1, ag.deckY > -1e29 ? ag.deckY : -999.0, ag.elevation, ag.grade,
+                                  m.m[1][3] - bodyH * 0.5, groundAt(ag.pos.x, ag.pos.y), pp != physPose_.end() ? " PHYS" : "");
+                    out += buf;
+                    ++shown;
+                }
+                ctx.settings.setString("ground.result", out);
             } else {
                 ctx.settings.setString("ground.result", "err parse: " + q);
             }

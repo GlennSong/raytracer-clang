@@ -1236,8 +1236,8 @@ std::string Application::handleControlCommand(const std::string& line) {
     // echoes your coordinates — the same ask-again idiom as possess?.
     if (cmd.name == "ground?") {
         if (cmd.args.size() >= 2) {
-            settingsStore.setString("ground.query",
-                                    cmd.args[0] + " " + cmd.args[1]);
+            settingsStore.setString("ground.query",   // `ground? x z [r]`: r dumps the area (RT_GROUND_DUMP)
+                                    cmd.args[0] + " " + cmd.args[1] + (cmd.args.size() >= 3 ? " " + cmd.args[2] : ""));
             return "ok staged (poll `ground?` with no args)";
         }
         return "ok " + settingsStore.getString("ground.result", "none");
