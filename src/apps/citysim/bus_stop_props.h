@@ -58,7 +58,9 @@ int buildBusStopProps(
     // lattice metro, 7 of 50 on the lane-built city, worst 9.8 m in. Given the deck, the
     // furniture is stepped further out along the same kerb normal until it is clear.
     // Null = width-only, as before.
-    const engine::RoadDeckField* deck = nullptr);
+    const engine::RoadDeckField* deck = nullptr,
+    // the sim's stand-back for a bus arriving on a link (CitySim::busStandBackAt): where its doors stop
+    const std::function<engine::Real(int)>& standBack = {});
 
 }  // namespace citysim
 

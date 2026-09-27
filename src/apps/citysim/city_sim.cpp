@@ -2329,6 +2329,30 @@ Real CitySim::busDistanceToStop(const Agent& a) const {
 // links "short of the node on the last link" was 2.4 m: the bus dwelt up to
 // 40 s inside the junction (Glenn, 2026-09-19: "That creates an instant
 // traffic jam"). Never behind the previous junction on its route.
+Real CitySim::busStandBackAt(int inLink) const {
+    if (!nav_ || inLink < 0 || inLink >= nav_->linkCount()) return 0;
+    const int node = nav_->links[static_cast<std::size_t>(inLink)].to;
+    Real approach = 0;
+    int li = inLink;
+    for (int guard = 0; guard < 16 && li >= 0 && approach < 80.0; ++guard) {
+        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+        approach += L.length;
+        if (nav_->isJunction(L.from)) break;
+        // the single street link arriving at a plain node (not the way back)
+        int prev = -1;
+        for (int k = 0; k < nav_->linkCount() && prev < 0; ++k) {
+            const engine::NavLink& P = nav_->links[static_cast<std::size_t>(k)];
+            if (P.to == L.from && P.from != L.to) prev = k;
+        }
+        li = prev;
+    }
+    Real busLen = 12.0;
+    for (int i = 0; i < static_cast<int>(agents_.size()); ++i)
+        if (isBus(i)) { busLen = vehicleLength(i); break; }
+    const Real want = junctionRadius(node) + kCrosswalkFarEdge + kStopLineMargin + 0.5 * busLen;
+    return std::min(want, approach * 0.6);
+}
+
 Real CitySim::busStandBack(const Agent& a) const {
     if (a.route.links.empty()) return 0;
     const int legs = static_cast<int>(a.route.links.size());

@@ -1249,6 +1249,12 @@ private:
     void releaseBays(Agent& a);          // free both the held and the reserved bay
     Real busDistanceToStop(const Agent& a) const;
     Real busStandBack(const Agent& a) const;   // route metres short of its stop node
+public:
+    // The same stand-back for a bus arriving at `inLink`'s end node, measured from that node back along the
+    // link to the bus's CENTRE -- where the stop's furniture belongs (#36). Walks back through plain nodes
+    // like busStandBack; the bus length is the fleet's.
+    Real busStandBackAt(int inLink) const;
+private:
     std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k) const;
     bool parksInBays(const Agent& a) const;   // a private car that parks (not a bus/cab/wanderer)
     void advance(Agent& a, Real dt, Real gap, Real minGap);

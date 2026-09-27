@@ -438,6 +438,7 @@ private:
     // Bus-stop furniture entities, kept so a rebuild can remove the old set
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
+    std::vector<engine::Vec2> busStopBenches_;   // where each stop's furniture stands (RT_BUS_STOP_AUDIT, #36)
     int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
