@@ -22,6 +22,7 @@
 #include "procgen/terrain_maps.h"
 #include "procgen/terrain_weather.h"
 #include "procgen/trails.h"
+#include "systems/nature_collider_system.h"   // NatureColliders (#55)
 #include "procgen/ground_cover.h"
 #include "procgen/ground_layers.h"
 #include "procgen/stylized_rock.h"
@@ -1856,6 +1857,22 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
     const std::vector<ForestTree> trees = placeForest(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, vps);
 
+    // TRUNK COLLIDERS (#55): a standing capsule per tree (not the understory), streamed round the player
+    // by NatureColliderSystem
+    NatureColliders natureColliders;
+    for (const ForestTree& t : trees) {
+        const Var& var = vars[t.variant];
+        if (var.species < 0 || fp.species[static_cast<std::size_t>(var.species)].understory) continue;
+        const double r = std::max(0.08, var.tree.trunkRadius / 1.45 * 1.1 * t.scale);
+        const double h = std::clamp(var.tree.crownBase * t.scale, 1.5, 6.0);
+        NatureCollider c;
+        c.capsule = true;
+        c.half = Vec3(r, 0.5 * h, r);
+        c.centre = Vec3(t.pos.x, t.pos.y - 0.15 * t.scale + r + 0.5 * h, t.pos.z);
+        c.orientation = Quat();
+        natureColliders.add(c);
+    }
+
     // NEAR: instanced models per (near cell, variant, part), fading out over the band
     RenderMaterial barkMat;
     barkMat.albedo = Vec3(1, 1, 1);
@@ -1953,7 +1970,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         const std::vector<PlacedRock> rocks = placeRocks(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, shoreAt, excludeDry);
         nRocks = rocks.size();
         std::map<int, RenderMaterial> stoneMats;   // one texture set per stone
-        struct RV { MeshHandle mesh; RenderMaterial mat; double bed = 0.22, size = 2.0; };
+        struct RV { MeshHandle mesh; RenderMaterial mat; double bed = 0.22, size = 2.0; Vec3 lo, hi; };
         std::vector<std::vector<RV>> rv(fp.rocks.size());
         for (std::size_t li = 0; li < fp.rocks.size(); ++li) {
             const RockLayer& L = fp.rocks[li];
@@ -1987,7 +2004,13 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             }
             for (int v = 0; v < L.variants; ++v) {
                 RV r;
-                r.mesh = assets.acquireMesh(stylizedRock(fp.seed * 31u + static_cast<uint32_t>(li * 97 + v * 13), rp),
+                const RenderMesh rockMesh = stylizedRock(fp.seed * 31u + static_cast<uint32_t>(li * 97 + v * 13), rp);
+                r.lo = Vec3(1e30, 1e30, 1e30); r.hi = Vec3(-1e30, -1e30, -1e30);
+                for (const Vertex& vx : rockMesh.vertices) {
+                    r.lo = Vec3(std::min(r.lo.x, vx.position.x), std::min(r.lo.y, vx.position.y), std::min(r.lo.z, vx.position.z));
+                    r.hi = Vec3(std::max(r.hi.x, vx.position.x), std::max(r.hi.y, vx.position.y), std::max(r.hi.z, vx.position.z));
+                }
+                r.mesh = assets.acquireMesh(rockMesh,
                                             "forest:rock:" + std::to_string(fp.seed) + ":" + std::to_string(li) + ":" + std::to_string(v));
                 r.mat = rockMat;
                 r.bed = rp.family == RockFamily::Pebbles ? 0.3 : 0.22;
@@ -2002,6 +2025,16 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             const Vec3 pos(r.pos.x, r.pos.y - v.bed * v.size * r.scale, r.pos.z);
             cells[{static_cast<int>(std::floor(r.pos.x / fp.cellM)), static_cast<int>(std::floor(r.pos.z / fp.cellM)), r.layer, r.variant}]
                 .push_back(Mat4::trs(pos, q, Vec3(r.scale, r.scale, r.scale)));
+            // a collider for a rock you could stand on or walk into (not pebbles): its mesh box, a little inside
+            const Vec3 half = (v.hi - v.lo) * (0.5 * 0.85 * r.scale);
+            if (std::max({half.x, half.y, half.z}) >= 0.35 && v.hi.x > v.lo.x) {
+                const Vec3 localC = (v.hi + v.lo) * 0.5;
+                NatureCollider c;
+                c.centre = pos + q.rotate(localC * r.scale);
+                c.orientation = q;
+                c.half = half;
+                natureColliders.add(c);
+            }
         }
         for (auto& [key, tf] : cells) {
             const RV& v = rv[std::get<2>(key)][std::get<3>(key)];
@@ -2022,7 +2055,17 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             world.add<InstanceGroup>(world.create(), g);
         }
     }
-    LOG_INFO << "[forest] " << nRocks << " rocks; " << trees.size() << " trees, " << nVar << " variants, " << nearGroups << " near groups, "
+    const std::size_t nColliders = natureColliders.shapes.size();
+    if (std::getenv("RT_NATURE_COLLIDER_TRACE")) {   // a few big rocks, for probes (#55)
+        int shown = 0;
+        for (const NatureCollider& c : natureColliders.shapes)
+            if (!c.capsule && c.half.y > 0.9 && shown < 6) {
+                LOG_INFO << "[nature colliders] rock at (" << c.centre.x << ", " << c.centre.z << ") top " << c.centre.y + c.half.y;
+                ++shown;
+            }
+    }
+    world.add<NatureColliders>(world.create(), std::move(natureColliders));
+    LOG_INFO << "[forest] " << nColliders << " collision shapes (trunks, rocks) for streaming; " << nRocks << " rocks; " << trees.size() << " trees, " << nVar << " variants, " << nearGroups << " near groups, "
              << farCells.size() << " far cells (" << farVerts * 32 / 1048576 << " MB of impostor vertices) in "
              << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
 }
