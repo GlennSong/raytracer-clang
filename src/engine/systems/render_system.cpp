@@ -24,7 +24,14 @@ void frustumCullInstances(const std::vector<Mat4>& transforms,
     out.clear();
     Real maxDistSq = maxDistance * maxDistance;
     for (const Mat4& m : transforms) {
-        Vec3 center = m.transformPoint(meshCenter);
+        // AFFINE, no perspective divide: an instance matrix's bottom row can carry DATA -- the grass
+        // clump's thinning rank (GrassSystem) -- and transformPoint divided the world position by
+        // (rank * centre.x + 1): 1.01-1.06 for a clump, which put its culling sphere 4-140 m away from
+        // it. A wide forward view still caught the displaced spheres; looking down at your feet, the
+        // grass under you was culled (#50, Glenn: "If I look down at the grass it disappears").
+        const Vec3 center(m.m[0][0] * meshCenter.x + m.m[0][1] * meshCenter.y + m.m[0][2] * meshCenter.z + m.m[0][3],
+                          m.m[1][0] * meshCenter.x + m.m[1][1] * meshCenter.y + m.m[1][2] * meshCenter.z + m.m[1][3],
+                          m.m[2][0] * meshCenter.x + m.m[2][1] * meshCenter.y + m.m[2][2] * meshCenter.z + m.m[2][3]);
         if (maxDistance > 0 && (center - cameraPos).lengthSquared() > maxDistSq)
             continue;
         Vec3 cx(m.m[0][0], m.m[1][0], m.m[2][0]);
