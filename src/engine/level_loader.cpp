@@ -4606,7 +4606,8 @@ bool LevelLoader::load(const std::string& path,
                 gf.fadeStart = gj.value("fadeStart", gf.fadeStart);
                 gf.fadeEnd = gj.value("fadeEnd", gf.fadeEnd);
                 gf.material.albedo = Vec3(1, 1, 1);   // the vertex colours are the grass
-                gf.material.roughness = static_cast<float>(gj.value("roughness", 0.85));
+                // fully rough by default (#51: against a low sun the 0.85 sheen washed the meadow out pale)
+                gf.material.roughness = static_cast<float>(gj.value("roughness", 1.0));
                 gf.material.metallic = 0.0f;
                 gf.material.opacity = 1.0f;
                 gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_WIND | RenderMaterial::FLAG_TWO_SIDED;

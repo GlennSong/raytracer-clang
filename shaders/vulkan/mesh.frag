@@ -1025,9 +1025,11 @@ void main() {
             vec3 L = normalize(g.lights[i].directionInner.xyz);
             float toward = pow(max(dot(-V, L), 0.0), 5.0);
             float tip = smoothstep(0.1, 1.0, inTexcoord.y);
-            vec3 transColor = albedo * vec3(2.2, 2.4, 1.1);
+            // (halved, #51 -- Glenn: "the sunlight grass... it's really bright": against a low sun the field
+            // washed out pale; a meadow backlit reads as a warm rim on the blades, not a milky sheet)
+            vec3 transColor = albedo * vec3(1.7, 1.9, 0.8);
             direct += transColor * g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w
-                    * (0.08 + 0.9 * toward) * tip * sunVis / PI;
+                    * (0.05 + 0.42 * toward) * tip * sunVis / PI;
             break;
         }
     }
