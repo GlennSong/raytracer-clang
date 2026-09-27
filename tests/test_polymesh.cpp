@@ -32,6 +32,11 @@ TEST_CASE(polymesh_loft_makes_a_closed_outward_solid) {
     // a rounded, resampled section lofted over three stations stays closed and outward
     const auto sec = resampleClosed(roundedPolygon({Vec2(-1, 0), Vec2(1, 0), Vec2(0.8, 1), Vec2(-0.8, 1)}, {0.2}, 3), 24);
     CHECK(sec.size() == 24);
+    // two big fillets on a short shared edge never meet in one duplicated point
+    {
+        const auto q = roundedPolygon({Vec2(0, 0), Vec2(1, 0), Vec2(1, 0.1), Vec2(0, 0.1)}, {0.5}, 3);
+        for (std::size_t i = 0; i < q.size(); ++i) CHECK((q[i] - q[(i + 1) % q.size()]).length() > 1e-6);
+    }
     // every corner emits segs + 1 points, even square and straight ones (recipes index faces by corner)
     CHECK(roundedPolygon({Vec2(0, 0), Vec2(1, 0), Vec2(2, 0), Vec2(2, 1), Vec2(0, 1)}, {0.0, 0.3, 0.2, 0.2, 0.0}, 3).size() == 20u);
     PolyMesh b = loft({sec, sec, sec}, {-2, 0, 2}, true, true);

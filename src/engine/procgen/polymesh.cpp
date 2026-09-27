@@ -115,7 +115,9 @@ std::vector<Vec2> roundedPolygon(const std::vector<Vec2>& c, const std::vector<d
             continue;
         }
         double t = r / std::tan(theta * 0.5);              // tangent distance along each edge
-        const double tMax = 0.5 * std::min(la, lb);
+        // 45%, not half: two neighbours both clamped to half their shared edge would meet at its midpoint in
+        // one duplicated point -- a zero-area strip down the whole loft
+        const double tMax = 0.45 * std::min(la, lb);
         if (t > tMax) { t = tMax; r = t * std::tan(theta * 0.5); }
         const Vec2 pa = p + ua * t, pb = p + ub * t;
         // arc centre along the bisector

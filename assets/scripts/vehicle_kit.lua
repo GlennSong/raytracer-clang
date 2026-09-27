@@ -143,10 +143,20 @@ function kit.body(P)
     B:crease_border(sel, spec.edge or 2.0)
     if (spec.corner or 0) > 0 then B:crease_corners(sel, 35, spec.corner) end
   end
-  window(windshield, "win_front", W.windshield)
-  window(backlight, "win_back", W.back)
+  if not P.open_top then   -- an open car's windshield is a separate frame; it has no roof glass
+    window(windshield, "win_front", W.windshield)
+    window(backlight, "win_back", W.back)
+  end
   window(sideR, "win_side_r", W.side)
   window(sideL, "win_side_l", W.side)
+
+  -- A REAR WINDOW in the tail (a boxy vehicle's back glass is on its vertical tail, not the roof run):
+  -- the tail cap's ladder rungs within P.rear_window = { y0, y1 }
+  if P.rear_window then
+    local rw = P.rear_window
+    local rear = B:select{ group = "cap_start", where = function(c) return c[2] > rw[1] and c[2] < rw[2] end }
+    window(rear, "win_rear", W.back)
+  end
 
   -- the underside and the arches: dark
   local under = faces("bottom", function() return true end, true)
@@ -173,7 +183,8 @@ function kit.profile(o)
   local half = L * 0.5
   local r = o.r
   local P = { name = o.name, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
-              windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin }
+              windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin,
+              rear_window = o.rear_window, level = o.level, grille_w = o.grille_w, open_top = o.open_top }
   P.axles = o.axles or { -(half - o.ro), half - o.fo }
   P.wheel_r = r
   P.wheel_w = o.wheel_w or 0.21
@@ -184,8 +195,12 @@ function kit.profile(o)
   local zs = {}
   local function add(z) if z >= -half and z <= half then zs[#zs + 1] = z end end
   for _, d in ipairs({ 0, 0.04, 0.12, 0.25, 0.45 }) do add(-half + d); add(half - d) end
+  -- ARCHES: stations evenly round each arch's semicircle (every 15 degrees), so a faceted body's wheel
+  -- arch reads as a curve rather than a six-sided box; plus one either side where the arch meets the sill
+  local ra = r + (o.arch_gap or 0.075)
   for _, zc in ipairs(P.axles) do
-    for _, d in ipairs({ -0.46, -0.34, -0.20, 0.0, 0.20, 0.34, 0.46 }) do add(zc + d * r / 0.33) end
+    for deg = -90, 90, 15 do add(zc + ra * math.sin(math.rad(deg))) end
+    add(zc - ra - 0.08); add(zc + ra + 0.08)
   end
   local g = o.glass
   for _, z in ipairs({ g.cowl, g.a_top, g.c_top, g.deck, g.a_side, g.c_side }) do add(z - 0.03); add(z + 0.03) end
@@ -194,7 +209,7 @@ function kit.profile(o)
   for z = -half + 0.45, half - 0.45, step do add(z) end
   table.sort(zs)
   local dedup = {}
-  for _, z in ipairs(zs) do if #dedup == 0 or z - dedup[#dedup] > (o.min_station or 0.06) then dedup[#dedup + 1] = z end end
+  for _, z in ipairs(zs) do if #dedup == 0 or z - dedup[#dedup] > (o.min_station or 0.045) then dedup[#dedup + 1] = z end end
   P.stations = dedup
 
   local tp = o.taper or { 0.16, 0.12, 0.55 }
@@ -222,8 +237,13 @@ function kit.profile(o)
   local arch = o.roof_arch or 0.03
   function P.roof(z)
     if z >= g.cowl or z <= g.deck then return 0 end
+    if o.open_top then return 0 end   -- a convertible's windshield is its own part (a frame and glass)
+    if o.roof_keys and z <= g.a_top then   -- an explicit roof line behind the windshield (a truck's sleeper)
+      local keys = {}
+      for i, k in ipairs(o.roof_keys) do keys[i] = { k[1], k[2] } end
+      return curve(keys, z)
+    end
     if z > g.a_top then return lerp(P.belt(g.cowl) + 0.02, H - rd[1], smooth((g.cowl - z) / (g.cowl - g.a_top)) ^ (o.ws_exp or 0.8)) end
-    if o.open_top then return 0 end
     if z < g.c_top then return lerp(P.belt(g.deck) + 0.02, H - rd[2], smooth((z - g.deck) / (g.c_top - g.deck)) ^ (o.bl_exp or 0.85)) end
     local t = (z - g.c_top) / (g.a_top - g.c_top)
     return lerp(H - rd[2], H - rd[1], t) + arch * math.sin(math.pi * t) ^ 0.7
@@ -309,14 +329,62 @@ end
 
 -- a separate rounded box part (truck boxes, trailers, signs): poly parts in ground space. `bevel` is the
 -- edge crease: 1 soft, 2.5 a crisp panel edge with a small radius
-function kit.box_part(size, at, bevel, mat)
+function kit.box_part(size, at, bevel, mat, level)
   local P = poly.box(size)
   P:crease_faces(P:select{ all = true }, bevel or 2.5)
   local all = P:select{ where = function() return true end }
   P:assign(all, { mat = mat or "body" })
-  local S = P:subdivide(2)
+  local S = (level or 0) > 0 and P:subdivide(level) or P   -- faceted parts are plain boxes
   S:translate(at)
   return S
+end
+
+-- a CYLINDER part: `sides`-gon rings along its axis ("x", "y" or "z"), capped, centred at `at`; the
+-- polygon is symmetric so its caps close as clean quad ladders
+function kit.cylinder_part(radius, length, sides, at, axis, mat)
+  local n = sides or 12
+  local ring = {}
+  for i = 0, n - 1 do
+    local a = -math.pi * 0.5 + (i + 0.5) * 2 * math.pi / n
+    ring[#ring + 1] = { radius * math.cos(a), radius * math.sin(a) }
+  end
+  local C = poly.loft{ sections = { ring, ring }, stations = { -length * 0.5, length * 0.5 }, cap_start = true, cap_end = true,
+                       cap_crease = 3 }
+  C:assign(C:select{}, { mat = mat or "trim" })
+  if axis == "x" then C:map(function(x, y, z) return z, y, -x end)
+  elseif axis == "y" then C:map(function(x, y, z) return x, z, -y end) end
+  C:translate(at)
+  return C
+end
+
+-- a box part tilted `rake` degrees about x (top leaning back toward -z), centred at `at`
+function kit.tilted_box(size, at, rake, mat)
+  local P = poly.box(size)
+  P:crease_faces(P:select{}, 3)
+  P:assign(P:select{}, { mat = mat or "body" })
+  local a = math.rad(rake or 0)
+  local c, sn = math.cos(a), math.sin(a)
+  P:map(function(x, y, z) return x, y * c - z * sn, y * sn + z * c end)
+  P:translate(at)
+  return P
+end
+
+-- A CONVERTIBLE'S WINDSHIELD: a raked frame (two A-posts and a header rail) round a glass pane, standing
+-- on the cowl. `w` wide, `h` tall along its rake, at station z (its foot), belt height y.
+function kit.windshield_frame(car, w, h, z, y, rake)
+  local a = math.rad(rake)
+  local up, back = math.cos(a), math.sin(a)          -- the frame's own up, in (y, -z)
+  local function at(u)                                -- a point u along the frame's height, centred
+    return { 0, y + u * up, z - u * back }
+  end
+  local mid = at(h * 0.5)
+  car.polys[#car.polys + 1] = kit.tilted_box({ w - 0.08, h - 0.06, 0.012 }, mid, -rake, "glass")
+  local post = 0.045
+  for _, sx in ipairs({ 1, -1 }) do
+    car.polys[#car.polys + 1] = kit.tilted_box({ post, h, 0.05 }, { sx * (w * 0.5 - post * 0.5), mid[2], mid[3] }, -rake, "trim")
+  end
+  local top = at(h - 0.02)
+  car.polys[#car.polys + 1] = kit.tilted_box({ w, 0.045, 0.05 }, top, -rake, "trim")
 end
 
 -- THE FLEET. Each spec is a plain table; kit.SPECS[name]() builds its profile.
@@ -360,13 +428,15 @@ S.suv = function() return kit.profile{
 
 S.jeep = function() return kit.profile{
   name = "jeep", L = 4.25, W = 1.90, H = 1.86, clear = 0.27, r = 0.40, fo = 0.72, ro = 0.72,
-  glass = { cowl = 0.55, a_top = 0.38, c_top = -1.95, deck = -2.10, a_side = 0.36, c_side = -1.85, pillars = { -0.45 } },
+  -- the roof runs flat to the tail (c_top / deck past it): a boxy tail is a tall panel with the rear
+  -- window in it (rear_window), not a sloped backlight
+  glass = { cowl = 0.55, a_top = 0.38, c_top = -2.40, deck = -2.50, a_side = 0.36, c_side = -1.85, pillars = { -0.45 } },
   belt = { { -1, 1.15 }, { -0.92, 1.18 }, { 0.2, 1.18 }, { 0.9, 1.12 }, { 1, 1.00 } },
   roof_drop = { 0.02, 0.02 }, roof_arch = 0.0, ws_exp = 1.0, bl_exp = 1.0, roof_w = { 0.86, 0.86 }, glass_w = 0.95,
   taper = { 0.05, 0.03, 0.3 }, tuck = 0.10, arch_gap = 0.09,
   radii = { bottom = 0.05, side = 0.08, shoulder = 0.04, glass = 0.02, roof = 0.06 },
   lamp_y = { 0.95, 1.10 }, grille_y = { 0.62, 1.02 }, tail_y = { 1.0, 1.15 },
-  cap_crease = 1.0, color = { 0.24, 0.30, 0.18 },
+  cap_crease = 1.0, color = { 0.24, 0.30, 0.18 }, rear_window = { 1.25, 1.78 },
   windows = { side = { edge = 2.5, corner = 3 }, windshield = { edge = 2.5, corner = 3 }, back = { edge = 2.5, corner = 3 } },
   extras = function(car)   -- the spare wheel on the tailgate
     car.spare = { 0, 1.05, -(4.25 * 0.5) - 0.12 }
@@ -378,7 +448,8 @@ S.convertible = function() return kit.profile{
   belt = { { -1, 0.80 }, { -0.85, 0.88 }, { -0.4, 0.90 }, { 0.2, 0.87 }, { 0.8, 0.80 }, { 1, 0.62 } },
   open_top = true, roof_drop = { 0.05, 0.1 },
   color = { 0.88, 0.88, 0.86 },
-  post = function(B, ctx) kit.tub(B, ctx, -1.25, 0.05, 0.42, "interior") end } end
+  post = function(B, ctx) kit.tub(B, ctx, -1.25, 0.05, 0.42, "interior") end,
+  extras = function(car) kit.windshield_frame(car, 1.50, 0.46, 0.30, 0.87, 58) end } end
 
 S.pickup = function() return kit.profile{
   name = "pickup", L = 5.60, W = 2.00, H = 1.90, clear = 0.24, r = 0.40, fo = 0.95, ro = 1.10,
@@ -432,21 +503,104 @@ S.small_truck = function()
     end }
 end
 
-S.semi = function()
-  local trL, trW, trH = 13.6, 2.55, 2.75
-  return truck_cab{
-    name = "semi", L = 6.2, W = 2.50, H = 3.95, clear = 0.40, r = 0.52, fo = 1.2, ro = 0.0,
-    axles = { -2.3, -1.0, 2.0 },
-    glass = { cowl = 0.80, a_top = 0.35, c_top = -2.9, deck = -3.08, a_side = 0.30, c_side = -0.40, pillars = {} },
-    belt = { { -1, 1.95 }, { -0.1, 1.95 }, { 0.3, 1.90 }, { 0.45, 1.70 }, { 0.9, 1.55 }, { 1, 1.30 } },
-    lamp_y = { 0.95, 1.12 }, grille_y = { 0.60, 1.60 }, color = { 0.55, 0.06, 0.06 },
+-- THE SEMI (Class 8 conventional sleeper; references: ~4.1 m tall, 2.6 m wide, a 53 ft / 16.15 m trailer,
+-- fifth wheel ~1.2 m high, tandem drive axles on duals, fuel tanks under the cab, stacks behind it).
+-- The tractor body is a loft from the front bumper (z = +2.2) to the back of the sleeper (z = -2.2); the
+-- chassis runs on behind it to the drive axles and the fifth wheel. `trailer` = "box" | "tanker".
+local function semi(trailer)
+  local L, W = 4.4, 2.50
+  local r = 0.52
+  local zF = 1.05                        -- front axle (body space)
+  local zD1, zD2 = -3.35, -4.65          -- tandem drive axles
+  local frameEnd = -5.35
+  local fifthZ = (zD1 + zD2) * 0.5 + 0.3
+  local P = kit.profile{
+    name = "semi", L = L, W = W, H = 3.95, clear = 0.45, r = r, fo = 2.2 - zF, ro = 0.0, axles = { zF },
+    glass = { cowl = 0.05, a_top = -0.40, c_top = -3.0, deck = -3.1, a_side = -0.45, c_side = -1.25, pillars = {} },
+    belt = { { -1, 1.95 }, { -0.1, 1.95 }, { 0.02, 1.92 }, { 0.3, 1.78 }, { 0.9, 1.62 }, { 1, 1.40 } },
+    roof_keys = { { -2.2, 3.90 }, { -1.3, 3.92 }, { -0.95, 3.35 }, { -0.60, 2.95 }, { -0.40, 2.92 } },
+    roof_drop = { 0.02, 0.02 }, ws_exp = 1.0, roof_w = { 0.92, 0.88 }, glass_w = 0.97,
+    taper = { 0.12, 0.02, 0.6 }, tuck = 0.05, arch_gap = 0.10,
+    radii = { bottom = 0.03, side = 0.10, shoulder = 0.06, glass = 0.03, roof = 0.12 },
+    lamp_y = { 1.05, 1.22 }, grille_y = { 0.75, 1.62 }, grille_w = 0.72, tail_y = { 9, 9 },
+    cap_crease = 2.0, color = { 0.55, 0.06, 0.06 },
+    windows = { side = { edge = 3, corner = 3 }, windshield = { edge = 3, corner = 2.5 }, back = { edge = 3, corner = 3 } },
     extras = function(car)
-      -- the trailer, hitched behind (drawn straight for now; articulation is the sim's, phase 5)
-      local zt = -3.1 - 0.9 - trL * 0.5
-      car.polys[#car.polys + 1] = kit.box_part({ trW, trH, trL }, { 0, 1.25 + trH * 0.5, zt }, 1.0, "trailer")
-      car.trailer_axles = { zt - trL * 0.5 + 1.6, zt - trL * 0.5 + 2.9 }
+      local add = function(x) car.polys[#car.polys + 1] = x end
+      -- CHASSIS: two frame rails from under the cab to the tail, a rear crossmember and bumper
+      for _, sx in ipairs({ 1, -1 }) do
+        add(kit.box_part({ 0.10, 0.28, 2.0 - frameEnd }, { sx * 0.45, 0.95, (2.0 + frameEnd) * 0.5 }, 3, "chassis"))
+      end
+      add(kit.box_part({ 1.10, 0.20, 0.12 }, { 0, 0.90, frameEnd + 0.06 }, 3, "chassis"))
+      -- FIFTH WHEEL: a tilted plate over the drive axles, on its mounting
+      add(kit.box_part({ 0.95, 0.10, 0.95 }, { 0, 1.18, fifthZ }, 3, "chassis"))
+      add(kit.box_part({ 1.10, 0.12, 0.40 }, { 0, 1.08, fifthZ }, 3, "chassis"))
+      -- DECK PLATE behind the sleeper and the steps' tanks: two cylindrical fuel tanks under the doors
+      add(kit.box_part({ 1.40, 0.04, 0.55 }, { 0, 1.12, -2.5 }, 3, "chrome"))
+      for _, sx in ipairs({ 1, -1 }) do
+        add(kit.cylinder_part(0.33, 1.35, 12, { sx * 1.00, 0.72, -1.55 }, "z", "chrome"))
+        add(kit.box_part({ 0.26, 0.05, 0.40 }, { sx * 1.18, 0.62, -0.62 }, 3, "chassis"))   -- a cab step
+        -- EXHAUST STACKS: up behind the cab's corners, past the roof
+        add(kit.cylinder_part(0.075, 2.9, 10, { sx * 1.02, 2.70, -2.30 }, "y", "chrome"))
+        -- battery / tool box behind the tank
+        add(kit.box_part({ 0.45, 0.45, 0.60 }, { sx * 0.95, 0.80, -2.60 }, 3, "chassis"))
+        -- MUDFLAPS behind the rear drive axle, and quarter fenders over the drive wheels
+        add(kit.box_part({ 0.62, 0.62, 0.02 }, { sx * 1.02, 0.55, zD2 - 0.62 }, 3, "trim"))
+        add(kit.box_part({ 0.66, 0.04, 0.70 }, { sx * 1.02, 1.12, zD1 + 0.35 }, 3, "chassis"))
+        add(kit.box_part({ 0.66, 0.04, 0.70 }, { sx * 1.02, 1.12, zD2 - 0.35 }, 3, "chassis"))
+      end
+      -- a front bumper
+      add(kit.box_part({ W - 0.04, 0.34, 0.18 }, { 0, 0.62, 2.2 + 0.02 }, 3, "chrome"))
+      car.duals = { [zD1] = true, [zD2] = true }
+      car.extra_axles = { zD1, zD2 }
+      -- THE TRAILER, hitched over the fifth wheel (drawn straight; articulation is the sim's, phase 5)
+      local kingpin = fifthZ
+      local trL, trW = 16.15, 2.59
+      local tFront = kingpin + 0.90                   -- the kingpin sits 0.9 m back from the trailer's nose
+      local tBack = tFront - trL
+      local tz = (tFront + tBack) * 0.5
+      local floorY = 1.25
+      local tA1, tA2 = tBack + 1.70, tBack + 2.95     -- the rear tandem
+      if trailer == "tanker" then
+        -- a tank on a frame: the shell, domed ends, a walkway on top, the frame beneath
+        local tr = 1.05
+        local shellL = trL - 0.8
+        add(kit.cylinder_part(tr, shellL, 16, { 0, floorY + tr + 0.10, tz }, "z", "tank"))
+        add(kit.cylinder_part(tr * 0.85, 0.35, 16, { 0, floorY + tr + 0.10, tz + shellL * 0.5 + 0.12 }, "z", "tank"))
+        add(kit.cylinder_part(tr * 0.85, 0.35, 16, { 0, floorY + tr + 0.10, tz - shellL * 0.5 - 0.12 }, "z", "tank"))
+        add(kit.box_part({ 0.50, 0.05, shellL * 0.8 }, { 0, floorY + 2 * tr + 0.14, tz }, 3, "chassis"))
+        for _, sx in ipairs({ 1, -1 }) do add(kit.box_part({ 0.12, 0.22, trL - 1.0 }, { sx * 0.50, floorY - 0.02, tz }, 3, "chassis")) end
+      else
+        -- a 53 ft box: the body, a floor frame and bottom rails, rear doors, corner posts
+        local H = 4.11 - floorY
+        add(kit.box_part({ trW, H, trL }, { 0, floorY + H * 0.5, tz }, 3, "trailer"))
+        for _, sx in ipairs({ 1, -1 }) do
+          add(kit.box_part({ 0.06, 0.16, trL }, { sx * (trW * 0.5 + 0.01), floorY + 0.06, tz }, 3, "chassis"))
+          add(kit.box_part({ 0.08, H, 0.08 }, { sx * (trW * 0.5 - 0.02), floorY + H * 0.5, tBack + 0.02 }, 3, "chassis"))
+          add(kit.box_part({ trW * 0.5 - 0.10, H - 0.30, 0.02 }, { sx * trW * 0.25, floorY + H * 0.5, tBack - 0.01 }, 3, "door"))
+        end
+        add(kit.box_part({ trW - 0.2, 0.10, trL - 0.4 }, { 0, floorY - 0.07, tz }, 3, "chassis"))
+      end
+      -- LANDING GEAR (two legs and a crank) ahead of the trailer's middle, and the rear bogie's rails
+      for _, sx in ipairs({ 1, -1 }) do
+        add(kit.box_part({ 0.10, floorY - 0.10, 0.10 }, { sx * 0.60, (floorY - 0.10) * 0.5 + 0.08, tFront - 3.5 }, 3, "chassis"))
+        add(kit.box_part({ 0.24, 0.05, 0.24 }, { sx * 0.60, 0.06, tFront - 3.5 }, 3, "chassis"))
+        add(kit.box_part({ 0.12, 0.22, 3.2 }, { sx * 0.48, floorY - 0.24, (tA1 + tA2) * 0.5 }, 3, "chassis"))
+        add(kit.box_part({ 0.62, 0.62, 0.02 }, { sx * 1.02, 0.55, tA1 - 0.62 }, 3, "trim"))   -- mudflaps
+      end
+      -- the under-ride (ICC) bar at the tail
+      add(kit.box_part({ trW - 0.3, 0.12, 0.12 }, { 0, 0.55, tBack + 0.25 }, 3, "chassis"))
+      for _, sx in ipairs({ 1, -1 }) do add(kit.box_part({ 0.08, 0.60, 0.08 }, { sx * 0.8, 0.85, tBack + 0.25 }, 3, "chassis")) end
+      car.trailer_axles = { tA2, tA1 }
+      car.duals[tA1] = true
+      car.duals[tA2] = true
     end }
+  P.wheel_w = 0.28
+  P.track_half = 1.02                 -- wheel centres from the centreline, whatever the body width there
+  return P
 end
+S.semi = function() return semi("box") end
+S.semi_tanker = function() return semi("tanker") end
 
 -- DETAIL AFTER SUBDIVISION: the gasket round each window (a flat rubber band at body level), the glass
 -- pushed in behind it (a dark reveal), and the grille set into the nose. Added to the SMOOTH mesh, so no
@@ -472,6 +626,7 @@ function kit.detail(S, P)
   setIn("win_back", W.back)
   setIn("win_side_r", W.side)
   setIn("win_side_l", W.side)
+  setIn("win_rear", W.back)
   return S
 end
 
@@ -479,7 +634,7 @@ end
 -- and tests.
 function kit.poly(P, level)
   local B = kit.body(P)
-  return B, kit.detail(B:subdivide(level or 1), P)
+  return B, kit.detail(B:subdivide(level or 0), P)
 end
 
 -- The whole car at `level` subdivisions, as { parts = { [mat] = Mesh }, wheels = {...}, size = {W,H,L} }
@@ -487,7 +642,8 @@ end
 function kit.build(P, level, opts)
   opts = opts or {}
   local B = kit.body(P)
-  local S = kit.detail(B:subdivide(level or 1), P)
+  level = level or P.level or 0
+  local S = kit.detail(level > 0 and B:subdivide(level) or B:copy(), P)
   local lo, hi = S:bounds()
   -- extras (boxes, trailer, sign) join before the centring, in ground space
   local car = { polys = {}, height = hi[2] }
@@ -498,19 +654,24 @@ function kit.build(P, level, opts)
   local cy = 0.5 * hi[2]                 -- ground (0) to the top
   local cz = 0.5 * (lo[3] + hi[3])
   S:translate{ 0, -cy, -cz }
-  local parts = S:to_parts{ autosmooth = 40 }
+  -- FACETED (Glenn: "I do like how the city bus's low poly style looks"): at level 0 every facet is flat
+  -- shaded; a subdivided body smooths within 40 degrees
+  local parts = S:to_parts{ autosmooth = level > 0 and 40 or 8 }
   -- wheels: round, at the axles, just inside the body sides
   local r = P.wheel_r
   local ww = P.wheel_w
   local wheels = {}
   local axles = {}
   for _, zc in ipairs(P.axles) do axles[#axles + 1] = zc end
+  for _, zc in ipairs(car.extra_axles or {}) do axles[#axles + 1] = zc end
   for _, zc in ipairs(car.trailer_axles or {}) do axles[#axles + 1] = zc end
+  local duals = car.duals or {}
   for _, zc in ipairs(axles) do
     local hw = math.min(P.half_width(math.max(-P.length * 0.5, math.min(P.length * 0.5, zc))), P.width * 0.5)
+    local wx = P.track_half or (hw - ww * 0.5 - 0.035)
     for _, sx in ipairs({ 1, -1 }) do
-      wheels[#wheels + 1] = { pos = { sx * (hw - ww * 0.5 - 0.035), r - cy, zc - cz }, radius = r, width = ww,
-                              front = zc == P.axles[#P.axles] }
+      wheels[#wheels + 1] = { pos = { sx * wx, r - cy, zc - cz }, radius = r, width = ww,
+                              front = zc == P.axles[#P.axles], dual = duals[zc] or false }
     end
   end
   local spare = car.spare and { car.spare[1], car.spare[2] - cy, car.spare[3] - cz } or nil
@@ -533,20 +694,21 @@ function kit.wheel(r, width, level)
     end
     return pts
   end
-  local N = 24
+  local N = (level or 0) > 0 and 24 or 14
   -- tyre: outer tread band with rounded shoulders (rings along the axle), capped by the sidewalls
   local T = poly.loft{ sections = { ring(rr, N), ring(r * 0.93, N), ring(r, N), ring(r, N), ring(r * 0.93, N), ring(rr, N) },
                        stations = { -w2, -w2 * 0.92, -w2 * 0.55, w2 * 0.55, w2 * 0.92, w2 }, cap_start = false, cap_end = false }
-  local Tm = T:subdivide(level or 1)
+  local Tm = (level or 0) > 0 and T:subdivide(level) or T
   -- the loft ran along z: turn it onto the x axis
   Tm:map(function(x, y, z) return z, y, -x end)
   local rim = poly.loft{ sections = { ring(rr * 1.0, N), ring(rr * 0.95, N), ring(rr * 0.35, N), ring(rr * 0.2, N) },
                          stations = { w2 * 0.60, w2 * 0.70, w2 * 0.62, w2 * 0.75 }, cap_start = true, cap_end = true,
                          cap_crease = 1 }
-  local Rm = rim:subdivide(level or 1)
+  local Rm = (level or 0) > 0 and rim:subdivide(level) or rim
   Rm:map(function(x, y, z) return z, y, -x end)
-  local tp = Tm:to_parts{ autosmooth = 50 }
-  local rp = Rm:to_parts{ autosmooth = 50 }
+  local sm = (level or 0) > 0 and 50 or 8
+  local tp = Tm:to_parts{ autosmooth = sm }
+  local rp = Rm:to_parts{ autosmooth = sm }
   return { tyre = tp.body, rim = rp.body }
 end
 
