@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -207,6 +208,11 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
     if (riding_ >= static_cast<int>(agents.size())) { riding_ = -1; return; }
     engine::Mat4 pose;
     if (sim.isBus(riding_) && city_.busFrame(riding_, &pose)) {
+        // RT_RIDE_TRACE=1 (#37): the bus frame the rider rides in, every step -- position and its up axis
+        static const bool trace = std::getenv("RT_RIDE_TRACE") != nullptr;
+        if (trace)
+            LOG_INFO << "[ride] " << pose.m[0][3] << " " << pose.m[1][3] << " " << pose.m[2][3] << " up " << pose.m[0][1] << " "
+                     << pose.m[1][1] << " " << pose.m[2][1] << " fwd " << pose.m[0][2] << " " << pose.m[2][2] << " dt " << dt;
         rideBus(world, dt, in, player, *pt, *cc, pose, busInteract);
         return;
     }
@@ -470,6 +476,31 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
 }
 
 void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
+    // THE EYE RIDES THE BUS AS DRAWN (#37, Glenn: "buses are still really jittery when you ride in them").
+    // The camera is placed in the UPDATE phase, before the frame's fixed steps; the bus body is baked IN
+    // them. On a frame that ran a step the eye stood one step behind the saloon it sits in (0.13 m at
+    // 8 m/s), on a frame that ran none they agreed -- and at a high frame rate half the frames run none, so
+    // the saloon shook round the rider. Here, after the steps, the eye is moved onto the seat in the bus's
+    // fresh pose; the view's direction is kept.
+    if (riding_ >= 0 && seated_ && city_.sim().isBus(riding_)) {
+        engine::Mat4 pose;
+        if (city_.busFrame(riding_, &pose)) {
+            const std::vector<Vec3>& seats = city_.busSeats();
+            const bool sat = seatIdx_ >= 0 && seatIdx_ < static_cast<int>(seats.size());
+            const Vec3 at = sat ? seats[static_cast<std::size_t>(seatIdx_)] : local_;
+            const Vec3 w = pose.transformPoint(at);
+            const Vec3 eye(w.x, w.y + (sat ? kSeatedEye : kStandingEye), w.z);
+            engine::CameraState& cam = ctx.view.camera;
+            const Vec3 shift = eye - cam.position;
+            static const bool trace = std::getenv("RT_RIDE_TRACE") != nullptr;
+            if (trace) LOG_INFO << "[ride eye] off by " << shift.length() << " m before the correction";
+            // only the first-person eye (a detached or third-person view has its own offset)
+            if (shift.length() < 1.0) {
+                cam.position = cam.position + shift;
+                cam.target = cam.target + shift;
+            }
+        }
+    }
 #ifdef RT_ENABLE_IMGUI
     if (hud_.mode == Hud::Mode::None) return;
     // Anchored by its BOTTOM-left corner: the line count varies (a hub lists
