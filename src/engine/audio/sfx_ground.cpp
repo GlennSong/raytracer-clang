@@ -334,17 +334,20 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     // THE RUSH: broad mid-band noise, swelling as the water tumbles -- what a river mostly IS to the ear
     std::vector<double> white2(count);
     for (double& w : white2) w = uni(rng);
-    const std::vector<double> rush = circBand(white2, rate, 250.0, 3500.0);
-    const std::vector<double> tumble = circEnvelope(count, rng, 6, 18, 5);
+    // calm (Glenn: "too intense for our rivers ... the narrow rivers should be more calm"): a soft, dark
+    // wash for a narrow river, a fuller one for a broad river; the tumble only a gentle breathing
+    const std::vector<double> rush = circBand(white2, rate, 150.0, 1200.0 + 1000.0 * size);
+    const std::vector<double> tumble = circEnvelope(count, rng, 3, 9, 4);
     const std::vector<double> swell = circEnvelope(count, rng, 2, 7, 4);
     std::vector<double> acc(count, 0.0);
     // GURGLES, not a boil (Glenn: "sounds like a pot of boiling water"): a boiling pot is exactly an even
     // rain of small independent bubbles. In a river the bubbles come in BURSTS where water tumbles over a
     // stone and traps air -- a few at once, larger (lower) ones, then a gap -- over a rushing wash that
     // carries most of the sound. So: burst events (Poisson), each a cluster of bubbles within ~60 ms.
-    const double rMin = 0.0025 + 0.0020 * size, rMax = 0.008 + 0.009 * size;   // metres: ~200-1300 Hz
-    const double burstsPerSecond = 13.0 - 8.0 * size;
-    std::poisson_distribution<int> perBurst(4.0 + 3.0 * size);
+    // small bubbles plink, big ones glug (Glenn: "hissy and gluggy"): a narrow river only the small, quiet ones
+    const double rMin = 0.0015 + 0.0020 * size, rMax = 0.0040 + 0.0080 * size;   // metres: ~270-2200 Hz
+    const double burstsPerSecond = 2.5 + 3.0 * size;   // a narrow river: a few quiet plinks
+    std::poisson_distribution<int> perBurst(1.5 + 2.5 * size);
     std::exponential_distribution<double> gap(burstsPerSecond);
     for (double tb = gap(rng); tb < 4.0; tb += gap(rng)) {
         const int n = std::max(1, perBurst(rng));
@@ -367,7 +370,7 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
         }
     }
     // splashes: short broadband bursts where the water breaks over a stone (more in a fast stream)
-    const int splashes = static_cast<int>(4.0 * (18.0 - 12.0 * size));
+    const int splashes = static_cast<int>(4.0 * (0.5 + 3.0 * size));
     for (int s2 = 0; s2 < splashes; ++s2) {
         const size_t start = static_cast<size_t>(u01(rng) * count);
         const double a = 0.2 + 0.4 * u01(rng);
@@ -382,9 +385,9 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
         const double sw = 1.0 + 0.15 * swell[i] / 2.0;
-        const double tum = std::max(0.2, 0.75 + 0.25 * tumble[i] / 2.5);
-        const double v = (0.25 + 0.75 * size) * roar[i] * sw + (0.9 - 0.3 * size) * rush[i] * tum + 0.10 * hiss[i] +
-                         0.45 * acc[i] * norm;
+        const double tum = std::max(0.3, 0.85 + 0.15 * tumble[i] / 2.0);
+        const double v = (0.15 + 0.6 * size) * roar[i] * sw + (0.55 + 0.1 * size) * rush[i] * tum + 0.012 * hiss[i] +
+                         (0.14 + 0.08 * size) * acc[i] * norm;
         out[i] = static_cast<float>(std::tanh(0.4 * v));
     }
     normalizeTo(out, 0.7f);

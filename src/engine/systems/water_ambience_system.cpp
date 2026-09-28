@@ -124,8 +124,9 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
                 }
             riverSize_ = std::clamp((width - 8.0) / 27.0, 0.0, 1.0);   // 8 m a stream .. 35 m a broad river
         }
-        drive(riverClip_, riverVoice_, riverAt_, haveRiver_, riverGain_, found, target, kRiverRange, 0.9 * (1.0 - riverSize_));
-        drive(bigRiverClip_, bigRiverVoice_, bigRiverAt_, haveBigRiver_, bigRiverGain_, found, target, kRiverRange, 0.9 * riverSize_);
+        // quieter than the surf: a river murmurs (Glenn: "too intense")
+        drive(riverClip_, riverVoice_, riverAt_, haveRiver_, riverGain_, found, target, kRiverRange, 0.45 * (1.0 - riverSize_));
+        drive(bigRiverClip_, bigRiverVoice_, bigRiverAt_, haveBigRiver_, bigRiverGain_, found, target, kRiverRange, 0.6 * riverSize_);
     }
     static const bool log = std::getenv("RT_WATER_LOG") != nullptr;   // RT_WATER_LOG=1: where each voice sits, twice a second
     static double since = 0;
