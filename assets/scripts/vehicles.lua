@@ -159,22 +159,24 @@ function vehicle.pickup(seed, opts)
 end
 vehicle.from_class = from_class
 
--- THE OFF-ROADER (#41): a DRIVABLE kit body (vehicle_kit.lua "offroad"), part-time four-wheel drive
--- (drive = "4wd": 2WD rear by default, Z / D-pad down engages 4WD), long-travel soft suspension, nearly
--- locking differentials, sticky tyres and low gearing -- a truck that climbs what a sedan spins on.
-function vehicle.offroad(seed, opts)
+-- DRIVABLE KIT BODIES (ADR-0141): any vehicle_kit.lua spec as a player car. `h` is the handling: drive
+-- ("fwd" | "rwd" | "awd" | "4wd" part-time), mass, drag, gears, suspension, grip, differentials.
+local KIT_TINT = { trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 }, grille = { 0.06, 0.06, 0.065 },
+                   chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 },
+                   chassis = { 0.07, 0.07, 0.08 }, box = { 0.90, 0.90, 0.88 }, bed = { 0.08, 0.08, 0.09 },
+                   interior = { 0.35, 0.26, 0.18 }, sign = { 1.0, 0.85, 0.2 } }
+local KIT_CABIN_TINT = { liner = { 0.45, 0.43, 0.40 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.18, 0.17, 0.16 },
+                         dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 } }
+local function kit_drivable(specName, opts, h)
   opts = opts or {}
   local kit = require "vehicle_kit"
-  local P = kit.SPECS.offroad()
+  local P = kit.SPECS[specName]()
   if opts.color then P.color = opts.color end
   local car = kit.build(P, 0)
-  local TINT = { trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 }, grille = { 0.06, 0.06, 0.065 },
-                 chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 },
-                 chassis = { 0.07, 0.07, 0.08 } }
   local shell = {}
   for name, part in pairs(car.parts) do
     if name ~= "glass" then
-      local col = name == "body" and P.color or (TINT[name] or { 0.4, 0.4, 0.4 })
+      local col = name == "body" and P.color or (KIT_TINT[name] or { 0.4, 0.4, 0.4 })
       shell[#shell + 1] = mesh.bake_height_color(part, col, col)
     end
   end
@@ -182,11 +184,9 @@ function vehicle.offroad(seed, opts)
   if car.parts.glass then
     parts[#parts + 1] = { mesh = car.parts.glass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
   end
-  local CABIN = { liner = { 0.45, 0.43, 0.40 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.18, 0.17, 0.16 },
-                  dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 } }
   local cabin = {}
   for name, part in pairs(car.cabin or {}) do
-    local col = CABIN[name] or { 0.3, 0.3, 0.3 }
+    local col = KIT_CABIN_TINT[name] or { 0.3, 0.3, 0.3 }
     cabin[#cabin + 1] = mesh.bake_height_color(part, col, col)
   end
   if #cabin > 0 then
@@ -200,34 +200,79 @@ function vehicle.offroad(seed, opts)
     wheels[#wheels + 1] = { x = w.pos[1], y = w.pos[2], z = w.pos[3], steered = w.front, driven = true,
                             hand_brake = not w.front }
   end
-  local mass = opts.mass or 2300
+  local W, H, L = car.size[1], car.size[2], car.size[3]
+  local mass = opts.mass or h.mass or math.floor(L * W * H * 120)
   return {
     body = mesh.recompute_normals(mesh.merge(shell)),
-    albedo = { 1, 1, 1 }, metallic = 0.35, roughness = 0.5,
+    albedo = { 1, 1, 1 }, metallic = h.metallic or 0.5, roughness = h.roughness or 0.4,
     parts = parts,
     lights = lights,
-    chassis = { half = { car.size[1] * 0.5, car.size[2] * 0.5, car.size[3] * 0.5 } },
+    chassis = { half = { W * 0.5, H * 0.5, L * 0.5 } },
     mass = mass,
-    com_offset = -0.62,
-    engine_torque = opts.engine_torque or math.floor(mass * 0.55),
-    max_rpm = 5200,
-    max_steer_deg = 32,
-    brake_torque = math.floor(mass * 1.2),
+    com_offset = h.com_offset or -(0.23 + 0.22 * (H / 1.45)),
+    engine_torque = opts.engine_torque or math.floor(mass * (h.torque_per_kg or 0.46)),
+    max_rpm = h.max_rpm or 6000,
+    max_steer_deg = h.max_steer_deg or 30,
+    brake_torque = math.floor(mass * 1.15),
     hand_brake_torque = math.floor(mass * 2.9),
-    grip = 2.3,
-    drive = "4wd",
-    axle_lsd = 1.15,        -- near-locking per axle
-    center_lsd = 1e30,      -- open between the axles: a fixed 50/50 split in 4WD (ADR-0141)
-    drag_area = 2.8,
+    grip = h.grip,
+    drive = h.drive,
+    axle_lsd = h.axle_lsd, center_lsd = h.center_lsd,
+    drag_area = h.drag_area or 2.0,
     shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
-    gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
-    -- long travel, soft: 0.40 m of it, 1.3 Hz (sags ~0.10 m), resting 0.30 m below the attach point
-    suspension = { min = 0.0, max = 0.40, freq = 1.3, damp = 0.5, rest_drop = 0.30 },
-    wheel = { radius = P.wheel_r, width = 0.32 },
+    gear_ratios = h.gear_ratios,
+    suspension = h.suspension,
+    wheel = { radius = P.wheel_r, width = h.wheel_width or P.wheel_w },
     wheels = wheels,
   }
 end
+vehicle.kit_drivable = kit_drivable
 
+-- THE OFF-ROADER (#41): part-time four-wheel drive (2WD rear by default, Z / D-pad down engages 4WD), long
+-- soft travel, near-locking axles with an open centre (a fixed 50/50 split in 4WD), sticky tyres, low gears.
+local OFFROAD = {
+  drive = "4wd", mass = 2300, torque_per_kg = 0.55, max_rpm = 5200, max_steer_deg = 32, com_offset = -0.62,
+  grip = 2.3, axle_lsd = 1.15, center_lsd = 1e30, drag_area = 2.8, gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
+  suspension = { min = 0.0, max = 0.40, freq = 1.3, damp = 0.5, rest_drop = 0.30 }, wheel_width = 0.32,
+  metallic = 0.35, roughness = 0.5,
+}
+-- a light off-road rig for the jeep and pickup (part-time 4WD, more travel than the street)
+local TRAIL = { drive = "4wd", axle_lsd = 1.2, center_lsd = 1e30, grip = 2.1, drag_area = 2.5,
+                suspension = { min = 0.0, max = 0.30, freq = 1.5, damp = 0.55, rest_drop = 0.23 } }
+local KIT_HANDLING = {
+  sedan       = { drive = "fwd", drag_area = 2.0 },
+  taxi        = { drive = "fwd", drag_area = 2.0 },
+  hatchback   = { drive = "fwd", drag_area = 1.9 },
+  convertible = { drive = "rwd", drag_area = 1.8, max_steer_deg = 32 },
+  suv         = { drive = "awd", drag_area = 2.4 },
+  jeep        = TRAIL,
+  pickup      = TRAIL,
+  step_van    = { drive = "rwd", drag_area = 3.2, torque_per_kg = 0.40 },
+  small_truck = { drive = "rwd", drag_area = 3.4, torque_per_kg = 0.40 },
+  offroad     = OFFROAD,
+}
+for name, h in pairs(KIT_HANDLING) do
+  vehicle["kit_" .. name] = function(seed, opts) return kit_drivable(name, opts, h) end
+end
+function vehicle.offroad(seed, opts) return kit_drivable("offroad", opts, OFFROAD) end
+
+-- THE DRIVABLE CATALOGUE: what the player can drop (VehicleSystem: , and . pick, N drops). `drive` is the
+-- label the picker shows -- test_vehicle_body checks it matches the spec's drivetrain.
+vehicle.drivable = {
+  { recipe = "offroad",          label = "Off-roader",           drive = "4wd" },
+  { recipe = "kit_jeep",         label = "Jeep",                 drive = "4wd" },
+  { recipe = "kit_pickup",       label = "Pickup",               drive = "4wd" },
+  { recipe = "kit_suv",          label = "SUV",                  drive = "awd" },
+  { recipe = "kit_sedan",        label = "Sedan",                drive = "fwd" },
+  { recipe = "kit_hatchback",    label = "Hatchback",            drive = "fwd" },
+  { recipe = "kit_taxi",         label = "Taxi",                 drive = "fwd" },
+  { recipe = "kit_convertible",  label = "Convertible",          drive = "rwd" },
+  { recipe = "kit_step_van",     label = "Parcel van",           drive = "rwd" },
+  { recipe = "kit_small_truck",  label = "Box truck",            drive = "rwd" },
+  { recipe = "sedan",            label = "Sedan (classic)",      drive = "awd" },
+  { recipe = "pickup",           label = "Pickup (classic)",     drive = "awd" },
+  { recipe = "van",              label = "Van (classic)",        drive = "awd" },
+}
 
 -- ---------------------------------------------------------------------------
 -- The AI car FLEET as DATA (ADR-0065). The citysim instanced renderer draws

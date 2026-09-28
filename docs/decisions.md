@@ -9101,4 +9101,9 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
   - the off-roader and a street sedan at the start.
 - **What it measures** (`offroader_climbs_what_the_course_asks_in_four_wheel_drive`): the off-roader in 4WD climbs 30° dirt and 20° mud, and neither in 2WD. It crawls every ledge up to 0.5 m, because the cylinder wheel cast rides an edge.
 
+- **The car picker** (Glenn: "cycle through all of them ... it should tell me if the car is 2WD or 4WD").
+  - `vehicle.drivable` in vehicles.lua is the catalogue: 13 cars. Every kit body is drivable with a fitting drivetrain (sedan, hatchback and taxi FWD; convertible, step van and box truck RWD; SUV AWD; jeep, pickup and off-roader part-time 4WD), plus the classic sedan, pickup and van.
+  - `,` / `.` pick, N drops the pick in front of the player, Z switches a part-time 4x4. A panel names the pick and its drivetrain, and flashes the mode on a switch.
+  - `car_picker_catalogue_builds_and_says_the_true_drivetrain` checks that every entry builds and that its label matches its physics.
+
 **Consequences.** `test_city_phys_tier` (`maxPossessed >= 6`) fails on the island-nature base too, so it predates this work.

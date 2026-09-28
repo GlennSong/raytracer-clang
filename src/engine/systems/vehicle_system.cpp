@@ -1,4 +1,7 @@
 #include "vehicle_system.h"
+#ifdef RT_ENABLE_IMGUI
+#include <imgui.h>
+#endif
 #include "../vehicle_steering.h"
 
 #include "../vehicle_lamps.h"
@@ -68,6 +71,9 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_horn", KeyCode::H);
     ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
     ctx.actions.setActionContext("vehicle_horn", engine::InputContext::InVehicle);
+    // The car picker: , and . cycle the drivable catalogue; N drops the pick.
+    ctx.actions.bindButton("vehicle_pick_prev", KeyCode::Comma);
+    ctx.actions.bindButton("vehicle_pick_next", KeyCode::Period);
     // A part-time 4x4's transfer case: 2WD (rear) <-> 4WD (#41).
     ctx.actions.bindButton("drive_4wd", KeyCode::Z);
     ctx.actions.bindButton("drive_4wd", GamepadButton::DpadDown);
@@ -104,12 +110,59 @@ void VehicleSystem::spawnInFront(FrameContext& ctx) {
     openModuleLoader(vm, makeModuleSource(""));
     std::string err;
     if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
+    loadCatalogue();
+    std::string recipe = "sedan", label = "Sedan", drive = "awd";
+    if (!catalogue_.empty()) {
+        const Pick& p = catalogue_[static_cast<std::size_t>(pick_)];
+        recipe = p.recipe;
+        label = p.label;
+        drive = p.drive;
+    }
     VehicleSpec spec;
-    if (loadVehicleSpec(vm, "return vehicle.sedan(seed, {})",
-                        static_cast<uint32_t>(++spawnCount_), spec, &err))
+    if (loadVehicleSpec(vm, "return vehicle." + recipe + "(seed, {})",
+                        static_cast<uint32_t>(++spawnCount_), spec, &err)) {
         spawnVehicle(ctx.world, ctx.assets, spec, spawn, yawDeg);
-    else
+        panelText_ = "Dropped: " + label + "  -  " + driveLabel(drive);
+        panelUntil_ = clock_ + 3.0;
+        LOG_INFO << "[vehicle] " << panelText_;
+    } else {
         LOG_WARN << "spawn_vehicle: " << err;
+    }
+#else
+    (void)ctx;
+#endif
+}
+
+void VehicleSystem::loadCatalogue() {
+#ifdef RT_ENABLE_SCRIPTING
+    if (catalogueTried_) return;
+    catalogueTried_ = true;
+    const std::string lib = loadScriptCode("vehicles.lua", "");
+    if (lib.empty()) return;
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(""));
+    std::string err;
+    if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
+    std::vector<DrivableEntry> entries;
+    if (!loadDrivableCatalogue(vm, entries, &err)) { LOG_WARN << "car picker: " << err; return; }
+    for (const DrivableEntry& e : entries) catalogue_.push_back({e.recipe, e.label, e.drive});
+    LOG_INFO << "[vehicle] car picker: " << catalogue_.size() << " drivable vehicles (, . to pick, N to drop)";
+#endif
+}
+
+void VehicleSystem::render(FrameContext& ctx) {
+#ifdef RT_ENABLE_IMGUI
+    if (clock_ > panelUntil_ || panelText_.empty()) return;
+    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(ctx.windowWidth) * 0.5f, static_cast<float>(ctx.windowHeight) - 24.0f),
+                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##carpicker", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    ImGui::TextUnformatted(panelText_.c_str());
+    ImGui::TextDisabled(",  .  pick      N  drop      Z  2WD/4WD");
+    ImGui::End();
 #else
     (void)ctx;
 #endif
@@ -547,10 +600,26 @@ void VehicleSystem::update(FrameContext& ctx) {
                 v->fourWheel = !v->fourWheel;
                 physicsSys.physicsWorld().setVehicleFrontDriveShare(v->vehicleId, v->fourWheel ? 0.5 : 0.0);
                 LOG_INFO << "[vehicle] " << (v->fourWheel ? "4WD engaged" : "2WD (rear)");
+                panelText_ = v->fourWheel ? "4WD ENGAGED" : "2WD (rear)";
+                panelUntil_ = clock_ + 2.5;
             });
     }
 
-    // Debug: drop a fresh car in front of the player.
+    // The car picker.
+    clock_ += ctx.frameDelta;
+    const int step = ctx.actions.pressed("vehicle_pick_next") ? 1 : ctx.actions.pressed("vehicle_pick_prev") ? -1 : 0;
+    if (step != 0) {
+        loadCatalogue();
+        if (!catalogue_.empty()) {
+            const int n = static_cast<int>(catalogue_.size());
+            pick_ = ((pick_ + step) % n + n) % n;
+            const Pick& p = catalogue_[static_cast<std::size_t>(pick_)];
+            panelText_ = std::to_string(pick_ + 1) + "/" + std::to_string(n) + "  " + p.label + "  -  " + driveLabel(p.drive);
+            panelUntil_ = clock_ + 4.0;
+            LOG_INFO << "[vehicle] pick " << panelText_;
+        }
+    }
+    // Drop the picked car in front of the player.
     if (ctx.actions.pressed("spawn_vehicle")) spawnInFront(ctx);
 
     updateHorn(ctx);

@@ -526,3 +526,35 @@ TEST_CASE(offroad_spec_is_a_part_time_4x4_on_long_travel) {
     CHECK(heads == 2 && tails == 2);
     CHECK(spec.parts.size() == 2);   // clear glass + the cabin
 }
+
+// THE CAR PICKER (Glenn: "cycle through all of them ... It should tell me if the car is 2WD or 4WD"): every
+// entry in vehicle.drivable builds, and the drive the picker SHOWS is the drive the car HAS -- fwd puts all
+// the torque on the front axle, rwd on the rear, awd splits it, 4wd is part-time (starts rear, switchable).
+TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::vector<DrivableEntry> cat;
+    std::string err;
+    CHECK(loadDrivableCatalogue(v.vm, cat, &err));
+    CHECK(cat.size() >= 10);
+    for (const DrivableEntry& e : cat) {
+        VehicleSpec spec;
+        const bool ok = loadVehicleSpec(v.vm, "return vehicle." + e.recipe + "(seed, {})", 5u, spec, &err);
+        if (!ok) std::printf("    %s: %s\n", e.recipe.c_str(), err.c_str());
+        CHECK(ok);
+        if (!ok) continue;
+        const Real share = spec.config.frontDriveShare;   // < 0: from the driven flags (all four: AWD)
+        bool matches = false;
+        if (e.drive == "fwd") matches = std::fabs(share - 1.0) < 1e-9 && !spec.partTime4wd;
+        else if (e.drive == "rwd") matches = std::fabs(share) < 1e-9 && !spec.partTime4wd;
+        else if (e.drive == "awd") matches = (share < 0 || std::fabs(share - 0.5) < 1e-9) && !spec.partTime4wd;
+        else if (e.drive == "4wd") matches = spec.partTime4wd && std::fabs(share) < 1e-9;
+        std::printf("    %-16s %-18s %-4s share %+.2f part-time %d  %s\n", e.recipe.c_str(), e.label.c_str(), e.drive.c_str(),
+                    share, spec.partTime4wd ? 1 : 0, matches ? "ok" : "MISMATCH");
+        CHECK(matches);
+        CHECK(spec.config.wheels.size() >= 4);
+        CHECK(spec.body != nullptr);
+    }
+    CHECK(driveLabel("4wd").find("4WD") != std::string::npos);
+    CHECK(driveLabel("fwd").find("2WD") != std::string::npos);
+}

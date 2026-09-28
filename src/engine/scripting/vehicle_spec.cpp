@@ -274,3 +274,39 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
 }
 
 }  // namespace engine
+
+namespace engine {
+
+bool loadDrivableCatalogue(ScriptVM& vm, std::vector<DrivableEntry>& out, std::string* err) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "vehicle");
+    if (!lua_istable(L, -1)) { lua_settop(L, base); if (err) *err = "no global `vehicle`"; return false; }
+    lua_getfield(L, -1, "drivable");
+    if (!lua_istable(L, -1)) { lua_settop(L, base); if (err) *err = "no `vehicle.drivable`"; return false; }
+    const int t = lua_gettop(L), n = static_cast<int>(luaL_len(L, t));
+    out.clear();
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, t, i);
+        if (lua_istable(L, -1)) {
+            DrivableEntry e;
+            lua_getfield(L, -1, "recipe"); if (lua_isstring(L, -1)) e.recipe = lua_tostring(L, -1); lua_pop(L, 1);
+            lua_getfield(L, -1, "label"); if (lua_isstring(L, -1)) e.label = lua_tostring(L, -1); lua_pop(L, 1);
+            lua_getfield(L, -1, "drive"); if (lua_isstring(L, -1)) e.drive = lua_tostring(L, -1); lua_pop(L, 1);
+            if (!e.recipe.empty()) out.push_back(std::move(e));
+        }
+        lua_pop(L, 1);
+    }
+    lua_settop(L, base);
+    return !out.empty();
+}
+
+std::string driveLabel(const std::string& d) {
+    if (d == "fwd") return "2WD (front)";
+    if (d == "rwd") return "2WD (rear)";
+    if (d == "awd") return "AWD";
+    if (d == "4wd") return "4WD part-time (Z)";
+    return d;
+}
+
+}  // namespace engine

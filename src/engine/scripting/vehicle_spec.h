@@ -74,6 +74,13 @@ struct VehicleSpec {
 bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                      VehicleSpec& out, std::string* err = nullptr);
 
+// The DRIVABLE CATALOGUE (vehicles.lua `vehicle.drivable`): what the player can pick and drop. `drive` is
+// "fwd" | "rwd" | "awd" | "4wd" (part-time). The VM must have vehicles.lua loaded.
+struct DrivableEntry { std::string recipe, label, drive; };
+bool loadDrivableCatalogue(ScriptVM& vm, std::vector<DrivableEntry>& out, std::string* err = nullptr);
+// "4WD (part-time, Z)" style text for a drive code.
+std::string driveLabel(const std::string& drive);
+
 // Spawn a drivable vehicle entity from a spec: Transform + PrevTransform, a
 // Renderable (body uploaded via `assets`), and a Vehicle component — VehicleSystem
 // then creates the Jolt vehicle and brings it to life. Returns the new entity.

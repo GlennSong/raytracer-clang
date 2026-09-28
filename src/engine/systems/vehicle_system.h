@@ -28,6 +28,7 @@ public:
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;        // enter/exit edges + camera
     void fixedUpdate(FrameContext& ctx) override;   // create, drive, write back
+    void render(FrameContext& ctx) override;        // the car picker / drive-mode panel
 
 private:
     void createVehicles(FrameContext& ctx);
@@ -40,6 +41,16 @@ private:
 
     PhysicsSystem& physicsSys;
     CameraSystem& cameras;
+    // THE CAR PICKER (Glenn: "cycle through all of them somehow and then select a car to drop. It should
+    // tell me if the car is 2WD or 4WD"): the drivable catalogue (vehicles.lua), the pick, and a panel
+    // shown for a few seconds after a pick, a drop or a 2WD/4WD switch.
+    struct Pick { std::string recipe, label, drive; };
+    std::vector<Pick> catalogue_;
+    bool catalogueTried_ = false;
+    int pick_ = 0;
+    double clock_ = 0.0, panelUntil_ = 0.0;
+    std::string panelText_;
+    void loadCatalogue();
     MeshHandle wheelMesh;            // shared wheel cylinder, uploaded on first use
     MeshHandle lensMesh;             // shared head/taillight lens box
     MeshHandle driverMesh;          // shared driver capsule
