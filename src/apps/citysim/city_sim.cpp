@@ -321,6 +321,8 @@ Real CitySim::brainUnit(Agent& a) {
 
 void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32_t seed) {
     nav_ = &graph;
+    // "There and back by car" for the whole build, once (engine::stronglyConnected).
+    const std::vector<int> buildCarComp = engine::stronglyConnected(graph, /*onFoot=*/false);
     agents_.clear();
     vehicles_.clear();
     sensed_.clear();
@@ -556,9 +558,11 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             // BOTH directions must route (the graph is directed — one-way ramps):
             // a valid home->work with no work->home used to retry a failing A*
             // every single tick once the agent wanted to come home.
+            // (There and back is one strongly connected component -- engine::stronglyConnected, computed
+            // once for the build, not two searches a try.)
             auto commutable = [&](int h, int w) {
-                return w != h && engine::findRoute(graph, h, w).valid() &&
-                       engine::findRoute(graph, w, h).valid();
+                return w != h && h >= 0 && w >= 0 &&
+                       buildCarComp[static_cast<std::size_t>(h)] == buildCarComp[static_cast<std::size_t>(w)];
             };
             bool ok = commutable(a.home, a.work);
             for (int tries = 0; tries < 8 && !ok && n > 1; ++tries) {
@@ -699,12 +703,24 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     venues_.clear();
     if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
 
-    // The nav node a place routes through (nearest to its snapped entrance).
-    auto nodeOf = [&](PlaceId id) { return graph.nearestNode(places[id].entrance); };
-    auto commutable = [&](int h, int w) {
-        return w != h && engine::findRoute(graph, h, w).valid() &&
-               engine::findRoute(graph, w, h).valid();
+    // The nav node a place routes through (nearest to its snapped entrance), each looked up once:
+    // nearestNode scans every node, and the job search below asks it again and again.
+    std::vector<int> placeNode(places.places().size(), -2);
+    auto nodeOf = [&](PlaceId id) {
+        int& n = placeNode[static_cast<std::size_t>(id)];
+        if (n == -2) n = graph.nearestNode(places[id].entrance);
+        return n;
     };
+    // THERE AND BACK by car: two places are commutable exactly when they sit in the same strongly
+    // connected component of the road graph (findRoute's own link rules). This was two A* searches a
+    // candidate -- up to 24 candidates for each of 28,000 agents -- and on an island of separate street
+    // networks a failed search floods everything it can reach first: a warm island_8_nature load spent
+    // ~9 of its 10.5 minutes here before the first frame.
+    const std::vector<int> carComp = engine::stronglyConnected(graph, /*onFoot=*/false);
+    auto sameComp = [&](int u, int v) {
+        return u >= 0 && v >= 0 && carComp[static_cast<std::size_t>(u)] == carComp[static_cast<std::size_t>(v)];
+    };
+    auto commutable = [&](int h, int w) { return w != h && sameComp(h, w); };
 
     // A place's DOORSTEP: its sidewalk entrance nudged toward the building site,
     // so a resting body stands at the door — clearly off the carriageway.
@@ -1005,8 +1021,15 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                         if (d2 >= bestD2) continue;
                         const int sn = nodeOf(sp);
                         if (sn == a.work || sn == hn) continue;
-                        if (!engine::findRoute(graph, a.work, sn).valid()) continue;
-                        if (!engine::findRoute(graph, sn, hn).valid()) continue;
+                        // work -> shop -> home, with home -> work already there and back, closes a cycle: the
+                        // shop is in their component, exactly. (A job the car graph does not join to home --
+                        // a bus commuter's -- still asks the router.)
+                        if (sameComp(a.work, hn)) {
+                            if (!sameComp(a.work, sn)) continue;
+                        } else {
+                            if (!engine::findRoute(graph, a.work, sn).valid()) continue;
+                            if (!engine::findRoute(graph, sn, hn).valid()) continue;
+                        }
                         bestD2 = d2; a.shop = sn; a.shopPlace = sp; a.shopDoor = doorOf(sp);
                     }
                 }
