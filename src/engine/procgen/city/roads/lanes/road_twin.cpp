@@ -219,7 +219,9 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
     std::vector<std::vector<std::vector<double>>> splits(lines.size());
     struct Ref { int line, seg; };
     std::unordered_map<long long, std::vector<Ref>> cells;
-    auto key = [](int ix, int iy) { return (static_cast<long long>(ix) << 32) ^ static_cast<long long>(static_cast<unsigned>(iy)); };
+    auto key = [](int ix, int iy) {   // shifted as unsigned: a negative cell shifted signed is UB (UBSan)
+        return static_cast<long long>((static_cast<unsigned long long>(static_cast<unsigned>(ix)) << 32) ^ static_cast<unsigned>(iy));
+    };
     auto cellsOf = [&](const Vec2& a, const Vec2& b, auto&& fn) {
         const int x0 = static_cast<int>(std::floor((std::min(a.x, b.x) - tol) / cell)), x1 = static_cast<int>(std::floor((std::max(a.x, b.x) + tol) / cell));
         const int y0 = static_cast<int>(std::floor((std::min(a.y, b.y) - tol) / cell)), y1 = static_cast<int>(std::floor((std::max(a.y, b.y) + tol) / cell));

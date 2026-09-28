@@ -208,7 +208,9 @@ struct Sea {
     std::vector<std::array<double, 4>> boxes;             // each cell: minX, minZ, maxX, maxZ
     double bucket = 64.0;                                 // lookup grid (m)
     std::unordered_map<int64_t, std::vector<int>> index;  // bucket -> boxes touching it
-    static int64_t key(int64_t bx, int64_t bz) { return (bx << 32) ^ (bz & 0xffffffff); }
+    static int64_t key(int64_t bx, int64_t bz) {   // unsigned shift: negative buckets are UB shifted signed
+        return static_cast<int64_t>((static_cast<uint64_t>(bx) << 32) ^ (static_cast<uint64_t>(bz) & 0xffffffffULL));
+    }
     void add(double x0, double z0, double x1, double z1) {
         const int id = static_cast<int>(boxes.size());
         boxes.push_back({x0, z0, x1, z1});

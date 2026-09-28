@@ -808,8 +808,9 @@ void RoadDeckField::buildIndex() {
     cells_.clear();
     padCells_.clear();
     auto key = [](int cx, int cz) {
-        return (static_cast<long long>(cx) << 32) ^
-               (static_cast<long long>(cz) & 0xffffffffLL);
+        // shifted as unsigned: a negative cell shifted signed is UB (UBSan)
+        return static_cast<long long>((static_cast<unsigned long long>(static_cast<unsigned>(cx)) << 32) ^
+                                      static_cast<unsigned>(cz));
     };
     for (int ti = 0; ti < static_cast<int>(pads.size()); ++ti) {
         const Tri& t = pads[ti];

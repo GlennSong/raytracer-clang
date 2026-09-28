@@ -282,7 +282,15 @@ endif()
 #
 # The usual reason to gate a submodule feature does not apply: the branch below
 # already runs `git submodule update --init` when third_party/imgui is missing.
-option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" ON)
+# The WEB build is the exception: its WebGPU renderer has no ImGui draw backend and viewer_web links
+# no platform backend, so ON there failed at link (ImGui_ImplGlfw_* undefined) from the day the default
+# flipped (e89ced6b) -- every Deploy Web run since 2026-08-17.
+if(EMSCRIPTEN)
+    set(RT_IMGUI_DEFAULT OFF)
+else()
+    set(RT_IMGUI_DEFAULT ON)
+endif()
+option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" ${RT_IMGUI_DEFAULT})
 if(RT_ENABLE_IMGUI)
     set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
     if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
