@@ -72,8 +72,14 @@ struct Triangulation {
     std::vector<Vec2> verts;
     std::vector<std::array<int, 3>> tris;
 };
+// Robust to near-degenerate crossings: CDT resolves two crossing constraint edges by splitting them at
+// the computed intersection, and when floating-point rounding puts that point outside the edges' triangles
+// it throws (CDT::InvalidEdgeSplitVertex). The first try snaps at `minDist` (1e-6 m); on that failure it
+// retries snapping at 1e-4, 1e-3 and 1e-2 m -- far below anything drawn. (Regenerating island_8_nature: a
+// freeway waypoint moved a metre and one such crossing took the whole city's products down with it.)
 Triangulation constrainedTriangulation(const std::vector<Vec2>& points,
-                                       const std::vector<std::pair<int, int>>& edges);
+                                       const std::vector<std::pair<int, int>>& edges,
+                                       double minDist = 1e-6);
 
 }  // namespace roads::lanes
 }  // namespace engine

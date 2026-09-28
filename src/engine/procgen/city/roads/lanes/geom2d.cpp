@@ -1,9 +1,11 @@
 #include "engine/procgen/city/roads/lanes/geom2d.h"
+#include "log.h"
 
 #include <clipper2/clipper.h>
 #include <CDT.h>
 
 #include <algorithm>
+#include <memory>
 #include <cmath>
 
 namespace engine {
@@ -229,16 +231,33 @@ Box2 bounds(const PolySet& ps) {
 
 PolySet fromRing(const Ring& r) { return unionRings({r}); }
 
-Triangulation constrainedTriangulation(const std::vector<Vec2>& points, const std::vector<std::pair<int, int>>& edgesIn) {
+Triangulation constrainedTriangulation(const std::vector<Vec2>& points, const std::vector<std::pair<int, int>>& edgesIn,
+                                       double minDist) {
     std::vector<CDT::V2d<double>> verts; verts.reserve(points.size());
     for (const Vec2& p : points) verts.push_back(CDT::V2d<double>(p.x, p.y));
     std::vector<CDT::Edge> edges; edges.reserve(edgesIn.size());
     for (const auto& e : edgesIn) edges.emplace_back(static_cast<CDT::VertInd>(e.first), static_cast<CDT::VertInd>(e.second));
     // Duplicate points are merged (their edges remapped) so coincident lane rails share vertices.
     CDT::RemoveDuplicatesAndRemapEdges(verts, edges);
-    CDT::Triangulation<double> cdt(CDT::VertexInsertionOrder::Auto, CDT::IntersectingConstraintEdges::TryResolve, 1e-6);
-    cdt.insertVertices(verts);
-    cdt.insertEdges(edges);
+    // One attempt per snapping distance: the first that resolves every crossing wins.
+    std::unique_ptr<CDT::Triangulation<double>> built;
+    for (const double snap : {minDist, 1e-4, 1e-3, 1e-2}) {
+        if (snap < minDist) continue;
+        auto cdt = std::make_unique<CDT::Triangulation<double>>(CDT::VertexInsertionOrder::Auto,
+                                                                CDT::IntersectingConstraintEdges::TryResolve, snap);
+        try {
+            cdt->insertVertices(verts);
+            cdt->insertEdges(edges);
+        } catch (const CDT::InvalidEdgeSplitVertex&) {
+            if (snap >= 1e-2) throw;   // nothing coarser to try: the caller reports it
+            continue;
+        }
+        if (snap > minDist) LOG_WARN << "[roads/lanes] triangulation: a near-degenerate edge crossing resolved at a "
+                                     << snap << " m snap (" << minDist << " m could not split it)";
+        built = std::move(cdt);
+        break;
+    }
+    CDT::Triangulation<double>& cdt = *built;
     cdt.eraseSuperTriangle();
     Triangulation out; out.verts.reserve(cdt.vertices.size());
     for (const auto& v : cdt.vertices) out.verts.emplace_back(v.x, v.y);

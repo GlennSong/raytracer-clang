@@ -580,3 +580,30 @@ TEST_CASE(lanes_a_balanced_profile_cuts_as_well_as_fills) {
     double gapH, gradeH; stats(held, gapH, gradeH);
     CHECK(gradeH <= 0.8 * 0.15 + 1e-6);
 }
+
+// NEAR-DEGENERATE CROSSINGS (regenerating island_8_nature: a freeway waypoint moved a metre, the city bake
+// threw "Intersection of constraint edges ... can not be resolved: computed split vertex is invalid", and the
+// level loaded with no roads or city at all). CDT's own recorded case (its issue #211) throws at a vanishing
+// snap distance; constrainedTriangulation retries at coarser ones and returns a triangulation.
+#include <fstream>
+TEST_CASE(lanes_triangulation_survives_a_near_degenerate_crossing) {
+    std::ifstream f(std::string(RT_SOURCE_DIR) + "/third_party/CDT/CDT/tests/inputs/issue-211.txt");
+    CHECK(f.good());
+    if (!f.good()) return;
+    std::size_t nv = 0, ne = 0;
+    f >> nv >> ne;
+    std::vector<engine::Vec2> pts(nv);
+    for (auto& p : pts) f >> p.x >> p.y;
+    std::vector<std::pair<int, int>> edges(ne);
+    for (auto& e : edges) f >> e.first >> e.second;
+    bool threw = false;
+    engine::roads::lanes::Triangulation t;
+    try {
+        t = engine::roads::lanes::constrainedTriangulation(pts, edges, 5e-17);
+    } catch (...) {
+        threw = true;
+    }
+    std::printf("    issue-211 input: %zu points, %zu edges -> %zu triangles%s\n", nv, ne, t.tris.size(), threw ? " (THREW)" : "");
+    CHECK(!threw);
+    CHECK(!t.tris.empty());
+}
