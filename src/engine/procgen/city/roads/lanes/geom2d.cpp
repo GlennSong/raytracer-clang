@@ -236,7 +236,15 @@ Triangulation constrainedTriangulation(const std::vector<Vec2>& points, const st
     std::vector<CDT::V2d<double>> verts; verts.reserve(points.size());
     for (const Vec2& p : points) verts.push_back(CDT::V2d<double>(p.x, p.y));
     std::vector<CDT::Edge> edges; edges.reserve(edgesIn.size());
-    for (const auto& e : edgesIn) edges.emplace_back(static_cast<CDT::VertInd>(e.first), static_cast<CDT::VertInd>(e.second));
+    const int nPoints = static_cast<int>(points.size());
+    int bad = 0;
+    for (const auto& e : edgesIn) {
+        // an edge naming a point that does not exist would be read past the end of CDT's tables (undefined
+        // behaviour, and a triangulation that fails differently run to run): refused, and counted
+        if (e.first < 0 || e.second < 0 || e.first >= nPoints || e.second >= nPoints) { ++bad; continue; }
+        edges.emplace_back(static_cast<CDT::VertInd>(e.first), static_cast<CDT::VertInd>(e.second));
+    }
+    if (bad > 0) LOG_ERROR << "[roads/lanes] triangulation: " << bad << " constraint edge(s) name a point out of range (of " << nPoints << ") -- dropped";
     // Duplicate points are merged (their edges remapped) so coincident lane rails share vertices.
     CDT::RemoveDuplicatesAndRemapEdges(verts, edges);
     // One attempt per snapping distance: the first that resolves every crossing wins.
@@ -252,6 +260,7 @@ Triangulation constrainedTriangulation(const std::vector<Vec2>& points, const st
             if (snap >= 1e-2) throw;   // nothing coarser to try: the caller reports it
             continue;
         }
+
         if (snap > minDist) LOG_WARN << "[roads/lanes] triangulation: a near-degenerate edge crossing resolved at a "
                                      << snap << " m snap (" << minDist << " m could not split it)";
         built = std::move(cdt);

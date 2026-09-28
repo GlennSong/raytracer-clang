@@ -1,5 +1,6 @@
 // lanelab (ADR-0083): the geometry seam and, as the modules land, the generator's invariants.
 #include "test_framework.h"
+#include <CDT.h>
 #include <filesystem>
 #include <fstream>
 #include "engine/procgen/city/roads/lanes/geom2d.h"
@@ -594,16 +595,98 @@ TEST_CASE(lanes_triangulation_survives_a_near_degenerate_crossing) {
     f >> nv >> ne;
     std::vector<engine::Vec2> pts(nv);
     for (auto& p : pts) f >> p.x >> p.y;
-    std::vector<std::pair<int, int>> edges(ne);
-    for (auto& e : edges) f >> e.first >> e.second;
+    std::vector<std::pair<int, int>> edges;
+    for (std::size_t i = 0; i < ne; ++i) {
+        std::pair<int, int> e;
+        f >> e.first >> e.second;
+        // the file's last edge names vertex 97 of 97 (0..96): CDT's own test only checks it throws, and read
+        // raw it overran CDT's tables -- this test then failed differently run to run
+        if (e.first < static_cast<int>(nv) && e.second < static_cast<int>(nv)) edges.push_back(e);
+    }
     bool threw = false;
     engine::roads::lanes::Triangulation t;
     try {
         t = engine::roads::lanes::constrainedTriangulation(pts, edges, 5e-17);
+    } catch (const std::exception& e) {
+        threw = true;
+        std::printf("    threw: %s\n", e.what());
     } catch (...) {
         threw = true;
     }
-    std::printf("    issue-211 input: %zu points, %zu edges -> %zu triangles%s\n", nv, ne, t.tris.size(), threw ? " (THREW)" : "");
+    std::printf("    issue-211 input: %zu points, %zu valid edges -> %zu triangles%s\n", nv, edges.size(), t.tris.size(), threw ? " (THREW)" : "");
+    // and the raw 5e-17 attempt really does fail on it: the retry is what rescued it
+    bool rawThrows = false;
+    {
+        std::vector<CDT::V2d<double>> v; for (const auto& p : pts) v.push_back({p.x, p.y});
+        std::vector<CDT::Edge> es; for (const auto& e : edges) es.emplace_back(static_cast<CDT::VertInd>(e.first), static_cast<CDT::VertInd>(e.second));
+        CDT::RemoveDuplicatesAndRemapEdges(v, es);
+        CDT::Triangulation<double> raw(CDT::VertexInsertionOrder::Auto, CDT::IntersectingConstraintEdges::TryResolve, 5e-17);
+        try { raw.insertVertices(v); raw.insertEdges(es); } catch (const CDT::InvalidEdgeSplitVertex&) { rawThrows = true; }
+    }
+    CHECK(rawThrows);
     CHECK(!threw);
     CHECK(!t.tris.empty());
+}
+
+// PADS CLIPPED TO THEIR BLOCKS, FAST (island_8_nature: clipPadsToBlocks was about half of a 100 s load -- every
+// lot cut against the union of all 1,407 blocks, the union built block by block). Now each lot is cut against
+// the inset blocks its bounds touch. The same region: checked against the old algorithm, reimplemented here,
+// over a town of rectangular and L-shaped blocks with lots straddling their edges.
+TEST_CASE(lanes_pads_clip_to_their_blocks_same_as_the_full_union) {
+    using namespace engine::roads::lanes;
+    std::vector<engine::Poly2> blocks;
+    for (int by = 0; by < 6; ++by)
+        for (int bx = 0; bx < 6; ++bx) {
+            const double x0 = bx * 70.0, y0 = by * 70.0;
+            if ((bx + by) % 3 == 0)   // an L
+                blocks.push_back({{x0, y0}, {x0 + 50, y0}, {x0 + 50, y0 + 20}, {x0 + 25, y0 + 20}, {x0 + 25, y0 + 50}, {x0, y0 + 50}});
+            else
+                blocks.push_back({{x0, y0}, {x0 + 50, y0}, {x0 + 50, y0 + 50}, {x0, y0 + 50}});
+        }
+    std::vector<engine::LotBuilding> lots;
+    uint32_t seed = 7;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+    for (int i = 0; i < 300; ++i) {
+        engine::LotBuilding lb;
+        lb.type = "home";
+        const double cx = rnd() * 420 - 10, cy = rnd() * 420 - 10, w = 6 + rnd() * 20, d = 6 + rnd() * 20;
+        lb.plan = {{cx, cy}, {cx + w, cy}, {cx + w, cy + d}, {cx, cy + d}};
+        lb.site = engine::Vec2(cx + w * 0.5, cy + d * 0.5);
+        lb.groundY = rnd() * 10;
+        lots.push_back(lb);
+    }
+    const double sidewalk = 5.0;
+    const std::vector<engine::TerrainFlatten> fast = clipPadsToBlocks(lots, blocks, sidewalk);
+    // THE OLD WAY: the union of every inset block, built block by block, and every lot cut against all of it
+    const double falloff = lanesPadFalloff(sidewalk);
+    PolySet all;
+    for (const engine::Poly2& b : blocks) all = unionSets(all, offsetSet(fromRing(Ring(b.begin(), b.end())), -falloff));
+    std::vector<engine::TerrainFlatten> slow;
+    for (const engine::LotBuilding& lb : lots) {
+        const engine::TerrainFlatten raw = engine::lotPadFlatten(lb, 2.2 + falloff, falloff);
+        Ring ring; for (const engine::Vec3& v : raw.polygon) ring.emplace_back(v.x, v.z);
+        for (const Polygon2& pg : intersectSets(fromRing(ring), all)) {
+            if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 1.0) continue;
+            std::vector<engine::Vec3> poly; for (const engine::Vec2& q : pg.outer) poly.push_back(engine::Vec3(q.x, 0, q.y));
+            slow.push_back(engine::makeFlattenPad(std::move(poly), lb.groundY, falloff));
+        }
+    }
+    auto signature = [](const std::vector<engine::TerrainFlatten>& v) {
+        std::vector<std::pair<double, double>> s;   // (plane height, footprint area), sorted
+        for (const engine::TerrainFlatten& f : v) {
+            double a = 0;
+            for (std::size_t i = 0; i < f.polygon.size(); ++i) {
+                const engine::Vec3& p = f.polygon[i]; const engine::Vec3& q = f.polygon[(i + 1) % f.polygon.size()];
+                a += p.x * q.z - q.x * p.z;
+            }
+            s.push_back({std::round(f.c * 1000) / 1000, std::round(std::fabs(a) * 0.5 * 100) / 100});
+        }
+        std::sort(s.begin(), s.end());
+        return s;
+    };
+    const auto sf = signature(fast), ss = signature(slow);
+    std::printf("    %zu lots -> %zu pads (fast) / %zu pads (full union)\n", lots.size(), fast.size(), slow.size());
+    CHECK(fast.size() == slow.size());
+    CHECK(sf == ss);
+    CHECK(!fast.empty() && fast.size() < lots.size() * 2);
 }

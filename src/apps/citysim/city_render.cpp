@@ -178,6 +178,10 @@ bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
 
 bool CityRenderSystem::build(World& world, AssetManager* assets,
                              std::function<double(double, double)> ground) {
+    struct StartupTotal {
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        ~StartupTotal() { LOG_INFO << "[citysim] startup: CityRenderSystem::build total " << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s"; }
+    } startupTotal;
     // Level-authored settings (ADR-0063): a CitySimConfig entity — the level's
     // top-level "citysim" block — overrides the constructor params, so each level
     // picks its own population, seed, clock rate, reliability, and whether the
@@ -512,7 +516,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     sim_.setJunctionPad(sidewalk_);
     sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body
+    { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
+    LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
     // Three-tier traffic (P4): the level's opt-in. The bubble only engages
@@ -526,8 +532,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     sim_.setHailPolicy(params_.hailChance, params_.hailMinMetres);
     sim_.setTaxiFraction(params_.taxiFraction);
     // Buses AFTER the cabs: setBuses skips an agent already marked as a taxi.
+    { const auto tT0 = std::chrono::steady_clock::now();
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
+    LOG_INFO << "[citysim] startup: setBuses " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     // The stops themselves, as something you can SEE: a pole, a route-coloured
     // sign and a bench (Glenn: "We should have stops with benches and signs for
     // bus stops so that we know where the route is"). The ground sampler goes
@@ -680,7 +688,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // (persistent) mode is settled; before the warm-up so day one runs on places.
     sim_.setLongCommuteShare(params_.longCommuteShare);
     sim_.setBusCommuteShare(params_.busCommuteShare);
+    { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
+    LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
              << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
              << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m; "
