@@ -1,4 +1,5 @@
 #include "player_system.h"
+#include "underwater_system.h"
 #include "physics_system.h"
 #include "../components.h"
 #include "../camera/scene_camera.h"
@@ -75,8 +76,22 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 standRadius = cc.radius;
                 standCaptured = true;
             }
+            // SWIMMING (#43): water deep enough at the feet floats the player (UnderwaterSystem knows
+            // whose water is where). While afloat, crouch means dive, not a smaller capsule.
+            {
+                const Real feetY = t.position.y - (cc.halfHeight + cc.radius);
+                const UnderwaterSystem::Surface water = UnderwaterSystem::surfaceAt(ctx.world, t.position.x, t.position.z);
+                const Real depth = water.kind != UnderwaterSystem::Water::None ? Real(water.level) - feetY : Real(-1);
+                const GroundState g = physicsSys.physicsWorld().characterGroundState(cc.characterId);
+                const bool was = swim_.swimming;
+                swim_.update(depth, g != GroundState::InAir);
+                if (swim_.swimming != was)
+                    LOG_INFO << (swim_.swimming ? "[swim] afloat" : "[swim] standing again") << " at (" << t.position.x << ", "
+                             << t.position.z << "), water depth " << depth << " m";
+                swimLevel_ = water.level;
+            }
             const bool wantCrouch =
-                camera.positionLocked && ctx.actions.held("player_crouch");
+                camera.positionLocked && ctx.actions.held("player_crouch") && !swim_.swimming;
             if (wantCrouch != crouched) {
                 const Real targetHalf =
                     wantCrouch ? standHalfHeight * kCrouchHalfScale
@@ -144,6 +159,22 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                           (crouched ? kCrouchSpeedScale : Real(1));
             }
 
+            if (swim_.swimming) {
+                // afloat: swim pace, the water holds you at the surface; jump rises, crouch dives
+                swimClock_ += dt;
+                const Real floatY = swimLevel_ + SwimState::kEyeAbove - eyeHeight;
+                const bool rise = camera.positionLocked && ctx.actions.held("player_jump");
+                const bool dive = camera.positionLocked && ctx.actions.held("player_crouch");
+                Vec3 v = desired * (SwimState::kSpeed / std::max(moveSpeed, Real(0.1)));
+                v.y = SwimState::verticalSpeed(t.position.y, floatY, rise, dive, swimClock_);
+                airVel_ = Vec3(v.x, 0, v.z);   // leaving the water keeps the stroke's speed
+                physicsSys.physicsWorld().moveCharacterFree(cc.characterId, v, dt);
+                t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
+                fall.onGrounded(t.position.y);   // floating is footing: never a fall
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
+            }
             // In the air the keys only nudge what the body left the ground with (#83); on the
             // ground they set it, and that is what a jump or a step off a ledge carries.
             const GroundState before = physicsSys.physicsWorld().characterGroundState(cc.characterId);

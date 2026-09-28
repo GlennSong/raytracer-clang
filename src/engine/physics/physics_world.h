@@ -124,6 +124,9 @@ public:
     // velocity (y is ignored — gravity and ground-sticking are applied here), dt
     // the step length. Call once per fixed update.
     void moveCharacter(CharacterId id, const Vec3& velocity, Real dt);
+    // SWIMMING (#43): the caller owns all three axes -- no gravity, no stick-to-floor (the water holds you),
+    // but the step-up stays, so a swimmer can climb out onto a shelving bank.
+    void moveCharacterFree(CharacterId id, const Vec3& velocity, Real dt);
     // JUMP. moveCharacter owns the vertical axis (and zeroes it on the
     // ground), so a jump cannot be a velocity the caller passes in — it is
     // staged here and consumed by the next moveCharacter, which also releases

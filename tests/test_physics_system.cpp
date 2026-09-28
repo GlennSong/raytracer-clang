@@ -276,3 +276,69 @@ TEST_CASE(a_running_jump_carries_its_momentum_through_the_air) {
     const Vec3 nudged = airborneVelocity(Vec3(6, 0, 0), Vec3(0, 0, 6), 1.0 / 60);
     CHECK(nudged.x < 6.0 && nudged.x > 5.9 && nudged.z > 0.0 && nudged.z < 0.07);
 }
+
+#include "../src/engine/systems/underwater_system.h"
+
+// #43 SWIMMING: "walk into a lake: float at the surface, swim, climb out on a bank". A beach: a ramp from
+// 6 m under the sea up to 1 m above it over 60 m, the sea at y = 0. The real Jolt character, driven by the
+// same SwimState rules PlayerSystem uses.
+TEST_CASE(a_swimmer_floats_dives_and_walks_out_up_the_beach) {
+    World world;
+    {   // the beach ramp, x -20 (deep) .. 40 (dry)
+        Entity e = world.create();
+        world.add<Transform>(e, Transform{});
+        MeshCollider mc;
+        mc.vertices = {Vec3(-20, -6, -20), Vec3(40, 1, -20), Vec3(40, 1, 20), Vec3(-20, -6, 20)};
+        mc.indices = {0, 2, 1, 0, 3, 2};
+        mc.surface = ColliderSurface::Sand;
+        world.add<MeshCollider>(e, mc);
+    }
+    { Sea sea; sea.level = 0.0; sea.add(-100, -100, 32, 100); world.add<Sea>(world.create(), std::move(sea)); }
+    Entity p = world.create();
+    Transform pt; pt.position = Vec3(-12, -1.0, 0);   // in 5 m of water
+    world.add<Transform>(p, pt);
+    world.add<CharacterController>(p, CharacterController{});
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.createBodies(world);
+    PhysicsWorld& pw = physics.physicsWorld();
+    const CharacterController cc = *world.get<CharacterController>(p);
+    const Real dt = 1.0 / 60.0, eye = 0.7;
+    SwimState swim;
+    Real clock = 0;
+    auto tick = [&](Vec3 keys, bool rise, bool dive) {
+        const Vec3 c = pw.characterPosition(cc.characterId);
+        const Real feet = c.y - (cc.halfHeight + cc.radius);
+        const auto w = UnderwaterSystem::surfaceAt(world, c.x, c.z);
+        const Real depth = w.kind != UnderwaterSystem::Water::None ? Real(w.level) - feet : Real(-1);
+        swim.update(depth, pw.characterGroundState(cc.characterId) != GroundState::InAir);
+        if (swim.swimming) {
+            clock += dt;
+            Vec3 v = keys * (SwimState::kSpeed / 6.0);
+            v.y = SwimState::verticalSpeed(c.y, Real(w.level) + SwimState::kEyeAbove - eye, rise, dive, clock);
+            pw.moveCharacterFree(cc.characterId, v, dt);
+        } else {
+            pw.moveCharacter(cc.characterId, keys, dt);
+        }
+        physics.step(world, dt);
+    };
+    for (int i = 0; i < 240; ++i) tick(Vec3(0, 0, 0), false, false);   // 4 s adrift
+    const Real eyeAfloat = pw.characterPosition(cc.characterId).y + eye;
+    CHECK(swim.swimming);
+    CHECK(eyeAfloat > 0.05 && eyeAfloat < 0.45);   // head just out of the water
+    for (int i = 0; i < 90; ++i) tick(Vec3(0, 0, 0), false, true);     // 1.5 s diving
+    const Real dived = pw.characterPosition(cc.characterId).y;
+    CHECK(dived < -1.5);
+    for (int i = 0; i < 240; ++i) tick(Vec3(0, 0, 0), false, false);   // let go: back up
+    CHECK(std::fabs(pw.characterPosition(cc.characterId).y + eye - SwimState::kEyeAbove) < 0.2);
+    int t = 0;
+    while (swim.swimming && t < 60 * 30) { tick(Vec3(6, 0, 0), false, false); ++t; }   // swim for the shore
+    const Vec3 out = pw.characterPosition(cc.characterId);
+    for (int i = 0; i < 180; ++i) tick(Vec3(6, 0, 0), false, false);   // and walk up the beach
+    const Vec3 dry = pw.characterPosition(cc.characterId);
+    std::printf("    [swim] afloat eye %.2f m, dived to %.2f, standing again after %.1f s at x %.1f (y %.2f), walked to x %.1f (y %.2f)\n",
+                eyeAfloat, dived, t * dt, out.x, out.y, dry.x, dry.y);
+    CHECK(!swim.swimming);
+    CHECK(dry.x > out.x + 5.0 && dry.y > out.y);   // out of the water and up the sand
+    physics.shutdown();
+}

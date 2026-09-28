@@ -570,6 +570,22 @@ void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) 
                        {}, {}, impl->tempAllocator);
 }
 
+void PhysicsWorld::moveCharacterFree(CharacterId id, const Vec3& velocity, Real dt) {
+    if (!impl || id >= impl->characters.size()) return;
+    JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch) return;
+    impl->characters[id].pendingJump = 0.0f;   // no jumping off water
+    const JPH::Vec3 up = JPH::Vec3::sAxisY();
+    ch->SetLinearVelocity(toJolt(velocity));
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    settings.mWalkStairsStepUp = up * impl->characters[id].stepHeight;
+    settings.mStickToFloorStepDown = JPH::Vec3::sZero();
+    ch->ExtendedUpdate(static_cast<float>(dt), JPH::Vec3::sZero(), settings,
+                       impl->physicsSystem.GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+                       impl->physicsSystem.GetDefaultLayerFilter(Layers::MOVING),
+                       {}, {}, impl->tempAllocator);
+}
+
 bool PhysicsWorld::jumpCharacter(CharacterId id, Real speed) {
     if (!impl || id >= impl->characters.size()) return false;
     JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
