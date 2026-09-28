@@ -55,6 +55,15 @@ struct VehicleSpec {
     // "not supplied", which would otherwise put the driver in the boot.
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
+
+    // The suspension the wheels get (the street rig unless the recipe's `suspension` says otherwise) and
+    // whether the drivetrain is a part-time 4x4 the driver switches (`drive = "4wd"`).
+    Real suspensionMin = PhysicsWorld::kStreetSuspensionMin;
+    Real suspensionMax = PhysicsWorld::kStreetSuspensionMax;
+    Real suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
+    Real suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
+    Real suspensionRestDrop = PhysicsWorld::kStreetSuspensionRestDrop;
+    bool partTime4wd = false;
 };
 
 // Run a `vehicle.*` recipe in `vm` (which must already have openProcgenLibrary

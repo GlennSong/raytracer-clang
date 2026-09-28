@@ -487,3 +487,41 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
     }
     CHECK(buses == 1);
 }
+
+// THE OFF-ROADER (#41): vehicle.offroad reads back as a part-time four-wheel-drive truck -- 2WD (rear) until
+// the driver engages 4WD, big wheels on long, soft travel resting where they are drawn, low gearing, near-
+// locking differentials, real drag -- and its lamps and driver's seat come from the kit body.
+TEST_CASE(offroad_spec_is_a_part_time_4x4_on_long_travel) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    VehicleSpec spec;
+    std::string err;
+    const bool ok = loadVehicleSpec(v.vm, "return vehicle.offroad(seed, {})", 3u, spec, &err);
+    if (!ok) std::printf("    spec error: %s\n", err.c_str());
+    CHECK(ok);
+    if (!ok) return;
+    const PhysicsWorld::VehicleConfig& c = spec.config;
+    CHECK(spec.partTime4wd);
+    CHECK_APPROX(c.frontDriveShare, 0.0, 1e-9);   // starts in 2WD (rear)
+    CHECK(c.wheels.size() == 4);
+    CHECK(c.dragArea > 0.0);
+    CHECK(c.gearRatios.size() == 5 && c.gearRatios[0] > 3.0);
+    CHECK(c.axleLimitedSlip < 1.4 && c.centerLimitedSlip < 1.4);
+    const Real H = c.chassisHalfExtent.y * 2.0;
+    for (const PhysicsWorld::VehicleWheel& w : c.wheels) {
+        CHECK(w.radius > 0.45);
+        CHECK(w.driven);
+        CHECK_APPROX(w.suspensionMax, 0.40, 1e-9);
+        CHECK_APPROX(w.suspensionFrequency, 1.3, 1e-9);
+        // attach = the drawn resting centre + the rig's rest drop
+        CHECK_APPROX(w.position.y, -H * 0.5 + w.radius + 0.30, 1e-6);
+    }
+    CHECK(spec.hasDriverSeat);
+    int heads = 0, tails = 0;
+    for (const auto& l : spec.lights) {
+        heads += l.name.rfind("headlight", 0) == 0;
+        tails += l.name.rfind("taillight", 0) == 0;
+    }
+    CHECK(heads == 2 && tails == 2);
+    CHECK(spec.parts.size() == 2);   // clear glass + the cabin
+}

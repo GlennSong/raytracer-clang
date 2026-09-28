@@ -86,6 +86,43 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
+    // DRIVETRAIN: drive = "fwd" | "rwd" | "awd" | "4wd" (part-time: starts in 2WD, rear, the player
+    // switches -- VehicleSystem), or front_share = 0..1 directly; axle_lsd / center_lsd limited-slip ratios
+    lua_getfield(L, t, "drive");
+    if (lua_isstring(L, -1)) {
+        const std::string d = lua_tostring(L, -1);
+        if (d == "fwd") c.frontDriveShare = 1.0;
+        else if (d == "rwd") c.frontDriveShare = 0.0;
+        else if (d == "awd") c.frontDriveShare = 0.5;
+        else if (d == "4wd") { c.frontDriveShare = 0.0; out.partTime4wd = true; }
+    }
+    lua_pop(L, 1);
+    c.frontDriveShare = numField(L, t, "front_share", c.frontDriveShare);
+    c.axleLimitedSlip = numField(L, t, "axle_lsd", c.axleLimitedSlip);
+    c.centerLimitedSlip = numField(L, t, "center_lsd", c.centerLimitedSlip);
+    // AERO and GEARBOX
+    c.dragArea = numField(L, t, "drag_area", c.dragArea);
+    c.shiftTime = numField(L, t, "shift_time", c.shiftTime);
+    c.clutchReleaseTime = numField(L, t, "clutch_time", c.clutchReleaseTime);
+    c.shiftLatency = numField(L, t, "shift_latency", c.shiftLatency);
+    lua_getfield(L, t, "gear_ratios");
+    if (lua_istable(L, -1)) {
+        const int gt = lua_gettop(L), n = static_cast<int>(luaL_len(L, gt));
+        for (int i = 1; i <= n; ++i) { lua_rawgeti(L, gt, i); c.gearRatios.push_back(lua_tonumber(L, -1)); lua_pop(L, 1); }
+    }
+    lua_pop(L, 1);
+    // SUSPENSION = { min=, max=, freq=, damp=, rest_drop= } -- the street rig by default; an off-roader's
+    // long travel and soft springs
+    lua_getfield(L, t, "suspension");
+    if (lua_istable(L, -1)) {
+        const int st = lua_gettop(L);
+        out.suspensionMin = numField(L, st, "min", out.suspensionMin);
+        out.suspensionMax = numField(L, st, "max", out.suspensionMax);
+        out.suspensionFrequency = numField(L, st, "freq", out.suspensionFrequency);
+        out.suspensionDamping = numField(L, st, "damp", out.suspensionDamping);
+        out.suspensionRestDrop = numField(L, st, "rest_drop", out.suspensionRestDrop);
+    }
+    lua_pop(L, 1);
 
     // lights = { { name = "headlight_l", pos = {x,y,z} }, ... }
     // Same shape citysim's fleet recipes use, so `mesh.car`'s output drops
@@ -154,13 +191,12 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                 // to a commandeered car — so the player's car rests exactly
                 // where it is drawn instead of 0.30 m above it.
                 w.position = Vec3(numField(L, wi, "x", 0),
-                                  numField(L, wi, "y", 0) +
-                                      PhysicsWorld::kStreetSuspensionRestDrop,
+                                  numField(L, wi, "y", 0) + out.suspensionRestDrop,
                                   numField(L, wi, "z", 0));
-                w.suspensionMin = PhysicsWorld::kStreetSuspensionMin;
-                w.suspensionMax = PhysicsWorld::kStreetSuspensionMax;
-                w.suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
-                w.suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
+                w.suspensionMin = out.suspensionMin;
+                w.suspensionMax = out.suspensionMax;
+                w.suspensionFrequency = out.suspensionFrequency;
+                w.suspensionDamping = out.suspensionDamping;
                 w.radius = numField(L, wi, "radius", wheelRadius);
                 w.width = numField(L, wi, "width", wheelWidth);
                 w.steered = boolField(L, wi, "steered", false);
@@ -199,6 +235,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
 
     Vehicle v;
     v.config = spec.config;
+    v.partTime4wd = spec.partTime4wd;
     v.driverSeat = spec.driverSeat;
     v.hasDriverSeat = spec.hasDriverSeat;
 

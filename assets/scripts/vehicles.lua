@@ -121,6 +121,11 @@ local function from_class(class_name, seed, opts)
     anti_roll = opts.anti_roll,
     yaw_assist = opts.yaw_assist,
     grip = opts.grip,               -- the tyres' peak lateral grip (default 1.7)
+    -- real aero drag (a top speed near 205 km/h, not linear body damping) and quick shifts: Jolt's
+    -- default gearbox cut the drive for ~1.3 s per upshift -- a 3.5 s stall at 105-115 km/h on the freeway
+    drag_area = opts.drag_area or 2.0,
+    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
+    drive = opts.drive,             -- nil: the wheels' driven flags (all four: AWD)
     wheel = { radius = r, width = math.max(0.18, c.track * 0.13) },
     wheels = {
       { x =  halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
@@ -153,6 +158,74 @@ function vehicle.pickup(seed, opts)
   return from_class("pickup", seed, opts)
 end
 vehicle.from_class = from_class
+
+-- THE OFF-ROADER (#41): a DRIVABLE kit body (vehicle_kit.lua "offroad"), part-time four-wheel drive
+-- (drive = "4wd": 2WD rear by default, Z / D-pad down engages 4WD), long-travel soft suspension, nearly
+-- locking differentials, sticky tyres and low gearing -- a truck that climbs what a sedan spins on.
+function vehicle.offroad(seed, opts)
+  opts = opts or {}
+  local kit = require "vehicle_kit"
+  local P = kit.SPECS.offroad()
+  if opts.color then P.color = opts.color end
+  local car = kit.build(P, 0)
+  local TINT = { trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 }, grille = { 0.06, 0.06, 0.065 },
+                 chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 },
+                 chassis = { 0.07, 0.07, 0.08 } }
+  local shell = {}
+  for name, part in pairs(car.parts) do
+    if name ~= "glass" then
+      local col = name == "body" and P.color or (TINT[name] or { 0.4, 0.4, 0.4 })
+      shell[#shell + 1] = mesh.bake_height_color(part, col, col)
+    end
+  end
+  local parts = {}
+  if car.parts.glass then
+    parts[#parts + 1] = { mesh = car.parts.glass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
+  end
+  local CABIN = { liner = { 0.45, 0.43, 0.40 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.18, 0.17, 0.16 },
+                  dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 } }
+  local cabin = {}
+  for name, part in pairs(car.cabin or {}) do
+    local col = CABIN[name] or { 0.3, 0.3, 0.3 }
+    cabin[#cabin + 1] = mesh.bake_height_color(part, col, col)
+  end
+  if #cabin > 0 then
+    parts[#parts + 1] = { mesh = mesh.merge(cabin), albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.9 }
+  end
+  local lights = {}
+  for _, l in ipairs(car.lights) do lights[#lights + 1] = l end
+  lights[#lights + 1] = { name = "driver_seat", pos = car.driver_seat }
+  local wheels = {}
+  for _, w in ipairs(car.wheels) do
+    wheels[#wheels + 1] = { x = w.pos[1], y = w.pos[2], z = w.pos[3], steered = w.front, driven = true,
+                            hand_brake = not w.front }
+  end
+  local mass = opts.mass or 2300
+  return {
+    body = mesh.recompute_normals(mesh.merge(shell)),
+    albedo = { 1, 1, 1 }, metallic = 0.35, roughness = 0.5,
+    parts = parts,
+    lights = lights,
+    chassis = { half = { car.size[1] * 0.5, car.size[2] * 0.5, car.size[3] * 0.5 } },
+    mass = mass,
+    com_offset = -0.62,
+    engine_torque = opts.engine_torque or math.floor(mass * 0.55),
+    max_rpm = 5200,
+    max_steer_deg = 32,
+    brake_torque = math.floor(mass * 1.2),
+    hand_brake_torque = math.floor(mass * 2.9),
+    grip = 2.3,
+    drive = "4wd",
+    axle_lsd = 1.15, center_lsd = 1.10,
+    drag_area = 2.8,
+    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
+    gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
+    -- long travel, soft: 0.40 m of it, 1.3 Hz (sags ~0.10 m), resting 0.30 m below the attach point
+    suspension = { min = 0.0, max = 0.40, freq = 1.3, damp = 0.5, rest_drop = 0.30 },
+    wheel = { radius = P.wheel_r, width = 0.32 },
+    wheels = wheels,
+  }
+end
 
 
 -- ---------------------------------------------------------------------------

@@ -9065,3 +9065,30 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
   - `test_vehicle_kit`: every body is closed, within budget and sliver-free.
   - The fleet contract tests: four lamp markers on the body, round wheels, see-into only for the bus and the convertible.
   - The wheel-lab tyre probe with the new fleet: 98.7% of cars within 5 cm.
+
+## ADR-0141 — Player driving: a chase camera that holds at speed, real drivetrains, an off-roader
+
+**Context.** Glenn: "the car once it hits a certain acceleration on the freeway begins to lag behind", and he wanted "offroad vehicles -- 2 wheel drive, 4 wheel drive". A background agent measured the causes.
+- **The chase spring.** It trailed by speed × 0.12 s, and its teleport test compared the raw feed with that trail, so past ~165 km/h it snapped 3–4 times a second.
+- **The gearbox and drag.** Jolt's default gearbox cut the drive for ~1.3 s per upshift, a 3.5 s stall at 105–115 km/h. Linear body damping stood in for aero drag.
+- **The drivetrain.** Every car was AWD, with differentials paired in wheel declaration order.
+
+**Decision.**
+- **Camera.**
+  - A teleport is the raw feed jumping between calls.
+  - Velocity feed-forward (the goal leads by the low-passed velocity × (smoothTime − dt/2)) removes the steady trail.
+  - The chase rig is evaluated in `CameraSystem::render()`, after the frame's fixed steps.
+  - Measured at 180 km/h: no snaps, mean trail under 1.5 cm (it was ~6 m), at 30/60/144 fps.
+- **Drivetrain.**
+  - One differential per driven axle, and a front/rear split (`frontDriveShare`).
+  - With one driven axle the centre coupling runs open. Jolt's default 1.4 between-differentials limited slip otherwise hands all torque to the slower axle, and a "2WD" car drove as a 4x4.
+  - `setVehicleFrontDriveShare` switches at runtime.
+  - Measured on 18° at friction 0.35, from rest: RWD +0.6 m, FWD −7.9 m, 4WD +30.6 m.
+- **Aero and gearbox.**
+  - `dragArea` (quadratic; 2.0 m² for a sedan, ~205 km/h top) replaces the linear damping.
+  - Quick configurable shifts: 50–110 km/h went from 5.1 s to 3.2 s.
+  - The player's `from_class` cars get both.
+- **Spec fields.** `drive` ("fwd" | "rwd" | "awd" | "4wd", part-time), `front_share`, `axle_lsd`, `center_lsd`, `drag_area`, the shift timings, `gear_ratios`, and `suspension` { min, max, freq, damp, rest_drop }.
+- **The off-roader** (`vehicle.offroad`, #41). A kit body (lifted, 0.96 m tyres, roof rack, skid plate) on long soft travel (0.40 m at 1.3 Hz), near-locking differentials, sticky tyres and low gears. It is part-time 4WD: Z / D-pad down engages it. The wheel lab parks one beside a street sedan.
+
+**Consequences.** `test_city_phys_tier` (`maxPossessed >= 6`) fails on the island-nature base too, so it predates this work.

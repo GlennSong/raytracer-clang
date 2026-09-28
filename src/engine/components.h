@@ -360,6 +360,10 @@ struct MeshCollider {
 // refreshes from the wheels. UNVERIFIED submodule-gated path (needs Jolt).
 struct Vehicle {
     PhysicsWorld::VehicleConfig config;
+    // A PART-TIME 4x4 (spec drive = "4wd"): the driver switches 2WD (rear) <-> 4WD (VehicleSystem, key
+    // `drive_4wd`); fourWheel is the current mode.
+    bool partTime4wd = false;
+    bool fourWheel = false;
     PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
     Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
     // Live driver input, written by VehicleSystem each step (for inspection/debug).

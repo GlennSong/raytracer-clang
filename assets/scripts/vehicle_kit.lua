@@ -493,6 +493,32 @@ S.jeep = function() return kit.profile{
     car.spare = { 0, 1.05, -(4.25 * 0.5) - 0.12 }
   end } end
 
+-- THE OFF-ROADER (#41, Glenn: "a 4x4 truck: bigger, wider wheels and long-travel suspension"): a jeep's
+-- boxy cabin lifted on 0.96 m tyres, short overhangs for approach and departure angles, a roof rack
+S.offroad = function() return kit.profile{
+  name = "offroad", L = 4.60, W = 2.05, H = 2.10, clear = 0.42, r = 0.48, fo = 0.70, ro = 0.72,
+  glass = { cowl = 0.60, a_top = 0.40, c_top = -2.55, deck = -2.65, a_side = 0.38, c_side = -1.95, pillars = { -0.55 } },
+  belt = { { -1, 1.42 }, { -0.92, 1.45 }, { 0.2, 1.45 }, { 0.9, 1.38 }, { 1, 1.25 } },
+  roof_drop = { 0.02, 0.02 }, roof_arch = 0.0, ws_exp = 1.0, bl_exp = 1.0, roof_w = { 0.86, 0.86 }, glass_w = 0.95,
+  taper = { 0.05, 0.03, 0.3 }, tuck = 0.10, arch_gap = 0.14,
+  radii = { bottom = 0.05, side = 0.08, shoulder = 0.04, glass = 0.02, roof = 0.06 },
+  lamp_y = { 1.18, 1.32 }, grille_y = { 0.80, 1.28 }, tail_y = { 1.20, 1.36 },
+  cap_crease = 1.0, color = { 0.85, 0.42, 0.08 }, rear_window = { 1.55, 2.02 },
+  truck_seating = true, rear_seat = true,
+  windows = { side = { edge = 2.5, corner = 3 }, windshield = { edge = 2.5, corner = 3 }, back = { edge = 2.5, corner = 3 } },
+  extras = function(car)
+    car.spare = { 0, 1.35, -(4.60 * 0.5) - 0.14 }
+    -- a roof rack: two rails and three bars
+    for _, sx in ipairs({ 1, -1 }) do
+      car.polys[#car.polys + 1] = kit.box_part({ 0.05, 0.05, 1.9 }, { sx * 0.78, 2.14, -0.95 }, 3, "chassis")
+    end
+    for _, z in ipairs({ -1.8, -0.95, -0.1 }) do
+      car.polys[#car.polys + 1] = kit.box_part({ 1.60, 0.04, 0.05 }, { 0, 2.17, z }, 3, "chassis")
+    end
+    -- a skid plate and tow hooks at the nose
+    car.polys[#car.polys + 1] = kit.box_part({ 1.2, 0.05, 0.8 }, { 0, 0.40, 1.8 }, 3, "chassis")
+  end } end
+
 S.convertible = function() return kit.profile{
   name = "convertible", L = 4.45, W = 1.82, H = 1.30, clear = 0.13, r = 0.33, fo = 0.88, ro = 0.95,
   glass = { cowl = 0.45, a_top = 0.10, c_top = -1.0, deck = -1.30, a_side = 0.0, c_side = 0.0, pillars = {} },

@@ -68,6 +68,10 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_horn", KeyCode::H);
     ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
     ctx.actions.setActionContext("vehicle_horn", engine::InputContext::InVehicle);
+    // A part-time 4x4's transfer case: 2WD (rear) <-> 4WD (#41).
+    ctx.actions.bindButton("drive_4wd", KeyCode::Z);
+    ctx.actions.bindButton("drive_4wd", GamepadButton::DpadDown);
+    ctx.actions.setActionContext("drive_4wd", engine::InputContext::InVehicle);
     // Debug: spawn a fresh car in front of the player (always on solid ground,
     // since the player is standing on a collider).
     ctx.actions.bindButton("spawn_vehicle", KeyCode::N);
@@ -531,6 +535,18 @@ void VehicleSystem::update(FrameContext& ctx) {
                 if (iv.vehicle.valid() && ctx.world.has<Vehicle>(iv.vehicle))
                     ctx.world.get<Vehicle>(iv.vehicle)->lightsOn =
                         !ctx.world.get<Vehicle>(iv.vehicle)->lightsOn;
+            });
+    }
+
+    // Shift a part-time 4x4 in or out of four-wheel drive.
+    if (ctx.actions.pressed("drive_4wd")) {
+        ctx.world.each<ControlledBy, InVehicle>(
+            [&](Entity, ControlledBy&, InVehicle& iv) {
+                Vehicle* v = iv.vehicle.valid() ? ctx.world.get<Vehicle>(iv.vehicle) : nullptr;
+                if (!v || !v->partTime4wd || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+                v->fourWheel = !v->fourWheel;
+                physicsSys.physicsWorld().setVehicleFrontDriveShare(v->vehicleId, v->fourWheel ? 0.5 : 0.0);
+                LOG_INFO << "[vehicle] " << (v->fourWheel ? "4WD engaged" : "2WD (rear)");
             });
     }
 
