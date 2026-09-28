@@ -29,6 +29,7 @@
 #include "../log.h"
 #include "city_planner_panel.h"
 #include "bake_dialog.h"
+#include "level_cache_panel.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
 #include "../engine/procgen/city/citylots_producer.h"
@@ -57,7 +58,9 @@
 #include <QCursor>
 #include <QDialog>
 #include <QSlider>
+#include <QDesktopServices>
 #include <QDir>
+#include <QUrl>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QDropEvent>
@@ -88,6 +91,8 @@
 #include <QStatusBar>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QPainter>
+#include <QPixmap>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -97,6 +102,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 #include <functional>
 #include <atomic>
 #include <mutex>
@@ -752,12 +758,24 @@ int main(int argc, char** argv) {
     assetsDock->setWidget(assetsView);
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, assetsDock);
 
+    // The open level's baked cache (ADR-0084): is there a bake, is it current, how big, and build / rebuild /
+    // delete / show it. Beside the console rather than behind it, so the status is always in view;
+    // refreshLevelCache (set once the bake job exists below) fills it.
+    auto* levelCacheDock = new QDockWidget("Level cache", &mainWindow);
+    auto* levelCachePanel = new LevelCachePanel(levelCacheDock);
+    levelCacheDock->setWidget(levelCachePanel);
+    mainWindow.addDockWidget(Qt::BottomDockWidgetArea, levelCacheDock);
+    mainWindow.splitDockWidget(assetsDock, levelCacheDock, Qt::Horizontal);   // before the console tabs onto assets: a column of its own
+    mainWindow.resizeDocks({levelCacheDock}, {380}, Qt::Horizontal);
+    std::function<void()> refreshLevelCache;
+
     // Engine log console, tabbed with the asset browser.
     LogConsole console;
     BakeJob bakeJob;
     QDockWidget* consoleDock = console.buildDock(&mainWindow);
     mainWindow.addDockWidget(Qt::BottomDockWidgetArea, consoleDock);
     mainWindow.tabifyDockWidget(assetsDock, consoleDock);
+
     assetsDock->raise();
 
     auto* fileMenu = mainWindow.menuBar()->addMenu("&File");
@@ -941,6 +959,7 @@ int main(int argc, char** argv) {
         mainWindow.setWindowTitle(baseTitle);
         app.requestState(makeEditor());
         viewport->setFocus();
+        if (refreshLevelCache) refreshLevelCache();
     };
 
     // File > Recently Opened: the last few scenes you've opened, newest first,
@@ -988,6 +1007,38 @@ int main(int argc, char** argv) {
             mainWindow.statusBar()->showMessage("This renderer cannot capture frames", 6000);
     });
     fileMenu->insertAction(fileTailSeparator, shotAction);
+    // The whole editor window, docks and all (bug reports, the Level cache panel): Qt grabs its widgets, but the
+    // viewport is a native Vulkan surface Qt can't read, so the engine dumps that frame and it is painted into
+    // the viewport's rectangle. RT_EDITOR_WINDOW_SHOT=<png> takes one unattended, RT_EDITOR_WINDOW_SHOT_DELAY
+    // seconds (default 20) after start — the compositor's own capture can come back blank.
+    auto windowShot = [&](std::string out) {
+        if (out.empty()) { out = engine::nextScreenshotPath(engine::screenshotFolder(app.settings())); if (out.size() > 4) out.insert(out.size() - 4, "_window"); }
+        if (out.empty()) { mainWindow.statusBar()->showMessage("Screenshot folder cannot be created", 6000); return; }
+        const std::string frame = out + ".viewport.png";
+        const bool dumped = app.renderer().requestFrameDump(frame);
+        auto tries = std::make_shared<int>(0);
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [&, out, frame, dumped, tries, poll]() {
+            QImage view;
+            if (dumped && !view.load(QString::fromStdString(frame)) && ++*tries < 50) { QTimer::singleShot(100, [poll]() { (*poll)(); }); return; }
+            QPixmap shot = mainWindow.grab();
+            if (!view.isNull()) { QPainter paint(&shot); paint.drawImage(QRect(viewport->mapTo(&mainWindow, QPoint(0, 0)), viewport->size()), view); }
+            std::error_code ec; std::filesystem::remove(frame, ec);
+            const bool ok = shot.save(QString::fromStdString(out));
+            LOG_INFO << "[screenshot] window " << (ok ? "-> " + out : "failed: " + out) << (view.isNull() ? " (no viewport frame)" : "");
+            mainWindow.statusBar()->showMessage(QString::fromStdString(ok ? "Window screenshot: " + out : "Window screenshot failed"), 6000);
+            *poll = nullptr;   // break the self-reference
+        };
+        QTimer::singleShot(100, [poll]() { (*poll)(); });
+    };
+    auto* windowShotAction = new QAction("Screenshot &Window", &mainWindow);
+    QObject::connect(windowShotAction, &QAction::triggered, [windowShot]() { windowShot(std::string()); });
+    fileMenu->insertAction(fileTailSeparator, windowShotAction);
+    if (const char* shotPath = std::getenv("RT_EDITOR_WINDOW_SHOT"); shotPath && *shotPath) {
+        const char* d = std::getenv("RT_EDITOR_WINDOW_SHOT_DELAY");
+        const int ms = static_cast<int>(1000.0 * (d && *d ? std::atof(d) : 20.0));
+        QTimer::singleShot(ms, [windowShot, path = std::string(shotPath)]() { windowShot(path); });
+    }
     fileMenu->insertAction(fileTailSeparator, [&]() {
         auto* a = new QAction("Screenshot &Folder...", &mainWindow);
         QObject::connect(a, &QAction::triggered, [&]() {
@@ -1274,17 +1325,17 @@ int main(int argc, char** argv) {
 
     // "Bake level cache" (ADR-0084): the same bakeLevel() rt_bake runs, on a worker thread, with the
     // Console raised and a progress bar in the status bar; the level reloads from the bundle when done.
-    auto* bakeCacheAction = toolbar->addAction("Bake level cache", [&]() {
+    // The saved bake options (the dialog's last choices); Build/Rebuild in the Level cache panel reuse them.
+    auto savedBakeOptions = [&]() {
+        BakeOptions o; o.outRoot = QString::fromStdString(app.settings().getString("bundleRoot", ""));
+        o.glb = app.settings().getBool("bakeGlb", false); o.splitCells = app.settings().getBool("bakeSplitCells", false);
+        return o;
+    };
+    auto startBake = [&](const BakeOptions& chosen) {
         if (!bridge.editable() || bakeJob.running) return;
-        BakeOptions defaults; defaults.outRoot = QString::fromStdString(app.settings().getString("bundleRoot", ""));
-        defaults.glb = app.settings().getBool("bakeGlb", false); defaults.splitCells = app.settings().getBool("bakeSplitCells", false);
-        const std::optional<BakeOptions> chosen = showBakeDialog(&mainWindow, defaults, QFileInfo(QString::fromStdString(levelPath)).fileName());
-        if (!chosen) return;
-        app.settings().setString("bundleRoot", chosen->outRoot.toStdString()); app.settings().setBool("bakeGlb", chosen->glb); app.settings().setBool("bakeSplitCells", chosen->splitCells);
-        app.settings().save(app.settingsFilePath());
-        engine::bundle::setBundleRoot(chosen->outRoot.toStdString());
-        engine::bundle::BakeRequest req; req.levelPath = levelPath; req.outRoot = chosen->outRoot.toStdString(); req.force = chosen->force;
-        const bool wantGlb = chosen->glb, wantSplit = chosen->splitCells;
+        engine::bundle::setBundleRoot(chosen.outRoot.toStdString());
+        engine::bundle::BakeRequest req; req.levelPath = levelPath; req.outRoot = chosen.outRoot.toStdString(); req.force = chosen.force;
+        const bool wantGlb = chosen.glb, wantSplit = chosen.splitCells;
         { std::lock_guard<std::mutex> l(bakeJob.m); bakeJob.running = true; bakeJob.done = false; bakeJob.ok = false; bakeJob.fraction = 0; bakeJob.producer.clear(); bakeJob.stage = "starting"; bakeJob.message.clear(); bakeJob.error.clear(); bakeJob.dir.clear(); }
         bakeJob.cancel = false;
         if (bakeJob.thread.joinable()) bakeJob.thread.join();
@@ -1309,9 +1360,73 @@ int main(int argc, char** argv) {
             std::lock_guard<std::mutex> l(job->m);
             job->ok = rep.ok; job->upToDate = rep.upToDate; job->glbOk = glbOk; job->error = rep.error; job->dir = rep.dir; job->seconds = rep.seconds; job->done = true; job->running = false;
         });
+        if (refreshLevelCache) refreshLevelCache();   // every action waits for the bake
+    };
+    auto* bakeCacheAction = toolbar->addAction("Bake level cache", [&]() {
+        if (!bridge.editable() || bakeJob.running) return;
+        const std::optional<BakeOptions> chosen = showBakeDialog(&mainWindow, savedBakeOptions(), QFileInfo(QString::fromStdString(levelPath)).fileName());
+        if (!chosen) return;
+        app.settings().setString("bundleRoot", chosen->outRoot.toStdString()); app.settings().setBool("bakeGlb", chosen->glb); app.settings().setBool("bakeSplitCells", chosen->splitCells);
+        app.settings().save(app.settingsFilePath());
+        startBake(*chosen);
     });
     bakeCacheAction->setToolTip("Prebuild this level's city into a bundle (cache/levels) the engine loads instead of rebuilding");
     asTextButton(bakeCacheAction);
+
+    // The Level cache panel: status from levelCacheStatus (reads the level's inputs and every manifest under
+    // the root, no bundle payloads), actions on the same bake job and the same prune rt_bake uses.
+    engine::bundle::LevelCacheStatus cacheStatus;
+    refreshLevelCache = [&]() {
+        const auto t0 = std::chrono::steady_clock::now();
+        cacheStatus = engine::bundle::levelCacheStatus(levelPath);
+        LevelCacheView v;
+        v.level = QFileInfo(QString::fromStdString(levelPath)).fileName();
+        v.error = QString::fromStdString(cacheStatus.error); v.applies = cacheStatus.applies; v.current = cacheStatus.current;
+        { std::lock_guard<std::mutex> l(bakeJob.m); v.baking = bakeJob.running; }
+        v.root = QFileInfo(QString::fromStdString(cacheStatus.root)).absoluteFilePath();
+        v.currentDir = QString::fromStdString(cacheStatus.currentDir); v.currentCreated = QString::fromStdString(cacheStatus.currentCreated); v.currentBytes = cacheStatus.currentBytes;
+        v.olderCount = static_cast<int>(cacheStatus.older.size()); v.olderBytes = cacheStatus.olderBytes;
+        if (!cacheStatus.older.empty()) { v.newestOlderDir = QString::fromStdString(cacheStatus.older.front().dir); v.newestOlderCreated = QString::fromStdString(cacheStatus.older.front().created); }
+        v.cacheBundles = static_cast<int>(cacheStatus.cacheBundles); v.cacheStale = static_cast<int>(cacheStatus.cacheStale);
+        v.cacheBytes = cacheStatus.cacheBytes; v.cacheStaleBytes = cacheStatus.cacheStaleBytes;
+        levelCachePanel->setView(v);
+        LOG_INFO << "[bake] cache status for " << levelPath << ": " << (cacheStatus.current ? "current" : cacheStatus.applies ? "not current" : "nothing to bake")
+                 << ", " << cacheStatus.older.size() << " older (" << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s)";
+    };
+    levelCachePanel->onRefresh = [&]() { refreshLevelCache(); };
+    levelCachePanel->onBuild = [&]() { startBake(savedBakeOptions()); };
+    levelCachePanel->onRebuild = [&]() { BakeOptions o = savedBakeOptions(); o.force = true; startBake(o); };
+    levelCachePanel->onShowFolder = [&]() {
+        const QString dir = levelCachePanel->folderToShow();
+        if (!dir.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(dir).absoluteFilePath()));
+    };
+    auto deleteBakes = [&](const std::vector<std::string>& dirs, uint64_t bytes, const QString& what) {
+        if (dirs.empty()) return;
+        if (QMessageBox::question(&mainWindow, "Delete bakes?", QString("Delete %1 (%2)? The level rebuilds from source on its next load.").arg(what, humanBytes(bytes))) != QMessageBox::Yes) return;
+        std::string err;
+        const std::size_t n = engine::bundle::deleteBundleDirs(cacheStatus.root, dirs, &err);
+        if (!err.empty()) LOG_WARN << "[bake] " << err;
+        LOG_INFO << "[bake] deleted " << n << " bundle(s) of " << levelPath;
+        mainWindow.statusBar()->showMessage(QString("Deleted %1 bake%2 (%3)").arg(n).arg(n == 1 ? "" : "s").arg(humanBytes(bytes)), 8000);
+        refreshLevelCache();
+    };
+    levelCachePanel->onDeleteOlder = [&]() {
+        std::vector<std::string> dirs; for (const auto& e : cacheStatus.older) dirs.push_back(e.dir);
+        deleteBakes(dirs, cacheStatus.olderBytes, QString("%1 out-of-date bake%2 of this level").arg(dirs.size()).arg(dirs.size() == 1 ? "" : "s"));
+    };
+    levelCachePanel->onDeleteAll = [&]() {
+        std::vector<std::string> dirs; for (const auto& e : cacheStatus.older) dirs.push_back(e.dir);
+        if (cacheStatus.current) dirs.push_back(cacheStatus.currentDir);
+        deleteBakes(dirs, cacheStatus.olderBytes + cacheStatus.currentBytes, QString("every bake of this level (%1)").arg(dirs.size()));
+    };
+    levelCachePanel->onPruneAll = [&]() {
+        if (QMessageBox::question(&mainWindow, "Prune stale bakes?", QString("Delete %1 stale bake%2 (%3) across all levels? Each level keeps its newest bake.")
+                                      .arg(cacheStatus.cacheStale).arg(cacheStatus.cacheStale == 1 ? "" : "s").arg(humanBytes(cacheStatus.cacheStaleBytes))) != QMessageBox::Yes) return;
+        const engine::bundle::PruneReport r = engine::bundle::pruneBundles(cacheStatus.root, cacheStatus.applies ? std::vector<std::string>{cacheStatus.currentDir} : std::vector<std::string>{}, true);
+        LOG_INFO << "[bake] pruned " << r.removed << " stale bundle(s) under " << cacheStatus.root;
+        mainWindow.statusBar()->showMessage(QString("Pruned %1 stale bake%2 (%3)").arg(r.removed).arg(r.removed == 1 ? "" : "s").arg(humanBytes(r.staleBytes)), 8000);
+        refreshLevelCache();
+    };
 
     // Open a level from the asset browser.
     QObject::connect(assetsView, &QTreeView::doubleClicked, [&](const QModelIndex& idx) {
@@ -1335,6 +1450,7 @@ int main(int argc, char** argv) {
     engine::roads::lanes::registerCityProducer();
     engine::roads::lanes::registerLotsProducer();
 #endif
+    refreshLevelCache();   // after the producers and the root: they decide whether and where the level bakes
     mainWindow.bakeRunning = [&]() { std::lock_guard<std::mutex> l(bakeJob.m); return bakeJob.running; };
     mainWindow.cancelBake = [&]() { bakeJob.cancel = true; if (bakeJob.thread.joinable()) bakeJob.thread.join(); };
     app.enableControlChannel([&makeEditor]() { return makeEditor(); });
@@ -1466,6 +1582,7 @@ int main(int argc, char** argv) {
         { std::lock_guard<std::mutex> l(bakeJob.m); bakeJob.done = false; }
         if (bakeJob.thread.joinable()) bakeJob.thread.join();
         bakeBar->hide(); bakeStage->hide(); bakeBar->setRange(0, 1000);
+        refreshLevelCache();
         if (!ok) { mainWindow.statusBar()->showMessage(QString::fromStdString("Level cache bake failed: " + error), 8000); LOG_ERROR << "[bake] " << error; return; }
         const std::string glbNote = glbOk ? "" : " (GLB export failed, see console)";
         if (upToDate) {   // nothing was rebuilt: the level already loaded from this bundle, so no reload

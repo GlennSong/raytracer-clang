@@ -3,6 +3,7 @@
 //   rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--threads N] [--require]
 //   rt_bake --inspect <bundle-dir>
 //   rt_bake --prune [--yes] [--out <root>] [level.json ...]
+//   rt_bake --status <level.json> [--out <root>]
 //
 // Runs every registered producer that applies to the level (the procedural city, then its lots), copying unchanged
 // producers' sections forward from earlier bundles, and writes <root>/<key>/level.bundle + manifest.json.
@@ -37,6 +38,7 @@ int usage() {
         "       rt_bake --inspect <bundle-dir>\n"
         "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root; --yes deletes them\n"
         "                    (stale = not the newest for its level path, and not the current bundle of a listed level)\n"
+        "       rt_bake --status <level.json> [--out <root>]   is the level baked, is the bake current, its size (the editor's Level cache panel)\n"
         "  --out        bundle root (default: $RT_BUNDLE_DIR or cache/levels)\n"
         "  --producer   only these producers (default: every one that applies)\n"
         "  --glb        also write city.glb (one object per material) into the bundle dir\n"
@@ -89,6 +91,18 @@ int main(int argc, char** argv) {
     engine::roads::lanes::registerLotsProducer();
 #endif
     if (std::strcmp(argv[1], "--inspect") == 0) { if (argc < 3) return usage(); return inspect(argv[2]); }
+    if (std::strcmp(argv[1], "--status") == 0) {
+        if (argc < 3) return usage();
+        std::string outRoot; for (int i = 3; i < argc; ++i) { if (std::string(argv[i]) == "--out" && i + 1 < argc) outRoot = argv[++i]; else return usage(); }
+        const LevelCacheStatus st = levelCacheStatus(argv[2], outRoot);
+        if (!st.error.empty()) { std::fprintf(stderr, "rt_bake: %s\n", st.error.c_str()); return 1; }
+        if (!st.applies) std::printf("nothing to bake: no producer applies to %s\n", argv[2]);
+        else if (st.current) std::printf("current  %9s  %s  %s\n", humanBytes(st.currentBytes).c_str(), st.currentDir.c_str(), st.currentCreated.c_str());
+        else std::printf("%s (would be %s)\n", st.older.empty() ? "not baked" : "out of date", st.currentDir.c_str());
+        for (const PruneEntry& e : st.older) std::printf("older    %9s  %s  %s\n", humanBytes(e.bytes).c_str(), e.dir.c_str(), e.created.c_str());
+        std::printf("cache %s: %zu bundles, %s; %zu stale (%s)\n", st.root.c_str(), st.cacheBundles, humanBytes(st.cacheBytes).c_str(), st.cacheStale, humanBytes(st.cacheStaleBytes).c_str());
+        return 0;
+    }
     if (std::strcmp(argv[1], "--prune") == 0) {
         bool yes = false; std::string outRoot; std::vector<std::string> levels;
         for (int i = 2; i < argc; ++i) { const std::string a = argv[i]; if (a == "--yes") yes = true; else if (a == "--out" && i + 1 < argc) outRoot = argv[++i]; else if (!a.empty() && a[0] == '-') return usage(); else levels.push_back(a); }

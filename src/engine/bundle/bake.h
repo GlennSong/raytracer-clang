@@ -118,6 +118,27 @@ struct PruneEntry { std::string dir, level, created, key; uint64_t bytes = 0; bo
 struct PruneReport { std::vector<PruneEntry> entries; uint64_t staleBytes = 0; size_t removed = 0; };
 PruneReport pruneBundles(const std::string& root, const std::vector<std::string>& keep, bool apply);
 
+// ONE LEVEL'S CACHE, for the editor's Level cache panel (Glenn: "the editor should show if there is a bake for a
+// level, how current it is, the size and have options to build it, rebuild it, delete it"). `currentDir` is
+// where today's bake of the level lives (bundleDirForLevel); `current` says whether it is there. `older` are
+// the level's other bundles: all out of date, since the level, its inputs or the engine changed since they
+// were written. The cache totals are the whole root's, as a dry-run prune sees it (the level's current bundle
+// counted as kept). Sizes are file sizes; a compressing filesystem stores them in less.
+struct LevelCacheStatus {
+    std::string root, levelAbs, currentDir, currentCreated, error;
+    bool applies = false;   // a producer applies to this level (it has a city to bake)
+    bool current = false;   // today's bake is on disk
+    uint64_t currentBytes = 0;
+    std::vector<PruneEntry> older;
+    uint64_t olderBytes = 0;
+    std::size_t cacheBundles = 0, cacheStale = 0;
+    uint64_t cacheBytes = 0, cacheStaleBytes = 0;
+};
+LevelCacheStatus levelCacheStatus(const std::string& levelPath, const std::string& root = std::string());
+// Delete these bundle directories -- each must sit DIRECTLY under `root` (anything else is refused, as is an
+// in-flight `*.tmp-<pid>` write). Returns how many went; `err` names the first refusal or failure.
+std::size_t deleteBundleDirs(const std::string& root, const std::vector<std::string>& dirs, std::string* err = nullptr);
+
 }  // namespace bundle
 }  // namespace engine
 

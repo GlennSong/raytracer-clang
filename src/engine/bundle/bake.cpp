@@ -262,6 +262,51 @@ PruneReport pruneBundles(const std::string& root, const std::vector<std::string>
     return rep;
 }
 
+LevelCacheStatus levelCacheStatus(const std::string& levelPath, const std::string& rootIn) {
+    LevelCacheStatus st;
+    st.root = rootIn.empty() ? bundleRoot() : rootIn;
+    std::error_code ec;
+    st.levelAbs = fs::absolute(levelPath, ec).lexically_normal().string();
+    LevelInputs in;
+    if (!loadLevelInputs(levelPath, in, &st.error)) return st;
+    st.currentDir = bundleDirForLevel(in, st.root);
+    st.applies = !st.currentDir.empty();
+    st.current = st.applies && fs::exists(fs::path(st.currentDir) / kBundleFile, ec);
+    const PruneReport rep = pruneBundles(st.root, st.applies ? std::vector<std::string>{st.currentDir} : std::vector<std::string>{}, false);
+    for (const PruneEntry& e : rep.entries) {
+        ++st.cacheBundles;
+        st.cacheBytes += e.bytes;
+        if (e.stale) { ++st.cacheStale; st.cacheStaleBytes += e.bytes; }
+        if (e.level != st.levelAbs) continue;
+        if (st.applies && fs::equivalent(e.dir, st.currentDir, ec)) {
+            st.currentBytes = e.bytes;
+            st.currentCreated = e.created;
+        } else {
+            st.older.push_back(e);
+            st.olderBytes += e.bytes;
+        }
+    }
+    std::sort(st.older.begin(), st.older.end(), [](const PruneEntry& a, const PruneEntry& b) { return a.created > b.created; });
+    return st;
+}
+
+std::size_t deleteBundleDirs(const std::string& root, const std::vector<std::string>& dirs, std::string* err) {
+    std::size_t n = 0;
+    std::error_code ec;
+    const fs::path r = fs::weakly_canonical(fs::path(root), ec);
+    for (const std::string& d : dirs) {
+        const fs::path p = fs::weakly_canonical(fs::path(d), ec);
+        const std::string leaf = p.filename().string();
+        if (p.parent_path() != r || leaf.empty() || leaf.find(".tmp-") != std::string::npos) {
+            if (err && err->empty()) *err = "refused (not a bundle directory under " + r.string() + "): " + d;
+            continue;
+        }
+        if (fs::remove_all(p, ec) > 0 && !ec) ++n;
+        else if (err && err->empty()) *err = "could not delete " + p.string() + (ec ? ": " + ec.message() : std::string());
+    }
+    return n;
+}
+
 std::string lastBundleStatus() { std::lock_guard<std::mutex> l(statusMutex()); return statusLine(); }
 void setLastBundleStatus(const std::string& s) { std::lock_guard<std::mutex> l(statusMutex()); statusLine() = s; }
 

@@ -1418,6 +1418,7 @@ if(Qt6_FOUND)
         src/editor_app/property_inspector.cpp
         src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
+        src/editor_app/level_cache_panel.cpp
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -1510,9 +1511,11 @@ if(Qt6_FOUND)
         tests/test_property_inspector_qt.cpp
         tests/test_city_planner_qt.cpp
         tests/test_bake_dialog_qt.cpp
+        tests/test_level_cache_panel_qt.cpp
         src/editor_app/property_inspector.cpp
         src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
+        src/editor_app/level_cache_panel.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders
     )
     target_compile_options(editor_qt_tests PRIVATE -Wall -Wextra)
