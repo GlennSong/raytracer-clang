@@ -641,3 +641,208 @@ TEST_CASE(city_lamps_sit_on_their_own_car_s_ends) {
     CHECK(lamps > 50);
     CHECK(misplaced == 0);
 }
+
+// #23 JUNCTION PILE-UPS (QA: "cars grinding against each other in packed intersections ... piled upon other
+// cars ... tipped over ... then somehow the cars become non-physics objects and they can go through each
+// other"). An OVERSATURATED grid -- four times the soak's traffic -- with the player at an interior crossing,
+// so the physical tier's bodies meet queues at every mouth. Measured per possessed body per tick:
+//   tip    -- up vector's y (a car on its side reads ~0)
+//   climb  -- chassis centre height above its resting height on the flat ground (on another car's roof: > 1 m)
+//   ghost  -- the deepest 2D footprint overlap with any other car, body or kinematic box ("go through each other")
+namespace {
+struct Foot { Vec2 c, ax, az; Vec2 he; };   // an oriented footprint: centre, unit axes, half extents
+Foot footOf(const Vec3& p, const Quat& q, Real hx, Real hz) {
+    const Vec3 x = q.rotate(Vec3(1, 0, 0)), z = q.rotate(Vec3(0, 0, 1));
+    auto unit = [](Real a, Real b) { const Real l = std::sqrt(a * a + b * b); return l > 1e-6 ? Vec2(a / l, b / l) : Vec2(1, 0); };
+    return Foot{Vec2(p.x, p.z), unit(x.x, x.z), unit(z.x, z.z), Vec2(hx, hz)};
+}
+// Separating-axis penetration depth of two oriented rectangles (0 when apart).
+Real footOverlap(const Foot& a, const Foot& b) {
+    Real depth = 1e30;
+    const Vec2 d = b.c - a.c;
+    for (const Vec2& n : {a.ax, a.az, b.ax, b.az}) {
+        auto r = [&](const Foot& f) { return f.he.x * std::fabs(f.ax.x * n.x + f.ax.y * n.y) + f.he.y * std::fabs(f.az.x * n.x + f.az.y * n.y); };
+        const Real gap = r(a) + r(b) - std::fabs(d.x * n.x + d.y * n.y);
+        if (gap <= 0) return 0;
+        depth = std::min(depth, gap);
+    }
+    return depth;
+}
+}  // namespace
+
+TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
+    World world;
+    world.add<RoadEntity>(world.create(), cityGrid());
+    CityRenderParams params;
+    params.cars = 160;
+    params.pedestrians = 0;
+    params.seed = 11;
+    params.wander = true;
+    params.physicalCars = 12;
+    params.vehicleScript = readAsset("vehicles.lua");   // the drawn fleet: without it there are no kinematic cars to meet
+    if (const char* s = std::getenv("RT_PILEUP_SEED")) params.seed = static_cast<uint32_t>(std::atoi(s));
+    CityRenderSystem city(params);
+    StubUploader uploader;
+    engine::AssetManager assets(uploader);
+    CHECK(city.build(world, &assets));
+
+    Entity player = world.create();
+    Transform pt;
+    pt.position = Vec3(80, 0.9, 80);   // an interior signalled crossing
+    world.add<Transform>(player, pt);
+    world.add<CharacterController>(player, CharacterController{});
+
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120), Quat::identity(), BodyMotion::Static);
+    CityPhysicsSystem bridge(city, physics);
+    PhysicsWorld& pw = physics.physicsWorld();
+
+    const Real dt = 1.0 / 60.0;
+    const int ticks = 60 * 90;
+    Real minUp = 1.0, restY = 0, worstClimb = 0, worstGhost = 0;
+    int restN = 0;
+    long bodyTicks = 0, tipTicks = 0, climbTicks = 0, ghostTicks = 0;
+    std::unordered_map<int, Real> age;
+    std::unordered_map<int, Vec3> lastPos;          // body positions last tick: a jump is a snap
+    std::unordered_map<int, char> inEpisode;        // body currently > 0.3 m into something
+    std::unordered_map<int, std::pair<int, Real>> episodeStart;   // class, depth
+    Real worstBoxBox = 0; long boxBoxPairs = 0, boxSamples = 0, boxSeen = 0;
+    Real worstDiv = 0, worstSpell = 0; std::unordered_map<int, Real> spell;   // body vs its ghost
+    int episodes[4] = {0, 0, 0, 0}; Real episodeDepth[4] = {0, 0, 0, 0};   // spawn, snap, box appeared, contact
+    std::unordered_map<int, int> classOf;
+    for (int i = 0; i < ticks; ++i) {
+        city.step(world, dt);
+        bridge.step(world, dt);
+        physics.step(world, dt);
+        // every other car's footprint: the other bodies, and the kinematic boxes that are not parked below the world
+        std::vector<std::pair<int, Foot>> feet;   // (agent or -1, footprint)
+        std::vector<std::pair<int, Foot>> traffic;   // kinematic boxes of MOVING drivers (not parked cars), with the agent
+        std::unordered_map<long long, int> byUid;
+        for (std::size_t q = 0; q < city.sim().agents().size(); ++q) byUid[static_cast<long long>(city.sim().agents()[q].uid)] = static_cast<int>(q);
+        for (const auto& p : bridge.possessed())
+            feet.push_back({p.agent, footOf(pw.vehiclePosition(p.vid), pw.vehicleOrientation(p.vid), 0.92, 2.15)});
+        for (const auto& box : bridge.carProxyBoxes()) {
+            const Vec3 bp = pw.bodyPosition(box.id);
+            if (bp.y < -100) continue;
+            feet.push_back({-1, footOf(bp, pw.bodyOrientation(box.id), box.he.x, box.he.z)});
+            if (auto u = byUid.find(box.key); u != byUid.end()) {
+                const Agent& ag = city.sim().agents()[u->second];
+                if (ag.mode == Agent::Mode::Driver && ag.moving) traffic.push_back({u->second, feet.back().second});
+            }
+        }
+        // Kinematic cars inside each other (the sim's own wrecks; boxes don't collide with boxes), near the player.
+        if (i % 30 == 0) {
+            std::vector<Foot> boxes; std::vector<int> boxAgent;
+            // On the carriageway only (the grid's roads run along multiples of 80 m, 10 m wide): this synthetic
+            // grid has no lots, so cars at home all park on one spot beside the road -- stacked, but not traffic.
+            auto onRoad = [](Real v) { const Real m = std::fmod(std::fabs(v) + 40.0, 80.0) - 40.0; return std::fabs(m) < 5.0; };
+            for (const auto& [ag, f] : traffic)
+                if ((f.c - Vec2(80, 80)).length() < 90 && (onRoad(f.c.x) || onRoad(f.c.y))) { boxes.push_back(f); boxAgent.push_back(ag); }
+            for (std::size_t x = 0; x < boxes.size(); ++x)
+                for (std::size_t y = x + 1; y < boxes.size(); ++y)
+                    if ((boxes[x].c - boxes[y].c).length() < 6) {
+                        const Real o = footOverlap(boxes[x], boxes[y]);
+                        worstBoxBox = std::max(worstBoxBox, o);
+                        if (o > 0.3) ++boxBoxPairs;
+                        static const bool logBox = std::getenv("RT_PILEUP_BOXLOG") != nullptr;
+                        if (logBox && o > 0.8) {
+                            const Real dp = std::fabs(boxes[x].az.x * boxes[y].az.x + boxes[x].az.y * boxes[y].az.y);
+                            const Agent& A = city.sim().agents()[boxAgent[x]]; const Agent& B = city.sim().agents()[boxAgent[y]];
+                            std::printf("      crashCount %d/%d crashTimer %.1f/%.1f speed %.1f/%.1f |", A.crashCount, B.crashCount, A.crashTimer, B.crashTimer, A.speed, B.speed);
+                            std::printf("      box-box t=%.1f (%.1f,%.1f) len %.1f w %.1f | (%.1f,%.1f) len %.1f w %.1f | |cos| %.2f centres %.1f m overlap %.2f\n",
+                                        i * dt, boxes[x].c.x, boxes[x].c.y, 2 * boxes[x].he.y, 2 * boxes[x].he.x, boxes[y].c.x, boxes[y].c.y,
+                                        2 * boxes[y].he.y, 2 * boxes[y].he.x, dp, (boxes[x].c - boxes[y].c).length(), o);
+                        }
+                    }
+            ++boxSamples; boxSeen += static_cast<long>(boxes.size());
+        }
+        std::unordered_map<int, Real> next;
+        for (const auto& p : bridge.possessed()) {
+            const Real a = age.count(p.agent) ? age[p.agent] + dt : 0.0;
+            next[p.agent] = a;
+            if (a < 1.0) continue;   // spawn settle
+            const Vec3 bp = pw.vehiclePosition(p.vid);
+            const Real up = upDot(pw.vehicleOrientation(p.vid));
+            ++bodyTicks;
+            minUp = std::min(minUp, up);
+            if (up < 0.8) ++tipTicks;
+            if (up > 0.98 && restN < 2000) { restY += bp.y; ++restN; }
+            const Real rest = restN ? restY / restN : bp.y;
+            const Real climb = bp.y - rest;
+            worstClimb = std::max(worstClimb, climb);
+            if (climb > 0.6) ++climbTicks;
+            { const Real dv = (city.sim().agents()[p.agent].pos - Vec2(bp.x, bp.z)).length();
+              worstDiv = std::max(worstDiv, dv);
+              Real& sp = spell[p.agent]; sp = dv > 6.0 ? sp + dt : 0; worstSpell = std::max(worstSpell, sp); }
+            const Foot me = footOf(bp, pw.vehicleOrientation(p.vid), 0.92, 2.15);
+            Real deepest = 0; int partner = -2; Vec2 partnerC;
+            for (const auto& [ag, f] : feet) if (ag != p.agent) { const Real o = footOverlap(me, f); if (o > deepest) { deepest = o; partner = ag; partnerC = f.c; } }
+            static const bool logDeep = std::getenv("RT_PILEUP_LOG") != nullptr;
+            if (logDeep && deepest > 0.8) {
+                const auto& ags = city.sim().agents();
+                int near = -1; Real nd = 1e9;   // a kinematic box: whose ghost is it?
+                if (partner == -1) for (std::size_t k = 0; k < ags.size(); ++k) { const Real dd = (ags[k].pos - partnerC).length(); if (dd < nd) { nd = dd; near = static_cast<int>(k); } }
+                const Agent& me2 = ags[p.agent];
+                { const Vec3 fz = pw.vehicleOrientation(p.vid).rotate(Vec3(0, 0, 1)); std::printf("      yaw %.0f y %.2f up %.3f |", std::atan2(fz.x, fz.z) * 57.3, bp.y, up); }
+                if (partner >= 0) for (const auto& q : bridge.possessed()) if (q.agent == partner) { const Vec3 fz = pw.vehicleOrientation(q.vid).rotate(Vec3(0, 0, 1)); std::printf(" other yaw %.0f y %.2f |", std::atan2(fz.x, fz.z) * 57.3, pw.vehiclePosition(q.vid).y); }
+                std::printf("      t=%.2f a%d body(%.1f,%.1f) ghost gap %.1f v=%.1f stuck %.2f crash %.2f | %s %d (%.1f,%.1f)%s v=%.1f crash %.2f | overlap %.2f\n",
+                            i * dt, p.agent, bp.x, bp.z, (me2.pos - Vec2(bp.x, bp.z)).length(), me2.speed, p.stuckTime, me2.crashTimer,
+                            partner == -1 ? "box" : "body", partner == -1 ? near : partner, partnerC.x, partnerC.y,
+                            partner == -1 ? (" ghost-off " + std::to_string(nd).substr(0, 4)).c_str() : "",
+                            (partner == -1 ? near : partner) >= 0 ? ags[partner == -1 ? near : partner].speed : 0.0,
+                            (partner == -1 ? near : partner) >= 0 ? ags[partner == -1 ? near : partner].crashTimer : 0.0, deepest);
+            }
+            worstGhost = std::max(worstGhost, deepest);
+            if (deepest > 0.3) ++ghostTicks;
+        }
+        // Episodes: how each deep overlap BEGAN. Spawn = a body younger than a tick's worth of acquisition
+        // (either party), snap = a body jumped > 2 m this tick, contact = everything else (driven into it).
+        for (const auto& p : bridge.possessed()) {
+            const Vec3 bp = pw.vehiclePosition(p.vid);
+            const Foot me = footOf(bp, pw.vehicleOrientation(p.vid), 0.92, 2.15);
+            Real deepest = 0; int partner = -2;
+            for (const auto& [ag, f] : feet) if (ag != p.agent) { const Real o = footOverlap(me, f); if (o > deepest) { deepest = o; partner = ag; } }
+            const bool jumped = lastPos.count(p.agent) && (Vec2(bp.x, bp.z) - Vec2(lastPos[p.agent].x, lastPos[p.agent].z)).length() > 2.0;
+            const bool partnerJumped = partner >= 0 && lastPos.count(partner) && [&]() { for (const auto& q : bridge.possessed()) if (q.agent == partner) { const Vec3 qp = pw.vehiclePosition(q.vid); return (Vec2(qp.x, qp.z) - Vec2(lastPos[partner].x, lastPos[partner].z)).length() > 2.0; } return false; }();
+            const bool young = !lastPos.count(p.agent) || (partner >= 0 && !lastPos.count(partner));
+            if (deepest > 0.3 && !inEpisode[p.agent]) {
+                const int cls = young ? 0 : (jumped || partnerJumped) ? 1 : 3;
+                ++episodes[cls]; classOf[p.agent] = cls; inEpisode[p.agent] = 1;
+                if (cls == 3) {
+                    const Agent& g = city.sim().agents()[p.agent];
+                    std::printf("      contact episode t=%.1f a%d body (%.1f,%.1f,%.2f) ghost (%.1f,%.1f) v %.1f pull %.1f/%.1f crash %.1f | partner %s\n",
+                                i * dt, p.agent, bp.x, bp.z, bp.y, g.pos.x, g.pos.y, g.speed, g.pullS, g.pullLen, g.crashTimer, partner >= 0 ? "body" : "box");
+                }
+            }
+            if (deepest > 0.3) { int c = classOf[p.agent]; episodeDepth[c] = std::max(episodeDepth[c], deepest); }
+            if (deepest < 0.1) inEpisode[p.agent] = 0;
+        }
+        lastPos.clear();
+        for (const auto& p : bridge.possessed()) lastPos[p.agent] = pw.vehiclePosition(p.vid);
+        age.swap(next);
+    }
+    const Real per = bodyTicks > 0 ? 1.0 / Real(bodyTicks) : 0.0;
+    std::printf("    [pileup] seed %u: body-ticks %ld; minUp %.3f, tipped %.4f; worst climb %.2f m, climbing %.4f; "
+                "worst overlap %.2f m, overlapping >0.3 m %.4f; snaps %d; sim crash events %d\n",
+                params.seed, bodyTicks, minUp, tipTicks * per, worstClimb, climbTicks * per, worstGhost, ghostTicks * per,
+                bridge.snapCount(), city.sim().crashEvents());
+    std::printf("    [pileup] episodes (> 0.3 m) by how they began: spawn %d (deepest %.2f), snap %d (%.2f), contact %d (%.2f)\n",
+                episodes[0], episodeDepth[0], episodes[1], episodeDepth[1], episodes[3], episodeDepth[3]);
+    std::printf("    [pileup] snaps held back because the landing spot was taken: %d; body-to-ghost worst %.1f m, longest > 6 m %.1f s\n",
+                bridge.snapsHeld(), worstDiv, worstSpell);
+    std::printf("    [pileup] kinematic cars inside each other (within 90 m, twice a second): worst %.2f m, %.2f pairs > 0.3 m per sample (%.0f boxes per sample)\n",
+                worstBoxBox, boxSamples ? Real(boxBoxPairs) / boxSamples : 0.0, boxSamples ? Real(boxSeen) / boxSamples : 0.0);
+    CHECK(bodyTicks > 60 * 60 * 4);   // the tier really engaged at the crossing
+    // Rates, not worst cases: one car in a 90 s run can still end up on its side (a turning body clipped at a
+    // T-junction), and single seeds swing. Measured over seeds 11-18, drawn fleet loaded:
+    //   before (#23 as filed)  body-ticks overlapping > 0.3 m up to 0.092, climbing up to 0.092, tipped up to 0.090
+    //                          (every deep overlap began with a SNAP dropping a chassis into a car already there)
+    //   after                  <= 0.0014, <= 0.0016, <= 0.0016
+    // The kinematic (sim-only) overlaps are reported, not gated: what is left there is the sim's escape valve
+    // (cars wedged through 5+ freezes pass through each other so the junction clears) -- a design call.
+    CHECK(ghostTicks * per < 0.005);   // cars inside other cars
+    CHECK(climbTicks * per < 0.005);   // cars on other cars' roofs
+    CHECK(tipTicks * per < 0.005);     // cars on their sides
+    physics.shutdown();
+}

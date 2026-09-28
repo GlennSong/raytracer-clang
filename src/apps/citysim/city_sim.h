@@ -130,6 +130,11 @@ struct Agent {
     Real wakeAt = -1;
     Real sleptAt = 0;
     bool playerControlled = false;
+    // THE PHYSICAL TIER'S BODY, as the sim's followers must see it (#23): metres the possessed car's real
+    // chassis trails this ghost along its heading (0 when not possessed, or not behind). Car-following and
+    // the vision wedge measure a leader to its BODY -- gaps planned to the ghost put the car behind's
+    // kinematic box into a body still a length back, and an immovable box ramming a chassis is the climb.
+    Real bodyLag = 0;
     // DIRECTED (ADR-0091): a director owns this agent's plan — the possession
     // channel now, a model later. The goal layer leaves it entirely alone (no
     // schedule, no chained trip on arrival) while the stepper keeps moving it
@@ -790,6 +795,12 @@ public:
     bool agentDirected(int agentIndex) const {
         return agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()) &&
                agents_[static_cast<std::size_t>(agentIndex)].directed;
+    }
+
+    // The physical tier reports how far a possessed car's body trails its ghost (Agent::bodyLag).
+    void setAgentBodyLag(int agentIndex, Real metres) {
+        if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
+            agents_[static_cast<std::size_t>(agentIndex)].bodyLag = metres;
     }
 
     // Mark an agent as host-driven (the player): the sim won't run its AI brain.

@@ -4346,7 +4346,7 @@ void CitySim::computeGaps() {
         });
         minEntry[kv.first] = { v.front().first, v.front().second };
         for (std::size_t k = 0; k + 1 < v.size(); ++k) {
-            gaps_[v[k].second] = v[k + 1].first - v[k].first;
+            gaps_[v[k].second] = std::max(Real(0), v[k + 1].first - agents_[v[k + 1].second].bodyLag - v[k].first);
             minGaps_[v[k].second] = pairMinGap(v[k].second, v[k + 1].second);
             leaderSpeeds_[v[k].second] = agents_[v[k + 1].second].speed;
         }
@@ -4373,7 +4373,7 @@ void CitySim::computeGaps() {
             int nextLi = a.route.links[a.leg + step];
             auto it = minEntry.find(laneKeyOf(a, nextLi));
             if (it != minEntry.end()) {
-                gaps_[i] = ahead + it->second.first;
+                gaps_[i] = std::max(Real(0), ahead + it->second.first - agents_[it->second.second].bodyLag);
                 minGaps_[i] = pairMinGap(i, it->second.second);
                 leaderSpeeds_[i] = agents_[it->second.second].speed;
                 break;
@@ -4434,7 +4434,8 @@ void CitySim::computeCarWedge() {
             if (!b.moving && b.parkedBay >= 0) continue;
             // Different decks never conflict (viaduct vs the street below).
             if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
-            const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+            // A possessed leader is where its BODY is, up to a length behind its ghost (Agent::bodyLag).
+            const Real dx = b.pos.x - b.heading.x * b.bodyLag - a.pos.x, dy = b.pos.y - b.heading.y * b.bodyLag - a.pos.y;
             if (dx * dx + dy * dy > kRange * kRange) continue;
             const Real along = fx * dx + fy * dy;
             const Real across = -fy * dx + fx * dy;   // + = b on my left
@@ -4746,8 +4747,12 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // contact until it drives clear — the tow-truck resolution. Without
             // it a crossing-path contact never resolves and the junction dies.
             if (a.crashCount > 5 || b.crashCount > 5) continue;
-            Real rs = 0.35 * (vehicleLength(static_cast<int>(i)) +
-                              vehicleLength(static_cast<int>(j)));
+            // Broad phase: the capsules below (half-length 0.5L - kHalfW, radius kHalfW) can touch out to a
+            // centre distance of exactly 0.5 * (La + Lb). This was 0.35 -- the old isotropic disc -- and cut
+            // the narrow phase short: two 6.4 m vans meeting at 37 degrees, centres 4.5 m apart, were
+            // "no contact" while their bodies overlapped 1.8 m (#23, the packed-junction soak).
+            Real rs = 0.5 * (vehicleLength(static_cast<int>(i)) +
+                             vehicleLength(static_cast<int>(j)));
             Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
             Real d2 = dx * dx + dy * dy;
             if (d2 >= rs * rs) continue;              // broad phase (cheap reject)
