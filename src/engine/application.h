@@ -153,6 +153,8 @@ private:
     AudioEngine audioEngine;
     InputMap inputMap;
     KeyCode pendingTapRelease_ = KeyCode::Unknown;   // `tap`: release next frame
+    std::vector<std::pair<KeyCode, double>> heldKeys_;   // `hold`: sim seconds left
+    bool keyClashChecked_ = false;
     PlayerInputs playerInputs;
     // Headset state (engine/xr/). `xr` is the renderer's backend or null;
     // `xrState` is refreshed at the top of every runFrame and handed to all

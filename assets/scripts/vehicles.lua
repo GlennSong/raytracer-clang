@@ -216,6 +216,11 @@ local function kit_drivable(specName, opts, h)
     brake_torque = math.floor(mass * 1.15),
     hand_brake_torque = math.floor(mass * 2.9),
     grip = h.grip,
+    -- the collision's underside follows the drawn body: its floor at the body's ground clearance (never
+    -- under the street rig's 0.22 kerb lift), and an off-roader's nose and tail cut to its approach and
+    -- departure angles (physics_world.h) -- a square box caught rocks the tyres could climb
+    floor_clearance = math.max(0.22, P.clear or 0),
+    approach_deg = h.approach_deg, departure_deg = h.departure_deg,
     drive = h.drive,
     axle_lsd = h.axle_lsd, center_lsd = h.center_lsd,
     drag_area = h.drag_area or 2.0,
@@ -234,19 +239,23 @@ local OFFROAD = {
   drive = "4wd", mass = 2300, torque_per_kg = 0.55, max_rpm = 5200, max_steer_deg = 32, com_offset = -0.62,
   grip = 2.3, axle_lsd = 1.15, center_lsd = 1e30, drag_area = 2.8, gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
   suspension = { min = 0.0, max = 0.40, freq = 1.3, damp = 0.5, rest_drop = 0.30 }, wheel_width = 0.32,
+  approach_deg = 42, departure_deg = 36,
   metallic = 0.35, roughness = 0.5,
 }
 -- a light off-road rig for the jeep and pickup (part-time 4WD, more travel than the street)
-local TRAIL = { drive = "4wd", axle_lsd = 1.2, center_lsd = 1e30, grip = 2.1, drag_area = 2.5,
-                suspension = { min = 0.0, max = 0.30, freq = 1.5, damp = 0.55, rest_drop = 0.23 } }
+local function trail(approach, departure)
+  return { drive = "4wd", axle_lsd = 1.2, center_lsd = 1e30, grip = 2.1, drag_area = 2.5,
+           suspension = { min = 0.0, max = 0.30, freq = 1.5, damp = 0.55, rest_drop = 0.23 },
+           approach_deg = approach, departure_deg = departure }
+end
 local KIT_HANDLING = {
   sedan       = { drive = "fwd", drag_area = 2.0 },
   taxi        = { drive = "fwd", drag_area = 2.0 },
   hatchback   = { drive = "fwd", drag_area = 1.9 },
   convertible = { drive = "rwd", drag_area = 1.8, max_steer_deg = 32 },
   suv         = { drive = "awd", drag_area = 2.4 },
-  jeep        = TRAIL,
-  pickup      = TRAIL,
+  jeep        = trail(38, 32),
+  pickup      = trail(28, 24),
   step_van    = { drive = "rwd", drag_area = 3.2, torque_per_kg = 0.40 },
   small_truck = { drive = "rwd", drag_area = 3.4, torque_per_kg = 0.40 },
   offroad     = OFFROAD,
@@ -256,7 +265,7 @@ for name, h in pairs(KIT_HANDLING) do
 end
 function vehicle.offroad(seed, opts) return kit_drivable("offroad", opts, OFFROAD) end
 
--- THE DRIVABLE CATALOGUE: what the player can drop (VehicleSystem: , and . pick, N drops). `drive` is the
+-- THE DRIVABLE CATALOGUE: what the player can drop (VehicleSystem: - and = pick, N drops). `drive` is the
 -- label the picker shows -- test_vehicle_body checks it matches the spec's drivetrain.
 vehicle.drivable = {
   { recipe = "offroad",          label = "Off-roader",           drive = "4wd" },

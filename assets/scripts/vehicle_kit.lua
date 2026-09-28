@@ -189,6 +189,7 @@ function kit.profile(o)
               hip_back = o.hip_back, interior = o.interior }
   P.axles = o.axles or { -(half - o.ro), half - o.fo }
   P.wheel_r = r
+  P.clear = o.clear   -- the drawn ground clearance (vehicles.lua: the collision floor)
   P.wheel_w = o.wheel_w or 0.21
   P.glass = o.glass
   P.glass_width = o.glass_w or 0.93

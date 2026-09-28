@@ -86,6 +86,10 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
+    // The collision's underside: floor_clearance (m off the body box's floor), approach / departure angles
+    c.floorClearance = numField(L, t, "floor_clearance", c.floorClearance);
+    c.approachDegrees = numField(L, t, "approach_deg", c.approachDegrees);
+    c.departureDegrees = numField(L, t, "departure_deg", c.departureDegrees);
     // DRIVETRAIN: drive = "fwd" | "rwd" | "awd" | "4wd" (part-time: starts in 2WD, rear, the player
     // switches -- VehicleSystem), or front_share = 0..1 directly; axle_lsd / center_lsd limited-slip ratios
     lua_getfield(L, t, "drive");

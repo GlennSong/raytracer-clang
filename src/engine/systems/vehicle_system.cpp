@@ -71,9 +71,12 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_horn", KeyCode::H);
     ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
     ctx.actions.setActionContext("vehicle_horn", engine::InputContext::InVehicle);
-    // The car picker: , and . cycle the drivable catalogue; N drops the pick.
-    ctx.actions.bindButton("vehicle_pick_prev", KeyCode::Comma);
-    ctx.actions.bindButton("vehicle_pick_next", KeyCode::Period);
+    // The car picker: - and = cycle the drivable catalogue; N drops the pick.
+    // NOT , and . -- those are DevControlSystem's sim slower/faster, and picking
+    // a car three places along ran the world at 8x ("super speed mode") -- nor
+    // [ and ], the spectator's. The boot log names any clash ([input] key clash).
+    ctx.actions.bindButton("vehicle_pick_prev", KeyCode::Minus);
+    ctx.actions.bindButton("vehicle_pick_next", KeyCode::Equal);
     // A part-time 4x4's transfer case: 2WD (rear) <-> 4WD (#41).
     ctx.actions.bindButton("drive_4wd", KeyCode::Z);
     ctx.actions.bindButton("drive_4wd", GamepadButton::DpadDown);
@@ -161,7 +164,7 @@ void VehicleSystem::render(FrameContext& ctx) {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
     ImGui::TextUnformatted(panelText_.c_str());
-    ImGui::TextDisabled(",  .  pick      N  drop      Z  2WD/4WD");
+    ImGui::TextDisabled("-  =  pick      N  drop      Z  2WD/4WD");
     ImGui::End();
 #else
     (void)ctx;
@@ -621,6 +624,21 @@ void VehicleSystem::update(FrameContext& ctx) {
     }
     // Drop the picked car in front of the player.
     if (ctx.actions.pressed("spawn_vehicle")) spawnInFront(ctx);
+
+    // The player's car for the control channel's `vehicle?`.
+    std::string telem = "none";
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+        const Vehicle* v = iv.vehicle.valid() ? ctx.world.get<Vehicle>(iv.vehicle) : nullptr;
+        const Transform* t = iv.vehicle.valid() ? ctx.world.get<Transform>(iv.vehicle) : nullptr;
+        if (!v || !t || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+        const auto tel = physicsSys.physicsWorld().vehicleTelemetry(v->vehicleId);
+        char b[200];
+        std::snprintf(b, sizeof(b), "kmh %.1f rpm %.0f gear %d drive %s pos %.2f %.2f %.2f", tel.speed * 3.6, tel.rpm,
+                      tel.gear, v->partTime4wd ? (v->fourWheel ? "4wd" : "2wd") : "fixed",
+                      t->position.x, t->position.y, t->position.z);
+        telem = b;
+    });
+    ctx.settings.setString("vehicle.telemetry", telem);
 
     updateHorn(ctx);
     updateEngines(ctx);

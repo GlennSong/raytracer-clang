@@ -10,6 +10,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
@@ -697,15 +698,55 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     // attach points are body-frame) are unaffected.
     const float carve = std::min(static_cast<float>(cfg.floorClearance),
                                  static_cast<float>(cfg.chassisHalfExtent.y));
-    JPH::Vec3 half = toJolt(cfg.chassisHalfExtent);
-    half.SetY(half.GetY() - carve * 0.5f);
-    JPH::BoxShapeSettings shapeSettings(half);
-    JPH::ShapeSettings::ShapeResult shapeRes = shapeSettings.Create();
-    if (shapeRes.HasError()) return INVALID_VEHICLE;
-    JPH::RotatedTranslatedShapeSettings floorSettings(
-        JPH::Vec3(0, carve * 0.5f, 0), JPH::Quat::sIdentity(), shapeRes.Get());
-    JPH::ShapeSettings::ShapeResult floorRes = floorSettings.Create();
-    if (floorRes.HasError()) return INVALID_VEHICLE;
+    JPH::ShapeSettings::ShapeResult floorRes;
+    if (cfg.approachDegrees > 0.0 || cfg.departureDegrees > 0.0) {
+        // The carved box as a hull, its lower nose and tail cut back along the approach and departure
+        // lines: each rises from the ground (the body box's floor, where the drawn tyres stand) under
+        // its axle, and the floor runs between where the two lines cross it.
+        const float hx = static_cast<float>(cfg.chassisHalfExtent.x);
+        const float hy = static_cast<float>(cfg.chassisHalfExtent.y);
+        const float hz = static_cast<float>(cfg.chassisHalfExtent.z);
+        float frontAxle = -hz, rearAxle = hz;
+        for (const VehicleWheel& w : cfg.wheels) {
+            frontAxle = std::max(frontAxle, static_cast<float>(w.position.z));
+            rearAxle = std::min(rearAxle, static_cast<float>(w.position.z));
+        }
+        if (cfg.wheels.empty()) { frontAxle = hz; rearAxle = -hz; }
+        const float ground = -hy, floorY = -hy + carve, roofCut = hy - 0.1f;
+        JPH::Array<JPH::Vec3> pts;
+        auto end = [&](float sign, float axleZ, Real deg) {   // sign +1 = the nose (+z), -1 = the tail
+            const float edgeZ = sign * hz;
+            if (deg <= 0.0) {   // square: the floor runs to the end
+                for (float x : {-hx, hx}) pts.push_back(JPH::Vec3(x, floorY, edgeZ));
+            } else {
+                const float t = std::tan(JPH::DegreesToRadians(static_cast<float>(std::min(deg, Real(80)))));
+                const float over = sign * (edgeZ - axleZ);   // overhang past the axle (>= 0 normally)
+                const float lipY = std::min(roofCut, std::max(floorY, ground + std::max(over, 0.0f) * t));
+                const float floorEnd = axleZ + sign * std::max(0.0f, (floorY - ground) / t);
+                const float fz = sign > 0 ? std::min(floorEnd, edgeZ) : std::max(floorEnd, edgeZ);
+                for (float x : {-hx, hx}) {
+                    pts.push_back(JPH::Vec3(x, floorY, fz));
+                    pts.push_back(JPH::Vec3(x, lipY, edgeZ));
+                }
+            }
+            for (float x : {-hx, hx}) pts.push_back(JPH::Vec3(x, hy, edgeZ));
+        };
+        end(1.0f, frontAxle, cfg.approachDegrees);
+        end(-1.0f, rearAxle, cfg.departureDegrees);
+        JPH::ConvexHullShapeSettings hull(pts, 0.03f);
+        floorRes = hull.Create();
+        if (floorRes.HasError()) return INVALID_VEHICLE;
+    } else {
+        JPH::Vec3 half = toJolt(cfg.chassisHalfExtent);
+        half.SetY(half.GetY() - carve * 0.5f);
+        JPH::BoxShapeSettings shapeSettings(half);
+        JPH::ShapeSettings::ShapeResult shapeRes = shapeSettings.Create();
+        if (shapeRes.HasError()) return INVALID_VEHICLE;
+        JPH::RotatedTranslatedShapeSettings floorSettings(
+            JPH::Vec3(0, carve * 0.5f, 0), JPH::Quat::sIdentity(), shapeRes.Get());
+        floorRes = floorSettings.Create();
+        if (floorRes.HasError()) return INVALID_VEHICLE;
+    }
     // Lower the centre of mass below the chassis centre so the car resists rolling
     // in corners (the classic anti-tip tweak).
     JPH::OffsetCenterOfMassShapeSettings comSettings(

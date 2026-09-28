@@ -1007,6 +1007,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
         tests/test_vehicle_drivetrain.cpp
+        tests/test_offroad_course.cpp
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
         tests/test_city_ride.cpp

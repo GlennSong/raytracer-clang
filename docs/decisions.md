@@ -9103,7 +9103,14 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
 
 - **The car picker** (Glenn: "cycle through all of them ... it should tell me if the car is 2WD or 4WD").
   - `vehicle.drivable` in vehicles.lua is the catalogue: 13 cars. Every kit body is drivable with a fitting drivetrain (sedan, hatchback and taxi FWD; convertible, step van and box truck RWD; SUV AWD; jeep, pickup and off-roader part-time 4WD), plus the classic sedan, pickup and van.
-  - `,` / `.` pick, N drops the pick in front of the player, Z switches a part-time 4x4. A panel names the pick and its drivetrain, and flashes the mode on a switch.
+  - `-` / `=` pick (first shipped on `,` / `.`, the sim slower/faster keys: picking ran the world at 8x; the boot log now warns of any key clash), N drops the pick in front of the player, Z switches a part-time 4x4. A panel names the pick and its drivetrain, and flashes the mode on a switch.
   - `car_picker_catalogue_builds_and_says_the_true_drivetrain` checks that every entry builds and that its label matches its physics.
+
+- **Stuck on rocks in 4WD** (Glenn's first drive: "if I go over slabs and rocks even with 4WD I get stuck. I thought the idea was that I didn't"). Two causes, both needed:
+  - The course: 53 of the 90 boulders stood over 0.8 m (up to 1.35), walls no truck climbs. They now stand 0.15–0.55 m, up to a wheel's radius.
+  - The collision: the chassis was the whole-vehicle box, carved 0.22 m, so its floor rode 14 cm under the drawn belly and its square bumper edge sat a full overhang ahead of the tyres. `VehicleConfig::approachDegrees` / `departureDegrees` now cut the nose and tail as a convex hull, and the kit drivables put the collision floor at the body's ground clearance (`floor_clearance`, never under 0.22). The off-roader is cut at 42° / 36°, the jeep 38° / 32°, the pickup 28° / 24°; street cars keep the box.
+  - A/B over four lanes of the course (`offroader_drives_the_course_ledges_rocks_and_twister_in_four_wheel_drive`, the real `vehicle.offroad` spec on the level's geometry): the old underside got through 0 lanes, the new one 4.
+- **Run-ups test momentum, not traction.** From 12 m back even 2WD crested 30° of mud. Each hill now has a stop line at its foot, and each mud hill a mud apron (a 2WD truck's rear tyres gripped the dirt until it was most of the way up). From the line: 4WD climbs every mud rung to 30°, 2WD stalls from 25°; 35° dirt is past the limit and decided at the crest.
+- **Probes that drive:** `hold <Key> <seconds>` holds a key through the real input path, and `vehicle?` reports the player's car (km/h, rpm, gear, 2wd/4wd, position, sim speed).
 
 **Consequences.** `test_city_phys_tier` (`maxPossessed >= 6`) fails on the island-nature base too, so it predates this work.

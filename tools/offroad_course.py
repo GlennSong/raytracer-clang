@@ -5,9 +5,10 @@ make an obstacle course for that vehicle to test 4wd?"). Writes assets/levels/of
   start       the off-roader (part-time 4WD: Z engages it) and a street sedan, facing down the course (-z)
   hills       two ladders of ramps, each rising 6 m to a flat top and back down:
                 grip  (friction 0.9)   15 20 25 30 35 degrees
-                mud   (friction 0.35)  10 15 20 25 30 degrees
+                mud   (friction 0.35)  10 15 20 25 30 degrees, each behind a 10 m mud apron
+              a white stop line before each: start there at rest to test traction, not momentum
   ledges      square steps 0.2 0.3 0.4 0.5 m high
-  rock garden boulders 0.3-0.9 m radius, half buried, seeded
+  rock garden boulders standing 0.15-0.55 m (up to a wheel radius), seeded
   twister     humps set diagonally left/right: one wheel up while its opposite drops
   logs        four logs across the track
   mud flat    40 m at friction 0.2
@@ -62,16 +63,26 @@ for i, deg in enumerate([15, 20, 25, 30, 35]):
     hill(-60 + i * 9, 0, deg, 0.9, DIRT, f"grip{deg}")
 for i, deg in enumerate([10, 15, 20, 25, 30]):
     hill(20 + i * 9, 0, deg, 0.35, MUD, f"mud{deg}")
+    # a mud APRON before each mud hill: on dirt, a 2WD truck's driven rear wheels grip until it is most of
+    # the way up, and it climbed 25 degrees of mud from a standing start -- a mud hill has a muddy approach
+    ent("box", [6, 0.02, 10], [20 + i * 9, 0.01, 5.0], MUD, 0.35, name=f"mud{deg}_apron")
+# STOP LINES at every hill's foot (the rear tyres on the apron): start there, at rest, to test traction -- a
+# run-up tests momentum, and carried even 2WD over 30 degrees of mud
+for x in [-60 + i * 9 for i in range(5)] + [20 + i * 9 for i in range(5)]:
+    ent("box", [6, 0.03, 0.3], [x, 0.015, 3.2], [0.9, 0.9, 0.85], 0.35 if x > 0 else 0.85, name="stop_line")
 
 # LEDGES at z = -40: square steps in lanes down the middle
 for i, h in enumerate([0.2, 0.3, 0.4, 0.5]):
     ent("box", [5, h, 6], [-12 + i * 8, h * 0.5, -42], ROCK, 0.85, name=f"ledge_{int(h * 100)}cm")
 
-# ROCK GARDEN z = -60 .. -95, x = -15 .. 15
+# ROCK GARDEN z = -60 .. -95, x = -15 .. 15: boulders standing 0.15-0.55 m out of the dirt -- up to a wheel's
+# radius, what a crawler climbs. (The first cut buried 0.3-0.9 m spheres only a little: 53 of 90 stood over
+# 0.8 m, walls no truck climbs, and the off-roader stopped dead on one -- Glenn: "I get stuck".)
 for _ in range(90):
-    r = rng.uniform(0.3, 0.9)
+    r = rng.uniform(0.35, 0.9)
+    top = rng.uniform(0.15, 0.55)
     x, z = rng.uniform(-15, 15), rng.uniform(-95, -60)
-    ent("sphere", [r, r, r], [round(x, 2), round(r * rng.uniform(0.2, 0.55), 3), round(z, 2)], ROCK, 0.8, name="boulder")
+    ent("sphere", [r, r, r], [round(x, 2), round(top - r, 3), round(z, 2)], ROCK, 0.8, name="boulder")
 
 # AXLE TWISTER z = -105 .. -140: humps diagonal left / right
 for i in range(8):

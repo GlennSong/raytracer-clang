@@ -220,6 +220,13 @@ public:
         // floor to bumper-lip height, comfortably over the city's 0.15 kerbs,
         // while a real wall still hits the box (see driving_lab kerb/wall gates).
         Real floorClearance = 0.22;
+        // APPROACH / DEPARTURE ANGLES (#41; Glenn: "if I go over slabs and rocks even with 4WD I get stuck").
+        // 0 = the square box above. > 0 chamfers the collision's lower nose (tail) up from the ground under
+        // the front (rear) axle at this angle, as a convex hull -- the angle an off-roader is sold on. With
+        // a square box the bumper's bottom edge sat a full overhang ahead of the front tyres at floor height
+        // and caught every rock the wheels could have climbed.
+        Real approachDegrees = 0.0;
+        Real departureDegrees = 0.0;
         // ARCADE-FORGIVING (ADR-0059's "tuned by the caller"): the roll CONE
         // keeps the body's up axis within this angle of world up — a kerb
         // hop or a trip can put the car on two wheels but never on its roof

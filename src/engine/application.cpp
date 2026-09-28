@@ -295,6 +295,41 @@ void Application::runFrame() {
                 inputMap.processEvent(up);
                 pendingTapRelease_ = KeyCode::Unknown;
             }
+            // `hold <Key> <seconds>`: the same real path, held down (throttle,
+            // steering) until its sim-time runs out -- so a probe can DRIVE.
+            const std::string holdReq = settingsStore.getString("input.hold", "");
+            if (!holdReq.empty()) {
+                settingsStore.setString("input.hold", "");
+                char name[32] = {0};
+                double secs = 0.0;
+                if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2) {
+                    const KeyCode k = keyCodeFromName(name);
+                    if (k != KeyCode::Unknown) {
+                        Event down(EventType::KeyPressed);
+                        down.key = k;
+                        inputMap.processEvent(down);
+                        heldKeys_.push_back({k, secs});
+                    }
+                }
+            }
+            for (std::size_t i = 0; i < heldKeys_.size();) {
+                heldKeys_[i].second -= frameDelta * clock.timeScale();
+                if (heldKeys_[i].second <= 0.0) {
+                    Event up(EventType::KeyReleased);
+                    up.key = heldKeys_[i].first;
+                    inputMap.processEvent(up);
+                    heldKeys_.erase(heldKeys_.begin() + static_cast<std::ptrdiff_t>(i));
+                } else {
+                    ++i;
+                }
+            }
+        }
+        // ONE KEY, TWO JOBS, SAME MODE: said once, loudly. The car picker shipped
+        // on , and . -- already the sim slower/faster keys -- and Glenn's first
+        // pick ran the world at 8x. `keys?` would have said so; nobody asked it.
+        if (!keyClashChecked_ && frameCounter > 2) {
+            keyClashChecked_ = true;
+            for (const std::string& c : inputMap.collisions()) LOG_WARN << "[input] key clash: " << c;
         }
         for (const Event& event : window->getEvents()) {
             inputMap.processEvent(event);
@@ -831,6 +866,23 @@ std::string Application::handleControlCommand(const std::string& line) {
             return "err unknown key: " + cmd.args[0];
         settingsStore.setString("input.tap", cmd.args[0]);
         return "ok tap " + cmd.args[0] + " staged";
+    }
+
+    if (cmd.name == "hold") {
+        // Hold a key down through the real input path for <seconds> of sim time.
+        double secs = 0.0;
+        if (cmd.args.size() < 2 || !num(cmd.args[1], secs) || secs <= 0.0)
+            return "err usage: hold <KeyName> <seconds>";
+        if (keyCodeFromName(cmd.args[0]) == KeyCode::Unknown)
+            return "err unknown key: " + cmd.args[0];
+        settingsStore.setString("input.hold", cmd.args[0] + " " + cmd.args[1]);
+        return "ok hold " + cmd.args[0] + " staged";
+    }
+    if (cmd.name == "vehicle?") {
+        // The player's car: speed km/h, rpm, gear, drive mode, position, sim speed
+        // (VehicleSystem publishes it each frame).
+        return "ok " + settingsStore.getString("vehicle.telemetry", "none") +
+               " timescale " + std::to_string(clock.timeScale());
     }
 
     if (cmd.name == "keys?") {
