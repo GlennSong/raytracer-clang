@@ -54,16 +54,24 @@ public:
     // (smoothTime <= 0) tracks exactly, and a teleport-sized jump snaps right
     // here — so a caller that never ticks update() (retarget + immediate
     // cameraState) still cuts to the new pose instead of framing stale ground.
+    // A TELEPORT is the raw feed jumping between two calls -- not the smoothed rig trailing it. (It used to
+    // compare against the smoothed pose, whose trail grows with speed: past ~165 km/h it snapped 3-4 times
+    // a second and the car lurched toward the lens -- Glenn's "lags behind" on the freeway.)
     void setTarget(const Vec3& position, Real headingDegrees) {
+        const Vec3 jump = position - lastRawPos;
+        const bool teleport = hasPose &&
+            (jump.x * jump.x + jump.y * jump.y + jump.z * jump.z) > snapDistance * snapDistance;
         targetPos = position;
         targetYaw = headingDegrees;
-        const Vec3 jump = position - smoothedPos;
-        const bool teleport =
-            (jump.x * jump.x + jump.y * jump.y + jump.z * jump.z) >
-            snapDistance * snapDistance;
+        lastRawPos = position;
         if (!hasPose || teleport) {
             smoothedPos = position;
             smoothedYaw = headingDegrees;
+            posVelocity = Vec3(0, 0, 0);
+            yawVelocity = 0.0;
+            targetVelocity = Vec3(0, 0, 0);
+            velocityPrev = position;
+            velocityPrimed = false;
         }
         if (posSmoothTime <= 0.0) smoothedPos = position;
         if (yawSmoothTime <= 0.0) smoothedYaw = headingDegrees;
@@ -83,6 +91,12 @@ public:
     // A target jump past this snaps instead of gliding (enter/exit, respawn,
     // spectate retarget — a camera sweeping across the city is worse than a cut).
     Real snapDistance = 6.0;
+    // VELOCITY FEED-FORWARD: a critically damped spring trails a moving target by speed x smoothTime (5.6 m
+    // at 170 km/h). The spring is aimed that far AHEAD along the target's (low-passed) velocity, so a steady
+    // chase has no trail and only the unsteady part -- bumps, the quantized feed, turns -- is smoothed.
+    // `maxTrail` is the safety net: a rig further than this behind its target cuts to it.
+    Real velocitySmoothTime = 0.15;
+    Real maxTrail = 25.0;
 
     void update(const CameraInput& input, Real dt) override;
     CameraState cameraState(float aspect) const override;
@@ -103,6 +117,10 @@ private:
     Real smoothedYaw = 0.0;
     Real yawVelocity = 0.0;
     bool hasPose = false;   // first setTarget/update pair snaps
+    Vec3 lastRawPos{0, 0, 0};
+    Vec3 targetVelocity{0, 0, 0};   // low-passed velocity of the raw feed
+    Vec3 velocityPrev{0, 0, 0};
+    bool velocityPrimed = false;
 };
 
 }  // namespace engine

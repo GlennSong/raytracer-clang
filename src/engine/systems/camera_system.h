@@ -23,6 +23,7 @@ class CameraSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
+    void render(FrameContext& ctx) override;   // the chase rig, after the fixed steps
     void onStop(FrameContext& ctx) override;
 
     FlyCameraController& flyController() { return fly; }
