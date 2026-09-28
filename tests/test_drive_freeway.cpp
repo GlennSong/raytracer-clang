@@ -46,8 +46,12 @@ CorridorDef labCorridor() {
     ex.target = Vec2(60, -150); ex.targetY = 0.0;
     ex.rampRadius = 65; ex.rampSpiral = 28; ex.decelLength = 190;
     c.exits.push_back(ex);
-    ExitDef on;                       // an ON-RAMP merging onto it
-    on.station = L * 0.62; on.upStation = true; on.onRamp = true;
+    // An ON-RAMP merging onto it. At 0.62 L its descent crossed the exit's at 3.4 m, and since the planarity
+    // audit (549f9691) a crossing ramp is DROPPED -- the test then drove a lane line through the dropped
+    // ramp's acceleration widening (halfWidthAt still counts it) into the kerb, and read that as a
+    // blocked mainline. At 0.70 L the two ramps clear each other and both bake.
+    ExitDef on;
+    on.station = L * 0.70; on.upStation = true; on.onRamp = true;
     on.target = Vec2(150, -150); on.targetY = 0.0;
     on.rampRadius = 65; on.rampSpiral = 28; on.decelLength = 200;
     c.exits.push_back(on);
