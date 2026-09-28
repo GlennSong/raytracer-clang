@@ -507,3 +507,76 @@ TEST_CASE(sleepers_wake_on_their_hour_whatever_the_rate_did) {
                 dueHour, wokeAt, diff);
     CHECK(diff < 0.15);
 }
+
+// THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load that
+// information?"). A population READ from the cache is the population DECIDED: every agent's assignment and
+// the commute statistics match field for field, and the two cities then run identically. A changed input
+// (one shop's hours) misses the cache; RT_POPULATION_VERIFY decides again and finds no difference.
+#include <filesystem>
+TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
+    const std::string dir = (std::filesystem::temp_directory_path() / "rt_population_cache_test").string();
+    std::filesystem::remove_all(dir);
+    auto town = [&](CitySim& sim, NavGraph& nav, PlaceMap& places, Real shopClose) {
+        nav = citytest::cityNav(1200, 90, 5);
+        sim.build(nav, 300, 200, 13);
+        for (int i = 0; i < 14; ++i) places.add(PlaceType::Home, Vec2(-500 + i * 60.0, -400), nav);
+        for (int i = 0; i < 6; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 90.0, 400), nav, 9, 17);
+        for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-400 + i * 200.0, 0), nav, 8, shopClose);
+        places.add(PlaceType::Park, Vec2(300, -100), nav);
+        places.add(PlaceType::Cafe, Vec2(-100, 150), nav, 7, 19);
+    };
+    NavGraph navA, navB, navC, navD;
+    PlaceMap pA, pB, pC, pD;
+    CitySim A, B, C, D;
+    town(A, navA, pA, 20);
+    A.assignPlaces(pA, navA);                                           // no cache: the reference
+    town(B, navB, pB, 20); B.setPopulationCacheDir(dir); B.assignPlaces(pB, navB);   // decides, saves
+    town(C, navC, pC, 20); C.setPopulationCacheDir(dir); C.assignPlaces(pC, navC);   // reads
+    CHECK(B.populationCache().used && !B.populationCache().hit && B.populationCache().saved);
+    CHECK(C.populationCache().hit);
+    CHECK(C.populationCache().key == B.populationCache().key);
+
+    int differ = 0;
+    for (std::size_t i = 0; i < A.agents().size(); ++i) {
+        const Agent& a = A.agents()[i]; const Agent& c = C.agents()[i];
+        const bool same = a.home == c.home && a.work == c.work && a.shop == c.shop && a.restNode == c.restNode &&
+                          a.homePlace == c.homePlace && a.workPlace == c.workPlace && a.shopPlace == c.shopPlace &&
+                          a.homeDoor.x == c.homeDoor.x && a.homeDoor.y == c.homeDoor.y && a.workDoor.x == c.workDoor.x &&
+                          a.workDoor.y == c.workDoor.y && a.shopDoor.x == c.shopDoor.x && a.shopDoor.y == c.shopDoor.y &&
+                          a.pos.x == c.pos.x && a.pos.y == c.pos.y && a.heading.x == c.heading.x && a.heading.y == c.heading.y &&
+                          a.departHome == c.departHome && a.departWork == c.departWork && a.commuteSeconds == c.commuteSeconds &&
+                          a.role == c.role && a.archetype == c.archetype && a.mode == c.mode && a.indoors == c.indoors;
+        differ += !same;
+    }
+    const auto& sa = A.commuteStats(); const auto& sc = C.commuteStats();
+    std::printf("    %zu agents, %d differ; drivers with jobs %d/%d; median commute %.1f/%.1f s\n", A.agents().size(), differ,
+                sa.driversWithJobs, sc.driversWithJobs, A.commuteSecondsMedian(), C.commuteSecondsMedian());
+    CHECK(differ == 0);
+    CHECK(sa.driversWithJobs == sc.driversWithJobs && sa.crossTownDrivers == sc.crossTownDrivers);
+    CHECK(sa.meanDriverCommute == sc.meanDriverCommute);
+    CHECK(A.commuteSecondsMedian() == C.commuteSecondsMedian());
+    int roles[3] = {0, 0, 0};
+    for (const Agent& a : A.agents()) roles[static_cast<int>(a.role)]++;
+    std::printf("    roles: %d commuters, %d shopkeepers, %d strollers\n", roles[0], roles[1], roles[2]);
+    CHECK((roles[0] > 0) + (roles[1] > 0) + (roles[2] > 0) >= 2);   // more than one branch of the role choice ran
+
+    // and they RUN the same
+    for (int s = 0; s < 60 * 30; ++s) { A.step(1.0 / 60.0, 0.004); C.step(1.0 / 60.0, 0.004); }
+    int apart = 0;
+    for (std::size_t i = 0; i < A.agents().size(); ++i)
+        if (A.agents()[i].pos.x != C.agents()[i].pos.x || A.agents()[i].pos.y != C.agents()[i].pos.y) ++apart;
+    std::printf("    after 30 s: %d agents in different places\n", apart);
+    CHECK(apart == 0);
+
+    // a changed input misses
+    town(D, navD, pD, 21); D.setPopulationCacheDir(dir); D.assignPlaces(pD, navD);
+    CHECK(!D.populationCache().hit && D.populationCache().key != C.populationCache().key);
+
+    // VERIFY: decide again over a hit, compare
+    setenv("RT_POPULATION_VERIFY", "1", 1);
+    NavGraph navE; PlaceMap pE; CitySim E;
+    town(E, navE, pE, 20); E.setPopulationCacheDir(dir); E.assignPlaces(pE, navE);
+    unsetenv("RT_POPULATION_VERIFY");
+    CHECK(E.populationCache().hit && E.populationCache().mismatches == 0);
+    std::filesystem::remove_all(dir);
+}

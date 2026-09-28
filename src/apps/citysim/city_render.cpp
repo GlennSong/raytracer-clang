@@ -688,9 +688,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // (persistent) mode is settled; before the warm-up so day one runs on places.
     sim_.setLongCommuteShare(params_.longCommuteShare);
     sim_.setBusCommuteShare(params_.busCommuteShare);
+    // The population cache (CitySim::setPopulationCacheDir): off under RT_NOCACHE, like the level bundle.
+    if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
     LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    if (sim_.populationCache().used)
+        LOG_INFO << "[citysim] population: " << (sim_.populationCache().hit ? "read from" : "decided, cached in")
+                 << " cache/population/" << std::hex << sim_.populationCache().key << std::dec << ".pop";
     LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
              << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
              << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m; "

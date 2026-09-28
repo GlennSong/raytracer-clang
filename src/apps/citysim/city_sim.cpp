@@ -5,6 +5,9 @@
 #include "../../profile.h"
 
 #include <algorithm>
+#include <cstring>
+#include <fstream>
+#include <filesystem>
 #include <chrono>
 #include <cmath>
 #include <cstdio>    // RT_CRASH_DEBUG contact telemetry
@@ -688,6 +691,34 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     measureCommute(graph);
 }
 
+
+namespace {
+// ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
+constexpr uint32_t kPopulationFormat = 1;   // bump when assignPlaces' rules or this record change
+struct Fnv {
+    uint64_t h = 1469598103934665603ull;
+    void bytes(const void* p, std::size_t n) {
+        const unsigned char* c = static_cast<const unsigned char*>(p);
+        for (std::size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ull; }
+    }
+    template <typename T> void pod(const T& v) { bytes(&v, sizeof v); }
+    void real(Real v) { const double d = static_cast<double>(v); pod(d); }
+    void vec(const engine::Vec2& v) { real(v.x); real(v.y); }
+};
+// One agent's assignment, as stored.
+struct PopRecord {
+    int32_t home, work, shop, restNode;
+    uint32_t homePlace, workPlace, shopPlace;
+    double homeDoor[2], workDoor[2], shopDoor[2], pos[2];
+    double heading[2], departHome, departWork, commuteSeconds;
+    uint8_t role, archetype, mode, indoors;
+};
+struct PopTail {
+    int32_t crossTownDrivers, driversWithJobs, busCommuters, busCommuteTried;
+    double driverCommute, medianAll, medianDrive, medianWalk;
+};
+}  // namespace
+
 void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     relationships_.clear();
     for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; }
@@ -746,6 +777,88 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     std::vector<std::pair<Real, PlaceId>> jobDist;
     int crossTownDrivers = 0, driversWithJobs = 0, busCommuters = 0, busCommuteTried = 0;
     Real driverCommute = 0;
+
+    // THE POPULATION CACHE: the key is everything the decisions below read.
+    popCache_ = PopulationCacheReport{};
+    std::string popPath;
+    std::vector<PopRecord> cached;
+    PopTail cachedTail{};
+    const bool verify = std::getenv("RT_POPULATION_VERIFY") != nullptr;
+    if (!populationCacheDir_.empty()) {
+        Fnv k;
+        k.pod(kPopulationFormat);
+        k.pod(static_cast<int32_t>(graph.nodeCount()));
+        for (const Vec2& p : graph.nodes) k.vec(p);
+        for (const engine::NavLink& L : graph.links) {
+            k.pod(L.from); k.pod(L.to); k.real(L.length); k.real(L.width); k.pod(L.klass); k.pod(L.walkable); k.pod(L.oneWay);
+        }
+        for (const Place& p : places.places()) {
+            k.pod(p.id); k.pod(p.type); k.vec(p.site); k.vec(p.entrance); k.pod(p.entranceLink); k.real(p.entranceT);
+            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours);
+        }
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            const Agent& a = agents_[i];
+            k.pod(a.uid); k.pod(a.brain); k.pod(a.archetype); k.pod(a.mode); k.real(a.speedFactor);
+            k.real(a.departHome); k.real(a.departWork);
+            k.pod(isBus(static_cast<int>(i))); k.pod(isTaxi(static_cast<int>(i)));
+        }
+        k.real(busCommuteShare_); k.real(busMaxWalk_); k.real(longCommuteShare_);
+        for (int r = 0; r < buses_.routeCount(); ++r) {
+            const BusRoute& br = buses_.route(r);
+            k.pod(br.regional); k.pod(br.network); k.real(br.pace);
+            for (int nd : br.pathNodes) k.pod(nd);
+            for (const BusStop& st : br.stops) { k.pod(st.node); k.pod(st.pathIndex); }
+        }
+        popCache_.used = true;
+        popCache_.key = k.h;
+        char name[40];
+        std::snprintf(name, sizeof name, "%016llx.pop", static_cast<unsigned long long>(k.h));
+        popPath = populationCacheDir_ + "/" + name;
+        std::ifstream in(popPath, std::ios::binary);
+        char magic[6] = {0};
+        uint32_t fmt = 0, count = 0;
+        uint64_t key = 0;
+        if (in && in.read(magic, 6) && std::string(magic, 6) == "RTPOP1" && in.read(reinterpret_cast<char*>(&fmt), 4) &&
+            fmt == kPopulationFormat && in.read(reinterpret_cast<char*>(&key), 8) && key == k.h &&
+            in.read(reinterpret_cast<char*>(&count), 4) && count == agents_.size()) {
+            cached.resize(count);
+            if (in.read(reinterpret_cast<char*>(cached.data()), static_cast<std::streamsize>(count * sizeof(PopRecord))) &&
+                in.read(reinterpret_cast<char*>(&cachedTail), sizeof cachedTail))
+                popCache_.hit = true;
+            else
+                cached.clear();
+        }
+    }
+    auto restore = [&](Agent& a, const PopRecord& r) {
+        a.home = r.home; a.work = r.work; a.shop = r.shop; a.restNode = r.restNode;
+        a.homePlace = r.homePlace; a.workPlace = r.workPlace; a.shopPlace = r.shopPlace;
+        a.homeDoor = Vec2(r.homeDoor[0], r.homeDoor[1]); a.workDoor = Vec2(r.workDoor[0], r.workDoor[1]);
+        a.shopDoor = Vec2(r.shopDoor[0], r.shopDoor[1]); a.pos = Vec2(r.pos[0], r.pos[1]);
+        a.heading = Vec2(r.heading[0], r.heading[1]); a.departHome = r.departHome; a.departWork = r.departWork;
+        a.commuteSeconds = r.commuteSeconds;
+        a.role = static_cast<Agent::Role>(r.role); a.archetype = static_cast<Agent::Mode>(r.archetype);
+        a.mode = static_cast<Agent::Mode>(r.mode); a.indoors = r.indoors != 0;
+    };
+    auto record = [](const Agent& a) {
+        PopRecord r;
+        std::memset(&r, 0, sizeof r);   // padding too: VERIFY compares records byte for byte
+        r.home = a.home; r.work = a.work; r.shop = a.shop; r.restNode = a.restNode;
+        r.homePlace = a.homePlace; r.workPlace = a.workPlace; r.shopPlace = a.shopPlace;
+        r.homeDoor[0] = a.homeDoor.x; r.homeDoor[1] = a.homeDoor.y; r.workDoor[0] = a.workDoor.x; r.workDoor[1] = a.workDoor.y;
+        r.shopDoor[0] = a.shopDoor.x; r.shopDoor[1] = a.shopDoor.y; r.pos[0] = a.pos.x; r.pos[1] = a.pos.y;
+        r.heading[0] = a.heading.x; r.heading[1] = a.heading.y; r.departHome = a.departHome; r.departWork = a.departWork; r.commuteSeconds = a.commuteSeconds;
+        r.role = static_cast<uint8_t>(a.role); r.archetype = static_cast<uint8_t>(a.archetype);
+        r.mode = static_cast<uint8_t>(a.mode); r.indoors = a.indoors ? 1 : 0;
+        return r;
+    };
+    if (popCache_.hit && !verify) {
+        for (std::size_t i = 0; i < agents_.size(); ++i) restore(agents_[i], cached[i]);
+        crossTownDrivers = cachedTail.crossTownDrivers; driversWithJobs = cachedTail.driversWithJobs;
+        busCommuters = cachedTail.busCommuters; busCommuteTried = cachedTail.busCommuteTried;
+        driverCommute = cachedTail.driverCommute;
+        commuteSecondsMedian_ = cachedTail.medianAll; commuteSecondsDrive_ = cachedTail.medianDrive;
+        commuteSecondsWalk_ = cachedTail.medianWalk;
+    } else {
     for (Agent& a : agents_) {
         // Home: deterministic pick from the agent's own brain bits (no rng
         // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
@@ -1076,6 +1189,37 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     }
 
     measureCommute(graph);
+    PopTail tail;
+    std::memset(&tail, 0, sizeof tail);
+    tail.crossTownDrivers = crossTownDrivers; tail.driversWithJobs = driversWithJobs;
+    tail.busCommuters = busCommuters; tail.busCommuteTried = busCommuteTried;
+    tail.driverCommute = driverCommute; tail.medianAll = commuteSecondsMedian_;
+    tail.medianDrive = commuteSecondsDrive_; tail.medianWalk = commuteSecondsWalk_;
+    if (popCache_.hit && verify) {   // decided again: does the cache agree, field for field?
+        int bad = 0;
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            const PopRecord now = record(agents_[i]);
+            if (std::memcmp(&cached[i], &now, sizeof(PopRecord)) != 0) ++bad;
+        }
+        if (std::memcmp(&cachedTail, &tail, sizeof tail) != 0) ++bad;
+        popCache_.mismatches = bad;
+        std::fprintf(stderr, "[citysim] population cache VERIFY: %d of %zu records differ\n", bad, agents_.size());
+    } else if (popCache_.used) {
+        std::error_code ec;
+        std::filesystem::create_directories(populationCacheDir_, ec);
+        const std::string tmp = popPath + ".tmp";
+        std::ofstream out(tmp, std::ios::binary);
+        const uint32_t fmt = kPopulationFormat, count = static_cast<uint32_t>(agents_.size());
+        out.write("RTPOP1", 6);
+        out.write(reinterpret_cast<const char*>(&fmt), 4);
+        out.write(reinterpret_cast<const char*>(&popCache_.key), 8);
+        out.write(reinterpret_cast<const char*>(&count), 4);
+        for (const Agent& a : agents_) { const PopRecord r = record(a); out.write(reinterpret_cast<const char*>(&r), sizeof r); }
+        out.write(reinterpret_cast<const char*>(&tail), sizeof tail);
+        out.close();
+        if (out) { std::filesystem::rename(tmp, popPath, ec); popCache_.saved = !ec; }
+    }
+    }   // decided (not read from the cache)
 
     // Seed the surface-level social graph: agents sharing a workplace are
     // coworkers; those sharing a home are neighbors (housemates).

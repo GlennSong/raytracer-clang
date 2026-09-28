@@ -1147,6 +1147,16 @@ public:
     // the build stream is unchanged). Call AFTER build()/setWander with the same
     // graph; a no-op when `places` has no homes. `graph` must be the built one.
     void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    // THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load
+    // that information?"). What assignPlaces decides for each agent -- home, job, errand stop, role, hours,
+    // commute, starting pose -- plus its commute statistics, written to `<dir>/<key>.pop` keyed by a hash
+    // of EVERYTHING it reads (the nav graph, the places, each agent's state before assignment, the bus
+    // network, the shares, the format). A later load with the same inputs reads it instead of deciding
+    // again. "" (the default) = no cache. RT_POPULATION_VERIFY=1 decides anyway and reports any field that
+    // differs from the cache.
+    void setPopulationCacheDir(std::string dir) { populationCacheDir_ = std::move(dir); }
+    struct PopulationCacheReport { bool used = false, hit = false, saved = false; uint64_t key = 0; int mismatches = -1; };
+    const PopulationCacheReport& populationCache() const { return popCache_; }
     // Share of drivers assignPlaces gives a CROSS-TOWN job (1.2 km+ away); the rest
     // take the nearest of their sampled jobs. Set before assignPlaces.
     void setLongCommuteShare(Real share) { longCommuteShare_ = share; }
@@ -1412,6 +1422,8 @@ private:
     std::vector<int> busRoute_, busStop_;   // per agent; -1 = not a bus
     GoalTable busTable_;
     Real busMaxWalk_ = 0;
+    std::string populationCacheDir_;      // setPopulationCacheDir
+    PopulationCacheReport popCache_;
     Real busServiceStart_ = 0, busServiceEnd_ = 0;   // 0/0 = around the clock
     bool busServiceWas_ = true;                      // edge detect for the events
     long busSkippedLegs_ = 0;
