@@ -331,26 +331,39 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     // the bed: the water's body moving (low roar, stronger for a big river) and surface hiss
     const std::vector<double> roar = circBand(white, rate, 60.0, 450.0);
     const std::vector<double> hiss = circBand(white, rate, 2500.0, 9000.0);
+    // THE RUSH: broad mid-band noise, swelling as the water tumbles -- what a river mostly IS to the ear
+    std::vector<double> white2(count);
+    for (double& w : white2) w = uni(rng);
+    const std::vector<double> rush = circBand(white2, rate, 250.0, 3500.0);
+    const std::vector<double> tumble = circEnvelope(count, rng, 6, 18, 5);
     const std::vector<double> swell = circEnvelope(count, rng, 2, 7, 4);
     std::vector<double> acc(count, 0.0);
-    // bubbles: radius from a power law (many small, few large), the range shifting larger with `size`
-    const double rMin = 0.0012 + 0.0015 * size, rMax = 0.006 + 0.010 * size;   // metres
-    const int bubbles = static_cast<int>(4.0 * (1300.0 - 800.0 * size));        // per loop
-    for (int b = 0; b < bubbles; ++b) {
-        // inverse-CDF of p(r) ~ r^-2.5 between rMin and rMax
-        const double a = -1.5, u = u01(rng);
-        const double r = std::pow(std::pow(rMin, a) + u * (std::pow(rMax, a) - std::pow(rMin, a)), 1.0 / a);
-        const double f0 = 3.26 / r;
-        const double d = 0.043 * f0 + 0.0014 * std::pow(f0, 1.5);
-        const double amp = std::pow(r / rMax, 1.0) * (0.4 + 0.6 * u01(rng));
-        const double rise = 0.1 * d;   // pitch climb per second, ~ the damping (xi ~ 0.1)
-        const size_t start = static_cast<size_t>(u01(rng) * count);
-        const size_t len = static_cast<size_t>(std::min(0.08, 5.0 / d) * rate);
-        double phase = 0;
-        for (size_t k = 0; k < len; ++k) {
-            const double t = static_cast<double>(k) / rate;
-            phase += 6.283185307179586 * f0 * (1.0 + rise * t) / rate;
-            acc[(start + k) % count] += amp * std::sin(phase) * std::exp(-d * t);
+    // GURGLES, not a boil (Glenn: "sounds like a pot of boiling water"): a boiling pot is exactly an even
+    // rain of small independent bubbles. In a river the bubbles come in BURSTS where water tumbles over a
+    // stone and traps air -- a few at once, larger (lower) ones, then a gap -- over a rushing wash that
+    // carries most of the sound. So: burst events (Poisson), each a cluster of bubbles within ~60 ms.
+    const double rMin = 0.0025 + 0.0020 * size, rMax = 0.008 + 0.009 * size;   // metres: ~200-1300 Hz
+    const double burstsPerSecond = 13.0 - 8.0 * size;
+    std::poisson_distribution<int> perBurst(4.0 + 3.0 * size);
+    std::exponential_distribution<double> gap(burstsPerSecond);
+    for (double tb = gap(rng); tb < 4.0; tb += gap(rng)) {
+        const int n = std::max(1, perBurst(rng));
+        const double burstAmp = 0.4 + 0.6 * u01(rng);
+        for (int b = 0; b < n; ++b) {
+            const double a = -1.5, u = u01(rng);
+            const double r = std::pow(std::pow(rMin, a) + u * (std::pow(rMax, a) - std::pow(rMin, a)), 1.0 / a);
+            const double f0 = 3.26 / r;
+            const double d = 0.043 * f0 + 0.0014 * std::pow(f0, 1.5);
+            const double amp = burstAmp * (r / rMax) * (0.5 + 0.5 * u01(rng));
+            const double rise = 0.15 * d;
+            const size_t start = static_cast<size_t>((tb + 0.06 * u01(rng)) * rate) % count;
+            const size_t len = static_cast<size_t>(std::min(0.12, 5.0 / d) * rate);
+            double phase = 0;
+            for (size_t k = 0; k < len; ++k) {
+                const double t = static_cast<double>(k) / rate;
+                phase += 6.283185307179586 * f0 * (1.0 + rise * t) / rate;
+                acc[(start + k) % count] += amp * std::sin(phase) * std::exp(-d * t);
+            }
         }
     }
     // splashes: short broadband bursts where the water breaks over a stone (more in a fast stream)
@@ -369,7 +382,9 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
         const double sw = 1.0 + 0.15 * swell[i] / 2.0;
-        const double v = (0.25 + 0.75 * size) * roar[i] * sw + 0.12 * hiss[i] + 0.9 * acc[i] * norm;
+        const double tum = std::max(0.2, 0.75 + 0.25 * tumble[i] / 2.5);
+        const double v = (0.25 + 0.75 * size) * roar[i] * sw + (0.9 - 0.3 * size) * rush[i] * tum + 0.10 * hiss[i] +
+                         0.45 * acc[i] * norm;
         out[i] = static_cast<float>(std::tanh(0.4 * v));
     }
     normalizeTo(out, 0.7f);
