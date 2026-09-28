@@ -201,3 +201,49 @@ TEST_CASE(offroader_with_an_axle_hanging_still_drives_the_wheels_on_the_ground) 
     CHECK(groundedSpin(fixedRun) < 1.0);   // what Glenn saw: starved
 }
 
+
+// ROLLING IT (Glenn: "how come I can't flip my car? ... if I go off a ramp with half my wheels on it I should be
+// able to flip my vehicle"). The street cars keep ADR-0087's 65 degree roll cone (a kerb trip must not roof a
+// commuter); the part-time 4x4s drop it. A ramp under the LEFT tyres only, hit at speed: the max roll reached.
+namespace {
+Real maxRollOffHalfRamp(PhysicsWorld::VehicleConfig cfg, Real kmh) {
+    PhysicsWorld w;
+    w.initialize();
+    w.addBox(Vec3(60, 0.5, 200), Vec3(0, -0.5, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    // a 25 degree kicker, 1.2 m wide, under one track (x = +0.9) only
+    const Real a = 25.0 * 3.14159265358979 / 180.0, len = 3.0;
+    w.addBox(Vec3(0.6, 0.1, len * 0.5), Vec3(0.9, len * 0.5 * std::sin(a) - 0.1, 40.0),
+             Quat::fromAxisAngle(Vec3(1, 0, 0), -a), BodyMotion::Static, 0.0, 0.85);
+    w.optimizeBroadPhase();
+    const auto id = w.addVehicle(cfg, Vec3(0, 1.4, 0), Quat::identity());
+    for (int i = 0; i < 60; ++i) w.update(1.0 / 60.0);
+    Real maxRoll = 0.0;
+    for (int i = 0; i < 60 * 12; ++i) {
+        const Vec3 p = w.vehiclePosition(id);
+        const Real v = w.vehicleTelemetry(id).speed * 3.6;
+        w.setVehicleInput(id, p.z < 38.0 && v < kmh ? 1.0 : 0.0, 0, p.z < 38.0 && v > kmh + 3 ? 0.5 : 0.0);
+        w.update(1.0 / 60.0);
+        const Vec3 up = w.vehicleOrientation(id).rotate(Vec3(0, 1, 0));
+        maxRoll = std::max(maxRoll, std::acos(std::clamp(up.y, Real(-1), Real(1))) * 57.2958);
+    }
+    return maxRoll;
+}
+}  // namespace
+
+TEST_CASE(offroader_can_roll_over_off_a_half_ramp_street_cars_cannot) {
+    VehiclesVM v;
+    VehicleSpec off, sedan;
+    std::string err;
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.offroad(seed, {})", 3u, off, &err));
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_sedan(seed, {})", 3u, sedan, &err));
+    CHECK(off.config.maxPitchRollDegrees >= 180.0);   // no cone on the 4x4
+    CHECK(sedan.config.maxPitchRollDegrees < 90.0);   // the street keeps it
+    bool rolled = false;
+    for (const Real kmh : {40.0, 60.0, 80.0}) {
+        const Real r4 = maxRollOffHalfRamp(off.config, kmh), rs = maxRollOffHalfRamp(sedan.config, kmh);
+        std::printf("    %2.0f km/h off a left-side kicker: off-roader max roll %5.1f deg, sedan %5.1f deg\n", kmh, r4, rs);
+        rolled = rolled || r4 > 100.0;
+        CHECK(rs < 90.0);
+    }
+    CHECK(rolled);   // fast enough, it goes over
+}

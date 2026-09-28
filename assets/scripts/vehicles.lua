@@ -221,6 +221,7 @@ local function kit_drivable(specName, opts, h)
     -- departure angles (physics_world.h) -- a square box caught rocks the tyres could climb
     floor_clearance = math.max(0.22, P.clear or 0),
     approach_deg = h.approach_deg, departure_deg = h.departure_deg,
+    max_roll_deg = h.max_roll_deg,
     drive = h.drive,
     axle_lsd = h.axle_lsd, center_lsd = h.center_lsd, traction_split = h.traction_split,
     drag_area = h.drag_area or 2.0,
@@ -241,13 +242,16 @@ local OFFROAD = {
   grip = 2.3, axle_lsd = 1.15, center_lsd = 1e30, traction_split = true, drag_area = 2.8, gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
   suspension = { min = 0.0, max = 0.40, freq = 1.3, damp = 0.5, rest_drop = 0.30 }, wheel_width = 0.32,
   approach_deg = 42, departure_deg = 36,
+  -- no roll cone (ADR-0087's 65 degree limit keeps a commuter off its roof after a kerb trip): an off-roader
+  -- can be rolled -- Glenn: "if I go off a ramp with half my wheels on it I should be able to flip". T rights it.
+  max_roll_deg = 180,
   metallic = 0.35, roughness = 0.5,
 }
 -- a light off-road rig for the jeep and pickup (part-time 4WD, more travel than the street)
 local function trail(approach, departure)
   return { drive = "4wd", axle_lsd = 1.2, center_lsd = 1e30, traction_split = true, grip = 2.1, drag_area = 2.5,
            suspension = { min = 0.0, max = 0.30, freq = 1.5, damp = 0.55, rest_drop = 0.23 },
-           approach_deg = approach, departure_deg = departure }
+           approach_deg = approach, departure_deg = departure, max_roll_deg = 180 }
 end
 local KIT_HANDLING = {
   sedan       = { drive = "fwd", drag_area = 2.0 },
