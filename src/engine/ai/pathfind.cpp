@@ -191,6 +191,63 @@ std::vector<char> reachableFrom(const NavGraph& graph, int startNode, bool onFoo
     return seen;
 }
 
+std::vector<int> stronglyConnected(const NavGraph& graph, bool onFoot) {
+    // Tarjan, iterative (an island's graph is deep enough to overflow a recursive one).
+    const int n = graph.nodeCount();
+    std::vector<int> comp(static_cast<std::size_t>(n), -1), index(static_cast<std::size_t>(n), -1),
+        low(static_cast<std::size_t>(n), 0);
+    std::vector<char> onStack(static_cast<std::size_t>(n), 0);
+    std::vector<int> stack;
+    struct Frame { int node; std::size_t next; };
+    std::vector<Frame> call;
+    int counter = 0, comps = 0;
+    auto usable = [&](const NavLink& link) {
+        return !(onFoot && (link.klass == RoadClass::Freeway || link.klass == RoadClass::Ramp || !link.walkable));
+    };
+    for (int root = 0; root < n; ++root) {
+        if (index[static_cast<std::size_t>(root)] >= 0) continue;
+        call.push_back({root, 0});
+        index[static_cast<std::size_t>(root)] = low[static_cast<std::size_t>(root)] = counter++;
+        stack.push_back(root);
+        onStack[static_cast<std::size_t>(root)] = 1;
+        while (!call.empty()) {
+            Frame& f = call.back();
+            const int u = f.node;
+            const std::vector<int>& out = graph.outLinks[static_cast<std::size_t>(u)];
+            if (f.next < out.size()) {
+                const NavLink& link = graph.links[static_cast<std::size_t>(out[f.next++])];
+                if (!usable(link)) continue;
+                const int v = link.to;
+                if (index[static_cast<std::size_t>(v)] < 0) {
+                    index[static_cast<std::size_t>(v)] = low[static_cast<std::size_t>(v)] = counter++;
+                    stack.push_back(v);
+                    onStack[static_cast<std::size_t>(v)] = 1;
+                    call.push_back({v, 0});
+                } else if (onStack[static_cast<std::size_t>(v)]) {
+                    low[static_cast<std::size_t>(u)] = std::min(low[static_cast<std::size_t>(u)], index[static_cast<std::size_t>(v)]);
+                }
+                continue;
+            }
+            if (low[static_cast<std::size_t>(u)] == index[static_cast<std::size_t>(u)]) {
+                for (;;) {
+                    const int w = stack.back();
+                    stack.pop_back();
+                    onStack[static_cast<std::size_t>(w)] = 0;
+                    comp[static_cast<std::size_t>(w)] = comps;
+                    if (w == u) break;
+                }
+                ++comps;
+            }
+            call.pop_back();
+            if (!call.empty()) {
+                const int parent = call.back().node;
+                low[static_cast<std::size_t>(parent)] = std::min(low[static_cast<std::size_t>(parent)], low[static_cast<std::size_t>(u)]);
+            }
+        }
+    }
+    return comp;
+}
+
 Route findRouteBetween(const NavGraph& graph, const Vec2& start, const Vec2& goal) {
     return findRoute(graph, graph.nearestNode(start), graph.nearestNode(goal));
 }

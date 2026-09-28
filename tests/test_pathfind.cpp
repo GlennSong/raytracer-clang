@@ -207,3 +207,46 @@ TEST_CASE(pathfind_route_polyline_sidewalk_offsets_off_the_centreline) {
         CHECK(dx * dx + dy * dy > 1.0);
     }
 }
+
+// THERE AND BACK, without searching: stronglyConnected puts two nodes in one component exactly when
+// findRoute routes both ways between them -- checked on every pair of random graphs with one-way links,
+// freeways, ramps and unwalkable links, by car and on foot.
+TEST_CASE(strongly_connected_agrees_with_findroute_both_ways) {
+    uint32_t seed = 12345;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+    int mismatches = 0, pairs = 0, sameComp = 0;
+    for (int trial = 0; trial < 40; ++trial) {
+        NavGraph g;
+        const int n = 12 + static_cast<int>(rnd() % 20);
+        for (int i = 0; i < n; ++i) g.nodes.push_back(Vec2(static_cast<Real>(rnd() % 400), static_cast<Real>(rnd() % 400)));
+        g.outLinks.assign(static_cast<std::size_t>(n), {});
+        const int m = n + static_cast<int>(rnd() % (2 * n));
+        for (int k = 0; k < m; ++k) {
+            NavLink L;
+            L.from = static_cast<int>(rnd() % n);
+            L.to = static_cast<int>(rnd() % n);
+            if (L.from == L.to) continue;
+            L.length = (g.nodes[L.from] - g.nodes[L.to]).length() + 1.0;
+            const uint32_t c = rnd() % 10;
+            L.klass = c == 0 ? RoadClass::Freeway : c == 1 ? RoadClass::Ramp : c < 5 ? RoadClass::Arterial : RoadClass::Local;
+            L.walkable = rnd() % 6 != 0;
+            g.outLinks[static_cast<std::size_t>(L.from)].push_back(static_cast<int>(g.links.size()));
+            g.links.push_back(L);
+        }
+        for (const bool foot : {false, true}) {
+            const std::vector<int> comp = stronglyConnected(g, foot);
+            for (int a = 0; a < n; ++a)
+                for (int b = 0; b < n; ++b) {
+                    if (a == b) continue;
+                    const bool routes = findRoute(g, a, b, foot).valid() && findRoute(g, b, a, foot).valid();
+                    const bool same = comp[static_cast<std::size_t>(a)] == comp[static_cast<std::size_t>(b)];
+                    ++pairs;
+                    sameComp += same;
+                    if (routes != same) ++mismatches;
+                }
+        }
+    }
+    std::printf("    %d ordered pairs, %d in one component, %d disagreements\n", pairs, sameComp, mismatches);
+    CHECK(mismatches == 0);
+    CHECK(sameComp > 0 && sameComp < pairs);   // both answers occur
+}

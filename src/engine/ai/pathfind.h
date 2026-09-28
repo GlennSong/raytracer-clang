@@ -50,6 +50,11 @@ RouteStats& routeStats();
 // of paying for each unreachable goal with an exhaustive failed search.
 std::vector<char> reachableFrom(const NavGraph& graph, int startNode, bool onFoot = false);
 
+// The graph's STRONGLY CONNECTED components under findRoute's link rules (on foot or not): comp[a] ==
+// comp[b] exactly when findRoute(a, b) and findRoute(b, a) both find a route (a != b). One linear pass --
+// what a caller asking "there and back?" of thousands of pairs runs once instead of two searches a pair.
+std::vector<int> stronglyConnected(const NavGraph& graph, bool onFoot = false);
+
 // Convenience: snap world points to their nearest nodes, then route.
 Route findRouteBetween(const NavGraph& graph, const Vec2& start, const Vec2& goal);
 // Same, on foot (skips Freeway/Ramp links) — walkers snap and route too.
