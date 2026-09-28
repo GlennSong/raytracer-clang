@@ -233,6 +233,13 @@ public:
         // grounded pair got nothing. (Jolt's centre limited slip, near-locked, drives the grounded pair too but
         // throws ALL torque between the axles on a climb and lost the 30 degree hill.)
         bool tractionSplit = false;
+        // BRAKE BALANCE (Glenn: "the brakes are really soft"): the front axle's share of the total brake
+        // torque (brakeTorque is the per-wheel average). Braking loads the front and unloads the rear, so
+        // equal torque locked the rears at once. Real cars run about two-thirds front. 100-0 km/h: 48-54 m
+        // at 0.5, 45-51 at 0.68. (The rest of the gap to a real car's ~37 m is tyre grip: the longitudinal
+        // curve is Jolt's 1.2 against lateralGrip 2.0 -- raising it stops in 35-43 m but makes the course's
+        // mud grip enough for 2WD. An ABS lengthened stops: Jolt's locked tyre keeps 83% of its peak.)
+        Real brakeFrontBias = 0.68;
         // The roll CONE keeps the body's up axis within this angle of world
         // up (>= 180 turns it off). OFF by default: Glenn, 2026-09-27: "rolling
         // over should be allowed for active drivers, everyone. That's what would
@@ -305,7 +312,7 @@ public:
     Real vehicleFrontDriveShare(VehicleId id) const;
     // Telemetry: forward speed (m/s), engine rpm, current gear (0 neutral, < 0 reverse).
     // speed (m/s along the nose), engine rpm, gear, and per wheel: spin (rad/s) and whether it touches ground
-    struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; };
+    struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; std::vector<Real> wheelSlip; };
     VehicleTelemetry vehicleTelemetry(VehicleId id) const;
 
     // Create a vehicle at the given pose; returns INVALID_VEHICLE on failure.

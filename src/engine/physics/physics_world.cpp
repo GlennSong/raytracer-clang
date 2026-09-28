@@ -789,7 +789,19 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         ws->mMaxSteerAngle = w.steered
             ? JPH::DegreesToRadians(static_cast<float>(cfg.maxSteerDegrees))
             : 0.0f;
-        ws->mMaxBrakeTorque = static_cast<float>(cfg.brakeTorque);
+        {   // brake balance: brakeTorque is the per-wheel average; the front axle takes brakeFrontBias of it
+            int nFront = 0, nRear = 0;
+            Real lo = 1e30, hi = -1e30;
+            for (const VehicleWheel& o : cfg.wheels) { lo = std::min(lo, o.position.z); hi = std::max(hi, o.position.z); }
+            const Real mid = 0.5 * (lo + hi);
+            for (const VehicleWheel& o : cfg.wheels) (o.position.z > mid ? nFront : nRear) += 1;
+            const Real total = cfg.brakeTorque * static_cast<Real>(cfg.wheels.size());
+            const Real bias = std::clamp(cfg.brakeFrontBias, Real(0), Real(1));
+            Real t = cfg.brakeTorque;
+            if (nFront > 0 && nRear > 0)
+                t = w.position.z > mid ? total * bias / nFront : total * (1.0 - bias) / nRear;
+            ws->mMaxBrakeTorque = static_cast<float>(t);
+        }
         // The lateral slip curve at the config's grip (Jolt's shape: a peak
         // at 3 degrees of slip, 85 % of it once sliding past 20).
         ws->mLateralFriction.Clear();
@@ -1116,6 +1128,7 @@ PhysicsWorld::VehicleTelemetry PhysicsWorld::vehicleTelemetry(VehicleId id) cons
         const JPH::Wheel* w = v.constraint->GetWheel(static_cast<JPH::uint>(i));
         t.wheelSpin.push_back(w->GetAngularVelocity());
         t.wheelContact.push_back(w->HasContact() ? 1 : 0);
+        t.wheelSlip.push_back(static_cast<const JPH::WheelWV*>(w)->mLongitudinalSlip);
     }
     return t;
 }

@@ -7,6 +7,7 @@
 #include "../src/engine/scripting/script_modules.h"
 #include "../src/engine/script_assets.h"
 #include "../src/engine/scripting/vehicle_spec.h"
+#include "../src/engine/vehicle_steering.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -299,3 +300,66 @@ TEST_CASE(drivable_cars_probe_cornering_roll_prints) {
                     k2.maxRoll, k2.over ? "OVER" : "");
     }
 }
+
+// BRAKES AND TURNING (Glenn: "the brakes are really soft and the turn radius feels really wide"). Each drivable
+// spec, through the player's own input path (the keyboard steering assist, vehicle_steering.h):
+//   stop     from 100 km/h: Space (brake pedal = 1) and S (throttle -1), metres to a stop. A real car: ~36-40 m.
+//   radius   full key held at a steady speed: the circle's radius (speed / yaw rate). A real sedan turns in a
+//            ~5.5 m radius at walking pace; the tyres cap it near v^2 / (0.9 g) at speed.
+namespace {
+PhysicsWorld::VehicleId flatCar(PhysicsWorld& w, const PhysicsWorld::VehicleConfig& cfg) {
+    w.initialize();
+    w.addBox(Vec3(4000, 1, 4000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    w.optimizeBroadPhase();
+    const auto id = w.addVehicle(cfg, Vec3(0, 1.2, 0), Quat::identity());
+    for (int i = 0; i < 90; ++i) w.update(1.0 / 60.0);
+    return id;
+}
+Real stopDistance(const PhysicsWorld::VehicleConfig& cfg, bool pedal) {
+    PhysicsWorld w;
+    const auto id = flatCar(w, cfg);
+    for (int i = 0; i < 60 * 30 && w.vehicleTelemetry(id).speed < 100.0 / 3.6; ++i) {
+        w.setVehicleInput(id, 1.0, 0, 0);
+        w.update(1.0 / 60.0);
+    }
+    const Vec3 p0 = w.vehiclePosition(id);
+    for (int i = 0; i < 60 * 30 && w.vehicleTelemetry(id).speed > 0.3; ++i) {
+        w.setVehicleInput(id, pedal ? 0.0 : -1.0, 0, pedal ? 1.0 : 0.0);
+        w.update(1.0 / 60.0);
+    }
+    return (w.vehiclePosition(id) - p0).length();
+}
+Real turnRadius(const PhysicsWorld::VehicleConfig& cfg, Real kmh) {
+    PhysicsWorld w;
+    const auto id = flatCar(w, cfg);
+    Real steer = 0.0;
+    Real yawRate = 0.0, speed = 0.0;
+    for (int i = 0; i < 60 * 14; ++i) {
+        speed = w.vehicleTelemetry(id).speed;
+        const bool turning = i > 60 * 6;
+        const Real thr = std::clamp((kmh / 3.6 - speed) * 0.5, Real(-0.3), Real(1.0));
+        steer = shapeSteer(steer, turning ? 1.0 : 0.0, speed, 1.0 / 60.0);
+        const Vec3 f0 = w.vehicleOrientation(id).rotate(Vec3(0, 0, 1));
+        w.setVehicleInput(id, thr, steer, 0);
+        w.update(1.0 / 60.0);
+        const Vec3 f1 = w.vehicleOrientation(id).rotate(Vec3(0, 0, 1));
+        if (i > 60 * 11) yawRate = 0.9 * yawRate + 0.1 * std::fabs(std::atan2(f0.x * f1.z - f0.z * f1.x, f0.x * f1.x + f0.z * f1.z)) * 60.0;
+    }
+    return yawRate > 1e-4 ? std::fabs(speed) / yawRate : 1e9;
+}
+}  // namespace
+
+TEST_CASE(drivable_cars_probe_brakes_and_turning_prints) {
+    VehiclesVM v;
+    for (const char* recipe : {"sedan", "kit_sedan", "kit_suv", "kit_convertible", "offroad"}) {
+        VehicleSpec spec;
+        std::string err;
+        if (!loadVehicleSpec(v.vm, std::string("return vehicle.") + recipe + "(seed, {})", 3u, spec, &err)) continue;
+        std::printf("    %-16s stop 100->0: Space %5.1f m  S %5.1f m  | radius:", recipe, stopDistance(spec.config, true),
+                    stopDistance(spec.config, false));
+        for (const Real kmh : {10.0, 30.0, 50.0, 80.0})
+            std::printf("  %2.0f km/h %5.1f m", kmh, turnRadius(spec.config, kmh));
+        std::printf("   [brake %.0f Nm, steer %.0f deg, mass %.0f]\n", spec.config.brakeTorque, spec.config.maxSteerDegrees, spec.config.mass);
+    }
+}
+
