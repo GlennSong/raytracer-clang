@@ -227,6 +227,12 @@ public:
         // and caught every rock the wheels could have climbed.
         Real approachDegrees = 0.0;
         Real departureDegrees = 0.0;
+        // TRACTION SPLIT (a part-time 4x4's transfer case; Glenn: "two wheels down (front) and they're not moving
+        // in 4wd mode"). In four-wheel drive an axle with no tyre on the ground hands its torque to the axle that
+        // has one. Without it the hanging pair spun up, the engine hit its limiter and cut its torque, and the
+        // grounded pair got nothing. (Jolt's centre limited slip, near-locked, drives the grounded pair too but
+        // throws ALL torque between the axles on a climb and lost the 30 degree hill.)
+        bool tractionSplit = false;
         // ARCADE-FORGIVING (ADR-0059's "tuned by the caller"): the roll CONE
         // keeps the body's up axis within this angle of world up — a kerb
         // hop or a trip can put the car on two wheels but never on its roof
@@ -296,7 +302,8 @@ public:
     void setVehicleFrontDriveShare(VehicleId id, Real share);
     Real vehicleFrontDriveShare(VehicleId id) const;
     // Telemetry: forward speed (m/s), engine rpm, current gear (0 neutral, < 0 reverse).
-    struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; };
+    // speed (m/s along the nose), engine rpm, gear, and per wheel: spin (rad/s) and whether it touches ground
+    struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; };
     VehicleTelemetry vehicleTelemetry(VehicleId id) const;
 
     // Create a vehicle at the given pose; returns INVALID_VEHICLE on failure.
@@ -339,6 +346,7 @@ private:
     // vehicle in slot `index` (called from update, before the Jolt step).
     void applyYawAssist(std::size_t index);
     void applyAeroDrag(std::size_t index);
+    void applyTractionSplit(std::size_t index);
 };
 
 

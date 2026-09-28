@@ -191,7 +191,11 @@ PhysicsWorld::VehicleConfig offroad(bool fourWheel) {
     c.lateralGrip = 2.3;
     c.frontDriveShare = fourWheel ? 0.5 : 0.0;
     c.axleLimitedSlip = 1.15;
-    c.centerLimitedSlip = 1e30;   // open between the axles: a fixed 50/50 split
+    c.centerLimitedSlip = 1e30;   // a fixed 50/50 split...
+    c.tractionSplit = true;       // ...that hands a hanging axle's torque to the grounded one (vehicles.lua)
+    c.floorClearance = 0.42;      // the collision underside the kit gives it (ground clearance, 42 / 36 cut)
+    c.approachDegrees = 42.0;
+    c.departureDegrees = 36.0;
     c.dragArea = 2.8;
     c.shiftTime = 0.2;
     c.clutchReleaseTime = 0.15;

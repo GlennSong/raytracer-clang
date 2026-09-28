@@ -9092,7 +9092,7 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
 - **The off-roader** (`vehicle.offroad`, #41). A kit body (lifted, 0.96 m tyres, roof rack, skid plate) on long soft travel (0.40 m at 1.3 Hz), near-locking differentials, sticky tyres and low gears. It is part-time 4WD: Z / D-pad down engages it. The wheel lab parks one beside a street sedan.
 
 - **Between the axles, Jolt's limited slip hurts a climb.** It sends ALL torque to the slower axle past its ratio, which flips the drive back and forth. Measured on 30° dirt: a 1.10 centre stalls (−0.8 m), 1.4 reaches +14 m, and an open centre (a fixed 50/50 split) reaches +28 m.
-  - The off-roader runs it open (`center_lsd = 1e30`) with near-locking axles (1.15).
+  - The off-roader runs it open (`center_lsd = 1e30`, a fixed 50/50 split) with near-locking axles (1.15), plus the traction split below.
   - Street AWD cars keep Jolt's 1.4, which their kerb and roll tuning assumes (the driving-lab and slanted-kerb gates caught the change).
 - **The off-road course** (`tools/offroad_course.py` → `assets/levels/offroad_course.json`) has:
   - hill ladders on grip (15–35°) and mud (10–30°);
@@ -9111,6 +9111,10 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
   - The collision: the chassis was the whole-vehicle box, carved 0.22 m, so its floor rode 14 cm under the drawn belly and its square bumper edge sat a full overhang ahead of the tyres. `VehicleConfig::approachDegrees` / `departureDegrees` now cut the nose and tail as a convex hull, and the kit drivables put the collision floor at the body's ground clearance (`floor_clearance`, never under 0.22). The off-roader is cut at 42° / 36°, the jeep 38° / 32°, the pickup 28° / 24°; street cars keep the box.
   - A/B over four lanes of the course (`offroader_drives_the_course_ledges_rocks_and_twister_in_four_wheel_drive`, the real `vehicle.offroad` spec on the level's geometry): the old underside got through 0 lanes, the new one 4.
 - **Run-ups test momentum, not traction.** From 12 m back even 2WD crested 30° of mud. Each hill now has a stop line at its foot, and each mud hill a mud apron (a 2WD truck's rear tyres gripped the dirt until it was most of the way up). From the line: 4WD climbs every mud rung to 30°, 2WD stalls from 25°; 35° dirt is past the limit and decided at the crest.
+- **A hanging axle starved the grounded one** (Glenn: "two wheels down (front) and they're not moving in 4wd mode ... if I try to reverse they don't spin"). With a plain fixed split, the pair in the air spins up, the engine hits its limiter and cuts its torque, and the grounded pair sits at 0 rad/s (reproduced: rear axle over a hole).
+  - A near-locked Jolt centre (1.1) drives the grounded pair, but it is all-or-nothing between the axles and lost the 30° dirt climb (+4.5 of 6 m).
+  - `VehicleConfig::tractionSplit` (spec `traction_split`) instead keeps the fixed split and, each step in 4WD, hands an axle with no tyre on the ground its torque to the axle that has one, as a transfer case would. Grounded pair driven (106 / 58 rad/s); the endless-slope climbs all improved (30° dirt +19 m, 25° dirt +42 m against +32 in 2WD). The off-roader, jeep and pickup have it.
+  - `offroader_with_an_axle_hanging_still_drives_the_wheels_on_the_ground` asserts the spin, not an escape: in that rig the tail drops below the hole's lip and wedges against its wall, a winch job (T recovers).
 - **Probes that drive:** `hold <Key> <seconds>` holds a key through the real input path, and `vehicle?` reports the player's car (km/h, rpm, gear, 2wd/4wd, position, sim speed).
 
 **Consequences.** `test_city_phys_tier` (`maxPossessed >= 6`) fails on the island-nature base too, so it predates this work.

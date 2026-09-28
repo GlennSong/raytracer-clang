@@ -222,7 +222,7 @@ local function kit_drivable(specName, opts, h)
     floor_clearance = math.max(0.22, P.clear or 0),
     approach_deg = h.approach_deg, departure_deg = h.departure_deg,
     drive = h.drive,
-    axle_lsd = h.axle_lsd, center_lsd = h.center_lsd,
+    axle_lsd = h.axle_lsd, center_lsd = h.center_lsd, traction_split = h.traction_split,
     drag_area = h.drag_area or 2.0,
     shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
     gear_ratios = h.gear_ratios,
@@ -234,17 +234,18 @@ end
 vehicle.kit_drivable = kit_drivable
 
 -- THE OFF-ROADER (#41): part-time four-wheel drive (2WD rear by default, Z / D-pad down engages 4WD), long
--- soft travel, near-locking axles with an open centre (a fixed 50/50 split in 4WD), sticky tyres, low gears.
+-- soft travel, near-locking axles, a fixed 50/50 split in 4WD that hands a hanging axle's torque to the one on
+-- the ground (traction_split), sticky tyres, low gears.
 local OFFROAD = {
   drive = "4wd", mass = 2300, torque_per_kg = 0.55, max_rpm = 5200, max_steer_deg = 32, com_offset = -0.62,
-  grip = 2.3, axle_lsd = 1.15, center_lsd = 1e30, drag_area = 2.8, gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
+  grip = 2.3, axle_lsd = 1.15, center_lsd = 1e30, traction_split = true, drag_area = 2.8, gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
   suspension = { min = 0.0, max = 0.40, freq = 1.3, damp = 0.5, rest_drop = 0.30 }, wheel_width = 0.32,
   approach_deg = 42, departure_deg = 36,
   metallic = 0.35, roughness = 0.5,
 }
 -- a light off-road rig for the jeep and pickup (part-time 4WD, more travel than the street)
 local function trail(approach, departure)
-  return { drive = "4wd", axle_lsd = 1.2, center_lsd = 1e30, grip = 2.1, drag_area = 2.5,
+  return { drive = "4wd", axle_lsd = 1.2, center_lsd = 1e30, traction_split = true, grip = 2.1, drag_area = 2.5,
            suspension = { min = 0.0, max = 0.30, freq = 1.5, damp = 0.55, rest_drop = 0.23 },
            approach_deg = approach, departure_deg = departure }
 end

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -127,4 +128,67 @@ TEST_CASE(offroader_drives_the_course_ledges_rocks_and_twister_in_four_wheel_dri
     CHECK(dirt30);      // a 30 degree dirt hill, crest and all
     CHECK(mudAll4);     // every mud hill, to 30 degrees, in four-wheel drive...
     CHECK(!mud25in2);   // ...where two-wheel drive stalls on 25
+}
+
+// ONE AXLE HANGING (Glenn: "I have two wheels down (front) and they're not moving in 4wd mode ... if I try to
+// reverse they don't spin"). The rear axle over a hole, its tyres in the air, the fronts on the dirt. A real
+// transfer case locks the shafts, so the grounded wheels still turn; the traction split hands the hanging axle's
+// torque to them (VehicleConfig::tractionSplit). The first cut's plain fixed split did not: the hanging rears spun up, the engine hit its limiter and cut its torque, and the
+// grounded pair sat at 0 rad/s. (Whether the truck then gets OUT is geometry: here its tail drops below the
+// hole's lip and wedges against the wall -- a winch job, not a drivetrain one -- so only the spin is asserted.)
+namespace {
+struct HoleRun { Real moved; std::vector<Real> spin; std::vector<char> contact0; };
+HoleRun driveOutOfHole(PhysicsWorld::VehicleConfig cfg, Real throttle, bool print) {
+    PhysicsWorld w;
+    w.initialize();
+    // dirt ahead (z > -1.0) and far behind (z < -4.0); a 1.5 m deep hole between, under the rear axle
+    w.addBox(Vec3(20, 0.5, 20), Vec3(0, -0.5, 19.0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    w.addBox(Vec3(20, 0.5, 20), Vec3(0, -0.5, -24.0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    w.addBox(Vec3(20, 0.5, 1.5), Vec3(0, -2.0, -2.5), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    w.optimizeBroadPhase();
+    const auto id = w.addVehicle(cfg, Vec3(0, 1.4, 0.4), Quat::identity());
+    for (int i = 0; i < 120; ++i) w.update(1.0 / 60.0);
+    HoleRun r;
+    r.contact0 = w.vehicleTelemetry(id).wheelContact;
+    const Vec3 p0 = w.vehiclePosition(id);
+    for (int i = 0; i < 60 * 4; ++i) { w.setVehicleInput(id, throttle, 0, 0); w.update(1.0 / 60.0); }
+    const auto t1 = w.vehicleTelemetry(id);
+    r.moved = w.vehiclePosition(id).z - p0.z;
+    r.spin = t1.wheelSpin;
+    if (print) {
+        std::printf("      contact at rest");
+        for (char c : r.contact0) std::printf(" %d", c);
+        std::printf("  | after 4 s: rpm %.0f spin", t1.rpm);
+        for (Real sp : t1.wheelSpin) std::printf(" %+.1f", sp);
+        std::printf("  moved %+.2f m\n", r.moved);
+    }
+    return r;
+}
+}  // namespace
+
+TEST_CASE(offroader_with_an_axle_hanging_still_drives_the_wheels_on_the_ground) {
+    VehiclesVM v;
+    VehicleSpec spec;
+    std::string err;
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.offroad(seed, {})", 3u, spec, &err));
+    PhysicsWorld::VehicleConfig cfg = spec.config;
+    cfg.frontDriveShare = 0.5;   // Z pressed
+    std::printf("    4WD with the traction split:\n");
+    const HoleRun fwd = driveOutOfHole(cfg, 1.0, true);
+    int down = 0;
+    for (char c : fwd.contact0) down += c;
+    CHECK(fwd.contact0.size() == 4 && down == 2);   // one axle on the dirt, one hanging
+    auto groundedSpin = [](const HoleRun& r) {
+        Real least = 1e9;
+        for (std::size_t i = 0; i < r.spin.size(); ++i)
+            if (r.contact0[i]) least = std::min(least, std::fabs(r.spin[i]));
+        return least;
+    };
+    CHECK(groundedSpin(fwd) > 5.0);   // the wheels on the ground are driven
+    CHECK(cfg.tractionSplit);
+    PhysicsWorld::VehicleConfig fixedSplit = cfg;
+    fixedSplit.tractionSplit = false;
+    std::printf("    4WD, a plain fixed 50/50 split (the first cut):\n");
+    const HoleRun fixedRun = driveOutOfHole(fixedSplit, 1.0, true);
+    CHECK(groundedSpin(fixedRun) < 1.0);   // what Glenn saw: starved
 }

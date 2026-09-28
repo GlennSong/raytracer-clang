@@ -104,6 +104,9 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.frontDriveShare = numField(L, t, "front_share", c.frontDriveShare);
     c.axleLimitedSlip = numField(L, t, "axle_lsd", c.axleLimitedSlip);
     c.centerLimitedSlip = numField(L, t, "center_lsd", c.centerLimitedSlip);
+    lua_getfield(L, t, "traction_split");   // true: in 4WD a hanging axle hands its torque to the grounded one
+    if (lua_isboolean(L, -1)) c.tractionSplit = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
     // AERO and GEARBOX
     c.dragArea = numField(L, t, "drag_area", c.dragArea);
     c.shiftTime = numField(L, t, "shift_time", c.shiftTime);
