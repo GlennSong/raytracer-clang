@@ -84,6 +84,7 @@ void BusNetwork::buildRegional(const engine::NavGraph& nav) {
     }
     if (byNet.size() < 2) return;
     std::vector<BusStop> picks;
+    std::vector<int> pickNet;   // the street network each pick serves
     for (auto& kv : byNet) {
         const std::vector<BusStop>& sts = kv.second;
         Vec2 mid(0, 0);
@@ -107,6 +108,7 @@ void BusNetwork::buildRegional(const engine::NavGraph& nav) {
             mine.push_back(sts[best]);
         }
         picks.insert(picks.end(), mine.begin(), mine.end());
+        pickNet.insert(pickNet.end(), mine.size(), kv.first);
     }
     // the visiting order
     const std::size_t m = picks.size();
@@ -129,19 +131,56 @@ void BusNetwork::buildRegional(const engine::NavGraph& nav) {
                 if (after < before - 1e-6) { std::reverse(order.begin() + static_cast<long>(i) + 1, order.begin() + static_cast<long>(j) + 1); improved = true; }
             }
     }
-    // the legs, by car
+    // THE LEGS, BY CAR (#80; Glenn: "I haven't seen buses on the freeway ramp"). A stop the car router cannot
+    // reach from the one before is SKIPPED -- logged with its network -- and the tour carries on; the first cut
+    // returned on any failed leg, so one unreachable town silently cost the whole island its regional route.
+    // The loop must also close: trailing stops that cannot drive back to the first are dropped. If the tour's
+    // first stop is itself the unreachable one, the next start is tried.
+    const bool why = std::getenv("RT_BUS_WHY") != nullptr;
+    std::vector<std::size_t> kept;
+    std::vector<engine::Route> legs;
+    std::vector<std::size_t> skipped;
+    for (std::size_t start = 0; start < m; ++start) {
+        kept.assign(1, order[start]);
+        legs.clear();
+        skipped.clear();
+        for (std::size_t k = 1; k < m; ++k) {
+            const std::size_t next = order[(start + k) % m];
+            engine::Route leg = engine::findRoute(nav, picks[kept.back()].node, picks[next].node, /*onFoot=*/false);
+            if (leg.links.empty()) { skipped.push_back(next); continue; }
+            legs.push_back(std::move(leg));
+            kept.push_back(next);
+        }
+        while (kept.size() >= 2) {   // close the loop
+            engine::Route back = engine::findRoute(nav, picks[kept.back()].node, picks[kept.front()].node, /*onFoot=*/false);
+            if (!back.links.empty()) { legs.push_back(std::move(back)); break; }
+            skipped.push_back(kept.back());
+            kept.pop_back();
+            legs.pop_back();
+        }
+        std::vector<int> nets;
+        for (std::size_t i : kept)
+            if (std::find(nets.begin(), nets.end(), pickNet[i]) == nets.end()) nets.push_back(pickNet[i]);
+        if (nets.size() >= 2) break;   // a route joining at least two towns
+        kept.clear();
+    }
+    for (std::size_t i : skipped)
+        std::fprintf(stderr, "[bus] regional route: skipped the stop in street network %d at (%.0f, %.0f) -- the car "
+                             "router cannot reach it from the tour\n", pickNet[i], picks[i].pos.x, picks[i].pos.y);
+    if (kept.size() < 2) {
+        std::fprintf(stderr, "[bus] regional route: none -- no two towns' stops are joined by road\n");
+        return;
+    }
+    if (why) std::fprintf(stderr, "[bus] regional route: %zu stops, %zu skipped\n", kept.size(), skipped.size());
     BusRoute route;
     route.regional = true;
     Real metres = 0, seconds = 0;
-    for (std::size_t k = 0; k < m; ++k) {
-        const int a0 = picks[order[k]].node, b0 = picks[order[(k + 1) % m]].node;
-        if (route.pathNodes.empty()) route.pathNodes.push_back(a0);
+    for (std::size_t k = 0; k < kept.size(); ++k) {
+        if (route.pathNodes.empty()) route.pathNodes.push_back(picks[kept[k]].node);
         route.stopArc.push_back(metres);
-        route.stops.push_back(picks[order[k]]);
-        route.stops.back().pathIndex = static_cast<int>(route.pathNodes.size()) - 1;   // a0 is the path's last node here
-        const engine::Route leg = engine::findRoute(nav, a0, b0, /*onFoot=*/false);
-        if (leg.links.empty()) return;   // a place the car router cannot reach: no regional route
-        for (int li : leg.links) {
+        route.stops.push_back(picks[kept[k]]);
+        route.stops.back().pathIndex = static_cast<int>(route.pathNodes.size()) - 1;   // this stop is the path's last node here
+        for (int li : legs[k].links) {
             const engine::NavLink& L = nav.links[static_cast<std::size_t>(li)];
             const bool fast = L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp;
             metres += L.length;
