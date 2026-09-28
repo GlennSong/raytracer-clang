@@ -185,7 +185,7 @@ function kit.profile(o)
   local P = { name = o.name, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
               windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin,
               rear_window = o.rear_window, level = o.level, grille_w = o.grille_w, open_top = o.open_top,
-              cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating,
+              cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating, cargo = o.cargo,
               hip_back = o.hip_back, interior = o.interior }
   P.axles = o.axles or { -(half - o.ro), half - o.fo }
   P.wheel_r = r
@@ -542,7 +542,7 @@ S.pickup = function() return kit.profile{
   post = function(B, ctx) kit.tub(B, ctx, -2.70, -0.74, 0.48, "bed") end } end
 
 S.step_van = function() return kit.profile{
-  name = "step_van", cabin_back = 1.25, rear_seat = false, truck_seating = true, hip_back = 0.95, L = 6.30, W = 2.30, H = 2.85, clear = 0.30, r = 0.42, fo = 0.85, ro = 1.35,
+  name = "step_van", cabin_back = 1.25, rear_seat = false, truck_seating = true, cargo = true, hip_back = 0.95, L = 6.30, W = 2.30, H = 2.85, clear = 0.30, r = 0.42, fo = 0.85, ro = 1.35,
   glass = { cowl = 2.70, a_top = 2.45, c_top = -3.12, deck = -3.14, a_side = 2.45, c_side = 1.55, pillars = {} },
   belt = { { -1, 1.30 }, { -0.97, 1.40 }, { 0.6, 1.40 }, { 0.85, 1.38 }, { 1, 1.25 } },
   roof_drop = { 0.02, 0.02 }, roof_arch = 0.0, ws_exp = 1.0, bl_exp = 1.0, roof_w = { 0.95, 0.95 }, glass_w = 0.985,
@@ -736,10 +736,14 @@ function kit.interior(P, S)
   local hipY = floorY + (truck and 0.36 or 0.27)
   local polys = {}
   local function add(x) polys[#polys + 1] = x end
+  -- A CARGO body (P.cargo, the step van -- Glenn: "the delivery van has no surface on the inside"): the box
+  -- behind the cab is part of the same shell, seen through the cab and the rear window, so the liner runs to
+  -- the tail, the floor with it, and a bulkhead stands behind the seats.
+  local zLine = P.cargo and (G.deck or zBack) - 0.2 or zBack
   -- the liner: painted faces round the cabin, above the floor
   if not P.open_top then
     local sel = S:select{ mat = "body", where = function(c)
-      return c[3] < zFront and c[3] > zBack and c[2] > floorY + 0.10 end }
+      return c[3] < zFront and c[3] > zLine and c[2] > floorY + 0.10 end }
     if #sel > 0 then
       local L = S:extract(sel, -0.04, true)
       L:assign(L:select{}, { mat = "liner" })
@@ -748,6 +752,14 @@ function kit.interior(P, S)
   end
   -- the floor
   add(kit.box_part({ W - 0.25, 0.04, zFront - zBack - 0.1 }, { 0, floorY, 0.5 * (zFront + zBack) }, 3, "carpet"))
+  if P.cargo then
+    local zTail = (G.deck or zBack) + 0.15
+    local cargoY = P.bottom(0.5 * (zBack + zTail)) + 0.12
+    add(kit.box_part({ W - 0.25, 0.04, zBack - zTail }, { 0, cargoY, 0.5 * (zBack + zTail) }, 3, "liner"))
+    -- the bulkhead, from the floor to under the roof, just behind the seats
+    local roofY = P.roof(zBack) - 0.08
+    add(kit.box_part({ W - 0.25, roofY - cargoY, 0.04 }, { 0, 0.5 * (cargoY + roofY), zBack - 0.02 }, 3, "liner"))
+  end
   -- seats
   local function seat(x, z, w)
     add(kit.box_part({ w, 0.12, 0.50 }, { x, hipY - 0.05, z + 0.08 }, 3, "seat"))
