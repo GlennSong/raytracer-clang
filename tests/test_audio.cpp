@@ -559,3 +559,205 @@ TEST_CASE(audio_system_registered_procedural_clip_plays_by_name) {
     CHECK(audio.activeVoiceCount() == 1);
     CHECK(pump(audio, 2048).total() > 0.001);
 }
+
+// ---- THE GROUND'S SOUNDS (#62/#63/#64/#65) ------------------------------------------------------
+namespace {
+// What an ear tells apart: how the energy splits across four bands (low body, low-mid, presence,
+// air), and how long the sound lasts (time to 90% of its energy).
+struct Voiceprint { double band[4]; double length; double centroidish; };
+Voiceprint voiceprint(const std::vector<float>& f, double rate) {
+    struct LP { double a, y = 0; LP(double hz, double r) : a(1 - std::exp(-6.283185307 * hz / r)) {} double operator()(double x) { y += a * (x - y); return y; } };
+    LP l300(300, rate), l1500(1500, rate), l5000(5000, rate);
+    double e[4] = {0, 0, 0, 0}, total = 0;
+    std::vector<double> cum(f.size());
+    for (std::size_t i = 0; i < f.size(); ++i) {
+        const double x = f[i], a = l300(x), b = l1500(x), c = l5000(x);
+        const double bands[4] = {a, b - a, c - b, x - c};
+        for (int k = 0; k < 4; ++k) e[k] += bands[k] * bands[k];
+        total += x * x;
+        cum[i] = total;
+    }
+    Voiceprint v{};
+    const double es = e[0] + e[1] + e[2] + e[3];
+    for (int k = 0; k < 4; ++k) v.band[k] = es > 0 ? e[k] / es : 0;
+    std::size_t n90 = 0;
+    while (n90 < cum.size() && cum[n90] < 0.9 * total) ++n90;
+    v.length = static_cast<double>(n90) / rate;
+    v.centroidish = v.band[1] * 1 + v.band[2] * 2 + v.band[3] * 3;
+    return v;
+}
+double distance(const Voiceprint& a, const Voiceprint& b) {
+    double d = 0;
+    for (int k = 0; k < 4; ++k) d += std::fabs(a.band[k] - b.band[k]);
+    return d + std::fabs(a.length - b.length) / 0.1;   // 100 ms of length ~ a whole band's worth
+}
+void maybeDump(const std::string& name, const std::vector<float>& f, uint32_t rate) {
+    const char* dir = std::getenv("RT_SFX_DUMP");   // listen to them: RT_SFX_DUMP=/some/dir run_tests
+    if (!dir || !*dir) return;
+    std::ofstream o(std::string(dir) + "/" + name + ".wav", std::ios::binary);
+    auto u32 = [&](uint32_t v) { o.write(reinterpret_cast<const char*>(&v), 4); };
+    auto u16 = [&](uint16_t v) { o.write(reinterpret_cast<const char*>(&v), 2); };
+    const uint32_t bytes = static_cast<uint32_t>(f.size() * 2);
+    o.write("RIFF", 4); u32(36 + bytes); o.write("WAVEfmt ", 8); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16);
+    o.write("data", 4); u32(bytes);
+    for (float x : f) { const int16_t s = static_cast<int16_t>(std::lround(std::clamp(x, -1.0f, 1.0f) * 32767.0f)); o.write(reinterpret_cast<const char*>(&s), 2); }
+}
+}  // namespace
+
+TEST_CASE(footsteps_sound_different_on_every_ground) {
+    // The issue's gate: "walk grass -> asphalt -> sand -> snow: four distinct footstep sounds, no samples".
+    const uint32_t rate = 48000;
+    const sfx::Ground grounds[] = {sfx::Ground::Asphalt, sfx::Ground::Concrete, sfx::Ground::Grass, sfx::Ground::Dirt,
+                                   sfx::Ground::Sand, sfx::Ground::Rock, sfx::Ground::Snow};
+    std::vector<Voiceprint> prints;
+    for (sfx::Ground g : grounds) {
+        const auto a = sfx::footstep(g, rate, 3), b = sfx::footstep(g, rate, 3), c = sfx::footstep(g, rate, 4);
+        CHECK(!a.empty() && a == b && a != c);   // deterministic; seeds vary the step
+        double energy = 0;
+        for (float x : a) { CHECK(std::fabs(x) <= 1.0f); energy += std::fabs(x); }
+        CHECK(energy / a.size() > 0.01);
+        prints.push_back(voiceprint(a, rate));
+        for (int s = 1; s <= 3; ++s) maybeDump(std::string("step_") + sfx::groundName(g) + "_" + std::to_string(s), sfx::footstep(g, rate, s), rate);
+        maybeDump(std::string("jump_") + sfx::groundName(g), sfx::jumpPush(g, rate, 1), rate);
+        maybeDump(std::string("land_hop_") + sfx::groundName(g), sfx::landing(g, 0.1, rate, 1), rate);
+        maybeDump(std::string("land_drop_") + sfx::groundName(g), sfx::landing(g, 1.0, rate, 1), rate);
+    }
+    double closest = 1e9; int ci = -1, cj = -1;
+    for (std::size_t i = 0; i < prints.size(); ++i)
+        for (std::size_t j = i + 1; j < prints.size(); ++j) {
+            const double d = distance(prints[i], prints[j]);
+            if (d < closest) { closest = d; ci = static_cast<int>(i); cj = static_cast<int>(j); }
+        }
+    std::printf("    [steps] closest pair %s/%s at %.2f\n", sfx::groundName(grounds[ci]), sfx::groundName(grounds[cj]), closest);
+    for (std::size_t i = 0; i < prints.size(); ++i)
+        std::printf("      %-9s bands %.2f %.2f %.2f %.2f  length %.0f ms\n", sfx::groundName(grounds[i]), prints[i].band[0], prints[i].band[1],
+                    prints[i].band[2], prints[i].band[3], prints[i].length * 1000);
+    CHECK(closest > 0.15);   // no two grounds sound alike
+}
+
+TEST_CASE(a_drop_lands_heavier_and_lower_than_a_hop) {
+    // #63's gate: "a 1 m hop and a 5 m drop sound different; landing on grass vs rock differs".
+    const uint32_t rate = 48000;
+    for (sfx::Ground g : {sfx::Ground::Grass, sfx::Ground::Rock, sfx::Ground::Asphalt}) {
+        const Voiceprint hop = voiceprint(sfx::landing(g, 0.1, rate, 1), rate);
+        const Voiceprint drop = voiceprint(sfx::landing(g, 1.0, rate, 1), rate);
+        CHECK(drop.length > hop.length * 1.3);         // it rings on
+        CHECK(drop.band[0] > hop.band[0]);             // more of it is the low body thud
+    }
+    CHECK(distance(voiceprint(sfx::landing(sfx::Ground::Grass, 0.6, rate, 1), rate),
+                   voiceprint(sfx::landing(sfx::Ground::Rock, 0.6, rate, 1), rate)) > 0.15);
+}
+
+TEST_CASE(ambience_loops_are_seamless_and_audible) {
+    const uint32_t rate = 48000;
+    auto seamIsClean = [](const std::vector<float>& f) {
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < f.size(); i++) maxStep = std::max(maxStep, std::fabs(f[i] - f[i - 1]));
+        return std::fabs(f.front() - f.back()) <= maxStep * 1.5f + 1e-4f;
+    };
+    struct L { const char* name; std::vector<float> f; };
+    for (const L& l : {L{"grass_rustle", sfx::grassRustle(rate, 1)}, L{"surf", sfx::surf(rate, 1)}, L{"river", sfx::river(rate, 1)}}) {
+        CHECK(!l.f.empty());
+        double energy = 0;
+        for (float x : l.f) { CHECK(std::fabs(x) <= 1.0f); energy += std::fabs(x); }
+        CHECK(energy / l.f.size() > 0.02);   // a bed, not near-silence
+        CHECK(seamIsClean(l.f));
+        maybeDump(std::string("loop_") + l.name, l.f, rate);
+    }
+    // surf and river are different beds: the surf breathes (two swells), the river does not
+    auto swing = [](const std::vector<float>& f) {
+        const std::size_t win = 4800;
+        double lo = 1e9, hi = 0;
+        for (std::size_t i = 0; i + win <= f.size(); i += win) {
+            double e = 0;
+            for (std::size_t k = i; k < i + win; ++k) e += f[k] * f[k];
+            lo = std::min(lo, e); hi = std::max(hi, e);
+        }
+        return hi / std::max(lo, 1e-9);
+    };
+    const double surfSwing = swing(sfx::surf(rate, 1)), riverSwing = swing(sfx::river(rate, 1));
+    std::printf("    [ambience] loudness swing (loudest/quietest 0.1 s): surf %.1fx, river %.1fx\n", surfSwing, riverSwing);
+    CHECK(surfSwing > 3.0 && surfSwing > 2.0 * riverSwing);
+}
+
+#include "../src/engine/audio/footsteps.h"
+
+TEST_CASE(footsteps_keep_a_walking_cadence_and_land_by_the_fall) {
+    const double dt = 1.0 / 60.0;
+    auto count = [&](double speed, double seconds, bool crouch = false) {
+        FootstepTracker t; int steps = 0;
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i)
+            if (t.update(true, speed, 0, dt, crouch).kind == FootstepEvent::Kind::Step) ++steps;
+        return steps;
+    };
+    // a walk (1.4 m/s): ~1.9 steps a second; a run (6 m/s): ~5.5; standing still: none
+    const int walk = count(1.4, 10), run = count(6.0, 10), still = count(0.0, 10);
+    std::printf("    [steps] 10 s: walk %d, run %d, still %d\n", walk, run, still);
+    CHECK(walk >= 17 && walk <= 21);
+    CHECK(run >= 50 && run <= 58);
+    CHECK(still == 0);
+    // the first step after starting off comes within half a stride, not a whole one
+    { FootstepTracker t; int first = -1;
+      for (int i = 0; i < 120 && first < 0; ++i) if (t.update(true, 1.4, 0, dt).kind == FootstepEvent::Kind::Step) first = i;
+      CHECK(first > 0 && first * dt < 0.35); }
+
+    // jump, hang, land: a push-off event, then a landing whose weight follows the fall
+    auto fall = [&](double upSpeed, double airSeconds) {
+        FootstepTracker t;
+        for (int i = 0; i < 30; ++i) t.update(true, 0, 0, dt);
+        FootstepEvent jump = t.update(false, 0, upSpeed, dt);
+        double vy = upSpeed;
+        FootstepEvent land;
+        for (int i = 0; i < static_cast<int>(airSeconds / dt); ++i) { vy -= 9.81 * dt; t.update(false, 0, vy, dt); }
+        land = t.update(true, 0, 0, dt);
+        return std::make_pair(jump, land);
+    };
+    const auto hop = fall(4.4, 0.9);            // a jump on the flat: up and back down, ~4.4 m/s at touchdown
+    const auto drop = fall(0.0, 1.1);           // stepping off a ~6 m wall: ~10.8 m/s
+    CHECK(hop.first.kind == FootstepEvent::Kind::Jump);
+    CHECK(drop.first.kind == FootstepEvent::Kind::None);   // walking off an edge is not a jump
+    CHECK(hop.second.kind == FootstepEvent::Kind::Land && drop.second.kind == FootstepEvent::Kind::Land);
+    std::printf("    [land] hop heavy %.2f vol %.2f, drop heavy %.2f vol %.2f\n", hop.second.heavy, hop.second.volume, drop.second.heavy, drop.second.volume);
+    CHECK(hop.second.heavy < 0.35 && drop.second.heavy > 0.85);
+    CHECK(drop.second.volume > hop.second.volume);
+    // a kerb-sized bump in the ground (a tick or two of "air") is not a landing
+    { FootstepTracker t; t.update(true, 1.4, 0, dt); t.update(false, 1.4, -0.5, dt);
+      CHECK(t.update(true, 1.4, 0, dt).kind != FootstepEvent::Kind::Land); }
+}
+
+TEST_CASE(the_ground_under_the_foot_picks_the_sound) {
+    using G = sfx::Ground;
+    CHECK(groundForSurface(2, true, 1, 0, 0, 0, 0) == G::Asphalt);        // a road is a road over any cover
+    CHECK(groundForSurface(3, true, 1, 0, 0, 0, 0) == G::Concrete);
+    CHECK(groundForSurface(0, true, 1, 0, 0, 0, 0) == G::Concrete);       // an untagged floor
+    CHECK(groundForSurface(1, true, 0.2, 0.1, 0.6, 0.1, 0) == G::Sand);   // terrain: the cover decides
+    CHECK(groundForSurface(1, true, 0.6, 0.2, 0, 0.2, 0.55) == G::Snow);  // snow over grass is snow
+    CHECK(groundForSurface(1, true, 0.1, 0.2, 0, 0.7, 0) == G::Rock);
+    CHECK(groundForSurface(1, false, 0, 0, 0, 0, 0) == G::Grass);         // no cover map: grass
+}
+
+#include "../src/engine/components.h"
+
+TEST_CASE(open_sea_keeps_the_ocean_and_drops_the_ponds) {
+    // #65: waves on a beach, not on a pond the water plane fills in a basin. A 20x20 grid of 50 m cells
+    // with a 3-cell-deep strip along the south edge (the ocean) and a 2x2 pond in the middle.
+    std::vector<std::array<double, 4>> cells;
+    for (int i = 0; i < 20; ++i)
+        for (int j = 0; j < 3; ++j) cells.push_back({i * 50.0, j * 50.0, i * 50.0 + 50, j * 50.0 + 50});
+    for (int i = 9; i < 11; ++i)
+        for (int j = 12; j < 14; ++j) cells.push_back({i * 50.0, j * 50.0, i * 50.0 + 50, j * 50.0 + 50});
+    cells.push_back({0, 950, 50, 1000});   // a corner cell on the far edge of the map: sea running off it
+    const auto open = openSeaCells(cells, 0, 0, 1000, 1000);
+    CHECK(open.size() == 61);   // the strip (60) and the corner, not the pond (4)
+    // a map with only ponds has no sea, however the ponds sit relative to each other
+    std::vector<std::array<double, 4>> ponds = {{300, 300, 350, 350}, {600, 700, 650, 750}};
+    CHECK(openSeaCells(ponds, 0, 0, 1000, 1000).empty());
+    Sea sea;
+    for (const auto& b : open) sea.add(b[0], b[1], b[2], b[3]);
+    CHECK(sea.contains(500, 60) && !sea.contains(500, 625) && !sea.contains(500, 400));
+    // a big lake inland still has waves
+    std::vector<std::array<double, 4>> lake;
+    for (int i = 0; i < 20; ++i) lake.push_back({i * 50.0, 0, i * 50.0 + 50, 50});   // the "edge" row
+    for (int i = 0; i < 16; ++i) for (int j = 0; j < 16; ++j) lake.push_back({2000 + i * 50.0, 2000 + j * 50.0, 2050 + i * 50.0, 2050 + j * 50.0});
+    CHECK(openSeaCells(lake, 0, 0, 4000, 4000).size() == lake.size());   // 0.64 km^2 > the 0.5 km^2 bar
+}

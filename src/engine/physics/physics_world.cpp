@@ -645,6 +645,26 @@ bool PhysicsWorld::castRay(const Vec3& origin, const Vec3& dirAndLength,
     return true;
 }
 
+PhysicsBodyId PhysicsWorld::characterGroundBody(CharacterId id) const {
+    if (!impl || id >= impl->characters.size()) return INVALID_PHYSICS_BODY;
+    const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch || ch->GetGroundState() == JPH::CharacterBase::EGroundState::InAir) return INVALID_PHYSICS_BODY;
+    const JPH::BodyID b = ch->GetGroundBodyID();
+    return b.IsInvalid() ? INVALID_PHYSICS_BODY : b.GetIndexAndSequenceNumber();
+}
+
+void PhysicsWorld::setBodySurface(PhysicsBodyId id, uint8_t surface) {
+    if (!impl || id == INVALID_PHYSICS_BODY) return;
+    impl->bodies().SetUserData(JPH::BodyID(id), surface);
+}
+
+uint8_t PhysicsWorld::bodySurface(PhysicsBodyId id) const {
+    if (!impl || id == INVALID_PHYSICS_BODY) return 0;
+    const JPH::BodyID b(id);
+    if (!impl->bodies().IsAdded(b)) return 0;
+    return static_cast<uint8_t>(impl->bodies().GetUserData(b) & 0xFF);
+}
+
 Vec3 PhysicsWorld::characterVelocity(CharacterId id) const {
     if (!impl || id >= impl->characters.size()) return Vec3();
     const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();

@@ -145,6 +145,13 @@ public:
                  Vec3& hitPoint) const;
     Vec3 characterVelocity(CharacterId id) const;
     GroundState characterGroundState(CharacterId id) const;
+    // The body the character stands on (INVALID_PHYSICS_BODY in the air): what a footstep lands on.
+    PhysicsBodyId characterGroundBody(CharacterId id) const;
+    // A small tag per body saying what its surface IS to the ear -- engine::ColliderSurface values
+    // (components.h); 0 = untagged. Stored on the body, so bodies made outside the ECS (the terrain's
+    // collider window) carry one too.
+    void setBodySurface(PhysicsBodyId id, uint8_t surface);
+    uint8_t bodySurface(PhysicsBodyId id) const;
     void setCharacterPosition(CharacterId id, const Vec3& position);
 
     // --- Wheeled vehicle (Jolt VehicleConstraint, ADR-0059) ------------------

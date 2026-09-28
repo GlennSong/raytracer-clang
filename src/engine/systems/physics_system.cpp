@@ -60,7 +60,10 @@ void PhysicsSystem::createBodies(World& world) {
         [this, &created](Entity, Transform& t, MeshCollider& mc) {
             if (mc.bodyId != INVALID_PHYSICS_BODY) return;
             mc.bodyId = physics.addMesh(mc.vertices, mc.indices, t.position, mc.friction);
-            if (mc.bodyId != INVALID_PHYSICS_BODY) created = true;
+            if (mc.bodyId != INVALID_PHYSICS_BODY) {
+                physics.setBodySurface(mc.bodyId, static_cast<uint8_t>(mc.surface));
+                created = true;
+            }
         });
 
     // Character controllers (the player): a kinematic capsule that steps up curbs

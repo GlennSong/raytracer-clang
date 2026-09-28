@@ -36,6 +36,10 @@
 #include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
+#include "../engine/systems/water_ambience_system.h"
+#ifdef RT_ENABLE_PHYSICS
+#include "../engine/systems/footstep_system.h"
+#endif
 #include "../engine/audio/sfx.h"
 #include "../engine/systems/camera_panel_system.h"
 #include "../engine/systems/planet_lab_system.h"
@@ -233,6 +237,10 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     auto& audioSys = addSystem<AudioSystem>();   // AudioSource/PlaySound -> AudioEngine (ADR-0069)
     // Procedural clips + Collision -> impact cues (ADR-0071).
     addSystem<ArenaSoundSystem>(audioSys);
+#ifdef RT_ENABLE_PHYSICS
+    addSystem<FootstepSystem>(physSys);    // footsteps by surface, jump + landing, grass swish (#62-#64)
+#endif
+    addSystem<WaterAmbienceSystem>();      // surf along the coast, rivers running (#65)
     addSystem<CameraPanelSystem>(camSys);
     addSystem<PlanetLabSystem>();     // Debug > Planet Lab (RT_ENABLE_IMGUI)
 }

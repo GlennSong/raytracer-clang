@@ -355,7 +355,10 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
             colliderPending_.erase(d.key);
             if (d.revision != colliderRevision_ || !d.shape || !desired.count(d.key) || colliders_.count(d.key)) continue;
             const PhysicsBodyId id = physics_->physicsWorld().addPreparedMesh(*d.shape, Vec3(0, 0, 0), 0.8);
-            if (id != INVALID_PHYSICS_BODY) colliders_[d.key] = id;
+            if (id != INVALID_PHYSICS_BODY) {
+                colliders_[d.key] = id;
+                physics_->physicsWorld().setBodySurface(id, static_cast<uint8_t>(ColliderSurface::Terrain));
+            }
         }
     }
     // The tile (patch + collision shape): the same on the spot or on a worker.
@@ -377,7 +380,10 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
             const auto shape = buildShape(cfg->baked, &cfg->params, &noise, m.node, cfg->gridRes, normalEps);
             const PhysicsBodyId id = shape ? physics_->physicsWorld().addPreparedMesh(*shape, Vec3(0, 0, 0), 0.8)
                                            : INVALID_PHYSICS_BODY;
-            if (id != INVALID_PHYSICS_BODY) colliders_[m.key] = id;
+            if (id != INVALID_PHYSICS_BODY) {
+                colliders_[m.key] = id;
+                physics_->physicsWorld().setBodySurface(id, static_cast<uint8_t>(ColliderSurface::Terrain));
+            }
             if (trace) LOG_INFO << "[colliders] SYNC tile (" << m.node.minX << ", " << m.node.minZ << ") d " << std::sqrt(m.d2)
                                 << " m, pending " << colliderPending_.count(m.key) << " (" << colliderPending_.size() << " jobs), "
                                 << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms, have " << colliders_.size()

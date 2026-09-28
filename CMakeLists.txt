@@ -208,6 +208,7 @@ add_library(engine_core STATIC
     src/engine/anim/skin_import.cpp
     src/engine/audio/audio_engine.cpp
     src/engine/audio/sfx.cpp
+    src/engine/audio/sfx_ground.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/xr_camera_system.cpp
@@ -224,6 +225,7 @@ add_library(engine_core STATIC
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp
     src/engine/systems/grass_system.cpp
+    src/engine/systems/water_ambience_system.cpp
     src/engine/systems/flashlight_system.cpp
     src/engine/residency.cpp
     src/engine/occlusion.cpp
@@ -989,6 +991,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
+        src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)

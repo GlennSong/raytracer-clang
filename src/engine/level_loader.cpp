@@ -544,6 +544,16 @@ static RenderMaterial::Surface surfaceForRoadMaterial(const std::string& name) {
     return S::None;                                                      // median grass slabs, paint_white, paint_yellow
 }
 
+// What a road mesh is underfoot (footsteps, engine/audio/footsteps.h), by the same names.
+static ColliderSurface colliderSurfaceForRoadMaterial(const std::string& name) {
+    if (name == "asphalt" || name == "shoulder") return ColliderSurface::Asphalt;
+    if (name == "concrete" || name == "sidewalk") return ColliderSurface::Concrete;
+    if (name == "terrain") return ColliderSurface::Terrain;
+    if (name == "guardrail") return ColliderSurface::Metal;
+    if (name.find("median") != std::string::npos || name.find("grass") != std::string::npos) return ColliderSurface::Grass;
+    return ColliderSurface::Unknown;
+}
+
 #ifdef RT_ROADS_LANES
 // EVERYTHING A CITY BUILDER HANDS BACK BESIDES ITS MESHES. A builder that paves a whole
 // city knows four things a mesher does not: the ground it made (GroundPlan::replace), the
@@ -626,6 +636,7 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         for (const Vertex& v : rm.mesh.vertices) mc.vertices.push_back(v.position);
         mc.indices = rm.mesh.indices;
         mc.friction = rm.friction;
+        mc.surface = colliderSurfaceForRoadMaterial(rm.name);
         world.add<MeshCollider>(me, mc);
     }
     // A road that built nothing still IS one: the host keeps its (mesh-less) Renderable so the
@@ -829,6 +840,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         MeshCollider mc;
         mc.vertices = tm.collisionVertices;
         mc.indices = tm.collisionIndices;
+        mc.surface = ColliderSurface::Wood;
         if (ent.contains("physics"))
             mc.friction = ent["physics"].value("friction", mc.friction);
         world.add<MeshCollider>(e, mc);
@@ -1547,6 +1559,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
             mc.vertices.reserve(chunk.mesh.vertices.size());
             for (const Vertex& v : chunk.mesh.vertices) mc.vertices.push_back(v.position);
             mc.indices = chunk.mesh.indices;
+            mc.surface = ColliderSurface::Terrain;
             world.add<MeshCollider>(e, mc);
         }
         Renderable r;
@@ -1750,6 +1763,7 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     mc.vertices.reserve(terrainMesh.vertices.size());
     for (const Vertex& v : terrainMesh.vertices) mc.vertices.push_back(v.position);
     mc.indices = terrainMesh.indices;
+    mc.surface = ColliderSurface::Terrain;
     world.add<MeshCollider>(e, mc);
 
     Renderable r;
@@ -4210,6 +4224,22 @@ bool LevelLoader::load(const std::string& path,
             }
             RenderMesh wmesh = engine::buildWaterMesh(waterFloor, wp);
             seaCells = engine::waterMeshCells(waterFloor, wp);
+            if (!seaCells.empty()) {   // where the sea is, for whatever needs to know (the surf you hear, #65)
+                std::vector<std::array<double, 4>> boxes;
+                for (const auto& cell : seaCells) {
+                    double x0 = 1e300, z0 = 1e300, x1 = -1e300, z1 = -1e300;
+                    for (const Vec2& v : cell) { x0 = std::min(x0, v.x); z0 = std::min(z0, v.y); x1 = std::max(x1, v.x); z1 = std::max(z1, v.y); }
+                    if (x1 >= x0) boxes.push_back({x0, z0, x1, z1});
+                }
+                const std::vector<std::array<double, 4>> open = openSeaCells(boxes, wp.lo.x, wp.lo.y, wp.hi.x, wp.hi.y);
+                if (!open.empty()) {
+                    Sea sea;
+                    sea.level = terrainParams.seaLevel > -1e29 ? terrainParams.seaLevel : 0.0;
+                    for (const auto& b : open) sea.add(b[0], b[1], b[2], b[3]);
+                    world.add<Sea>(world.create(), std::move(sea));
+                }
+                std::fprintf(stderr, "[water] %zu sea cells, %zu of them open sea\n", boxes.size(), open.size());
+            }
             if (!wmesh.vertices.empty()) {
                 Entity we = world.create();
                 world.add<Transform>(we, Transform{});
@@ -4347,6 +4377,7 @@ bool LevelLoader::load(const std::string& path,
             for (const Vertex& v : roadWallMesh.vertices) mc.vertices.push_back(v.position);
             mc.indices = roadWallMesh.indices;
             mc.friction = 0.9;
+            mc.surface = ColliderSurface::Concrete;
             world.add<MeshCollider>(we, mc);
         }
         // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly

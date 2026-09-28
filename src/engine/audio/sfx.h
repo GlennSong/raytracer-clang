@@ -37,6 +37,29 @@ std::vector<float> horn(uint32_t sampleRate = 48000, uint32_t seed = 1);
 // Seeds vary the rasp partials so two cars in one street aren't clones.
 std::vector<float> engine(uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// ---- The ground under a foot (#62/#63/#64/#65) --------------------------------------------------
+// What a footstep lands on, as far as the ear cares. The surface resolver (engine/audio/footsteps.h)
+// picks one from the collider's tag (roads) or the ground-cover map (terrain).
+enum class Ground : uint8_t { Asphalt = 0, Concrete, Grass, Dirt, Sand, Rock, Snow, Wood, Metal, Count };
+const char* groundName(Ground g);   // "asphalt", "concrete", ... (clip names: "sfx/step/<name>/<n>")
+
+// One footstep on `ground`: the heel's contact, the body's weight, and the surface's own texture --
+// grit scraped on asphalt, a clean click on concrete, a swish on grass, a dull crumble on dirt, a soft
+// shush on sand, loose stones on rock, the compressed crunch of snow. ~0.1-0.35 s, one-shot. Seeds vary
+// it so a walk is never the same step twice.
+std::vector<float> footstep(Ground ground, uint32_t sampleRate = 48000, uint32_t seed = 1);
+// Pushing off for a jump: the same surface scuffed harder and shorter, no weight landing.
+std::vector<float> jumpPush(Ground ground, uint32_t sampleRate = 48000, uint32_t seed = 1);
+// Landing: `heavy` 0..1 from a hop to a drop off a wall -- a bigger, lower body thud under the
+// surface's texture, longer as it grows. The caller also scales volume by impact speed.
+std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate = 48000, uint32_t seed = 1);
+
+// Ambience LOOPS, seamless by construction (circular filtering, integer-cycle envelopes), for a
+// looping voice whose volume the caller drives:
+std::vector<float> grassRustle(uint32_t sampleRate = 48000, uint32_t seed = 1);   // walking through tall grass, ~2 s
+std::vector<float> surf(uint32_t sampleRate = 48000, uint32_t seed = 1);          // waves on a beach, two swells, ~11 s
+std::vector<float> river(uint32_t sampleRate = 48000, uint32_t seed = 1);         // running water, ~4 s
+
 // The firing rate the clip is baked at: pitch 1.0 sounds like this many
 // combustion events per second (~1700 rpm on a four-cylinder four-stroke, two
 // firings per revolution). Callers multiply it; the mapping core owns the band.

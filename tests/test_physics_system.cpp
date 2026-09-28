@@ -182,3 +182,45 @@ TEST_CASE(physics_system_publishes_collision_events_with_entities) {
     }
     physics.shutdown();
 }
+
+// FOOTSTEPS (#62): the character knows which body it stands on, and that body carries its collider's
+// surface tag -- an asphalt road strip beside a terrain patch, walked from one onto the other.
+TEST_CASE(the_character_stands_on_a_tagged_surface) {
+    World world;
+    auto quad = [&](double x0, double x1, ColliderSurface s) {
+        Entity e = world.create();
+        world.add<Transform>(e, Transform{});
+        MeshCollider mc;
+        mc.vertices = {Vec3(x0, 0, -10), Vec3(x1, 0, -10), Vec3(x1, 0, 10), Vec3(x0, 0, 10)};
+        mc.indices = {0, 2, 1, 0, 3, 2};
+        mc.surface = s;
+        world.add<MeshCollider>(e, mc);
+    };
+    quad(-10, 0, ColliderSurface::Asphalt);
+    quad(0, 10, ColliderSurface::Terrain);
+    Entity player = world.create();
+    Transform pt; pt.position = Vec3(-5, 1.0, 0);
+    world.add<Transform>(player, pt);
+    world.add<CharacterController>(player, CharacterController{});
+    PhysicsSystem physics;
+    physics.initialize();
+    physics.createBodies(world);
+    PhysicsWorld& pw = physics.physicsWorld();
+    const CharacterId id = world.get<CharacterController>(player)->characterId;
+    CHECK(id != INVALID_CHARACTER);
+    auto settle = [&](const Vec3& vel, int ticks) {
+        for (int i = 0; i < ticks; ++i) { pw.moveCharacter(id, vel, 1.0 / 60.0); physics.step(world, 1.0 / 60.0); }
+    };
+    settle(Vec3(0, 0, 0), 60);
+    CHECK(pw.characterGroundState(id) == GroundState::OnGround);
+    CHECK(pw.bodySurface(pw.characterGroundBody(id)) == static_cast<uint8_t>(ColliderSurface::Asphalt));
+    settle(Vec3(3, 0, 0), 150);   // walk 7.5 m east, off the road onto the ground
+    CHECK(pw.characterPosition(id).x > 1.0);
+    CHECK(pw.bodySurface(pw.characterGroundBody(id)) == static_cast<uint8_t>(ColliderSurface::Terrain));
+    // in the air: no ground body, untagged
+    pw.setCharacterPosition(id, Vec3(5, 20, 0));
+    settle(Vec3(0, 0, 0), 2);
+    CHECK(pw.characterGroundBody(id) == INVALID_PHYSICS_BODY);
+    CHECK(pw.bodySurface(pw.characterGroundBody(id)) == 0);
+    physics.shutdown();
+}
