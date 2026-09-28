@@ -561,13 +561,16 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
 
 // THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). vehicle.fleet_mixed
 // is every kit car and truck, then every classic one, then ONE city bus; a level's `citysim.fleet` points
-// vehicle.fleet at it (level_loader appends the switch to the script), and the kit fleet stays the default.
+// vehicle.fleet at it (selectFleet, after the script runs -- the first cut appended the switch to the script
+// text, after vehicles.lua's `return`, and every such level drew no cars), and the kit fleet stays the default.
 TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
     VehiclesVM v;
     CHECK(v.loaded);
     CHECK(fleetSlotCount(v.vm) == 13);   // the default: the kit fleet
     std::string err;
-    CHECK(v.vm.doString("if vehicle and vehicle[\"fleet_mixed\"] then vehicle.fleet = vehicle[\"fleet_mixed\"] end", &err));
+    CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
+    CHECK(fleetSlotCount(v.vm) == 13);
+    CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
     const int n = fleetSlotCount(v.vm);
     std::printf("    fleet_mixed: %d slots\n", n);
     CHECK(n == 25);

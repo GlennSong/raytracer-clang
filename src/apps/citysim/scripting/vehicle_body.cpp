@@ -91,6 +91,18 @@ void addColoredBox(RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
 
 }  // namespace
 
+bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "vehicle");
+    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "no global `vehicle` table"); }
+    lua_getfield(L, -1, name.c_str());
+    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "no `vehicle." + name + "` table"); }
+    lua_setfield(L, -2, "fleet");   // vehicle.fleet = vehicle[name]
+    lua_settop(L, base);
+    return true;
+}
+
 bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
                       std::string* err) {
     lua_State* L = luaState(vm);
