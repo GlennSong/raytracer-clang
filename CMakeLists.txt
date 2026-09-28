@@ -226,6 +226,7 @@ add_library(engine_core STATIC
     src/engine/systems/residency_system.cpp
     src/engine/systems/grass_system.cpp
     src/engine/systems/water_ambience_system.cpp
+    src/engine/systems/underwater_system.cpp
     src/engine/systems/flashlight_system.cpp
     src/engine/residency.cpp
     src/engine/occlusion.cpp

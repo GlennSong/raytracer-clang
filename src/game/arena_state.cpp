@@ -37,6 +37,7 @@
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
 #include "../engine/systems/water_ambience_system.h"
+#include "../engine/systems/underwater_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/footstep_system.h"
 #endif
@@ -231,6 +232,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // to the renderer as the locomotion-base hint. Must stay after every
     // other camera writer and before RenderSystem. Inert without a headset.
     addSystem<XrCameraSystem>();
+    addSystem<UnderwaterSystem>();   // the camera under a water surface -> the composite's underwater look (#58)
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.

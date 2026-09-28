@@ -515,6 +515,17 @@ struct FogParams {
     float heightFalloff = 0.0f;
 };
 
+// UNDER THE WATER (#58): set each frame by UnderwaterSystem when the camera is below a water surface.
+// The composite then absorbs light along each view ray's underwater path toward `color` (red first), lays
+// moving caustics on the bed, and shows the surface from below: Snell's window straight up, the depths
+// mirrored outside it. Inactive = no cost.
+struct UnderwaterParams {
+    bool  active = false;
+    float surfaceY = 0.0f;         // the water surface over the camera (world y)
+    float visibility = 12.0f;      // metres to ~1/e of the light (green channel)
+    Vec3  color{0.03, 0.16, 0.18}; // the water's own colour (scatter tint), linear
+};
+
 struct SceneLighting {
     DirectionalLight sun;
     // The SUN's elevation truth even when `sun` (slot 0) carries the moon at
@@ -559,6 +570,7 @@ struct SceneLighting {
     ShadowArtistic shadowArtistic;
     ProceduralSky sky;
     FogParams fog;
+    UnderwaterParams underwater;
     SkyScatteringParams skyScattering;      // cinematic-sky opt-in (per level)
     VolumetricCloudParams volumetricClouds; // cloud-slab opt-in (per level)
     float exposure = 1.0f;

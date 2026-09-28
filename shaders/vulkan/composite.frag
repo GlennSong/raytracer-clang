@@ -5,13 +5,32 @@
 // is sRGB-encoded and the swapchain is UNORM (no second gamma). Phase 5b adds
 // SSAO/SSR/bloom/lens/DOF here.
 
-layout(set = 0, binding = 0) uniform sampler2D hdrTex;
-layout(set = 0, binding = 1) uniform sampler2D bloomTex;
-layout(set = 0, binding = 2) uniform sampler2D aoTex;
-layout(set = 0, binding = 3) uniform sampler2D ssrTex;
-layout(set = 0, binding = 4) uniform sampler2D depthTex;     // debug views
-layout(set = 0, binding = 5) uniform sampler2D normalTex;    // debug views
-layout(set = 0, binding = 6) uniform sampler2D dofTex;       // DOF-blurred scene
+layout(set = 1, binding = 0) uniform sampler2D hdrTex;
+layout(set = 1, binding = 1) uniform sampler2D bloomTex;
+layout(set = 1, binding = 2) uniform sampler2D aoTex;
+layout(set = 1, binding = 3) uniform sampler2D ssrTex;
+layout(set = 1, binding = 4) uniform sampler2D depthTex;     // debug views
+layout(set = 1, binding = 5) uniform sampler2D normalTex;    // debug views
+layout(set = 1, binding = 6) uniform sampler2D dofTex;       // DOF-blurred scene
+
+// The frame's globals (set 0, the mesh passes' block): only its head is read here -- the camera, to
+// rebuild each pixel's world position, and the sky, to light the water (#58). A prefix of a std140 block
+// is layout-compatible with the whole.
+layout(set = 0, binding = 0) uniform Globals {
+    mat4  viewProjection;
+    mat4  view;
+    mat4  invViewProjection;
+    mat4  cascadeVP[4];
+    vec4  cameraPosition;
+    vec4  ambient;
+    vec4  cascadeSplit;
+    ivec4 counts;
+    vec4  shadowParams;
+    vec4  skySunDir;          // xyz toward the sun, w disc intensity
+    vec4  skySunColor;
+    vec4  skyZenith;
+    vec4  skyHorizon;
+} g;
 
 layout(push_constant) uniform Push {
     float exposure;
@@ -31,6 +50,8 @@ layout(push_constant) uniform Push {
     float lensAspect;
     int   debugView;        // 0 normal; see the switch in main()
     int   dofEnabled;       // 1 → sample the DOF-blurred scene instead of HDR
+    vec4  underwater;       // x active, y surface y, z visibility (m), w time (s)   (#58)
+    vec4  underwaterColor;  // rgb the water's colour
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -81,6 +102,82 @@ vec3 tonemapAgX(vec3 val) {
     val = agxContrastApprox(val);
     val = agxMatInv * clamp(val, 0.0, 1.0);
     return clamp(val, 0.0, 1.0);
+}
+
+// ---- UNDER THE WATER (#58) ------------------------------------------------------------------------
+// Moving caustics: light focused by the rippling surface into bright threads on the bed. A classic
+// iterated warp (after the well-known "tileable water caustic"); `p` in metres, a ~4 m tile.
+float caustic(vec2 p, float t) {
+    vec2 q = mod(p * (6.28318 / 4.0), 6.28318) - 250.0;
+    vec2 i = q;
+    float c = 1.0;
+    const float inten = 0.005;
+    for (int n = 0; n < 4; ++n) {
+        float tt = t * (1.0 - 3.5 / float(n + 1));
+        i = q + vec2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+        c += 1.0 / length(vec2(q.x / (sin(i.x + tt) / inten), q.y / (cos(i.y + tt) / inten)));
+    }
+    c /= 4.0;
+    c = 1.17 - pow(c, 1.4);
+    return clamp(pow(abs(c), 8.0), 0.0, 3.0);
+}
+
+// The scene through water, from a camera under it. Every view ray travels through water until it meets
+// the bed (or anything else) or the surface; along that path light is absorbed (red first, blue last)
+// and replaced by light the water scatters toward the eye. A ray reaching the surface inside Snell's
+// window (~48.6 deg of vertical) sees the world above; outside it, the surface is a mirror of the depths.
+vec3 underwaterScene(vec3 hdr, vec2 uv) {
+    const vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+    float depth = texture(depthTex, uv).r;                 // reverse-Z: 0 = far / sky
+    vec3 cam = g.cameraPosition.xyz;
+    vec4 nearW = g.invViewProjection * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    vec3 dir = normalize(nearW.xyz / nearW.w - cam);
+    float tScene = 1e9;
+    vec3 P = cam;
+    if (depth > 0.0) {
+        vec4 w = g.invViewProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+        P = w.xyz / w.w;
+        tScene = length(P - cam);
+    }
+    float surf = pc.underwater.y;
+    float tSurf = dir.y > 1e-4 ? (surf - cam.y) / dir.y : 1e9;
+    float path = min(tScene, tSurf);
+    // light in the water: the sky's brightness, dimming with depth below the surface
+    float sky = dot(g.skyZenith.rgb, luma) * 1.2 + dot(g.skyHorizon.rgb, luma) * 0.5;
+    float sunUp = max(g.skySunDir.y, 0.0);
+    float sunLum = dot(g.skySunColor.rgb, luma) * sunUp * 0.08;
+    float camDepth = max(0.0, surf - cam.y);
+    float light = (sky + sunLum) * exp(-camDepth / 22.0);
+    vec3 water = pc.underwaterColor.rgb;
+    vec3 scatter = water * light * 1.6;
+    // absorption per channel: red dies in a few metres, blue-green carries
+    vec3 k = vec3(2.6, 1.0, 0.75) / pc.underwater.z;
+    vec3 T = exp(-k * path);
+    vec3 seen = hdr;
+    // the water mesh itself, seen from below, is the SURFACE, not the bed: it draws its above-water shading
+    // (stripes of wave normals at a grazing angle) and would otherwise be caustic-lit as seabed
+    bool hitsSurface = tSurf <= tScene || (depth > 0.0 && P.y > surf - 0.25);
+    if (hitsSurface) path = min(path, tSurf);
+    if (!hitsSurface) {
+        // the bed and anything in the water: caustics where it faces up and the sun reaches
+        vec3 n = texture(normalTex, uv).rgb * 2.0 - 1.0;
+        float below = max(0.0, surf - P.y);
+        float c = caustic(P.xz + vec2(0.0, 0.0), pc.underwater.w * 0.8);
+        float reach = exp(-below / 7.0) * smoothstep(0.2, 0.8, n.y) * (0.25 + sunUp);
+        seen = hdr * (1.0 + c * 1.4 * reach);
+    } else {
+        // the surface from below
+        float window = smoothstep(0.62, 0.70, dir.y);   // cos(48.6 deg) = 0.661
+        // the sky and shore, through the window: the water mesh drawn over them from below reads dark, so
+        // lean toward the sky's own light the way a diver sees the bright disc overhead
+        vec3 above = mix(g.skyHorizon.rgb, g.skyZenith.rgb, smoothstep(0.66, 1.0, dir.y)) * 1.1;
+        // the surface's ripples bend the disc: a little moving brightness across it
+        above *= 0.9 + 0.2 * caustic(cam.xz + dir.xz / max(dir.y, 0.2) * (surf - cam.y), pc.underwater.w * 0.6);
+        vec3 mirror = scatter * 0.55;                    // total internal reflection: the depths
+        float rim = exp(-pow((dir.y - 0.661) / 0.02, 2.0)) * 0.6;   // the window's bright edge
+        seen = mix(mirror, above * 1.3, window) + scatter * rim;
+    }
+    return seen * T + scatter * (1.0 - T);
 }
 
 void main() {
@@ -138,6 +235,12 @@ void main() {
     if (pc.ssrEnabled != 0) {
         vec4 ssr = texture(ssrTex, uvG);
         hdr = mix(hdr, ssr.rgb, clamp(ssr.a, 0.0, 1.0));
+    }
+    if (pc.underwater.x > 0.5) {
+        // the surface ripples what is seen through it: a gentle wobble of the lookup
+        vec2 wob = vec2(sin(uvG.y * 40.0 + pc.underwater.w * 1.7), cos(uvG.x * 35.0 + pc.underwater.w * 1.3)) * 0.0015;
+        vec3 wobbled = texture(hdrTex, clamp(uvG + wob, 0.0, 1.0)).rgb;
+        hdr = underwaterScene(mix(hdr, wobbled, 0.7), uvG);
     }
     if (pc.bloomEnabled != 0)
         hdr += texture(bloomTex, uvG).rgb * pc.bloomIntensity;

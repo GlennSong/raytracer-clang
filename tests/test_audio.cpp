@@ -805,3 +805,16 @@ TEST_CASE(hard_ground_steps_are_a_heel_and_a_toe) {
         CHECK(on.size() == 1);
     }
 }
+
+#include "../src/engine/systems/underwater_system.h"
+#include "../src/engine/world.h"
+
+TEST_CASE(the_camera_knows_whose_water_it_is_under) {
+    // #58: the sea's surface over the open sea, nothing over land or a pond the water plane doesn't call sea
+    World world;
+    Sea sea; sea.level = 0.5; sea.add(0, 0, 100, 100);
+    world.add<Sea>(world.create(), std::move(sea));
+    const auto in = UnderwaterSystem::surfaceAt(world, 50, 50);
+    CHECK(in.kind == UnderwaterSystem::Water::Sea && std::fabs(in.level - 0.5) < 1e-9);
+    CHECK(UnderwaterSystem::surfaceAt(world, 150, 50).kind == UnderwaterSystem::Water::None);
+}
