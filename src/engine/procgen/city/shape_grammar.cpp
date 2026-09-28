@@ -6,7 +6,9 @@
 #include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
 #include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
+#include "../noise.h"             // emitSoftBox's lumps
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace engine {
@@ -370,6 +372,84 @@ void emitBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color) 
     emitQuad(mesh, c100, c101, c111, c110, r,      color);   // right (+r)
     emitQuad(mesh, c000, c100, c101, c001, u * -1, color);   // bottom(-u)
     emitQuad(mesh, c010, c110, c111, c011, u,      color);   // top   (+u)
+}
+
+void emitSoftBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color, uint32_t seed) {
+    RenderMesh& mesh = partMesh(out, part);
+    const Vec3 h = s.size * 0.5;
+    const Vec3 c = s.center();
+    const Real rad = std::min<Real>(0.2, 0.45 * std::min({h.x, h.y, h.z}));
+    auto lin = [](Real v) { return std::pow(std::max<Real>(v, 0), Real(2.2)); };
+    const Vec3 light(lin(color.x) * 1.1, lin(color.y) * 1.1, lin(color.z) * 1.1), dark = light * 0.3;
+    // seed 0: from where it stands, so a lot's other draws are not disturbed
+    if (seed == 0)
+        seed = static_cast<uint32_t>(static_cast<int64_t>(std::floor(c.x * 8)) * 73856093LL ^
+                                     static_cast<int64_t>(std::floor(c.z * 8)) * 19349663LL) | 1u;
+    const Noise noise(seed);
+    // about 30 cm cells, so the lumps have vertices to show on
+    auto cells = [&](const Vec3& axis) {
+        const Real extent = 2.0 * (std::fabs(axis.x) * h.x + std::fabs(axis.y) * h.y + std::fabs(axis.z) * h.z);
+        return std::clamp(static_cast<int>(std::ceil(extent / 0.3)), 2, 8);
+    };
+    // local coords: x along axis[0], y up, z along axis[2]; each face a grid over [-1, 1]^2
+    struct Face { Vec3 n, a, b; };
+    const Face faces[5] = {{{0, 1, 0}, {1, 0, 0}, {0, 0, 1}}, {{1, 0, 0}, {0, 0, 1}, {0, 1, 0}}, {{-1, 0, 0}, {0, 1, 0}, {0, 0, 1}},
+                           {{0, 0, 1}, {0, 1, 0}, {1, 0, 0}}, {{0, 0, -1}, {1, 0, 0}, {0, 1, 0}}};
+    for (const Face& f : faces) {
+        const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        const std::size_t firstIndex = mesh.indices.size();
+        const int NU = cells(f.a), NV = cells(f.b);
+        for (int j = 0; j <= NV; ++j)
+            for (int i = 0; i <= NU; ++i) {
+                const Real u = -1 + 2.0 * i / NU, v = -1 + 2.0 * j / NV;
+                const Vec3 p = f.n + f.a * u + f.b * v;                      // on the unit cube
+                const Vec3 P(p.x * h.x, p.y * h.y, p.z * h.z);                  // on the box (local)
+                const Vec3 inner(std::clamp(P.x, -h.x + rad, h.x - rad), std::clamp(P.y, -h.y + rad, h.y - rad),
+                                 std::clamp(P.z, -h.z + rad, h.z - rad));
+                Vec3 dir = P - inner;
+                dir = dir.lengthSquared() > 1e-12 ? normalize(dir) : f.n;
+                Vec3 L = inner + dir * rad;                                       // the rounded box
+                const Vec3 W0 = c + s.axis[0] * L.x + s.axis[1] * L.y + s.axis[2] * L.z;
+                const Real lump = 0.7 * noise.noise3(W0.x * 2.4, W0.y * 2.4, W0.z * 2.4) +
+                                  0.3 * noise.noise3(W0.x * 5.9 + 5.1, W0.y * 5.9, W0.z * 5.9 - 2.7);   // leafy, two scales
+                const Real amp = std::min<Real>(0.14, 0.3 * std::min({h.x, h.y, h.z}));
+                if (L.y > -h.y + 1e-6) L = L + dir * (amp * lump * 1.6);           // lumps, not below the base
+                const Vec3 soft = normalize(dir * 0.5 + normalize(Vec3(L.x / (h.x * h.x), L.y / (h.y * h.y), L.z / (h.z * h.z))) * 0.5);
+                const Vec3 W = c + s.axis[0] * L.x + s.axis[1] * L.y + s.axis[2] * L.z;
+                const Vec3 N3 = normalize(s.axis[0] * soft.x + s.axis[1] * soft.y + s.axis[2] * soft.z);
+                const Real t = std::clamp((L.y + h.y) / (2 * h.y), Real(0), Real(1));
+                Vertex vx(W, N3, s.axis[0], 0.0f, 0.0f);
+                vx.color = (dark + (light - dark) * (0.15 + 0.85 * t)) * (1.0 + 0.35 * lump);   // mottled: lumps catch light, hollows shade
+                mesh.vertices.push_back(vx);
+            }
+        for (int j = 0; j < NV; ++j)
+            for (int i = 0; i < NU; ++i) {
+                const uint32_t a = base + j * (NU + 1) + i, b = a + 1, cc = a + (NU + 1), d = cc + 1;
+                const Vec3 out3 = mesh.vertices[a].normal;
+                for (const auto& t3 : {std::array<uint32_t, 3>{a, b, d}, std::array<uint32_t, 3>{a, d, cc}}) {
+                    const Vec3& A = mesh.vertices[t3[0]].position; const Vec3& B = mesh.vertices[t3[1]].position; const Vec3& C3 = mesh.vertices[t3[2]].position;
+                    if (dot(cross(C3 - A, B - A), out3) >= 0) mesh.indices.insert(mesh.indices.end(), {t3[0], t3[1], t3[2]});
+                    else mesh.indices.insert(mesh.indices.end(), {t3[0], t3[2], t3[1]});
+                }
+            }
+        // Light the LUMPS: blend the smooth mass normal with the lumpy surface's own, so the
+        // bumps catch the sun and shade the hollows (the soft normal alone hid them).
+        const std::size_t v0 = base, v1 = mesh.vertices.size();
+        std::vector<Vec3> geo(v1 - v0, Vec3(0, 0, 0));
+        for (std::size_t k = firstIndex; k + 2 < mesh.indices.size(); k += 3) {
+            const uint32_t a = mesh.indices[k], b = mesh.indices[k + 1], cc = mesh.indices[k + 2];
+            const Vec3 n = cross(mesh.vertices[cc].position - mesh.vertices[a].position,
+                                 mesh.vertices[b].position - mesh.vertices[a].position);   // front-facing, as wound above
+            for (uint32_t q : {a, b, cc}) geo[q - v0] = geo[q - v0] + n;
+        }
+        for (std::size_t q = v0; q < v1; ++q) {
+            const Vec3& g3 = geo[q - v0];
+            if (g3.lengthSquared() < 1e-18) continue;
+            Vec3 gn = normalize(g3);
+            if (dot(gn, mesh.vertices[q].normal) < 0) gn = gn * -1.0;
+            mesh.vertices[q].normal = normalize(gn * 0.6 + mesh.vertices[q].normal * 0.4);
+        }
+    }
 }
 
 void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color,

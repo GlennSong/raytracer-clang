@@ -29,6 +29,7 @@
 #endif
 
 #include <algorithm>
+#include <sstream>
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
@@ -103,8 +104,42 @@ Real CityRenderSystem::deckYAt(int link, Real station, Vec2 p) const {
                        ? std::clamp(station / L.length, Real(0), Real(1))
                        : Real(0);
     const Real e = L.elevA + (L.elevB - L.elevA) * t;
-    if (L.elevAbsolute) return e;
+    if (L.elevAbsolute) return deckSurfaceNear(p.x, p.y, e);
     return groundAt(p.x, p.y) + L.layer * kLayerClearance + e;
+}
+
+Real CityRenderSystem::deckSurfaceNear(Real x, Real z, Real refY) const {
+    // 3 m: past the lerp's worst error on a curved ramp (1.5 m measured) and well under a grade
+    // separation (kLayerClearance 5.8 m)
+    constexpr double kWindow = 3.0;
+    for (const engine::RoadDeckField& f : decks_) {
+        double y;
+        if (f.heightNear(x, z, 0.5, refY, kWindow, &y)) return static_cast<Real>(y);
+    }
+    return refY;
+}
+
+int CityRenderSystem::drawSlotFor(int ai) const {
+    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size()) || drawVariantCount() <= 0) return -1;
+    const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
+    int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
+    if (v >= drawVariantCount()) v %= drawVariantCount();
+    if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < drawVariantCount()) v = busVariant_;
+    return v;
+}
+
+Real CityRenderSystem::carSurfaceAt(const Agent& a, Real px, Real pz, Real along) const {
+    const int li = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())
+                       ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+    const engine::RoadClass* klass = li >= 0 && li < nav_.linkCount() ? &nav_.links[static_cast<std::size_t>(li)].klass : nullptr;
+    const bool deck = a.deckY > -1e29;
+    // a deck car knows its level (the link's height, 3 m either way); a street car goes by its class alone
+    const double refY = deck ? a.deckY + a.grade * along : 0.0, window = deck ? 3.0 : 1e9;
+    for (const engine::RoadDeckField& f : decks_) {
+        double y;
+        if (f.heightOn(px, pz, 0.5, klass, refY, window, &y)) return static_cast<Real>(y);
+    }
+    return deck ? static_cast<Real>(refY) : groundAt(px, pz) + a.elevation;
 }
 
 bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
@@ -143,6 +178,10 @@ bool CityRenderSystem::agentWorldPose(int agentId, Vec3& outPos,
 
 bool CityRenderSystem::build(World& world, AssetManager* assets,
                              std::function<double(double, double)> ground) {
+    struct StartupTotal {
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        ~StartupTotal() { LOG_INFO << "[citysim] startup: CityRenderSystem::build total " << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s"; }
+    } startupTotal;
     // Level-authored settings (ADR-0063): a CitySimConfig entity — the level's
     // top-level "citysim" block — overrides the constructor params, so each level
     // picks its own population, seed, clock rate, reliability, and whether the
@@ -151,6 +190,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.cars = c.cars;
         params_.pedestrians = c.pedestrians;
         params_.carsPerLaneKm = c.carsPerLaneKm;
+        params_.longCommuteShare = c.longCommuteShare;
+        params_.busCommuteShare = c.busCommuteShare;
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
         params_.seed = c.seed;
@@ -173,8 +214,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busMaxWalk = c.busMaxWalk;
         params_.physicalCars = c.physicalCars;
         params_.wander = c.wander;
+        params_.ambientBus = c.ambientBus;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
+        params_.fleet = c.fleet;
         debugWidgets_ = c.debugWidgets;
         showPlan_ = showPlan_ || c.showPlan;
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
@@ -225,6 +268,31 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     nav_ = engine::buildNavGraph(combined);
     if (nav_.linkCount() == 0) return false;
+    // HEIGHTS RESOLVED ONCE, where the ground is known (review of #35 / the ramp-foot sink): every link end
+    // gets its ABSOLUTE carriageway Y (elevA/B on an absolute link -- what draws the car) and its height
+    // ABOVE THE GROUND (aboveA/B -- what the sim's same-level tests compare). A deck-to-street link (one
+    // absolute end, one relative) was absolute as a whole: cars lerped toward y = 0 and sank, and on it the
+    // sim compared an absolute Y against street cars' heights above ground, so a car at a ramp foot saw
+    // street traffic tens of metres away. Now both forms are exact at both ends of every link.
+    {
+        int mixed = 0;
+        for (engine::NavLink& L : nav_.links) {
+            if (L.from < 0 || L.to < 0) continue;
+            const engine::Vec2 pa = nav_.nodes[static_cast<std::size_t>(L.from)], pb = nav_.nodes[static_cast<std::size_t>(L.to)];
+            const Real ga = groundAt(pa.x, pa.y), gb = groundAt(pb.x, pb.y);
+            const Real lift = L.layer * kLayerClearance;
+            // above the ground: a relative end's own height (+ the layer lift), an absolute end's over its ground
+            L.aboveA = L.elevAbsA ? L.elevA - ga : lift + L.elevA;
+            L.aboveB = L.elevAbsB ? L.elevB - gb : lift + L.elevB;
+            if (L.elevAbsolute && L.elevAbsA != L.elevAbsB) {   // mixed: the relative end becomes absolute too
+                if (!L.elevAbsA) L.elevA = ga + L.aboveA;
+                if (!L.elevAbsB) L.elevB = gb + L.aboveB;
+                L.elevAbsA = L.elevAbsB = true;
+                ++mixed;
+            }
+        }
+        if (mixed) LOG_INFO << "[citysim] " << mixed << " deck-to-street links resolved to absolute heights at both ends";
+    }
 
     // Connectivity truth (device: "I don't see the freeway connected yet"):
     // walk the built nav and report whether a car can actually reach the
@@ -232,30 +300,80 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // the weld failed and freeway traffic is impossible — say so loudly.
     {
         int fwLinks = 0, rampLinks = 0, onWelds = 0, offWelds = 0;
+        auto street = [&](int li) { const engine::RoadClass k = nav_.links[li].klass; return k != engine::RoadClass::Ramp && k != engine::RoadClass::Freeway; };
+        // A street link ENTERING a node counts as much as one leaving it: an on-ramp's street-level
+        // run is a one-way link into the node where its deck begins, and a census that only looked
+        // at links leaving that node called every such on-ramp unconnected.
+        std::vector<char> streetIn(static_cast<std::size_t>(nav_.nodeCount()), 0);
+        for (int li = 0; li < nav_.linkCount(); ++li) if (street(li)) streetIn[static_cast<std::size_t>(nav_.links[li].to)] = 1;
         for (int li = 0; li < nav_.linkCount(); ++li) {
             const engine::NavLink& L = nav_.links[li];
             if (L.klass == engine::RoadClass::Freeway) ++fwLinks;
             if (L.klass != engine::RoadClass::Ramp) continue;
             ++rampLinks;
-            // a ramp link leaving a node that also has street links = on-weld
-            bool fromStreet = false, toStreet = false;
-            for (int ol : nav_.outLinks[L.from])
-                if (nav_.links[ol].klass != engine::RoadClass::Ramp &&
-                    nav_.links[ol].klass != engine::RoadClass::Freeway)
-                    fromStreet = true;
-            for (int ol : nav_.outLinks[L.to])
-                if (nav_.links[ol].klass != engine::RoadClass::Ramp &&
-                    nav_.links[ol].klass != engine::RoadClass::Freeway)
-                    toStreet = true;
+            bool fromStreet = streetIn[static_cast<std::size_t>(L.from)] != 0, toStreet = false;
+            for (int ol : nav_.outLinks[L.from]) if (street(ol)) fromStreet = true;
+            for (int ol : nav_.outLinks[L.to]) if (street(ol)) toStreet = true;
             if (fromStreet) ++onWelds;
             if (toStreet) ++offWelds;
+        }
+        // ...and the truth the welds only suggest: WALK it. From every street, how much of the
+        // carriageway can a car reach; from the carriageway, can it get back to a street.
+        auto reach = [&](auto&& seed) {
+            std::vector<char> seen(static_cast<std::size_t>(nav_.linkCount()), 0);
+            std::vector<int> stack;
+            for (int li = 0; li < nav_.linkCount(); ++li) if (seed(li)) { seen[static_cast<std::size_t>(li)] = 1; stack.push_back(li); }
+            while (!stack.empty()) {
+                const int li = stack.back(); stack.pop_back();
+                for (int ol : nav_.outLinks[nav_.links[li].to]) if (!seen[static_cast<std::size_t>(ol)]) { seen[static_cast<std::size_t>(ol)] = 1; stack.push_back(ol); }
+            }
+            return seen;
+        };
+        const std::vector<char> fromStreets = reach(street);
+        const std::vector<char> fromFreeway = reach([&](int li) { return nav_.links[li].klass == engine::RoadClass::Freeway; });
+        int fwReached = 0, streetsReached = 0;
+        for (int li = 0; li < nav_.linkCount(); ++li) {
+            if (nav_.links[li].klass == engine::RoadClass::Freeway && fromStreets[static_cast<std::size_t>(li)]) ++fwReached;
+            if (street(li) && fromFreeway[static_cast<std::size_t>(li)]) ++streetsReached;
+        }
+        // STRANDED STREETS: links a car can reach the city from and get back to — the main loop —
+        // against those it cannot. A home on one of the rest routes nowhere, and assignPlaces then
+        // tries every job in the city from it, a full search each.
+        {
+            int seedLink = -1;
+            for (int li = 0; li < nav_.linkCount() && seedLink < 0; ++li) if (street(li) && nav_.outLinks[nav_.links[li].to].size() >= 3) seedLink = li;
+            if (seedLink >= 0) {
+                const std::vector<char> down = reach([&](int li) { return li == seedLink; });
+                std::vector<std::vector<int>> inLinks(static_cast<std::size_t>(nav_.nodeCount()));
+                for (int li = 0; li < nav_.linkCount(); ++li) inLinks[static_cast<std::size_t>(nav_.links[li].to)].push_back(li);
+                std::vector<char> up(static_cast<std::size_t>(nav_.linkCount()), 0);
+                std::vector<int> stack{seedLink};
+                up[static_cast<std::size_t>(seedLink)] = 1;
+                while (!stack.empty()) {
+                    const int li = stack.back(); stack.pop_back();
+                    for (int il : inLinks[static_cast<std::size_t>(nav_.links[li].from)]) if (!up[static_cast<std::size_t>(il)]) { up[static_cast<std::size_t>(il)] = 1; stack.push_back(il); }
+                }
+                int stranded = 0, streets = 0;
+                std::ostringstream where;
+                for (int li = 0; li < nav_.linkCount(); ++li) {
+                    if (!street(li)) continue;
+                    ++streets;
+                    if (down[static_cast<std::size_t>(li)] && up[static_cast<std::size_t>(li)]) continue;
+                    if (stranded++ < 8) {
+                        const Vec2 a = nav_.nodes[static_cast<std::size_t>(nav_.links[li].from)];
+                        where << " (" << static_cast<int>(a.x) << ", " << static_cast<int>(a.y) << ")" << (down[static_cast<std::size_t>(li)] ? "" : " unreachable") << (up[static_cast<std::size_t>(li)] ? "" : " no way back");
+                    }
+                }
+                if (stranded) LOG_WARN << "[citysim] " << stranded << " of " << streets << " street links are off the main loop, e.g." << where.str();
+            }
         }
         if (fwLinks > 0)
             LOG_INFO << "[citysim] freeway in nav: " << fwLinks
                      << " carriageway links, " << rampLinks << " ramp links, "
                      << onWelds << " street->ramp welds, " << offWelds
-                     << " ramp->street welds"
-                     << ((onWelds == 0 || offWelds == 0)
+                     << " ramp->street welds; from the streets a car reaches " << fwReached << " of "
+                     << fwLinks << " carriageway links, and from the carriageway " << streetsReached << " street links"
+                     << ((fwReached == 0 || streetsReached == 0)
                              ? "  <-- NOT DRIVABLE"
                              : "");
     }
@@ -346,9 +464,19 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         engine::openProcgenLibrary(fleetVM_);
         engine::openModuleLoader(fleetVM_, engine::makeModuleSource(""));
         std::string err;
-        if (!fleetVM_.doString(params_.vehicleScript, &err)) {
+        const bool scriptOk = fleetVM_.doString(params_.vehicleScript, &err);
+        if (!scriptOk) {
             LOG_WARN << "citysim vehicles script: " << err
                      << " — this level draws NO cars";
+        } else if (!params_.fleet.empty()) {
+            // the level's named fleet (citysim.fleet): pointed at AFTER the script has run
+            std::string ferr;
+            if (engine::selectFleet(fleetVM_, params_.fleet, &ferr))
+                LOG_INFO << "[citysim] fleet: vehicle." << params_.fleet;
+            else
+                LOG_WARN << "citysim fleet '" << params_.fleet << "': " << ferr << " — keeping the default fleet";
+        }
+        if (!scriptOk) {
         } else if (int slots = engine::fleetSlotCount(fleetVM_); slots > 0) {
             // THE ASSET decides how many cars the fleet has. This used to be a
             // C++ constant, so a thirteenth slot was never built and a shorter
@@ -387,7 +515,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 #endif
 
     sim_.setJunctionPad(sidewalk_);
+    sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body
+    { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
+    LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
     // Three-tier traffic (P4): the level's opt-in. The bubble only engages
@@ -401,8 +532,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     sim_.setHailPolicy(params_.hailChance, params_.hailMinMetres);
     sim_.setTaxiFraction(params_.taxiFraction);
     // Buses AFTER the cabs: setBuses skips an agent already marked as a taxi.
+    { const auto tT0 = std::chrono::steady_clock::now();
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
+    LOG_INFO << "[citysim] startup: setBuses " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     // The stops themselves, as something you can SEE: a pole, a route-coloured
     // sign and a bench (Glenn: "We should have stops with benches and signs for
     // bus stops so that we know where the route is"). The ground sampler goes
@@ -459,7 +592,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         const int stops = buildBusStopProps(
             world, *assets, sim_.buses(), nav_,
             [this](Real x, Real z) { return groundAt(x, z); }, &busStopProps_,
-            &stopPositions, decks_.empty() ? nullptr : &decks_.front());
+            &stopPositions, decks_.empty() ? nullptr : &decks_.front(),
+            [this](int link) { return sim_.busStandBackAt(link); });
         // The denominator is the network's own stop count: spacing, not the
         // level's busStops, decides how many a route gets.
         int networkStops = 0;
@@ -489,6 +623,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     LOG_INFO << "[citysim] buses: " << params_.buses << " on "
              << sim_.buses().routeCount() << " derived routes of " << params_.busStops
              << " stops; riders walk <= " << params_.busMaxWalk << " m to a stop";
+    for (int r = 0; r < sim_.buses().routeCount(); ++r) {
+        const BusRoute& br = sim_.buses().route(r);
+        const Real lap = sim_.buses().rideSeconds(r, 0, 0);
+        LOG_INFO << "[citysim]   route " << r << ": " << (br.regional ? "REGIONAL" : "network " + std::to_string(br.network))
+                 << ", " << br.stops.size() << " stops, " << static_cast<int>(br.loopLength) << " m, lap "
+                 << static_cast<int>(lap / 60) << " min, " << sim_.buses().fleetOf(r) << " buses (every "
+                 << static_cast<int>(lap / 60 / std::max(1, sim_.buses().fleetOf(r))) << " min)";
+    }
     LOG_INFO << "[citysim] cabs: " << (params_.taxiFraction * 100.0) << "% of drivers, hail "
              << (params_.hailChance * 100.0) << "% over " << params_.hailMinMetres << " m";
     LOG_INFO << "[citysim] sim tiers: tiered=" << (params_.tieredAgents ? "on" : "off")
@@ -544,7 +686,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // routes them to actual buildings. No-op when the level authored no places
     // (then the built random home/work schedule stands). After setWander so the
     // (persistent) mode is settled; before the warm-up so day one runs on places.
+    sim_.setLongCommuteShare(params_.longCommuteShare);
+    sim_.setBusCommuteShare(params_.busCommuteShare);
+    // The population cache (CitySim::setPopulationCacheDir): off under RT_NOCACHE, like the level bundle.
+    if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
+    { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
+    LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    if (sim_.populationCache().used)
+        LOG_INFO << "[citysim] population: " << (sim_.populationCache().hit ? "read from" : "decided, cached in")
+                 << " cache/population/" << std::hex << sim_.populationCache().key << std::dec << ".pop";
+    LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
+             << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
+             << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m; "
+             << sim_.commuteStats().busCommuters << " walkers ride to work in another town (share "
+             << params_.busCommuteShare << ", " << sim_.commuteStats().busCommuteTried << " tried)";
 
     // ONE CLOCK. A staged day/night cycle owns the world's hour and rate:
     // the sim opens at the sky's hour and its schedules run at the sky's
@@ -650,6 +806,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carChassis_.clear();
     carWheels_.clear();
     carGlassGroups_.clear();
+    carGlassOpaqueGroups_.clear();
+    carInteriorGroups_.clear();
+    carSeeInto_.clear();
+    nearSwap_.clear();
     carSeats_.clear();
     carDoors_.clear();
     carDriverSeat_.clear();
@@ -667,7 +827,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             MeshHandle mh{}, chassisMh{};
             std::vector<LampMarker> lights;
             std::vector<CarWheel> wheels;
-            engine::RenderMesh glassMesh;
+            engine::RenderMesh glassMesh, interiorMesh;
+            bool seeInto = false;
             std::vector<Vec3> seats, doors;
             Vec3 driverSeat(0, 0, 0);
             bool hasDriver = false;
@@ -702,6 +863,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         for (const engine::Attachment& att : recipe.lights)
                             lights.push_back({att.name, att.pos});
                         glassMesh = std::move(recipe.glass);
+                        interiorMesh = std::move(recipe.interior);
+                        seeInto = recipe.seeInto;
                         seats = recipe.seats;
                         doors = recipe.doors;
                         driverSeat = recipe.driverSeat;
@@ -731,13 +894,15 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             carLights_.push_back(std::move(lights));
             carChassis_.push_back(chassisMh);
             carWheels_.push_back(std::move(wheels));
-            // Clear glass, for a vehicle meant to be seen into.
+            // The glass, clear (a see-into vehicle always; any other car while it is near the player) and
+            // opaque (traffic at large), and the cabin a near car shows through it.
             {
-                Entity ge{};
+                Entity ge{}, go{}, gi{};
                 if (assets && !glassMesh.vertices.empty()) {
+                    const MeshHandle gh = assets->acquireMesh(glassMesh, "city:carglass" + std::to_string(v));
                     ge = world.create();
                     InstanceGroup gg;
-                    gg.mesh = assets->acquireMesh(glassMesh, "city:carglass" + std::to_string(v));
+                    gg.mesh = gh;
                     engine::RenderMaterial gm;
                     gm.albedo = Vec3(1, 1, 1);
                     gm.metallic = 0.0f;
@@ -747,8 +912,39 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     gg.renderLayer = engine::LayerSim;
                     gg.drawClass = engine::DrawClass::SimBody;
                     world.add<InstanceGroup>(ge, gg);
+                    if (!seeInto) {
+                        // OPAQUE GLASS that reads as glass: dark, near-mirror smooth, so the sky and the street
+                        // show in it (Fresnel does the rest at grazing angles) -- no transparent pass per car.
+                        go = world.create();
+                        InstanceGroup og;
+                        og.mesh = gh;
+                        engine::RenderMaterial om;
+                        om.albedo = Vec3(1.0, 1.05, 1.12);   // x the glass mesh's own dark tint, a little toward the sky
+                        om.metallic = 0.15f;
+                        om.roughness = 0.03f;
+                        og.material = om;
+                        og.renderLayer = engine::LayerSim;
+                        og.drawClass = engine::DrawClass::SimBody;
+                        world.add<InstanceGroup>(go, og);
+                    }
+                }
+                if (assets && !seeInto && !interiorMesh.vertices.empty()) {
+                    gi = world.create();
+                    InstanceGroup ig;
+                    ig.mesh = assets->acquireMesh(interiorMesh, "city:carcabin" + std::to_string(v));
+                    engine::RenderMaterial im;
+                    im.albedo = Vec3(1, 1, 1);
+                    im.metallic = 0.0f;
+                    im.roughness = 0.9f;
+                    ig.material = im;
+                    ig.renderLayer = engine::LayerSim;
+                    ig.drawClass = engine::DrawClass::SimBody;
+                    world.add<InstanceGroup>(gi, ig);
                 }
                 carGlassGroups_.push_back(ge);
+                carGlassOpaqueGroups_.push_back(go);
+                carInteriorGroups_.push_back(gi);
+                carSeeInto_.push_back(seeInto ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
                 carDriverSeat_.push_back(driverSeat);
@@ -1138,49 +1334,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             Vec3(p.x, groundAt(p.x, p.y) + 0.04, p.y), Quat(), Vec3(1.2, 1, 1.2)));
     }
 
-    // Bake the CITY-PLAN outlines once (ADR-0066): every block/lot polygon
-    // (published by the loader as CityPlanDebug) is stroked as ONE CLOSED
-    // RIBBON (device: "use the ribbon library ... form polygon shapes
-    // properly") — a continuous mitred loop, not per-edge strips with corner
-    // gaps. Draped at each polygon's local ground height (a block is small vs
-    // the terrain, so one height reads flat). The group shows the merged mesh
-    // via a single identity transform; the show/hide toggle stays the same.
+    // The CITY-PLAN outlines bake the first time they are shown (bakePlanOutlines): a
+    // debug view that is off by default should not hold ~40 MB of GPU mesh (ADR-0096).
+    assets_ = assets;
+    planBaked_ = false;
     blockBake_.clear();
     lotBake_.clear();
-    if (assets) {
-        engine::RenderMesh blockRib, lotRib;
-        auto strokePoly = [&](const engine::Poly2& poly, double halfW,
-                              double lift, engine::RenderMesh& into) {
-            if (poly.size() < 3) return;
-            std::vector<engine::Vec2> pts(poly.begin(), poly.end());
-            const engine::Vec2 c = engine::centroid(poly);
-            engine::MeshBuilder::append(
-                into, engine::strokeRibbon(pts, {halfW}, groundAt(c.x, c.y) + lift,
-                                           engine::Vec3(1, 1, 1), /*closed=*/true));
-        };
-        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
-            for (const engine::Poly2& b : plan.blocks) strokePoly(b, 0.45, 0.06, blockRib);
-            for (const engine::Poly2& l : plan.lots) strokePoly(l, 0.26, 0.05, lotRib);
-        });
-        if (!blockRib.vertices.empty()) {
-            MeshHandle h = assets->acquireMesh(blockRib, "city:blockoutline");
-            if (auto* g = world.get<InstanceGroup>(blockGroup_)) {
-                g->mesh = h;
-                g->boundsCenter = Vec3(0, 0, 0);
-                g->boundsRadius = 6000.0;   // city-wide merged mesh: never cull
-            }
-            blockBake_ = {Mat4()};
-        }
-        if (!lotRib.vertices.empty()) {
-            MeshHandle h = assets->acquireMesh(lotRib, "city:lotoutline");
-            if (auto* g = world.get<InstanceGroup>(lotGroup_)) {
-                g->mesh = h;
-                g->boundsCenter = Vec3(0, 0, 0);
-                g->boundsRadius = 6000.0;
-            }
-            lotBake_ = {Mat4()};
-        }
-    }
 
     // Bake the COLLIDER-PRISM outlines once (device: "a physics hull
     // visualizer"): the exact Jolt volumes — a rim loop at each prism's world
@@ -1420,9 +1579,68 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     Real halfH = bodyH * 0.5;
     // Absolute deck (corridor): the deck Y IS the surface; ground-relative
     // placement hovered/sank between chain nodes on hills (device).
-    Real y = (a.deckY > -1e29) ? a.deckY + halfH
+    Real y = (a.deckY > -1e29) ? deckSurfaceNear(x, z, a.deckY) + halfH
                                : groundAt(x, z) + a.elevation + halfH;
     Real yaw = std::atan2(drawHeading.x, drawHeading.y); // box local +Z -> travel heading
+    // FOUR WHEELS ON THE ROAD (#35 follow-up, Glenn: "we'd have to make sure the 4 wheels are on the
+    // ground"). The drawn surface under each tyre's contact patch (the deck the car is on, or the road
+    // and ground), a plane fitted through them for pitch and roll, then the height that puts the LOWEST
+    // tyre on the surface -- none sinks; on a crest or a twist one floats by the plane's residual, as a
+    // real car's would. One rule for decks, ramps, streets and hills.
+    // RT_FOUR_WHEELS=0: the older centre-sample placement below, for A/B (wheel_lab)
+    static const bool fourWheels = [] { const char* e = std::getenv("RT_FOUR_WHEELS"); return !(e && e[0] == '0'); }();
+    if (car && fourWheels) {
+        const int slot = agentIdx >= 0 ? drawSlotFor(agentIdx) : -1;
+        const std::vector<CarWheel>* wheels =
+            slot >= 0 && slot < static_cast<int>(carWheels_.size()) && carWheels_[static_cast<std::size_t>(slot)].size() >= 3
+                ? &carWheels_[static_cast<std::size_t>(slot)] : nullptr;
+        const Real fl = drawHeading.length();
+        if (wheels && fl > 1e-6) {
+            const Vec2 f = drawHeading * (1.0 / fl);
+            const Vec2 r(f.y, -f.x);                  // +X, the car's right
+            auto surface = [&](Real px, Real pz, Real along) { return carSurfaceAt(a, px, pz, along); };
+            // least squares y = c + gx * lx + gz * lz over the contacts (lx right, lz forward)
+            struct C { Real lx, lz, h; Vec3 local; };
+            C cs[8];
+            int n = 0;
+            for (const CarWheel& w : *wheels) {
+                if (n == 8) break;
+                const Vec3 local(w.pos.x, w.pos.y - w.radius, w.pos.z);
+                const Real wx = x + r.x * local.x + f.x * local.z, wz = z + r.y * local.x + f.y * local.z;
+                cs[n++] = {local.x, local.z, surface(wx, wz, local.z), local};
+            }
+            Real sx = 0, sz = 0, sh = 0;
+            for (int i = 0; i < n; ++i) { sx += cs[i].lx; sz += cs[i].lz; sh += cs[i].h; }
+            sx /= n; sz /= n; sh /= n;
+            Real xx = 0, zz = 0, xz = 0, xh = 0, zh = 0;
+            for (int i = 0; i < n; ++i) {
+                const Real dx = cs[i].lx - sx, dz = cs[i].lz - sz, dh = cs[i].h - sh;
+                xx += dx * dx; zz += dz * dz; xz += dx * dz; xh += dx * dh; zh += dz * dh;
+            }
+            const Real det = xx * zz - xz * xz;
+            Real gx = 0, gz = 0;   // roll and pitch slopes
+            if (std::fabs(det) > 1e-9) { gx = (xh * zz - zh * xz) / det; gz = (zh * xx - xh * xz) / det; }
+            Vec3 fw = normalize(Vec3(f.x, gz, f.y));
+            Vec3 rt = normalize(Vec3(r.x, gx, r.y));
+            Vec3 up = normalize(cross(fw, rt));
+            if (up.y < 0) up = up * -1;
+            up = smoothedUp(up);
+            fw = normalize(Vec3(f.x, 0, f.y) - up * dot(Vec3(f.x, 0, f.y), up));
+            rt = normalize(cross(up, fw));
+            // the height at which the lowest tyre just touches
+            Real cy = -1e30;
+            for (int i = 0; i < n; ++i) {
+                const Real dy = rt.y * cs[i].local.x + up.y * cs[i].local.y + fw.y * cs[i].local.z;
+                cy = std::max(cy, cs[i].h - dy);
+            }
+            Mat4 m;   // columns: X = right, Y = up, Z = forward
+            m.m[0][0] = rt.x; m.m[1][0] = rt.y; m.m[2][0] = rt.z;
+            m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
+            m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
+            m.m[0][3] = x; m.m[1][3] = cy; m.m[2][3] = z;
+            return m;
+        }
+    }
     // Cars sit NORMAL to the road plane (device: a world-upright box on a
     // graded street floats its nose or buries its tail). Sample the drive
     // surface a wheelbase fore/aft and a track left/right, build the tilted
@@ -1434,9 +1652,17 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         // instead — all four wheels track the ramp (device feedback).
         Vec2 f = drawHeading;
         const Real fl = f.length();
-        if (fl > 1e-6 && std::fabs(a.grade) > 1e-4) {
+        Real grade = a.grade;
+        if (fl > 1e-6 && a.deckY > -1e29) {   // the drawn deck a wheelbase fore and aft (its vertical curves)
+            constexpr Real kHalfBase = 1.4;
+            const Vec2 u = f * (1.0 / fl);
+            const Real yF = deckSurfaceNear(x + u.x * kHalfBase, z + u.y * kHalfBase, a.deckY + a.grade * kHalfBase);
+            const Real yB = deckSurfaceNear(x - u.x * kHalfBase, z - u.y * kHalfBase, a.deckY - a.grade * kHalfBase);
+            grade = (yF - yB) / (2 * kHalfBase);
+        }
+        if (fl > 1e-6 && std::fabs(grade) > 1e-4) {
             f = f * (1.0 / fl);
-            Vec3 fw = normalize(Vec3(f.x, a.grade, f.y));
+            Vec3 fw = normalize(Vec3(f.x, grade, f.y));
             Vec3 rt(f.y, 0, -f.x);
             Vec3 up = normalize(cross(fw, rt));
             if (up.y < 0) up = up * -1;
@@ -1630,11 +1856,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // The SAME slot the body is drawn with (syncGroups). This used
         // vehicle % count, a different model's lamps: a bus wore a sedan's,
         // whose tail lights sit 2.3 m behind centre -- inside the saloon.
-        int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
-        if (v >= drawVariantCount()) v %= drawVariantCount();
-        if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
-            busVariant_ < drawVariantCount())
-            v = busVariant_;
+        const int v = drawSlotFor(static_cast<int>(ai));
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
@@ -1678,8 +1900,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // marker, which sits exactly on the end face, so half of it poked
         // through into the saloon -- tail lights glowing inside the bus
         // (Glenn). Out by half the lens depth, it sits flush on the outside.
-        const bool seeInto = v < static_cast<int>(carGlassGroups_.size()) &&
-                             carGlassGroups_[static_cast<std::size_t>(v)].valid();
+        const bool seeInto = v < static_cast<int>(carSeeInto_.size()) && carSeeInto_[static_cast<std::size_t>(v)] != 0;
         for (const LampMarker& m : markers) {
             const bool isHead = m.name.rfind("headlight", 0) == 0;
             const bool isTail = m.name.rfind("taillight", 0) == 0;
@@ -1701,6 +1922,54 @@ void CityRenderSystem::syncCarLamps(World& world) {
     refreshBounds(head);
     refreshBounds(brake);
     refreshBounds(turn);
+}
+
+// Bake the CITY-PLAN outlines (ADR-0066), on first show (syncGroups).
+void CityRenderSystem::bakePlanOutlines(World& world) {
+    // The CITY-PLAN outlines (ADR-0066): every block/lot polygon
+    // (published by the loader as CityPlanDebug) is stroked as ONE CLOSED
+    // RIBBON (device: "use the ribbon library ... form polygon shapes
+    // properly") — a continuous mitred loop, not per-edge strips with corner
+    // gaps. Draped at each polygon's local ground height (a block is small vs
+    // the terrain, so one height reads flat). The group shows the merged mesh
+    // via a single identity transform; the show/hide toggle stays the same.
+    planBaked_ = true;
+    engine::AssetManager* assets = assets_;
+    if (assets) {
+        engine::RenderMesh blockRib, lotRib;
+        auto strokePoly = [&](const engine::Poly2& poly, double halfW,
+                              double lift, engine::RenderMesh& into) {
+            if (poly.size() < 3) return;
+            std::vector<engine::Vec2> pts(poly.begin(), poly.end());
+            const engine::Vec2 c = engine::centroid(poly);
+            engine::MeshBuilder::append(
+                into, engine::strokeRibbon(pts, {halfW}, groundAt(c.x, c.y) + lift,
+                                           engine::Vec3(1, 1, 1), /*closed=*/true));
+        };
+        world.each<engine::CityPlanDebug>([&](Entity, engine::CityPlanDebug& plan) {
+            for (const engine::Poly2& b : plan.blocks) strokePoly(b, 0.45, 0.06, blockRib);
+            for (const engine::Poly2& l : plan.lots) strokePoly(l, 0.26, 0.05, lotRib);
+        });
+        if (!blockRib.vertices.empty()) {
+            MeshHandle h = assets->acquireMesh(blockRib, "city:blockoutline");
+            if (auto* g = world.get<InstanceGroup>(blockGroup_)) {
+                g->mesh = h;
+                g->boundsCenter = Vec3(0, 0, 0);
+                g->boundsRadius = 6000.0;   // city-wide merged mesh: never cull
+            }
+            blockBake_ = {Mat4()};
+        }
+        if (!lotRib.vertices.empty()) {
+            MeshHandle h = assets->acquireMesh(lotRib, "city:lotoutline");
+            if (auto* g = world.get<InstanceGroup>(lotGroup_)) {
+                g->mesh = h;
+                g->boundsCenter = Vec3(0, 0, 0);
+                g->boundsRadius = 6000.0;
+            }
+            lotBake_ = {Mat4()};
+        }
+    }
+
 }
 
 void CityRenderSystem::syncGroups(World& world) {
@@ -1849,6 +2118,19 @@ void CityRenderSystem::syncGroups(World& world) {
         SignalState st = sc.stateForLink(li);
         int s = static_cast<int>(st);
         if (sig[s]) sig[s]->transforms.push_back(signalLensPose(li, st));
+        // THE LEFT ARROW (ADR-0109): a fourth lamp beside the head, on the side the left turn goes,
+        // lit green (or amber) through the lead arrow while the straight-on lamps show red
+        if (sc.hasLeftArrow(li)) {
+            const SignalState la = sc.stateFor(li, Move::Left);
+            if (la != SignalState::Red && st == SignalState::Red) {
+                const Vec2 u = nav_.direction(li);
+                const Vec3 turnSide(-u.y, 0, u.x);   // the nav frame's left of travel, in the world
+                Mat4 pose = signalLensPose(li, SignalState::Green);
+                pose = Mat4::trs(Vec3(0, 0, 0) + turnSide * 0.34, Quat(), Vec3(1, 1, 1)) * pose;
+                const int k = static_cast<int>(la);
+                if (sig[k]) sig[k]->transforms.push_back(pose);
+            }
+        }
     }
 
     for (InstanceGroup* c : cars) refreshBounds(c);
@@ -1867,21 +2149,64 @@ void CityRenderSystem::syncGroups(World& world) {
         if (drv) drv->transforms.clear();
         for (InstanceGroup* r : rid) if (r) r->transforms.clear();
         busDrawnPose_.clear();
+        // THE NEAR SWAP (fleet v2): the kNearCount moving cars nearest the player, within kNearIn m (kept
+        // until kNearOut, so a car at the edge does not flicker), draw clear glass, their cabin and driver.
+        {
+            constexpr Real kNearIn = 50.0, kNearOut = 58.0;
+            constexpr std::size_t kNearCount = 12;
+            std::vector<std::pair<Real, int>> cand;
+            if (sim_.hasTierCenter()) {
+                const Vec2 c = sim_.tierCenter();
+                const auto& ags = sim_.agents();
+                for (std::size_t v = 0; v < cars.size() && v < carSeeInto_.size(); ++v) {
+                    if (!cars[v] || carSeeInto_[v]) continue;
+                    for (int ai : carAgentIds_[v]) {
+                        if (ai < 0) continue;
+                        const Real d = (ags[static_cast<std::size_t>(ai)].pos - c).length();
+                        if (d < (nearSwap_.count(ai) ? kNearOut : kNearIn)) cand.push_back({d, ai});
+                    }
+                }
+            }
+            std::sort(cand.begin(), cand.end());
+            nearSwap_.clear();
+            for (std::size_t i = 0; i < cand.size() && i < kNearCount; ++i) nearSwap_.insert(cand[i].second);
+        }
         for (std::size_t v = 0; v < cars.size() && v < carGlassGroups_.size(); ++v) {
             if (!cars[v]) continue;
-            if (carGlassGroups_[v].valid())
-                if (InstanceGroup* g = world.get<InstanceGroup>(carGlassGroups_[v])) {
-                    g->transforms = cars[v]->transforms;
-                    refreshBounds(g);
+            const bool always = carSeeInto_[v] != 0;
+            const std::vector<int>& ids = carAgentIds_[v];
+            InstanceGroup* clear = carGlassGroups_[v].valid() ? world.get<InstanceGroup>(carGlassGroups_[v]) : nullptr;
+            InstanceGroup* opaque = carGlassOpaqueGroups_[v].valid() ? world.get<InstanceGroup>(carGlassOpaqueGroups_[v]) : nullptr;
+            InstanceGroup* cabin = carInteriorGroups_[v].valid() ? world.get<InstanceGroup>(carInteriorGroups_[v]) : nullptr;
+            if (clear) clear->transforms.clear();
+            if (opaque) opaque->transforms.clear();
+            if (cabin) cabin->transforms.clear();
+            for (std::size_t k = 0; k < cars[v]->transforms.size(); ++k) {
+                const Mat4& xf = cars[v]->transforms[k];
+                const int ai = k < ids.size() ? ids[k] : -1;
+                // near-swapped only when the slot HAS a cabin to show (a kit body without one keeps its glass
+                // opaque rather than showing an empty shell through clear glass)
+                const bool seen = always || (ai >= 0 && nearSwap_.count(ai) && cabin);
+                if (seen) {
+                    if (clear) clear->transforms.push_back(xf);
+                    if (cabin) cabin->transforms.push_back(xf);
+                } else if (opaque) {
+                    opaque->transforms.push_back(xf);
+                } else if (clear) {
+                    clear->transforms.push_back(xf);   // a slot with no opaque form keeps its clear glass
                 }
+            }
+            refreshBounds(clear);
+            refreshBounds(opaque);
+            refreshBounds(cabin);
             const std::vector<Vec3>& seats = carSeats_[v];
             const bool hasDriver = carHasDriver_[v] != 0;
             if (seats.empty() && !hasDriver) continue;
-            const std::vector<int>& ids = carAgentIds_[v];
             const int n = static_cast<int>(seats.size());
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
+                if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
                 if (hasDriver && drv)
@@ -1930,6 +2255,7 @@ void CityRenderSystem::syncGroups(World& world) {
         if (navN) navN->transforms = showNav ? navNodeBake_ : std::vector<Mat4>{};
         // City-plan outlines (static bakes, same show-or-empty pattern).
         const bool showPlan = debugWidgets_ && showPlan_;
+        if (showPlan && !planBaked_) bakePlanOutlines(world);
         InstanceGroup* blk = world.get<InstanceGroup>(blockGroup_);
         InstanceGroup* lot = world.get<InstanceGroup>(lotGroup_);
         if (blk) blk->transforms = showPlan ? blockBake_ : std::vector<Mat4>{};
@@ -2164,6 +2490,8 @@ void CityRenderSystem::step(World& world, Real dt) {
     }
     static double simMs = 0.0, syncMs = 0.0;
     static int calls = 0;
+    const CitySim::PhaseTimes ph0 = sim_.phaseTimes();
+    const engine::RouteStats rs0 = engine::routeStats();
     auto t0 = std::chrono::steady_clock::now();
     sim_.step(dt, params_.hoursPerSecond);
     auto t1 = std::chrono::steady_clock::now();
@@ -2171,6 +2499,35 @@ void CityRenderSystem::step(World& world, Real dt) {
     auto t2 = std::chrono::steady_clock::now();
     simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    if (std::chrono::duration<double, std::milli>(t2 - t0).count() > 16.0)
+        LOG_INFO << "[stats] SPIKE citysim step " << std::chrono::duration<double, std::milli>(t1 - t0).count()
+                 << " ms, group sync " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms"
+                 << " | phases ms: rehash " << (sim_.phaseTimes().rehash - ph0.rehash) / 1000.0
+                 << " tier " << (sim_.phaseTimes().tierPass - ph0.tierPass) / 1000.0
+                 << " goals " << (sim_.phaseTimes().goals - ph0.goals) / 1000.0
+                 << " sensed " << (sim_.phaseTimes().sensedBuild - ph0.sensedBuild) / 1000.0
+                 << " gaps " << (sim_.phaseTimes().gaps - ph0.gaps) / 1000.0
+                 << " active " << (sim_.phaseTimes().activeList - ph0.activeList) / 1000.0
+                 << " move " << (sim_.phaseTimes().advMove - ph0.advMove) / 1000.0
+                 << " pairs " << (sim_.phaseTimes().advPairs - ph0.advPairs) / 1000.0
+                 << " pop " << (sim_.phaseTimes().advPop - ph0.advPop) / 1000.0
+                 << " solver " << (sim_.phaseTimes().advSolver - ph0.advSolver) / 1000.0
+                 << " tail " << (sim_.phaseTimes().advance - ph0.advance) / 1000.0
+                 << " total " << (sim_.phaseTimes().total - ph0.total) / 1000.0
+                 << " | routes " << engine::routeStats().calls - rs0.calls << " in "
+                 << engine::routeStats().ms - rs0.ms << " ms, " << engine::routeStats().expanded - rs0.expanded
+                 << " nodes expanded";
+        {   // who routed: caller addresses (the viewer is not PIE: `nm -C -n` names them)
+            std::vector<std::pair<const void*, long>> d;
+            for (const auto& c : engine::routeStats().callers) {
+                long before = 0;
+                for (const auto& b : rs0.callers) if (b.first == c.first) before = b.second;
+                if (c.second > before) d.push_back({c.first, c.second - before});
+            }
+            std::sort(d.begin(), d.end(), [](const auto& x, const auto& y) { return x.second > y.second; });
+            for (std::size_t k = 0; k < d.size() && k < 4; ++k)
+                LOG_INFO << "[stats]   route caller " << d[k].first << " x" << d[k].second;
+        }
     if (++calls % 300 == 0) {
         // `moving` means "has an open route" — it stays true through red
         // lights, crash freezes, car-following stops and the far tier's
@@ -2246,29 +2603,154 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         const std::string q = ctx.settings.getString("ground.query", "");
         if (!q.empty()) {
             ctx.settings.setString("ground.query", "");
-            double qx = 0, qz = 0;
-            if (std::sscanf(q.c_str(), "%lf %lf", &qx, &qz) == 2) {
-                char buf[256];
+            double qx = 0, qz = 0, qr = 0;
+            const int nq = std::sscanf(q.c_str(), "%lf %lf %lf", &qx, &qz, &qr);
+            if (nq == 3 && qr > 0) {   // `ground? x z r`: dump nav links + deck spines within r to RT_GROUND_DUMP (JSON)
+                const char* path = std::getenv("RT_GROUND_DUMP");
+                if (FILE* fp = path ? std::fopen(path, "w") : nullptr) {
+                    auto near = [&](engine::Vec2 p) { return (p - engine::Vec2(qx, qz)).length() < qr; };
+                    std::fprintf(fp, "{\"links\":[");
+                    bool first = true;
+                    for (int li = 0; li < nav_.linkCount(); ++li) {
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        if (L.from < 0 || L.to < 0) continue;
+                        const engine::Vec2 a = nav_.nodes[static_cast<std::size_t>(L.from)], b = nav_.nodes[static_cast<std::size_t>(L.to)];
+                        if (!near(a) && !near(b)) continue;
+                        std::fprintf(fp, "%s{\"id\":%d,\"a\":[%.2f,%.2f],\"b\":[%.2f,%.2f],\"abs\":[%d,%d],\"elev\":[%.2f,%.2f],\"cls\":%d}",
+                                     first ? "" : ",", li, a.x, a.y, b.x, b.y, L.elevAbsA ? 1 : 0, L.elevAbsB ? 1 : 0, L.elevA, L.elevB,
+                                     static_cast<int>(L.klass));
+                        first = false;
+                    }
+                    std::fprintf(fp, "],\"spines\":[");
+                    first = true;
+                    for (const engine::RoadDeckField& f : decks_)
+                        for (const engine::UnionSpine& sp : f.spines) {
+                            bool any = false;
+                            for (const engine::Vec2& p : sp.points) any = any || near(p);
+                            if (!any) continue;
+                            std::fprintf(fp, "%s{\"layer\":%d,\"pts\":[", first ? "" : ",", sp.layer);
+                            for (std::size_t i = 0; i < sp.points.size(); ++i)
+                                std::fprintf(fp, "%s[%.2f,%.2f,%.2f,%.2f]", i ? "," : "", sp.points[i].x, sp.points[i].y,
+                                             i < sp.yAbs.size() ? sp.yAbs[i] : 0.0, i < sp.hw.size() ? sp.hw[i] : sp.halfWidth);
+                            std::fprintf(fp, "]}");
+                            first = false;
+                        }
+                    std::fprintf(fp, "],\"cars\":[");
+                    first = true;   // every car in the area: where it is DRAWN vs every deck surface under it
+                    const auto& ags = sim_.agents();
+                    for (int i = 0; i < static_cast<int>(ags.size()); ++i) {
+                        const Agent& ag = ags[static_cast<std::size_t>(i)];
+                        if (ag.mode != Agent::Mode::Driver || ag.released || !near(ag.pos)) continue;
+                        const auto pp = physPose_.find(i);
+                        const engine::Mat4 m = pp != physPose_.end() ? pp->second : agentPose(ag, i);
+                        Real bodyH = params_.carSize.y;
+                        if (ag.vehicle >= 0 && ag.vehicle < static_cast<int>(sim_.vehicles().size()))
+                            bodyH = sim_.vehicles()[static_cast<std::size_t>(ag.vehicle)].height;
+                        const int link = ag.leg >= 0 && ag.leg < static_cast<int>(ag.route.links.size())
+                                             ? ag.route.links[static_cast<std::size_t>(ag.leg)] : -1;
+                        std::fprintf(fp, "%s{\"id\":%d,\"x\":%.2f,\"z\":%.2f,\"link\":%d,\"deckY\":%.3f,\"elev\":%.3f,"
+                                         "\"bottom\":%.3f,\"up\":[%.3f,%.3f,%.3f],\"phys\":%d,\"ground\":%.3f,",
+                                     first ? "" : ",", i, ag.pos.x, ag.pos.y, link, ag.deckY > -1e29 ? ag.deckY : -999.0, ag.elevation,
+                                     m.m[1][3] - bodyH * 0.5, m.m[0][1], m.m[1][1], m.m[2][1], pp != physPose_.end() ? 1 : 0,
+                                     groundAt(ag.pos.x, ag.pos.y));
+                        {   // each tyre's contact point (drawn) vs the surface under it: + floats, - sinks
+                            const int slot = drawSlotFor(i);
+                            std::fprintf(fp, "\"slot\":%d,\"wheels\":[", slot);
+                            if (slot >= 0 && slot < static_cast<int>(carWheels_.size())) {
+                                bool fw = true;
+                                for (const CarWheel& w : carWheels_[static_cast<std::size_t>(slot)]) {
+                                    const Vec3 c = m.transformPoint(Vec3(w.pos.x, w.pos.y - w.radius, w.pos.z));
+                                    const Real s = carSurfaceAt(ag, c.x, c.z, w.pos.z);
+                                    std::fprintf(fp, "%s%.3f", fw ? "" : ",", c.y - s);
+                                    fw = false;
+                                }
+                            }
+                            std::fprintf(fp, "],\"decks\":[");
+                        }
+                        bool f2 = true;
+                        for (const engine::RoadDeckField& f : decks_) {
+                            double y;
+                            for (double w : {0.5, 3.0})   // at the car, and a little wider (the lane's edge)
+                                if (f.heightAt(ag.pos.x, ag.pos.y, w, &y)) { std::fprintf(fp, "%s%.3f", f2 ? "" : ",", y); f2 = false; }
+                        }
+                        std::fprintf(fp, "]}");
+                        first = false;
+                    }
+                    std::fprintf(fp, "]}\n");
+                    std::fclose(fp);
+                    ctx.settings.setString("ground.result", std::string("dumped ") + path);
+                } else {
+                    ctx.settings.setString("ground.result", "err set RT_GROUND_DUMP to a writable path");
+                }
+            } else if (nq >= 2) {
                 const double carved = heightAt_ ? heightAt_(qx, qz) : 0.0;
-                double deckY = -1e30;
-                int li = nav_.nearestLink(engine::Vec2(qx, qz));
+                char buf[512];
+                std::snprintf(buf, sizeof buf, "%.1f %.1f carved=%.2f lifted=%.2f drawn=%.2f", qx, qz, carved,
+                              carved + roadLift_, groundAt(qx, qz));
+                std::string out = buf;
+                // every drawn surface over the point (which deck, at what height)
+                for (const engine::RoadDeckField& f : decks_) {
+                    double y;
+                    if (f.heightAt(qx, qz, 0.5, &y)) { std::snprintf(buf, sizeof buf, " deckAt=%.2f", y); out += buf; }
+                }
+                {   // the nearest drawn deck spine within 40 m (is this road in the field at all, how wide)
+                    std::size_t nSp = 0;
+                    double bd = 40.0, by = 0, bhw = 0; int bl = -1;
+                    for (const engine::RoadDeckField& f : decks_) {
+                        nSp += f.spines.size();
+                        for (const engine::UnionSpine& sp : f.spines)
+                            for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+                                const engine::Vec2 a = sp.points[i], ab = sp.points[i + 1] - a;
+                                const double L2 = ab.lengthSquared();
+                                double t = L2 < 1e-12 ? 0.0 : dot(engine::Vec2(qx, qz) - a, ab) / L2;
+                                t = std::clamp(t, 0.0, 1.0);
+                                const double d = (a + ab * t - engine::Vec2(qx, qz)).length();
+                                if (d < bd && sp.yAbs.size() == sp.points.size()) {
+                                    bd = d; bl = sp.layer;
+                                    by = sp.yAbs[i] + (sp.yAbs[i + 1] - sp.yAbs[i]) * t;
+                                    bhw = sp.hw.size() == sp.points.size() ? sp.hw[i] : sp.halfWidth;
+                                }
+                            }
+                    }
+                    std::snprintf(buf, sizeof buf, " | decks=%zu spines=%zu nearestSpine d=%.2f y=%.2f hw=%.2f layer=%d",
+                                  decks_.size(), nSp, bl >= 0 ? bd : -1.0, by, bhw, bl);
+                    out += buf;
+                }
+                // the nearest nav link, both height forms
+                const int li = nav_.nearestLink(engine::Vec2(qx, qz));
                 if (li >= 0) {
                     const engine::NavLink& L = nav_.links[li];
                     const engine::Vec2 a = nav_.nodes[L.from], b = nav_.nodes[L.to];
                     const engine::Vec2 ab(b.x - a.x, b.y - a.y);
                     const double len2 = ab.x * ab.x + ab.y * ab.y;
-                    double t = len2 > 1e-9
-                                   ? std::clamp(((qx - a.x) * ab.x +
-                                                 (qz - a.y) * ab.y) / len2,
-                                                0.0, 1.0)
-                                   : 0.0;
-                    deckY = deckYAt(li, static_cast<engine::Real>(t),
-                                    engine::Vec2(qx, qz));
+                    const double t = len2 > 1e-9 ? std::clamp(((qx - a.x) * ab.x + (qz - a.y) * ab.y) / len2, 0.0, 1.0) : 0.0;
+                    std::snprintf(buf, sizeof buf,
+                                  " | link=%d t=%.2f len=%.1f abs=%d(%d,%d) layer=%d elev=%.2f..%.2f above=%.2f..%.2f deckYAt=%.2f",
+                                  li, t, L.length, L.elevAbsolute ? 1 : 0, L.elevAbsA ? 1 : 0, L.elevAbsB ? 1 : 0, L.layer,
+                                  L.elevA, L.elevB, L.aboveA, L.aboveB,
+                                  deckYAt(li, static_cast<engine::Real>(t * L.length), engine::Vec2(qx, qz)));
+                    out += buf;
                 }
-                std::snprintf(buf, sizeof buf,
-                              "%.1f %.1f carved=%.2f lifted=%.2f deckY=%.2f link=%d",
-                              qx, qz, carved, carved + roadLift_, deckY, li);
-                ctx.settings.setString("ground.result", buf);
+                // the cars within 15 m: their link, sim heights, and where they are DRAWN (bottom of the body)
+                const auto& agents = sim_.agents();
+                int shown = 0;
+                for (int i = 0; i < static_cast<int>(agents.size()) && shown < 6; ++i) {
+                    const Agent& ag = agents[static_cast<std::size_t>(i)];
+                    if (ag.mode != Agent::Mode::Driver || ag.released) continue;
+                    if ((ag.pos - engine::Vec2(qx, qz)).length() > 15.0) continue;
+                    const auto pp = physPose_.find(i);
+                    const engine::Mat4 m = pp != physPose_.end() ? pp->second : agentPose(ag, i);
+                    Real bodyH = params_.carSize.y;
+                    if (ag.vehicle >= 0 && ag.vehicle < static_cast<int>(sim_.vehicles().size()))
+                        bodyH = sim_.vehicles()[static_cast<std::size_t>(ag.vehicle)].height;
+                    std::snprintf(buf, sizeof buf,
+                                  " | car %d at (%.1f, %.1f) link=%d deckY=%.2f elevation=%.2f grade=%.3f bottom=%.2f drawn=%.2f%s",
+                                  i, ag.pos.x, ag.pos.y, ag.leg >= 0 && ag.leg < static_cast<int>(ag.route.links.size()) ? ag.route.links[static_cast<std::size_t>(ag.leg)] : -1, ag.deckY > -1e29 ? ag.deckY : -999.0, ag.elevation, ag.grade,
+                                  m.m[1][3] - bodyH * 0.5, groundAt(ag.pos.x, ag.pos.y), pp != physPose_.end() ? " PHYS" : "");
+                    out += buf;
+                    ++shown;
+                }
+                ctx.settings.setString("ground.result", out);
             } else {
                 ctx.settings.setString("ground.result", "err parse: " + q);
             }

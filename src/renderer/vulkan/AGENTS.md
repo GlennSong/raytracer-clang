@@ -9,6 +9,16 @@ real Linux/Windows run with the validation layers). Phases 2+ (textures, full
 forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
 `docs/vulkan-renderer-plan.md`. Parity reference: `../metal/AGENTS.md`.
 
+### GPU memory and uploads (ADR-0094) — read before allocating anything
+- **Meshes and textures go through VMA** (`allocator`, `createGpuBuffer`, `createGpuImage`),
+  never a raw `vkAllocateMemory`. Only render targets, UBOs and readback buffers allocate raw.
+- **Uploads go through the queue:** `stage()` the bytes (may flush — call it *before*
+  `uploadCmd()`), then record the copy into `uploadCmd()`. Never submit + `vkQueueWaitIdle` a
+  one-time command buffer for an upload. The batch flushes at the start of `drawFrame`.
+- **Removal retires, it does not destroy:** `retiredMeshes`/`retiredTextures` are freed by
+  `collectRetired` once `MAX_FRAMES_IN_FLIGHT` frames have passed. No `vkDeviceWaitIdle` for it.
+- `mem?` (control channel) prints heaps, blocks, allocations and upload totals.
+
 ### What exists after Phase 1
 - `vulkan_renderer.h` — `VulkanRenderer : Renderer`, pimpl (no Vulkan in header).
 - `vulkan_renderer.cpp` — instance (+ debug messenger) → surface (Window seam) →
@@ -16,8 +26,22 @@ forward, shadows, IBL, post) still to do. Decision: ADR-0057. Plan:
   buffers → per-frame sync → descriptor set layout + per-frame global UBO +
   descriptor pool/sets → forward graphics pipeline → `drawFrame`. Defines
   `Renderer::create()`.
-- **Rendering:** `uploadMesh` packs the (double) engine `Vertex` to float
-  `GpuVertex`, uploads device-local vertex/index buffers via a staging copy.
+- **Rendering:** `uploadMesh` packs the (double) engine `Vertex` into one of TWO
+  layouts (ADR-0096): the 32-byte standard `GpuVertexPacked` (octahedral snorm16
+  normal + tangent, RGBA8 tint) unless the mesh needs the 56-byte full `GpuVertex`
+  (`RenderMesh::tangentIsData` — CDLOD terrain's morph target — or a tint outside
+  [0, 1]). Every pipeline that reads mesh vertices has a `...Packed` twin (same
+  state, packed vertex input, `mesh.vert`'s `kPackedVertex` specialisation on) and
+  a draw binds the twin its mesh needs. A new mesh pipeline needs its twin too;
+  terrain has none. `RT_VERTEX_FULL=1` keeps everything full for A/B frames.
+  `prepareMesh` (any thread, no device calls) + `uploadPrepared` (render thread,
+  a staging copy) are the same upload in two halves; streamed content prepares
+  on its worker. Keep `packVertices` free of renderer state so it stays thread-safe.
+- **Instancing (ADR-0097):** mesh pipelines take the model matrix per instance
+  (binding 1, locations 5-8; shadow 1-4) from `instanceBuffers[currentFrame]`, not
+  the push block. Every DrawItem has `firstInstance/instanceCount`; a new draw path
+  must `pushInstance` its transform. `RT_NO_INSTANCING=1` and `RT_VSYNC=0` are the
+  A/B and benchmark switches.
   `setCamera`/`setLights` fill a `GlobalsUBO` (viewProjection with the clip-space
   Y-flip baked in by `packMat4`, camera pos, sun, ambient). `drawMesh` queues a
   draw with a `MeshPush` push-constant (model + albedo/metallic + emission/

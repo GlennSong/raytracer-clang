@@ -1,0 +1,257 @@
+{
+ "version": 1,
+ "environment": {
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.8,
+  "exposure": 0.75,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.3,
+    0.75,
+    0.55
+   ],
+   "intensity": 6.0
+  }
+ },
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   0.0,
+   1.2,
+   30.0
+  ]
+ },
+ "entities": [
+  {
+   "id": 1,
+   "name": "ground",
+   "shape": "box",
+   "position": [
+    0,
+    -0.55,
+    0
+   ],
+   "size": [
+    200,
+    1,
+    120
+   ],
+   "material": {
+    "albedo": [
+     0.3,
+     0.33,
+     0.28
+    ],
+    "roughness": 1.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0
+   }
+  },
+  {
+   "id": 2,
+   "name": "signs",
+   "shape": "road_signs",
+   "signs": [
+    {
+     "at": [
+      -40.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "advance",
+     "legend": {
+      "dests": [
+       "Sixteenth Blvd",
+       "Carrcombe Harbor"
+      ],
+      "dist": "2 km",
+      "exit": "31"
+     },
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      -31.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "exit",
+     "legend": {
+      "arrow": "up-left",
+      "dests": [
+       "Sixteenth Blvd",
+       "Carrcombe Harbor"
+      ],
+      "exit": "31"
+     },
+     "mount": "overhead"
+    },
+    {
+     "at": [
+      -17.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "gore",
+     "legend": {
+      "arrow": "up-left",
+      "exit": "31"
+     },
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      -8.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "route",
+     "legend": {
+      "dir": "Outer Loop",
+      "route": "1"
+     },
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      1.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "distance",
+     "legend": {
+      "rows": [
+       [
+        "Saltwood",
+        "2"
+       ],
+       [
+        "Brookcliff",
+        "7"
+       ],
+       [
+        "Coldwell",
+        "15"
+       ]
+      ],
+      "unit": "km"
+     },
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      10.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "entrance",
+     "legend": {
+      "arrow": "left",
+      "city": "Saltwood",
+      "dir": "Outer Loop",
+      "route": "1"
+     },
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      19.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "do-not-enter",
+     "legend": {},
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      28.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "wrong-way",
+     "legend": {},
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      37.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "limit",
+     "legend": {
+      "kind": "city",
+      "name": "Saltwood",
+      "pop": 32000
+     },
+     "mount": "roadside"
+    },
+    {
+     "at": [
+      46.0,
+      0.0
+     ],
+     "facing": [
+      0.0,
+      -1.0
+     ],
+     "kind": "trailblazer",
+     "legend": {
+      "dest": "Dunwyn",
+      "dist": "9 km",
+      "route": "2"
+     },
+     "mount": "roadside"
+    }
+   ]
+  }
+ ]
+}

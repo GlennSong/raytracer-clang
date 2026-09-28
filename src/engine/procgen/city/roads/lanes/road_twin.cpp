@@ -69,6 +69,7 @@ RoadClass classOf(const EdgeSpec& e) {
     if (e.cls == "freeway") return RoadClass::Freeway;
     if (e.cls == "arterial") return RoadClass::Arterial;
     if (e.cls == "collector") return RoadClass::Collector;
+    if (e.cls == "rural") return RoadClass::Collector;   // a country road: collector speeds, no sidewalks
     if (e.cls == "alley") return RoadClass::Alley;
     return RoadClass::Local;
 }
@@ -81,7 +82,7 @@ double twinRightOfWayPad(const Result& r, RoadClass k) {
     return 2.0 * (shoulder + kTwinTolerance + r.graph.rules.conformW);
 }
 
-RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
+RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forNav) {
     RoadEntity net; net.look.sidewalk = 3.5; net.look.autoRoundabout = false;   // lanelab owns its junctions
     std::vector<Line> lines;
     // A ramp is one lanelab edge but two things to the city: at grade, beside the street it leaves
@@ -164,6 +165,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots) {
         // travel lanes' own width; the right-of-way the lot pass zones around gets its padding
         // back where it is built (twinRightOfWayPad, city_producer).
         if (deckEarthwork && !forLots) L.w = 2.0 * r.graph.hw(e);
+        if (forNav) L.w = 2.0 * r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e);   // every road: its travel lanes
         // THE CROSS-SECTION, so the city can park on it. `w` above is the LOT clearance band —
         // padded by the twin tolerance and, on a deck, by the whole earthwork — and is not a
         // street's actual asphalt. The sim's kerbside bays are laid in a road's own Parking band

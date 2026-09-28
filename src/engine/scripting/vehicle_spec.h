@@ -55,6 +55,15 @@ struct VehicleSpec {
     // "not supplied", which would otherwise put the driver in the boot.
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
+
+    // The suspension the wheels get (the street rig unless the recipe's `suspension` says otherwise) and
+    // whether the drivetrain is a part-time 4x4 the driver switches (`drive = "4wd"`).
+    Real suspensionMin = PhysicsWorld::kStreetSuspensionMin;
+    Real suspensionMax = PhysicsWorld::kStreetSuspensionMax;
+    Real suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
+    Real suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
+    Real suspensionRestDrop = PhysicsWorld::kStreetSuspensionRestDrop;
+    bool partTime4wd = false;
 };
 
 // Run a `vehicle.*` recipe in `vm` (which must already have openProcgenLibrary
@@ -64,6 +73,13 @@ struct VehicleSpec {
 // UNVERIFIED: the Lua submodule can't be fetched here, so this hasn't compiled.
 bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                      VehicleSpec& out, std::string* err = nullptr);
+
+// The DRIVABLE CATALOGUE (vehicles.lua `vehicle.drivable`): what the player can pick and drop. `drive` is
+// "fwd" | "rwd" | "awd" | "4wd" (part-time). The VM must have vehicles.lua loaded.
+struct DrivableEntry { std::string recipe, label, drive; };
+bool loadDrivableCatalogue(ScriptVM& vm, std::vector<DrivableEntry>& out, std::string* err = nullptr);
+// "4WD (part-time, Z)" style text for a drive code.
+std::string driveLabel(const std::string& drive);
 
 // Spawn a drivable vehicle entity from a spec: Transform + PrevTransform, a
 // Renderable (body uploaded via `assets`), and a Vehicle component — VehicleSystem

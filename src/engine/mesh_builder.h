@@ -2,6 +2,8 @@
 #define RAYTRACER_ENGINE_MESH_BUILDER_H
 
 #include "../renderer/renderer.h"
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -144,6 +146,44 @@ struct MeshBuilder {
     // brown trunk fading to green leaves on a tree (use a white material so the
     // vertex color shows). No-op on an empty mesh.
     static void bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3& high);
+
+    // --- THE SHAPE KIT (the flora plan): organic and mineral forms from a few operations,
+    // shared by trees, rocks, shrubs, hedges -- and Lua (mesh.icosphere, mesh.displace, ...).
+    // A unit icosphere, welded (subdiv 0: 12 verts / 20 faces; 1: 42 / 80; 2: 162 / 320).
+    static RenderMesh icosphere(int subdiv);
+    // Push every vertex along its direction from `centre` by amp * noise(p * freq): lumps.
+    static void displaceNoise(RenderMesh& mesh, const Vec3& centre, double amp, double freq, uint32_t seed);
+    // Clamp every vertex onto the plane dot(n, p - centre) <= d: a crisp flat break.
+    static void cutByPlane(RenderMesh& mesh, const Vec3& centre, const Vec3& n, double d);
+    // Unweld into flat faces (each triangle its own vertices, the face normal), wound outward
+    // from `centre`. The low-poly look; soften afterwards with leanNormals.
+    static void facet(RenderMesh& mesh, const Vec3& centre);
+    // Lean every normal by `t` toward the normal of the ellipsoid (centre, radii) at that vertex:
+    // the whole shape lights as one soft volume (canopies, hedges, semi-faceted stone).
+    static void leanNormals(RenderMesh& mesh, const Vec3& centre, const Vec3& radii, double t);
+    // Move every vertex through a function of its position (squash, bend, taper, flatten a foot).
+    static void deform(RenderMesh& mesh, const std::function<Vec3(const Vec3&)>& fn);
+    // Colour every vertex by a function of it (position, normal): gradients, moss by facing, AO.
+    static void colorBy(RenderMesh& mesh, const std::function<Vec3(const Vertex&)>& fn);
+    // A RIBBON along a curve: a strip through `points`, `halfWidths[i]` to each side, the side
+    // direction horizontal-perpendicular to the curve (level across, like water or a road) unless
+    // `up` says otherwise. u runs 0..1 across, v the distance along in metres; normals `up`;
+    // `colours` per point (may be empty). Rivers today; fronds and paths are its other readers.
+    static RenderMesh ribbon(const std::vector<Vec3>& points, const std::vector<double>& halfWidths,
+                             const Vec3& up = Vec3(0, 1, 0), const std::vector<Vec3>& colours = {});
+    // Indexed building blocks for custom topology (cone tiers, fronds): append one vertex (normal
+    // normalised) and return its index; append a triangle wound to face `out`.
+    static uint32_t vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, const Vec3& color);
+    static void triFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, const Vec3& out);
+    // CROSSED CARDS: `planes` vertical quads `width` x `height` through the origin, evenly turned
+    // about +y, standing on y = 0. u runs 0..1 across a card, v 0 at the foot .. 1 at the top;
+    // every normal is `normal` (straight up for ground cover, so it lights like the ground it
+    // stands on). White. Grass cards, flowers, reeds, distant-tree impostors.
+    static RenderMesh crossCards(double width, double height, int planes, const Vec3& normal = Vec3(0, 1, 0));
+    // A tapered generalized cylinder through `points` (a `sides`-gon ring at each, radial
+    // normals), colour per ring (`colours` may be empty: white).
+    static RenderMesh tube(const std::vector<Vec3>& points, const std::vector<double>& radii, int sides,
+                           const std::vector<Vec3>& colours = {});
 };
 
 }  // namespace engine

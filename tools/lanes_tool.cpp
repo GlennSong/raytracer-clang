@@ -1,6 +1,9 @@
 // lanes_tool — the headless host for the lanes road builder (ADR-0083, ADR-0089).
 //   lanes_tool build <graph.json> [--out <dir>]     build, print the summary and invariants, write <name>.glb/.svg/stats.json
 //                      [--probe x y r] [--quick] [--holes] [--walls]   heights and steps around a point; --quick skips the invariant sweep and the exports; --holes lists unpaved holes; --walls lists parapets that end on drivable road
+//   lanes_tool terrain <graph.json> <out.json> [step]   the scene's natural ground on a grid (for a map)
+//   lanes_tool interchange-demo <out.json>   write the system-interchange test scene: a curved elevated ring over a radial
+//                      expressway at ground level, its four ramps, and the expressway's inner leg becoming a boulevard
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"
 #include "engine/procgen/city/roads/lanes/block_audit.h"
@@ -13,6 +16,8 @@
 #include <cmath>
 #include "engine/procgen/city/roads/lanes/lanes_export.h"
 #include "engine/procgen/city/roads/lanes/level_import.h"
+#include "engine/procgen/city/roads/lanes/interchange.h"
+#include "engine/procgen/city/roads/lanes/terrain_recipe.h"
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -25,7 +30,99 @@
 using namespace engine;
 using namespace engine::roads::lanes;
 
+namespace {
+
+// THE SYSTEM-INTERCHANGE SCENE, the city planner's geometry in miniature: a ring of radius 1000
+// held 8 m up, crossed square by a radial expressway at ground level, with the ring's frontage
+// roads cut back round the crossing. Outside, the expressway climbs back to 8 m to bridge a
+// street; inside, it ends 150 m in and its carriageways carry on as a one-way boulevard pair to
+// a boulevard 220 m inside the ring — midtown's, in the city.
+nlohmann::json interchangeDemo() {
+    using nlohmann::json;
+    auto pts = [](const std::vector<Vec2>& xy) { json a = json::array(); for (const Vec2& p : xy) a.push_back({std::round(p.x * 100) / 100, std::round(p.y * 100) / 100}); return a; };
+    auto arc = [](double r, double a0, double a1) {   // the ring: centre (0, -1000), clockwise with increasing station
+        std::vector<Vec2> out; const int n = static_cast<int>(std::fabs(a1 - a0) * r / 8.0);
+        for (int i = 0; i <= n; ++i) { const double a = a0 + (a1 - a0) * i / n; out.push_back(Vec2(r * std::cos(a), -1000.0 + r * std::sin(a))); }
+        return out;
+    };
+    const double lanes = 4, laneW = 3.75, carriageHalf = lanes * laneW / 2 + 2.5, carriage = carriageHalf + 2.0;   // a 4 m median
+    json scene;
+    scene["name"] = "interchange_demo";
+    scene["terrain"] = {{"type", "flat"}, {"bounds", {-900.0, 900.0, -600.0, 900.0}}, {"res", 3.0}};
+    scene["classes"] = {
+        {"freeway", {{"w", laneW}, {"fwd", 4}, {"back", 0}, {"shoulder", 2.5}, {"sidewalk", 0.0}, {"g_max", 0.06}, {"rank", 3}, {"thick", 1.2}, {"window", 200.0}}},
+        {"ramp", {{"w", 4.5}, {"fwd", 1}, {"back", 0}, {"shoulder", 2.5}, {"g_max", 0.08}, {"rank", 0}, {"thick", 1.0}, {"window", 40}}},
+        {"boulevard", {{"w", 3.6667}, {"fwd", 3}, {"back", 0}, {"sidewalk", 5.0}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
+        {"arterial", {{"w", 3.6667}, {"fwd", 3}, {"back", 3}, {"sidewalk", 5.0}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
+        {"collector", {{"w", 4.0}, {"fwd", 2}, {"back", 2}, {"sidewalk", 5.0}, {"g_max", 0.1}, {"rank", 1}, {"thick", 0.5}, {"window", 80}}}};
+    scene["rules"] = {{"closing", 3.0}};
+    json edges = json::array();
+    // the ring, 8 m up the whole way
+    const double a0 = M_PI / 2 + 0.75, a1 = M_PI / 2 - 0.75;
+    std::vector<Vec2> ra = arc(1000.0 - carriage, a0, a1), rb = arc(1000.0 + carriage, a1, a0);
+    json ringFloor = json::array(); for (const Vec2& p : arc(1000.0, a0, a1)) ringFloor.push_back({p.x, p.y, 8.0, 8.0});
+    edges.push_back({{"id", "ring_a"}, {"class", "freeway"}, {"floor", ringFloor}, {"path", {{"points", pts(ra)}}}});
+    edges.push_back({{"id", "ring_b"}, {"class", "freeway"}, {"floor", ringFloor}, {"path", {{"points", pts(rb)}}}});
+    // the expressway, inward along -y: at ground through the interchange, 8 m up beyond 420 m out
+    std::vector<Vec2> stem; for (double y = 800; y >= -150; y -= 8) stem.push_back(Vec2(0, y));
+    json stemFloor = json::array(); for (double y = 800; y >= 420; y -= 30) stemFloor.push_back({0.0, y, 8.0, 15.0});
+    std::vector<Vec2> sa, sb; for (const Vec2& p : stem) { sa.push_back(p + Vec2(-carriage, 0)); sb.push_back(p + Vec2(carriage, 0)); }
+    std::reverse(sb.begin(), sb.end());
+    edges.push_back({{"id", "stem_a"}, {"class", "freeway"}, {"floor", stemFloor}, {"path", {{"points", pts(sa)}}}});
+    edges.push_back({{"id", "stem_b"}, {"class", "freeway"}, {"floor", stemFloor}, {"path", {{"points", pts(sb)}}}});
+    // inside: the carriageways carry on as a one-way boulevard pair that splays to meet
+    // midtown's boulevard at two Ts 40 m apart. (Closing the pair into one two-way road puts two
+    // edges' lanes on one centreline at the node, and they overlap there by construction.)
+    const double tee = 20.0;
+    edges.push_back({{"id", "blvd_in"}, {"class", "boulevard"}, {"path", {{"type", "bezier"}, {"points", pts({Vec2(-carriage, -150), Vec2(-carriage, -180), Vec2(-tee, -190), Vec2(-tee, -220)})}}}});
+    edges.push_back({{"id", "blvd_out"}, {"class", "boulevard"}, {"path", {{"type", "bezier"}, {"points", pts({Vec2(tee, -220), Vec2(tee, -190), Vec2(carriage, -180), Vec2(carriage, -150)})}}}});
+    edges.push_back({{"id", "mid_w"}, {"class", "arterial"}, {"path", {{"points", pts({Vec2(-400, -220), Vec2(-tee, -220)})}}}});
+    edges.push_back({{"id", "mid_c"}, {"class", "arterial"}, {"path", {{"points", pts({Vec2(-tee, -220), Vec2(tee, -220)})}}}});
+    edges.push_back({{"id", "mid_e"}, {"class", "arterial"}, {"path", {{"points", pts({Vec2(tee, -220), Vec2(400, -220)})}}}});
+    // the frontage roads, 50 m either side of the ring, cut back from the crossing
+    for (double side : {-1.0, 1.0}) {
+        const double r = 1000.0 + side * 50.0, gap = 330.0 / r;
+        edges.push_back({{"id", side < 0 ? "front_in_w" : "front_out_w"}, {"class", "collector"}, {"path", {{"points", pts(arc(r, a0, M_PI / 2 + gap))}}}});
+        edges.push_back({{"id", side < 0 ? "front_in_e" : "front_out_e"}, {"class", "collector"}, {"path", {{"points", pts(arc(r, M_PI / 2 - gap, a1))}}}});
+    }
+    // a street the expressway bridges, outside
+    edges.push_back({{"id", "street_out"}, {"class", "collector"}, {"path", {{"points", pts({Vec2(-600, 600), Vec2(600, 600)})}}}});
+
+    SystemRoad ring; ring.route = arc(1000.0, a0, a1); ring.aId = "ring_a"; ring.bId = "ring_b";
+    ring.carriage = carriage; ring.edgeReach = carriage + carriageHalf; ring.lanes = 4; ring.laneW = laneW;
+    SystemRoad rad; rad.route = stem; rad.aId = "stem_a"; rad.bId = "stem_b";
+    rad.carriage = carriage; rad.edgeReach = carriage + carriageHalf; rad.lanes = 4; rad.laneW = laneW;
+    SystemOptions so; so.idPrefix = "x0";
+    const SystemResult sr = systemInterchange(ring, rad, -1.0, so);   // the outer leg runs back up the stem's stations
+    if (!sr.built) std::fprintf(stderr, "interchange-demo: no interchange: %s\n", sr.why.c_str());
+    for (const json& r : sr.ramps) edges.push_back(r);
+    scene["edges"] = edges;
+    return scene;
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
+    if (argc >= 4 && std::strcmp(argv[1], "terrain") == 0) {
+        // the scene's natural ground (before any road conforms it), every `step` m, as JSON
+        std::ifstream f(argv[2]); nlohmann::json spec; f >> spec;
+        const RoadLabGraph g = RoadLabGraph::fromJson(spec);
+        const std::array<double, 4> b = g.terrain.bounds;
+        const HeightField h = makeTerrain(g.terrain, b);
+        const double step = argc >= 5 ? std::atof(argv[4]) : 20.0;
+        nlohmann::json out = {{"x0", b[0]}, {"y0", b[2]}, {"step", step}};
+        std::vector<std::vector<double>> rows;
+        for (double y = b[2]; y <= b[3]; y += step) { rows.emplace_back(); for (double x = b[0]; x <= b[1]; x += step) rows.back().push_back(h(x, y)); }
+        out["z"] = rows;
+        std::ofstream(argv[3]) << out.dump() << "\n";
+        std::printf("wrote %s: %zu x %zu\n", argv[3], rows.empty() ? 0 : rows[0].size(), rows.size());
+        return 0;
+    }
+    if (argc == 3 && std::strcmp(argv[1], "interchange-demo") == 0) {
+        std::ofstream(argv[2]) << interchangeDemo().dump(1) << "\n";
+        std::printf("wrote %s\n", argv[2]);
+        return 0;
+    }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "from-level") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
                              "       lanes_tool from-level <level.json> --out <dir> [--diamonds N] [--no-freeway]   (writes <dir>/<name>_lanelab.json + terrain grid)\n"

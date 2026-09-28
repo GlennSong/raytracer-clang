@@ -160,6 +160,18 @@ struct TerrainParams {
     // sea floor below it, a sand/rock shore just above, then the upland bands.
     // -1e30 = no sea (inland terrain colours exactly as before).
     double seaLevel = -1e30;
+    // THE GROUND-COVER MAP (procgen/ground_cover.h). When set, terrainColor's rich entry colours
+    // from it (grass / dirt / sand / rock / snow) instead of the height bands below, so the
+    // terrain agrees with the grass field and the tree biomes. Null = the bands, as before.
+    std::shared_ptr<const class GroundCover> cover;
+    // TERRAIN LAYERS (procgen/ground_layers.h): with a cover, bake the cover's WEIGHTS into the
+    // vertex colour (r grass, g dirt, b sand; rock the rest) for the TerrainLayers surface to
+    // blend its textures by, instead of a finished colour.
+    bool coverWeights = false;
+    // HYDROLOGY (procgen/hydrology.h, ADR-0099): the river network the land drains into. When set,
+    // terrainHeight cuts its channels into the base relief (before earthworks and flattening),
+    // so every consumer of the ground sees them. Built by readTerrainParams from "rivers".
+    std::shared_ptr<const class Hydrology> hydro;
     // COLOUR BANDS scale to the level's relief: `snowLine` is the height where
     // snow starts to win (the old hardcoded 74 m suited ~240 m peaks; a 450 m
     // range needs ~200+), `rockLine` where stone starts displacing ground cover.
@@ -201,6 +213,27 @@ struct TerrainParams {
     // the loader). Each segment is a ridge axis with per-endpoint height (tall
     // main divide -> lower spurs by branch depth). Empty = no branching range.
     std::vector<RidgeSegment> rangeRidges;
+
+    // AN ISLAND (ADR-0105): the land is an elongated island in the sea, and everything above --
+    // the fbm, the tilt, the mountains, the range -- rises only on it. Its outline is an ellipse
+    // (radius x aspect along `angleDeg`, radius across) broken by warped noise into bays and inlets,
+    // plus a PENINSULA (a lobe out along penDeg) and a stretch of CLIFF coast (a plateau cliffHeight
+    // up, dropping to the sea within a few tens of metres, between cliffFromDeg and cliffToDeg around
+    // the centre). Inland of the beach the ground rises to plainHeight; past the coast the shelf falls
+    // to -shelfDepth. `land` (see islandLand) is 0 at the coast, about 1 at the centre.
+    // Erosion reshapes LAND only: below the sea the raw relief stands (droplets settling in the sea
+    // left a speckled band of shoals round an island). Opt-in ("erodeLandOnly"); other levels' sea
+    // floors are as they were.
+    bool erodeLandOnly = false;
+    struct Island {
+        bool on = false;
+        double cx = 0.0, cz = 0.0;
+        double radius = 6500.0, aspect = 1.45, angleDeg = 20.0;
+        double coastNoise = 0.22, coastScale = 0.00032;
+        double penDeg = -1e9, penLength = 2600.0, penWidth = 900.0;   // penDeg < -1e8: none
+        double cliffFromDeg = 0.0, cliffToDeg = 0.0, cliffHeight = 0.0;
+        double plainHeight = 14.0, shelfDepth = 45.0;
+    } island;
 
     // Cut/fill footprints (ADR-0038): where a city road or block sits, the raw
     // noise is graded flat to a target surface so the ground doesn't poke through
@@ -266,6 +299,9 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
 // field is baked, and bakeErodedTerrain erodes THIS into params.erodedBase.
 double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
                          double worldX, double worldZ);
+// The island's land field at (x, z): 0 on the coast, positive inland (about 1 at the centre),
+// negative at sea. Meaningful only with params.island.on.
+double islandLand(const TerrainParams& params, const Noise& noise, double worldX, double worldZ);
 
 // Bake hydraulic + thermal EROSION of the analytic relief into params.erodedBase,
 // so the CDLOD terrain (and collider, and placement) get natural drainage detail
@@ -293,13 +329,26 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue);
 // grain), plus a CURVATURE term (4 extra height taps) — gullies read wetter/
 // darker and hold snow tongues, ridges stay bare. Band heights scale with
 // params.snowLine/rockLine. Used by the mesh bakers; the 3-arg form is for tests.
+// The layered surface's fifth weight (ground-cover map, coverWeights): snow, 0..1. The drawn
+// terrain carries it in the vertex's u (the layers sample by world position, not UV); 0 when
+// the level has no cover map or draws it as a flat colour.
+double terrainSnowWeight(double worldX, double worldZ, double height, double normalUp,
+                         const TerrainParams& params, double normalX = 0.0, double normalZ = 0.0);
+// normalX/Z (optional): the rest of the surface normal -- the ground cover lowers snow on shaded faces and
+// runs it down the fall line (ADR-0118); 0,0 = only the slope is known
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise, const TerrainParams& params);
+                  const Noise& noise, const TerrainParams& params, double normalX = 0.0, double normalZ = 0.0);
 
 // Build the terrain mesh: a grid in the XZ plane with y = terrainHeight, smooth
 // normals, planar UVs spanning [0,1], and per-vertex height/slope coloration
 // (terrainColor) baked in. Centered on the origin.
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise);
+// The height of the DRAWN grid terrain at (x, z): the triangle of a regular grid (corner
+// `origin`, spacing `step`, each cell split a->d as MeshBuilder::gridIndices winds it) that
+// generateTerrain / generateTerrainChunks emit, interpolated -- not the smooth field, which on
+// a rounded hill stands above the mesh's flat triangles (and planted trees floated).
+double terrainGridSurfaceHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                                double origin, double step);
 
 // Build one square annular ring of terrain from inner to outer half-extent at
 // `cells` resolution (coarse), with a hole for the inner (higher-detail) tile.

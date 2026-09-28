@@ -46,6 +46,9 @@ struct ContactEvent {
 
 class JobSystem;   // our thread pool (src/job_system.h)
 
+// A static mesh's collision shape, built ahead (PhysicsWorld::prepareMeshShape) -- opaque.
+struct PreparedMeshShape;
+
 class PhysicsWorld {
 public:
     PhysicsWorld();
@@ -78,6 +81,12 @@ public:
     PhysicsBodyId addMesh(const std::vector<Vec3>& vertices,
                           const std::vector<uint32_t>& indices,
                           const Vec3& position, Real friction = 0.5);
+    // TWO-PHASE addMesh: building the shape (its bounding-volume tree -- ~50 ms for a terrain
+    // tile) is safe on any thread and touches no world; adding the body is the cheap part and
+    // stays on the simulation thread. Null on an empty or degenerate mesh.
+    static std::shared_ptr<const PreparedMeshShape> prepareMeshShape(const std::vector<Vec3>& vertices,
+                                                                     const std::vector<uint32_t>& indices);
+    PhysicsBodyId addPreparedMesh(const PreparedMeshShape& shape, const Vec3& position, Real friction = 0.5);
     void removeBody(PhysicsBodyId id);
     // Live bodies in the world (ADR-0080 gates: "body count back to
     // baseline" after an interior releases). 0 before initialize().
@@ -211,16 +220,38 @@ public:
         // floor to bumper-lip height, comfortably over the city's 0.15 kerbs,
         // while a real wall still hits the box (see driving_lab kerb/wall gates).
         Real floorClearance = 0.22;
-        // ARCADE-FORGIVING (ADR-0059's "tuned by the caller"): the roll CONE
-        // keeps the body's up axis within this angle of world up — a kerb
-        // hop or a trip can put the car on two wheels but never on its roof
-        // (>= 180 turns it off). ANTI-ROLL BARS (N/m across each axle's
+        // APPROACH / DEPARTURE ANGLES (#41; Glenn: "if I go over slabs and rocks even with 4WD I get stuck").
+        // 0 = the square box above. > 0 chamfers the collision's lower nose (tail) up from the ground under
+        // the front (rear) axle at this angle, as a convex hull -- the angle an off-roader is sold on. With
+        // a square box the bumper's bottom edge sat a full overhang ahead of the front tyres at floor height
+        // and caught every rock the wheels could have climbed.
+        Real approachDegrees = 0.0;
+        Real departureDegrees = 0.0;
+        // TRACTION SPLIT (a part-time 4x4's transfer case; Glenn: "two wheels down (front) and they're not moving
+        // in 4wd mode"). In four-wheel drive an axle with no tyre on the ground hands its torque to the axle that
+        // has one. Without it the hanging pair spun up, the engine hit its limiter and cut its torque, and the
+        // grounded pair got nothing. (Jolt's centre limited slip, near-locked, drives the grounded pair too but
+        // throws ALL torque between the axles on a climb and lost the 30 degree hill.)
+        bool tractionSplit = false;
+        // BRAKE BALANCE (Glenn: "the brakes are really soft"): the front axle's share of the total brake
+        // torque (brakeTorque is the per-wheel average). Braking loads the front and unloads the rear, so
+        // equal torque locked the rears at once. Real cars run about two-thirds front. 100-0 km/h: 48-54 m
+        // at 0.5, 45-51 at 0.68. (The rest of the gap to a real car's ~37 m is tyre grip: the longitudinal
+        // curve is Jolt's 1.2 against lateralGrip 2.0 -- raising it stops in 35-43 m but makes the course's
+        // mud grip enough for 2WD. An ABS lengthened stops: Jolt's locked tyre keeps 83% of its peak.)
+        Real brakeFrontBias = 0.68;
+        // The roll CONE keeps the body's up axis within this angle of world
+        // up (>= 180 turns it off). OFF by default: Glenn, 2026-09-27: "rolling
+        // over should be allowed for active drivers, everyone. That's what would
+        // happen in reality." (It was 65, ADR-0087, so a kerb trip could never
+        // roof a car; T rights one now.) A recipe may still set max_roll_deg.
+        // ANTI-ROLL BARS (N/m across each axle's
         // wheel pair) are available but OFF by default: measured on the
         // slanted kerb they hand a one-wheel hit to the other side and lift
         // the whole car (26 deg of roll and a 0.7 m hop at 36 km/h against
         // 4 deg and 0.25 m without), and the street rig's cornering roll is
         // a few degrees without them.
-        Real maxPitchRollDegrees = 65.0;
+        Real maxPitchRollDegrees = 180.0;
         Real antiRollStiffness = 0.0;
         // YAW ASSIST (the fishtail, measured in tests/test_vehicle_handling.cpp):
         // Jolt's tyre is a per-step impulse cap, so past a degree or two of
@@ -245,11 +276,44 @@ public:
         // 28 m at 58 km/h, 1.7 gave 23, 2.0 gives ~20 (an arcade 1.3 g when
         // sliding). The yaw assist's cap follows it.
         Real lateralGrip = 2.0;
+        // DRIVETRAIN (#41; Glenn: "offroad vehicles -- 2 wheel drive, 4 wheel drive"). One differential PER
+        // AXLE (driven wheels grouped by position, left and right by x -- the old code paired them in
+        // declaration order), the engine's torque split between the front and rear axles by
+        // `frontDriveShare`: 0 rear-wheel drive, 1 front, 0.5 all/four-wheel drive; < 0 derives it from the
+        // wheels' `driven` flags. A part-time 4x4 switches it at runtime (setVehicleFrontDriveShare).
+        // Limited-slip ratios (Jolt's: the fastest wheel's speed over the slowest's; lower locks harder,
+        // >= 1e29 is open): per axle, and between the axles. BETWEEN the axles Jolt's limited slip sends ALL
+        // torque to the slower axle past the ratio, so it flips the drive back and forth on a climb --
+        // measured on 30 deg dirt: centre 1.10 stuck (-0.8 m), 1.4 +14 m, open +28 m. An off-roader opens it
+        // (1e30: the torque split stays `frontDriveShare`, as a part-time transfer case in 4WD) with near-
+        // locking axles (1.15); street AWD cars keep Jolt's 1.4, which their kerb and roll tuning assumes.
+        Real frontDriveShare = -1.0;
+        Real axleLimitedSlip = 1.4;
+        Real centerLimitedSlip = 1.4;
+        // AERO DRAG: Cd x frontal area (m^2), a quadratic 0.5 rho CdA v^2 against the motion (a sedan
+        // ~0.65, a truck ~1.1). 0 keeps the old linear body damping -- which at motorway speed was ~4x a
+        // real car's drag and left no true top speed (the freeway-lag diagnosis measured it).
+        Real dragArea = 0.0;
+        // GEARBOX: Jolt's defaults cut the drive for 0.5 s per shift plus 0.3 s of clutch and 0.5 s of
+        // latency -- a stall every upshift. Quicker here; ratios empty = Jolt's five.
+        Real shiftTime = 0.5;
+        Real clutchReleaseTime = 0.3;
+        Real shiftLatency = 0.5;
+        std::vector<Real> gearRatios;
         std::vector<VehicleWheel> wheels;
     };
 
     using VehicleId = uint32_t;
     static constexpr VehicleId INVALID_VEHICLE = 0xFFFFFFFFu;
+
+    // Runtime drive split for vehicle `id` (the 2WD <-> 4WD switch): the engine torque share of its front
+    // axles, 0..1 (see VehicleConfig::frontDriveShare).
+    void setVehicleFrontDriveShare(VehicleId id, Real share);
+    Real vehicleFrontDriveShare(VehicleId id) const;
+    // Telemetry: forward speed (m/s), engine rpm, current gear (0 neutral, < 0 reverse).
+    // speed (m/s along the nose), engine rpm, gear, and per wheel: spin (rad/s) and whether it touches ground
+    struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; std::vector<Real> wheelSlip; };
+    VehicleTelemetry vehicleTelemetry(VehicleId id) const;
 
     // Create a vehicle at the given pose; returns INVALID_VEHICLE on failure.
     VehicleId addVehicle(const VehicleConfig& config, const Vec3& position,
@@ -290,6 +354,8 @@ private:
     // The per-step stability torque of VehicleConfig::yawAssist, for the
     // vehicle in slot `index` (called from update, before the Jolt step).
     void applyYawAssist(std::size_t index);
+    void applyAeroDrag(std::size_t index);
+    void applyTractionSplit(std::size_t index);
 };
 
 

@@ -50,6 +50,8 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     }
     for (EdgeSpec& e : g.edges) if (!e.isRamp()) throughProfile(e, terrain, g.cls(e));
     for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // ramps need heights to take part in crossing consistency
+    // where the roads meet, found once (only the heights move from here on)
+    const std::vector<CrossingMeet> meets = crossingMeets(g);
     auto agree = [&](bool first) {
         // Iterate to the BEST state, not the last one. Each pass only partially
         // resolves (a correction is smoothed over a radius), so a city whose
@@ -65,7 +67,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         int stalls = 0;
         std::vector<std::vector<double>> keep;
         for (int it = 0; it < 120; ++it) {
-            double mm = nodeConsistency(g, R.endpointTol, R.bridgeH), xm = crossingConsistency(g, R.bridgeH, R.rampLevelDz);
+            double mm = nodeConsistency(g, R.endpointTol, R.bridgeH), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz);
             for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e));   // lifts survive the blends
             for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // hosts moved
             const double cur = std::max(mm, xm);
@@ -98,6 +100,9 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         auto crossingsInclusive = [&](const EdgeSpec& a, const EdgeSpec& b) {
             std::vector<Vec2> out = crossings(a.xy, b.xy);
             auto addEnd = [&](const EdgeSpec& e, const EdgeSpec& o) {
+                // a street ending on a street is a junction (levelled by crossingConsistency), never an
+                // overpass to lift -- ends count here only where a freeway or a ramp is one of the two
+                if (!e.isRamp() && !o.isRamp() && e.cls != "freeway" && o.cls != "freeway") return;
                 for (const Vec2& q : {e.xy.front(), e.xy.back()}) {
                     // a road ending anywhere under the other's paved band counts (streets the importer clipped at a
                     // frontage road's edge end 5 m from its centreline); at-grade tees are excluded by the bridge test
@@ -115,10 +120,22 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                 EdgeSpec& a = *paved[i]; EdgeSpec& b = *paved[j];
                 if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;   // a ramp and its own host: the gore, not a crossing
                 if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;
-                for (const Vec2& p : crossingsInclusive(a, b)) {
-                    const double za = projectZ(a, p), zb = projectZ(b, p); if (std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
-                    EdgeSpec& hi = za > zb ? a : b; EdgeSpec& lo = za > zb ? b : a;
-                    const double need = std::min(za, zb) + R.underClearance + g.cls(hi).thick + R.structureDepth;
+                const std::vector<Vec2> meetsAB = crossingsInclusive(a, b);
+                const std::size_t crossedAB = crossings(a.xy, b.xy).size();   // crossingsInclusive lists the true crossings first
+                for (std::size_t mi = 0; mi < meetsAB.size(); ++mi) {
+                    const Vec2& p = meetsAB[mi];
+                    const bool sep = mi < crossedAB && R.freewaySeparates && mustSeparate(a, b);   // a freeway crossing is structure at any height
+                    const double za = projectZ(a, p), zb = projectZ(b, p); if (!sep && std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
+                    // which goes over: the higher; for a forced separation, the one the scene asked to (a floor
+                    // point over the crossing), else the freeway
+                    bool aHi = za > zb;
+                    if (sep) {
+                        auto floored = [&](const EdgeSpec& e) { for (const auto& fp : e.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 40.0) return true; return false; };
+                        const bool fa = floored(a), fb = floored(b);
+                        if (fa != fb) aHi = fa;
+                        else if (std::fabs(za - zb) < R.bridgeH && (a.cls == "freeway") != (b.cls == "freeway")) aHi = a.cls == "freeway";
+                    }
+                    EdgeSpec& hi = aHi ? a : b; EdgeSpec& lo = aHi ? b : a;
                     // The hold must span the whole crossing, not the centreline point: a tent peaks at its station
                     // and falls away at design grade, so the deck over the far kerb of a 20 m road sat half a
                     // metre low. The floor point holds flat over a half-span covering the lower road's paved band
@@ -128,6 +145,12 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     auto tangent = [](const EdgeSpec& e, double st) { const Vec2 q0 = pointAt(e.xy, e.s, std::max(0.0, st - 0.5)), q1 = pointAt(e.xy, e.s, std::min(e.s.back(), st + 0.5)); const Vec2 d = q1 - q0; const double L = std::hypot(d.x, d.y); return L > 1e-9 ? d / L : Vec2(1, 0); };
                     const Vec2 th = tangent(hi, sHi), tl = tangent(lo, sLo); const double sinT = std::max(0.25, std::fabs(cross(th, tl)));
                     const double span = (0.5 * pavedW(lo) + 0.5 * pavedW(hi) + 1.0) / sinT;
+                    // clear the lower road's HIGHEST point under the upper deck, not its height at the centreline:
+                    // the pass climbs 12% under the island freeway, a metre across its 20 m carriageway
+                    const double spanLo = (0.5 * pavedW(hi) + 1.0) / sinT;
+                    double zLo = aHi ? zb : za;
+                    for (int k = -4; k <= 4; ++k) zLo = std::max(zLo, interp(lo.s, lo.z, std::clamp(sLo + spanLo * k / 4.0, 0.0, lo.s.back())));
+                    const double need = zLo + R.underClearance + g.cls(hi).thick + R.structureDepth;
                     const double sts[3] = {std::max(0.0, sHi - span), sHi, std::min(hi.s.back(), sHi + span)};
                     bool low = false; for (double st : sts) if (interp(hi.s, hi.z, st) < need - 0.02) low = true;
                     if (!low) continue;
@@ -144,12 +167,21 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         }
         if (lifted) std::fprintf(stderr, "lanelab: %d grade-separated crossings lifted to clear their structure\n", lifted);
     }
-    { NodeMismatchWhere w; const double nm = nodeMismatch(g, R.endpointTol, R.bridgeH, &w), xm = crossingConsistency(g, R.bridgeH, R.rampLevelDz); for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e)); r.nodeMismatchAfter = std::max(nm, xm);
+    { NodeMismatchWhere w; const double nm = nodeMismatch(g, R.endpointTol, R.bridgeH, &w), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz); for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e)); r.nodeMismatchAfter = std::max(nm, xm);
       if (nm >= xm && nm > 0.02) r.nodeMismatchWhere = w.a + (w.atEnd ? " meets " : " ends on ") + w.b + " at (" + std::to_string(static_cast<int>(w.at.x)) + ", " + std::to_string(static_cast<int>(w.at.y)) + ")"; }
     for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);
     for (Lane& l : r.lanes.lanes) if (l.isConnector()) {
         l.z0 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.srcLane)], g, l.xy.front()); l.z1 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.dstLane)], g, l.xy.back());
     }
+    // LANELAB_DUMP_EDGE=<id>: an edge's solved profile against its ground, every 50 m (why a road floats)
+    if (const char* dumpId = std::getenv("LANELAB_DUMP_EDGE"))
+        for (const EdgeSpec& e : g.edges)
+            if (e.id == dumpId && e.s.size() == e.z.size() && e.t.size() == e.z.size()) {
+                std::fprintf(stderr, "[dump] %s: station, deck z, ground, floors %zu\n", e.id.c_str(), e.floorPts.size());
+                double next = 0;
+                for (std::size_t i = 0; i < e.s.size(); ++i)
+                    if (e.s[i] >= next) { std::fprintf(stderr, "[dump]   %7.0f %8.2f %8.2f  (%+.1f)  at (%.0f, %.0f)\n", e.s[i], e.z[i], e.t[i], e.z[i] - e.t[i], e.xy[i].x, e.xy[i].y); next += 50.0; }
+            }
     r.timings["profiles"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(2, "footprints", 0.0);
     // 3. footprints, closing, layers; 4. arrangement and surfaces
     r.heights = std::make_unique<DeckHeight>(g, r.lanes);
@@ -168,8 +200,12 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
             const Lane& l = r.lanes.lanes[li]; if (l.parent == ownIdx || r.pavement.footprints[li].empty()) continue;
             const PolySet& fp = r.pavement.footprints[li]; const Box2 b = ::engine::roads::lanes::bounds(fp[0]);
-            if (p.x < b.minX - 2 || p.x > b.maxX + 2 || p.y < b.minY - 2 || p.y > b.maxY + 2) continue;
-            for (const Vec2& q : {p, p + Vec2(1.5, 0), p - Vec2(1.5, 0), p + Vec2(0, 1.5), p - Vec2(0, 1.5)}) if (contains(fp, q)) return true;
+            // the pier's square (2.6 m, deck_mesh.cpp) and 1.5 m of clearance round it -- the other road's
+            // shoulder is not in its lane footprints, and a pier tested at its centre +-1.5 m stood half on the
+            // island pass's edge line: a car driving the pass pulled up against it
+            constexpr double kReach = 1.3 + 1.5;
+            if (p.x < b.minX - kReach || p.x > b.maxX + kReach || p.y < b.minY - kReach || p.y > b.maxY + kReach) continue;
+            for (double dx : {-kReach, 0.0, kReach}) for (double dy : {-kReach, 0.0, kReach}) if (contains(fp, p + Vec2(dx, dy))) return true;
         }
         return false;
     };
@@ -198,7 +234,15 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     r.adjacent = adjacency(r.lanes);
     // 6. terrain
     if (r.hasTerrain) {
-        r.terrain = bakeGrid(terrain, g.terrain, bounds); conformGrid(g, r.lanes, *r.heights, r.terrain, r.conform, r.pavement.decks); terrainVsDeck(r.pavement.decks, r.terrain, r.conform);
+        const auto tb = std::chrono::steady_clock::now();
+        r.terrain = bakeGrid(terrain, g.terrain, bounds);
+        r.timings["terrain.sample"] = secondsSince(tb);
+        const auto tc = std::chrono::steady_clock::now();
+        conformGrid(g, r.lanes, *r.heights, r.terrain, r.conform, r.pavement.decks);
+        r.timings["terrain.conform"] = secondsSince(tc);
+        const auto tv = std::chrono::steady_clock::now();
+        terrainVsDeck(r.pavement.decks, r.terrain, r.conform);
+        r.timings["terrain.vsDeck"] = secondsSince(tv);
     }
     r.timings["terrain"] = secondsSince(t1); r.seconds = secondsSince(t0); stage(4, "done", 1.0);
     return rp;
@@ -207,6 +251,10 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
 std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
     std::vector<SurfaceStep> out; const RoadLabGraph& g = r.graph; const size_t nl = r.lanes.lanes.size();
     std::vector<Box2> boxes(nl); for (size_t li = 0; li < nl; ++li) boxes[li] = r.pavement.footprints[li].empty() ? Box2{} : bounds(r.pavement.footprints[li]);
+    // candidates from the lane grid (ascending lane order, as a full scan meets them) and prepared footprints:
+    // scanning all 14,600 lanes of the island for each of ~700 k open deck edges took most of an hour
+    const LaneGrid grid(boxes, r.pavement.footprints);
+    const std::vector<PreparedSet> prepared = prepareAll(r.pavement.footprints);
     auto laneName = [&](int li) { return li >= 0 && li < static_cast<int>(nl) ? r.lanes.lanes[static_cast<size_t>(li)].id : std::string("?"); };
     for (const Surface& s : r.pavement.decks) {
         std::map<std::pair<int, int>, std::pair<int, int>> edges;   // key -> (count, triangle)
@@ -224,9 +272,10 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
             const Vec2 m = (A.xy + B.xy) * 0.5, q = m + n * 0.35; const double zEdge = 0.5 * (A.z + B.z);
             // pavement outside the edge: the covering lane whose deck is nearest in height
             int other = -1; double best = 1e9;
-            for (size_t li = 0; li < nl; ++li) {
+            for (int liI : grid.at(q)) {
+                const size_t li = static_cast<size_t>(liI);
                 const Box2& bx = boxes[li]; if (r.pavement.footprints[li].empty() || q.x < bx.minX || q.x > bx.maxX || q.y < bx.minY || q.y > bx.maxY) continue;
-                if (!contains(r.pavement.footprints[li], q)) continue;
+                if (!prepared[li].contains(q)) continue;
                 const double dz = r.heights->deck(static_cast<int>(li), q) - zEdge; if (std::fabs(dz) < std::fabs(best)) { best = dz; other = static_cast<int>(li); }
             }
             SurfaceStep st; st.at = m; st.a = laneName(s.triOwner[ti]); st.length = L;
@@ -248,6 +297,7 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
     const LayerSpec layers[] = {{&r.pavement.sidewalk, "sidewalk", 0.12, false}, {&r.pavement.shoulder, "shoulder", 0.0, false}, {&r.pavement.median, "median", 0.10, true}};
     for (const LayerSpec& ls : layers) {
         const std::vector<int> roads = layerRoads(g, ls.anyRoad); if (roads.empty()) continue;
+        const std::vector<char> want = r.heights->edgeFlags(roads);
         {   // triangles the mesher drops for bridging two levels: the condition is worth naming even though the mesh no longer shows it
             std::vector<Vec2> spanning; (void)layerMeshes(g, *r.heights, *ls.set, roads, &spanning);
             for (const Vec2& c : spanning) { SurfaceStep st2; st2.at = c; st2.a = ls.name; st2.kind = 2; st2.length = 1.0; out.push_back(st2); }
@@ -265,14 +315,16 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
                     const Vec2 m = a + d * (st / L);
                     {
                         const Vec2 q = m + nrm * (0.35 * away);
+                        const double layerZ = r.heights->layerHeight(want, roads, m);   // once per sample, not once per candidate lane
                         int other = -1; double bestZ = 0, bd = 1e300;
-                        for (size_t li = 0; li < nl; ++li) {
+                        for (int liI : grid.at(q)) {
+                            const size_t li = static_cast<size_t>(liI);
                             const Box2& bx = boxes[li]; if (r.pavement.footprints[li].empty() || q.x < bx.minX || q.x > bx.maxX || q.y < bx.minY || q.y > bx.maxY) continue;
-                            if (!contains(r.pavement.footprints[li], q)) continue;
-                            const double z = r.heights->deck(static_cast<int>(li), q); const double dd = std::fabs(z - r.heights->layerHeight(roads, m)); if (dd < bd) { bd = dd; other = static_cast<int>(li); bestZ = z; }
+                            if (!prepared[li].contains(q)) continue;
+                            const double z = r.heights->deck(static_cast<int>(li), q); const double dd = std::fabs(z - layerZ); if (dd < bd) { bd = dd; other = static_cast<int>(li); bestZ = z; }
                         }
                         if (other < 0) continue;
-                        const double dz = (r.heights->layerHeight(roads, m) + ls.lift) - bestZ;
+                        const double dz = (layerZ + ls.lift) - bestZ;
                         if (std::fabs(dz) <= kerb + ls.lift || std::fabs(dz) >= g.rules.bridgeH) continue;
                         SurfaceStep st2; st2.at = m; st2.dz = dz; st2.a = ls.name; st2.b = laneName(other); st2.length = std::min(1.0, L - st + 0.5); out.push_back(st2);
                     }
@@ -377,7 +429,7 @@ std::vector<Check> invariants(const Result& r) {
             }
         }
         std::sort(offenders.begin(), offenders.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
-        dd << bad << " of " << pairs << " grade-separated lane pairs short of under_clearance + slab + structure"; if (bad) { dd << ", worst by " << std::fixed << std::setprecision(1) << worst << " m:"; for (size_t i = 0; i < offenders.size() && i < 8; ++i) dd << offenders[i].second; }
+        dd << bad << " of " << pairs << " grade-separated lane pairs short of under_clearance + slab + structure"; if (bad) { dd << ", worst by " << std::fixed << std::setprecision(1) << worst << " m:"; static const bool all = std::getenv("LANELAB_TRACE_CLEARANCE") != nullptr; for (size_t i = 0; i < offenders.size() && (all || i < 8); ++i) dd << offenders[i].second; }
         out.push_back({"grade-separated pairs clear their structure", dd.str(), bad == 0});
     }
     // Piers under their decks: a column topped above the built slab bottom stands out of the road.

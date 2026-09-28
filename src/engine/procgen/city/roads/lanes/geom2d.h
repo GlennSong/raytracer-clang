@@ -11,6 +11,7 @@
 #include "engine/procgen/city/polygon.h"   // Vec2
 #include <array>
 #include <utility>
+#include <memory>
 #include <vector>
 
 namespace engine {
@@ -41,6 +42,21 @@ double ringArea(const Ring& r);             // signed (+ CCW)
 double setArea(const PolySet& s);
 bool contains(const Polygon2& p, const Vec2& q);   // holes excluded; boundary counts as inside
 bool contains(const PolySet& s, const Vec2& q);
+
+// A polygon set converted ONCE for many point queries. contains(PolySet, q) converts every ring to
+// Clipper's integer path on every call; a freeway lane 10 km long is one footprint of thousands of
+// vertices, and placing the walls along the outer loop's 89 km of outline spent some forty minutes of
+// a bake converting it. Same test, same integer points, same answers.
+class PreparedSet {
+public:
+    PreparedSet() = default;
+    explicit PreparedSet(const PolySet& s);
+    bool contains(const Vec2& q) const;   // as contains(PolySet, q): holes excluded, boundary counts as inside
+private:
+    struct Poly;
+    std::shared_ptr<const std::vector<Poly>> polys_;
+};
+std::vector<PreparedSet> prepareAll(const std::vector<PolySet>& sets);
 struct Box2 { double minX = 0, minY = 0, maxX = 0, maxY = 0; };
 Box2 bounds(const Polygon2& p);
 Box2 bounds(const PolySet& ps);              // over EVERY polygon of the set (a footprint may carry a detached sliver first)
@@ -56,8 +72,14 @@ struct Triangulation {
     std::vector<Vec2> verts;
     std::vector<std::array<int, 3>> tris;
 };
+// Robust to near-degenerate crossings: CDT resolves two crossing constraint edges by splitting them at
+// the computed intersection, and when floating-point rounding puts that point outside the edges' triangles
+// it throws (CDT::InvalidEdgeSplitVertex). The first try snaps at `minDist` (1e-6 m); on that failure it
+// retries snapping at 1e-4, 1e-3 and 1e-2 m -- far below anything drawn. (Regenerating island_8_nature: a
+// freeway waypoint moved a metre and one such crossing took the whole city's products down with it.)
 Triangulation constrainedTriangulation(const std::vector<Vec2>& points,
-                                       const std::vector<std::pair<int, int>>& edges);
+                                       const std::vector<std::pair<int, int>>& edges,
+                                       double minDist = 1e-6);
 
 }  // namespace roads::lanes
 }  // namespace engine

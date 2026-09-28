@@ -1,6 +1,7 @@
 #include "bus_stop_props.h"
 
 #include <algorithm>
+#include <map>
 #include <unordered_map>
 
 #include "../../engine/components.h"
@@ -96,26 +97,42 @@ int buildBusStopProps(
     const NavGraph& nav,
     const std::function<Real(Real, Real)>& groundAt,
     std::vector<Entity>* out, std::vector<Vec3>* outPositions,
-    const engine::RoadDeckField* deck) {
+    const engine::RoadDeckField* deck,
+    const std::function<Real(int)>& standBack) {
     if (net.empty() || nav.nodeCount() == 0 || !groundAt) return 0;
     int built = 0;
 
-    // ONE STOP PER CORNER. Routes that share a node share its furniture: this
-    // used to build a pole, sign and bench per ROUTE, all at the identical
-    // spot, so a hub served by three routes was three benches inside each
-    // other and one visible sign -- whichever colour won the z-fight. A real
-    // shared stop is one pole carrying every route's plate.
-    std::vector<int> nodeOrder;
-    std::unordered_map<int, std::vector<int>> routesAt;
-    for (int r = 0; r < net.routeCount(); ++r)
-        for (const BusStop& stop : net.route(r).stops) {
-            std::vector<int>& at = routesAt[stop.node];
-            if (at.empty()) nodeOrder.push_back(stop.node);
+    // ONE STOP PER KERB (#36, Glenn: "buses don't stop at the bus stop... they usually stop across the
+    // street from it"). A bus dwells short of its stop node, on the street it ARRIVES by, at that street's
+    // kerb (CitySim::busStandBack). The furniture used to stand beside the LONGEST street leaving the node
+    // -- often the way back, so the bench faced the bus from across the road. It now keys on the arrival
+    // link: routes that come in on the same street share one pole; routes arriving from different streets
+    // get a stop each, on their own kerbs.
+    struct Kerb { int node; int link; };
+    std::vector<Kerb> kerbOrder;
+    std::map<std::pair<int, int>, std::vector<int>> routesAt;
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const BusRoute& route = net.route(r);
+        const std::vector<int>& pn = route.pathNodes;
+        for (const BusStop& stop : route.stops) {
+            // the node the route reaches THIS visit from: the stop's own place on the path (an open loop,
+            // so the first node's predecessor is the last)
+            int prev = -1;
+            if (stop.pathIndex >= 0 && !pn.empty() && static_cast<std::size_t>(stop.pathIndex) < pn.size())
+                prev = pn[(static_cast<std::size_t>(stop.pathIndex) + pn.size() - 1) % pn.size()];
+            int in = -1;
+            if (prev >= 0 && prev < nav.nodeCount())
+                for (int li : nav.outLinks[static_cast<std::size_t>(prev)])
+                    if (nav.links[static_cast<std::size_t>(li)].to == stop.node) { in = li; break; }
+            std::vector<int>& at = routesAt[{stop.node, in}];
+            if (at.empty()) kerbOrder.push_back({stop.node, in});
             if (std::find(at.begin(), at.end(), r) == at.end()) at.push_back(r);
         }
+    }
 
-    for (int node : nodeOrder) {
-        const std::vector<int>& calling = routesAt[node];
+    for (const Kerb& kerb : kerbOrder) {
+        const int node = kerb.node;
+        const std::vector<int>& calling = routesAt[{kerb.node, kerb.link}];
         {
             const BusStop stop{node, node >= 0 && node < nav.nodeCount()
                                          ? nav.nodes[static_cast<std::size_t>(node)]
@@ -124,32 +141,34 @@ int buildBusStopProps(
             const std::vector<int>& outs =
                 nav.outLinks[static_cast<std::size_t>(stop.node)];
 
-            // A STREET to stand beside: the LONGEST ordinary one leaving the
-            // node. Freeway and ramp links have no kerb, and furniture in a
-            // fast lane is worse than an unmarked stop, so a stop with no
-            // kerbed street at all gets nothing.
-            //
-            // This first demanded 12 m and took the FIRST match, which
-            // furnished 6 stops of 56 -- in a dense grid most
-            // junction-to-junction links are shorter than that, and a short
-            // street is no reason to have no bus stop.
+            // THE STREET THE BUS ARRIVES BY, when the route told us; else (a stop off its path) the longest
+            // ordinary street leaving the node, as before. Freeway and ramp links have no kerb.
             const NavLink* use = nullptr;
-            for (int li : outs) {
-                const NavLink& l = nav.links[static_cast<std::size_t>(li)];
-                if (l.klass == engine::RoadClass::Freeway ||
-                    l.klass == engine::RoadClass::Ramp)
-                    continue;
-                if (!use || l.length > use->length) use = &l;
+            bool arriving = false;
+            if (kerb.link >= 0) {
+                const NavLink& l = nav.links[static_cast<std::size_t>(kerb.link)];
+                if (l.klass != engine::RoadClass::Freeway && l.klass != engine::RoadClass::Ramp) { use = &l; arriving = true; }
             }
+            if (!use)
+                for (int li : outs) {
+                    const NavLink& l = nav.links[static_cast<std::size_t>(li)];
+                    if (l.klass == engine::RoadClass::Freeway ||
+                        l.klass == engine::RoadClass::Ramp)
+                        continue;
+                    if (!use || l.length > use->length) use = &l;
+                }
             if (!use) continue;
 
-            const Vec2 a = nav.nodes[static_cast<std::size_t>(use->from)];
-            const Vec2 b = nav.nodes[static_cast<std::size_t>(use->to)];
+            // travelling INTO the node on an arrival link: the dwell point is back up that link from the
+            // node, on its right; measured from the node (b) backwards
+            const Vec2 a = arriving ? nav.nodes[static_cast<std::size_t>(use->to)] : nav.nodes[static_cast<std::size_t>(use->from)];
+            const Vec2 b = arriving ? nav.nodes[static_cast<std::size_t>(use->from)] : nav.nodes[static_cast<std::size_t>(use->to)];
             Vec2 dir = b - a;
             const Real len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
             if (len < 1e-3) continue;
             dir = Vec2(dir.x / len, dir.y / len);
-            const Vec2 right = rightOf(dir);
+            // the bus's right is the right of its TRAVEL direction (into the node), i.e. the left of `dir`
+            const Vec2 right = arriving ? Vec2(-rightOf(dir).x, -rightOf(dir).y) : rightOf(dir);
 
             // BACK OFF from the node -- a nav node is usually an intersection
             // and a bench in the middle of a junction is worse than no bench --
@@ -157,8 +176,10 @@ int buildBusStopProps(
             // SCALES with the link: a fixed 7 m would put the bench in the next
             // junction on a 6 m street, which is what dropping the length filter
             // would otherwise have caused.
-            Real along = use->length * 0.35;
-            if (along > 7.0) along = 7.0;
+            // (arriving: where the bus's doors stand -- the dwell's stand-back, ~a junction box, a crossing and
+            // half a bus, capped by the street like CitySim::busStandBack)
+            Real along = arriving ? (standBack ? standBack(kerb.link) : std::min(Real(16.0), use->length * 0.6)) : use->length * 0.35;
+            if (!arriving && along > 7.0) along = 7.0;
             if (along < 1.2) along = 1.2;
             const Real offset = use->width * 0.5 + 1.5;
             Vec2 p(a.x + dir.x * along + right.x * offset,

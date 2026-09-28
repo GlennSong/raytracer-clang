@@ -1,0 +1,224 @@
+// PolyMesh: the hard-surface modelling kit (ADR-0139). Each op keeps the mesh a closed, outward-facing
+// solid, and subdivision honours creases -- the properties every recipe leans on.
+#include "test_framework.h"
+#include "../src/engine/procgen/polymesh.h"
+
+#include <cmath>
+#include <cstdio>
+
+using namespace engine;
+
+namespace {
+// a unit cube (-0.5..0.5) as a loft of two square sections
+PolyMesh cube() {
+    const std::vector<Vec2> sq = {Vec2(-0.5, -0.5), Vec2(0.5, -0.5), Vec2(0.5, 0.5), Vec2(-0.5, 0.5)};
+    return loft({sq, sq}, {-0.5, 0.5}, true, true);
+}
+void bounds(const PolyMesh& m, Vec3& lo, Vec3& hi) {
+    lo = Vec3(1e30, 1e30, 1e30);
+    hi = Vec3(-1e30, -1e30, -1e30);
+    for (const Vec3& p : m.pts) {
+        lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+        hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+    }
+}
+}  // namespace
+
+TEST_CASE(polymesh_loft_makes_a_closed_outward_solid) {
+    PolyMesh c = cube();
+    CHECK(c.faces.size() == 6);
+    CHECK(isClosed(c));
+    CHECK_APPROX(signedVolume(c), 1.0, 1e-9);
+    // a rounded, resampled section lofted over three stations stays closed and outward
+    const auto sec = resampleClosed(roundedPolygon({Vec2(-1, 0), Vec2(1, 0), Vec2(0.8, 1), Vec2(-0.8, 1)}, {0.2}, 3), 24);
+    CHECK(sec.size() == 24);
+    // two big fillets on a short shared edge never meet in one duplicated point
+    {
+        const auto q = roundedPolygon({Vec2(0, 0), Vec2(1, 0), Vec2(1, 0.1), Vec2(0, 0.1)}, {0.5}, 3);
+        for (std::size_t i = 0; i < q.size(); ++i) CHECK((q[i] - q[(i + 1) % q.size()]).length() > 1e-6);
+    }
+    // every corner emits segs + 1 points, even square and straight ones (recipes index faces by corner)
+    CHECK(roundedPolygon({Vec2(0, 0), Vec2(1, 0), Vec2(2, 0), Vec2(2, 1), Vec2(0, 1)}, {0.0, 0.3, 0.2, 0.2, 0.0}, 3).size() == 20u);
+    PolyMesh b = loft({sec, sec, sec}, {-2, 0, 2}, true, true);
+    CHECK(isClosed(b));
+    CHECK(signedVolume(b) > 0);
+}
+
+TEST_CASE(polymesh_extrude_and_inset_keep_the_solid_closed) {
+    PolyMesh c = cube();
+    const auto top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    CHECK(top.size() == 1);
+    extrude(c, top, 1.0);
+    CHECK(c.faces.size() == 10);
+    CHECK(isClosed(c));
+    CHECK_APPROX(signedVolume(c), 2.0, 1e-9);
+    Vec3 lo, hi;
+    bounds(c, lo, hi);
+    CHECK_APPROX(hi.y, 1.5, 1e-9);
+    const auto front = selectWhere(c, [](const Vec3& ctr, const Vec3& n) { return n.z > 0.9 && ctr.y < 0.1; });
+    CHECK(front.size() == 1);
+    const auto in = inset(c, front, 0.1);
+    CHECK(in.size() == 1);
+    CHECK(c.faces.size() == 14);
+    CHECK(isClosed(c));
+    // pushing the inset face in makes a recess (a window): still closed, less volume
+    const double v0 = signedVolume(c);
+    extrude(c, in, -0.05);
+    CHECK(isClosed(c));
+    CHECK(signedVolume(c) < v0);
+}
+
+TEST_CASE(polymesh_mirror_welds_the_seam) {
+    // the +x half of a box, open on x = 0
+    PolyMesh h;
+    h.pts = {Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(1, 1, 0), Vec3(0, 1, 0), Vec3(0, 0, 1), Vec3(1, 0, 1), Vec3(1, 1, 1), Vec3(0, 1, 1)};
+    auto q = [&](int a, int b, int c, int d) { PolyMesh::Face f; f.v = {a, b, c, d}; h.faces.push_back(f); };
+    q(0, 3, 2, 1);   // z = 0 (faces -z)
+    q(4, 5, 6, 7);   // z = 1
+    q(1, 2, 6, 5);   // x = 1
+    q(0, 1, 5, 4);   // y = 0
+    q(3, 7, 6, 2);   // y = 1
+    CHECK(!isClosed(h));
+    mirrorX(h);
+    CHECK(isClosed(h));
+    CHECK_APPROX(signedVolume(h), 2.0, 1e-9);
+}
+
+TEST_CASE(polymesh_subdivision_smooths_and_creases_hold) {
+    PolyMesh c = cube();
+    c.creases.clear();   // loft creases its cap rings; the blob wants none
+    PolyMesh s = subdivide(c, 3);
+    CHECK(s.faces.size() == 6u * 64u);
+    CHECK(isClosed(s));
+    CHECK(signedVolume(s) > 0.3 && signedVolume(s) < 0.4);   // a smooth blob well inside the cage
+    Vec3 lo, hi;
+    bounds(s, lo, hi);
+    CHECK(hi.x < 0.5 && hi.x > 0.25);
+    // every edge fully creased: the cube keeps its shape exactly
+    PolyMesh k = cube();
+    creaseFaces(k, selectAll(k), PolyMesh::kInfCrease);
+    PolyMesh ks = subdivide(k, 2);
+    CHECK(isClosed(ks));
+    CHECK_APPROX(signedVolume(ks), 1.0, 1e-9);
+    // sharpness is a dial: every edge at 0 (smooth), 0.5 (semi-sharp), 1 (one level sharp) -- the volume
+    // grows with it. (loft creases its cap rings at 1, so clear them for the smooth reference.)
+    auto vol = [](float s) { PolyMesh h = cube(); creaseFaces(h, selectAll(h), s); h.creases.erase(h.creases.begin(), h.creases.end()); if (s > 0) creaseFaces(h, selectAll(h), s); return signedVolume(subdivide(h, 2)); };
+    CHECK(vol(0.0f) < vol(0.5f));
+    CHECK(vol(0.5f) < vol(1.0f));
+    CHECK(vol(1.0f) < 1.0);
+}
+
+TEST_CASE(polymesh_to_parts_splits_by_material_in_engine_winding) {
+    PolyMesh c = cube();
+    const auto top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    for (int f : top) c.faces[static_cast<std::size_t>(f)].mat = c.matId("glass");
+    const auto parts = toParts(subdivide(c, 1), 35.0);
+    CHECK(parts.size() == 2);
+    CHECK(parts.count("body") && parts.count("glass"));
+    for (const auto& [name, rm] : parts) {
+        CHECK(!rm.indices.empty());
+        // engine winding: the geometric normal cross(c-a, b-a) agrees with the vertex normal
+        int agree = 0, total = 0;
+        for (std::size_t i = 0; i + 2 < rm.indices.size(); i += 3) {
+            const Vertex& a = rm.vertices[rm.indices[i]];
+            const Vertex& b = rm.vertices[rm.indices[i + 1]];
+            const Vertex& cc = rm.vertices[rm.indices[i + 2]];
+            agree += dot(cross(cc.position - a.position, b.position - a.position), a.normal) > 0;
+            ++total;
+            CHECK_APPROX(a.normal.length(), 1.0, 1e-6);
+        }
+        CHECK(agree == total);
+    }
+}
+
+// A window's corners stay corners (vertex sharpness) while its outline between them stays smooth.
+TEST_CASE(polymesh_corners_hold_through_subdivision) {
+    PolyMesh c = cube();
+    c.creases.clear();
+    PolyMesh a = c;
+    creaseCorners(a, selectAll(a), 40.0, 0.0f);   // nothing: an all-faces region has no outline
+    CHECK(a.corners.empty());
+    const auto top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    creaseCorners(c, top, 40.0, PolyMesh::kInfCrease);
+    CHECK(c.corners.size() == 4);   // the top face's four corners
+    const PolyMesh s = subdivide(c, 3);
+    int kept = 0;
+    for (const Vec3& p : s.pts) kept += std::fabs(std::fabs(p.x) - 0.5) < 1e-9 && std::fabs(p.y - 0.5) < 1e-9 && std::fabs(std::fabs(p.z) - 0.5) < 1e-9;
+    CHECK(kept == 4);
+    CHECK(isClosed(s));
+}
+
+namespace {
+// the worst face's "roundness": 4*pi*area / perimeter^2 (1 for a circle, ~0.785 for a square, -> 0 for a sliver)
+double worstRoundness(const PolyMesh& m) {
+    double worst = 1.0;
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        const auto& v = m.faces[f].v;
+        double per = 0, area2 = 0;
+        const Vec3 n = m.faceNormal(static_cast<int>(f));
+        Vec3 acc(0, 0, 0);
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const Vec3& a = m.pts[static_cast<std::size_t>(v[i])];
+            const Vec3& b = m.pts[static_cast<std::size_t>(v[(i + 1) % v.size()])];
+            per += (b - a).length();
+            acc = acc + cross(a, b);
+        }
+        area2 = std::fabs(dot(acc, n));
+        worst = std::min(worst, 4.0 * M_PI * (0.5 * area2) / std::max(1e-12, per * per));
+    }
+    return worst;
+}
+}  // namespace
+
+// No slivers (Glenn: "degenerate looking triangles in the rear ... we don't want wasted triangles"): a
+// car-like section with sharp corners, lofted and capped, has no face thinner than a sensible bound, and
+// its caps are rows of quads, not one polygon.
+TEST_CASE(polymesh_car_section_loft_has_no_slivers_and_ladder_caps) {
+    const std::vector<Vec2> corners = {Vec2(-0.8, 0.15), Vec2(0.8, 0.15), Vec2(0.9, 0.6), Vec2(0.88, 0.95),
+                                       Vec2(0.8, 0.97), Vec2(0.65, 1.4), Vec2(-0.65, 1.4), Vec2(-0.8, 0.97),
+                                       Vec2(-0.88, 0.95), Vec2(-0.9, 0.6)};
+    const auto sec = roundedPolygon(corners, {0.1, 0.1, 0.4, 0.0, 0.0, 0.15, 0.15, 0.0, 0.0, 0.4}, 3);
+    std::vector<std::vector<Vec2>> secs;
+    std::vector<double> st;
+    for (int i = 0; i <= 10; ++i) { secs.push_back(sec); st.push_back(-2.0 + 0.4 * i); }   // car-like station spacing
+    PolyMesh b = loft(secs, st, true, true, 0.3f);
+    CHECK(isClosed(b));
+    CHECK(signedVolume(b) > 0);
+    std::size_t maxSides = 0;
+    for (const auto& f : b.faces) maxSides = std::max(maxSides, f.v.size());
+    CHECK(maxSides <= 4u);   // the caps are quads (and at most a triangle where the ring crosses the axis)
+    const PolyMesh s = subdivide(b, 1);
+    CHECK(isClosed(s));
+    const double r = worstRoundness(s);
+    std::printf("    worst face roundness %.4f over %zu faces\n", r, s.faces.size());
+    CHECK(r > 0.02);
+    // a region inset of the whole cap stays closed and one panel
+    PolyMesh g = b;
+    const auto cap = selectGroup(g, "cap_end");
+    CHECK(cap.size() > 4);
+    insetRegion(g, cap, 0.08);
+    CHECK(isClosed(g));
+}
+
+// Placement rules set parts on the finished surface: a ray finds the first face it meets and its normal.
+TEST_CASE(polymesh_raycast_finds_the_surface_and_its_normal) {
+    PolyMesh c = cube();
+    double t = 0;
+    Vec3 n;
+    int f = -1;
+    CHECK(raycast(c, Vec3(0.1, 0.2, 5.0), Vec3(0, 0, -1), t, n, f));
+    CHECK_APPROX(t, 4.5, 1e-9);            // the +z face at z = 0.5
+    CHECK_APPROX(n.z, 1.0, 1e-9);
+    CHECK(!raycast(c, Vec3(2.0, 0.0, 5.0), Vec3(0, 0, -1), t, n, f));   // beside the cube: a miss
+}
+
+// A cabin's inner skin is the body's own inside: the region copied, offset inward and flipped.
+TEST_CASE(polymesh_extract_offsets_and_flips_a_region) {
+    PolyMesh c = cube();
+    const auto top = selectWhere(c, [](const Vec3&, const Vec3& n) { return n.y > 0.9; });
+    const PolyMesh in = extractOffset(c, top, -0.1, true);
+    CHECK(in.faces.size() == 1);
+    CHECK(in.pts.size() == 4);
+    for (const Vec3& p : in.pts) CHECK_APPROX(p.y, 0.4, 1e-9);   // 10 cm inside the top
+    CHECK(in.faceNormal(0).y < -0.9);                             // facing down, into the box
+}

@@ -30,6 +30,12 @@ public:
     // generated mesh with no reuse). Refcount is bumped on every call.
     MeshHandle acquireMesh(const RenderMesh& mesh, const std::string& key = "");
 
+    // The same in two halves (renderer.h, PreparedMesh): prepareMesh converts the mesh for the
+    // GPU and is safe on ANY thread (a residency worker, ADR-0096); acquirePrepared uploads it on
+    // the render thread, and is acquireMesh otherwise (key, refcount, accounting).
+    PreparedMesh prepareMesh(RenderMesh&& mesh) const { return uploader_.prepareMesh(std::move(mesh)); }
+    MeshHandle acquirePrepared(PreparedMesh&& mesh, const std::string& key = "");
+
     // Release one reference; the GPU mesh is freed (MeshUploader::removeMesh)
     // when its refcount reaches zero. A null or unknown handle is ignored.
     void releaseMesh(MeshHandle handle);
@@ -48,6 +54,12 @@ public:
 
     // --- introspection (tests, debug overlays) ---
     std::size_t liveMeshCount() const { return records_.size(); }
+    // Live meshes and their vertex + index bytes grouped by key PATTERN -- the key
+    // with every run of digits as '#' ("cdlod_4411" -> "cdlod_#", "road:3:deck:12" ->
+    // "road:#:deck:#"; un-keyed meshes are "(unkeyed)").
+    // Largest first. Bytes are the GPU's: 56 per vertex, 4 per index (Vulkan).
+    struct MeshGroup { std::string prefix; std::size_t meshes = 0, bytes = 0; };
+    std::vector<MeshGroup> meshBytesByPrefix() const;
     int refCount(MeshHandle handle) const;
 
 private:
@@ -59,6 +71,7 @@ private:
         BoundingSphere bounds;
         int refs = 0;
         std::string key;   // empty = un-keyed (no dedup entry)
+        std::size_t bytes = 0;   // vertex + index bytes on the GPU (meshBytesByPrefix)
     };
 
     static std::string primitiveKey(const std::string& shape, Vec3 size);

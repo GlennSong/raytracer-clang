@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--settle", type=float, default=3.0, help="seconds after the level answers before the first shot")
     ap.add_argument("--cmd", action="append", default=[], help="a raw control-channel line to send once the level answers (e.g. 'citymap out/map.svg blocks,lots')")
     ap.add_argument("--hour", type=float, default=11.0, help="hold the day/night clock at this hour for the shots (the lab levels' clock runs; night frames are useless). <0 leaves it alone")
+    ap.add_argument("--shot-wait", type=float, default=0.4, help="seconds after moving the camera before the shot (grass and other streamed layers build around it)")
     ap.add_argument("--load-timeout", type=float, default=900.0, help="seconds to wait for the level to answer (a lanelab build at load can take minutes)")
     a = ap.parse_args()
     shots = []
@@ -74,7 +75,9 @@ def main():
             time.sleep(0.2)
         print(f"viewer up ({time.time() - t0:.1f}s); waiting for the level:", send(sock_path, "camera?", timeout=a.load_timeout), flush=True)
         time.sleep(a.settle)
-        if a.hour >= 0: send(sock_path, f"daynight {a.hour:g}"); send(sock_path, "daynight hold")
+        # the city sim builds on the first frames after the load (its agents' routes, minutes on a
+        # big city), so the first command after the load gets the load's patience too
+        if a.hour >= 0: send(sock_path, f"daynight {a.hour:g}", timeout=a.load_timeout); send(sock_path, "daynight hold")
         for c in a.cmd: print("   ", c, "->", send(sock_path, c), flush=True)
         ok = 0
         queue = list(shots); extra = queue
@@ -90,7 +93,7 @@ def main():
             else:
                 pitch, yaw = pose(eye, target)
                 send(sock_path, f"camera {eye[0]:.2f} {eye[1]:.2f} {eye[2]:.2f} {pitch:.2f} {yaw:.2f}")
-                time.sleep(0.4)
+                time.sleep(max(0.4, a.shot_wait))   # streamed layers (grass tiles) catch up to the new camera
             out = os.path.abspath(os.path.join(a.out, name + ".png"))
             if os.path.exists(out): os.remove(out)
             reply = send(sock_path, f"shot {out}")

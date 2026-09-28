@@ -13,6 +13,9 @@ class MeshUploader {
 public:
     virtual ~MeshUploader() = default;
     virtual MeshHandle uploadMesh(const RenderMesh& mesh) = 0;
+    // Two-phase upload (renderer.h, PreparedMesh): prepare on any thread, upload on the render thread.
+    virtual PreparedMesh prepareMesh(RenderMesh&& mesh) const { return prepareRawMesh(std::move(mesh)); }
+    virtual MeshHandle uploadPrepared(PreparedMesh&& mesh) { return uploadMesh(mesh.raw); }
     virtual void removeMesh(MeshHandle handle) = 0;
     virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
 };
@@ -26,6 +29,10 @@ public:
     MeshHandle uploadMesh(const RenderMesh& mesh) override {
         return renderer_.uploadMesh(mesh);
     }
+    PreparedMesh prepareMesh(RenderMesh&& mesh) const override {
+        return static_cast<const Renderer&>(renderer_).prepareMesh(std::move(mesh));
+    }
+    MeshHandle uploadPrepared(PreparedMesh&& mesh) override { return renderer_.uploadPrepared(std::move(mesh)); }
     void removeMesh(MeshHandle handle) override { renderer_.removeMesh(handle); }
     BoundingSphere getMeshBounds(MeshHandle handle) const override {
         return renderer_.getMeshBounds(handle);

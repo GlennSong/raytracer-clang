@@ -25,6 +25,8 @@ public:
     void resize(int width, int height) override;
 
     MeshHandle uploadMesh(const RenderMesh& mesh) override;
+    PreparedMesh prepareMesh(RenderMesh&& mesh) const override;
+    MeshHandle uploadPrepared(PreparedMesh&& mesh) override;
     void removeMesh(MeshHandle handle) override;
     BoundingSphere getMeshBounds(MeshHandle handle) const override;
     TextureHandle uploadTexture(int width, int height, int channels,
@@ -37,12 +39,16 @@ public:
     void removeTexture(TextureHandle handle) override;
     void submitUi(const std::vector<UiQuad>& quads) override;
     RenderStats getRenderStats() const override;
+    const OcclusionDepth* occlusionDepth() const override;
 
     void beginFrame() override;
     void setCamera(const CameraState& camera) override;
     void setLights(const SceneLighting& lighting) override;
     void drawMesh(MeshHandle handle, const Mat4& transform,
                   const RenderMaterial& material) override;
+    bool setPresentSync(bool enabled) override;
+    void drawMeshInstanced(MeshHandle handle, const std::vector<Mat4>& transforms,
+                           const RenderMaterial& material) override;
     void drawTerrain(MeshHandle handle, const RenderMaterial& material,
                      float morphStart, float morphEnd) override;
     void endFrame() override;
@@ -50,6 +56,7 @@ public:
     // Headless frame capture: arm a one-shot PNG of the next composited frame
     // (the control channel's `shot`). Same seam as the Metal backend.
     bool requestFrameDump(const std::string& path) override;
+    std::string memoryReport() const override;
 
     // Dear ImGui (ADR-0011). No-ops unless RT_ENABLE_IMGUI is defined.
     void initDebugUi(void* windowHandle) override;

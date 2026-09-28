@@ -158,6 +158,26 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
     ImGui::Checkbox("Show HUD", &ctx.renderer.showHud);
     ImGui::Separator();
 
+    // SIM SPEED: here, not on the keyboard (DevControlSystem: ',' and '.' were
+    // one stray press from half or double speed). The badge top-right shows it
+    // whenever the world isn't at real time.
+    {
+        ImGui::TextUnformatted("Sim speed");
+        const double now = ctx.clock.timeScale();
+        const struct { const char* label; double speed; } steps[] = {
+            {"1/4x", 0.25}, {"1/2x", 0.5}, {"1x", 1.0}, {"2x", 2.0}, {"4x", 4.0}};
+        for (const auto& st : steps) {
+            ImGui::SameLine();
+            const bool on = now == st.speed;
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            if (ImGui::SmallButton(st.label)) ctx.clock.setTimeScale(st.speed);
+            if (on) ImGui::PopStyleColor();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton(ctx.clock.paused() ? "Resume" : "Pause")) ctx.clock.setPaused(!ctx.clock.paused());
+    }
+    ImGui::Separator();
+
     double fps = ctx.frameDelta > 0.0 ? 1.0 / ctx.frameDelta : 0.0;
     ImGui::Text("FPS: %.1f (%.2f ms)", fps, ctx.frameDelta * 1000.0);
     ImGui::Text("Entities: %zu", ctx.world.entityCount());

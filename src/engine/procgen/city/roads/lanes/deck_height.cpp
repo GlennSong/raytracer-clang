@@ -14,6 +14,39 @@ DeckHeight::DeckHeight(const RoadLabGraph& g, const LaneSet& L) : g_(g), L_(L) {
     partners_.assign(L.lanes.size(), {}); roadPartners_.assign(g.edges.size(), {});
     grids_.reserve(L.lanes.size());
     for (const Lane& l : L.lanes) grids_.push_back(std::make_unique<SegmentGrid>(l.xy, 8.0));
+    // the near-lane index: each lane's centreline box, grown by its half-width and 15 m of caps and fillets
+    // (the footprint's reach past the centreline) and by the index's search reach
+    std::vector<Box2> box(L.lanes.size());
+    double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+    for (size_t li = 0; li < L.lanes.size(); ++li) {
+        Box2 b{1e300, 1e300, -1e300, -1e300};
+        for (const Vec2& q : L.lanes[li].xy) { b.minX = std::min(b.minX, q.x); b.minY = std::min(b.minY, q.y); b.maxX = std::max(b.maxX, q.x); b.maxY = std::max(b.maxY, q.y); }
+        const double grow = L.lanes[li].w / 2 + 15.0 + kIndexReach;
+        b.minX -= grow; b.minY -= grow; b.maxX += grow; b.maxY += grow;
+        box[li] = b;
+        if (L.lanes[li].xy.empty()) continue;
+        x0 = std::min(x0, b.minX); y0 = std::min(y0, b.minY); x1 = std::max(x1, b.maxX); y1 = std::max(y1, b.maxY);
+    }
+    if (x0 < x1) {
+        ix0_ = x0; iy0_ = y0;
+        inx_ = std::max(1, static_cast<int>(std::ceil((x1 - x0) / kIndexCell)));
+        iny_ = std::max(1, static_cast<int>(std::ceil((y1 - y0) / kIndexCell)));
+        index_.assign(static_cast<size_t>(inx_) * static_cast<size_t>(iny_), {});
+        for (size_t li = 0; li < L.lanes.size(); ++li) {
+            if (L.lanes[li].xy.empty()) continue;
+            const int i0 = std::clamp(static_cast<int>((box[li].minX - ix0_) / kIndexCell), 0, inx_ - 1), i1 = std::clamp(static_cast<int>((box[li].maxX - ix0_) / kIndexCell), 0, inx_ - 1);
+            const int j0 = std::clamp(static_cast<int>((box[li].minY - iy0_) / kIndexCell), 0, iny_ - 1), j1 = std::clamp(static_cast<int>((box[li].maxY - iy0_) / kIndexCell), 0, iny_ - 1);
+            for (int j = j0; j <= j1; ++j) for (int i = i0; i <= i1; ++i) index_[static_cast<size_t>(j) * static_cast<size_t>(inx_) + static_cast<size_t>(i)].push_back(static_cast<int>(li));
+        }
+    }
+}
+
+const std::vector<int>* DeckHeight::candidates(const Vec2& p) const {
+    static const std::vector<int> none;
+    if (index_.empty()) return nullptr;
+    const int i = static_cast<int>(std::floor((p.x - ix0_) / kIndexCell)), j = static_cast<int>(std::floor((p.y - iy0_) / kIndexCell));
+    if (i < 0 || j < 0 || i >= inx_ || j >= iny_) return &none;   // beyond every lane's reach
+    return &index_[static_cast<size_t>(j) * static_cast<size_t>(inx_) + static_cast<size_t>(i)];
 }
 
 void DeckHeight::setPartners(std::vector<std::vector<int>> partners) {
@@ -42,18 +75,33 @@ void DeckHeight::setFootprints(const std::vector<std::vector<Ring>>& outers, con
     }
 }
 
-int DeckHeight::nearestLane(const std::vector<int>& roads, const Vec2& p, double radius) const {
+std::vector<char> DeckHeight::edgeFlags(const std::vector<int>& roads) const {
     std::vector<char> want(g_.edges.size(), 0); for (int e : roads) if (e >= 0 && e < static_cast<int>(want.size())) want[static_cast<size_t>(e)] = 1;
+    return want;
+}
+
+int DeckHeight::nearestLane(const std::vector<int>& roads, const Vec2& p, double radius) const {
+    return nearestLane(edgeFlags(roads), p, radius);
+}
+
+int DeckHeight::nearestLane(const std::vector<char>& want, const Vec2& p, double radius) const {
     int best = -1; double bd = radius;
-    for (size_t li = 0; li < L_.lanes.size(); ++li) {
-        const Lane& l = L_.lanes[li]; if (l.isConnector() || l.parent < 0 || !want[static_cast<size_t>(l.parent)]) continue;
+    auto test = [&](size_t li) {
+        const Lane& l = L_.lanes[li]; if (l.isConnector() || l.parent < 0 || !want[static_cast<size_t>(l.parent)]) return;
         const double d = distanceToLane(static_cast<int>(li), p, radius); if (d < bd) { bd = d; best = static_cast<int>(li); }
-    }
+    };
+    const std::vector<int>* cand = radius <= kIndexReach ? candidates(p) : nullptr;
+    if (cand) for (int li : *cand) test(static_cast<size_t>(li));   // ascending lane order: the full scan's answer
+    else for (size_t li = 0; li < L_.lanes.size(); ++li) test(li);
     return best;
 }
 
 double DeckHeight::layerHeight(const std::vector<int>& roads, const Vec2& p) const {
-    const int li = nearestLane(roads, p); if (li >= 0) return deck(li, p);
+    return layerHeight(edgeFlags(roads), roads, p);
+}
+
+double DeckHeight::layerHeight(const std::vector<char>& want, const std::vector<int>& roads, const Vec2& p) const {
+    const int li = nearestLane(want, p); if (li >= 0) return deck(li, p);
     int best = roads.empty() ? -1 : roads[0]; double bd = 1e300;
     for (int e : roads) { const EdgeSpec& E = g_.edges[static_cast<size_t>(e)]; const double d = project(E.xy, E.s, p).distance; if (d < bd) { bd = d; best = e; } }
     return best >= 0 ? ownRoad(best, p) : 0.0;

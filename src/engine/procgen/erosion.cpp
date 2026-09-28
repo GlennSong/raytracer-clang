@@ -1,4 +1,5 @@
 #include "erosion.h"
+#include "../../log.h"
 #include "erosion_gpu.h"
 #include "../mesh_builder.h"
 
@@ -63,9 +64,14 @@ bool forceCpuErosion() {
 
 }  // namespace
 
-const char* erosionBackendTag() {
+const char* erosionBackendTag(const ErosionParams* p) {
+#if defined(RT_HAVE_VULKAN_EROSION)
+    // Vulkan's own tag: run-to-run deterministic like the Metal port, not bit-identical to it (ADR-0122)
+    return (p && p->vulkan && !forceCpuErosion() && erodeGpuAvailable()) ? "vk-erosion-v1" : "cpu";
+#else
     return (!forceCpuErosion() && erodeGpuAvailable()) ? "gpu-erosion-v1"
                                                        : "cpu";
+#endif
 }
 
 void erode(Heightmap& hm, const ErosionParams& p) {
@@ -74,7 +80,14 @@ void erode(Heightmap& hm, const ErosionParams& p) {
     // droplet+thermal model turns a minutes-long bake into seconds at 2048
     // res. Any failure (no device, kernel source missing, env pin) falls
     // through to the reference CPU sim below, unchanged.
+#if defined(RT_HAVE_VULKAN_EROSION)
+    if (p.vulkan && !forceCpuErosion() && erodeGpu(hm, p)) return;   // opt-in per terrain (ADR-0122)
+    // the water model and breaching exist only on the Vulkan backend: say so rather than bake without them
+    if (p.waterSteps > 0 || p.breachDepth > 0.0f)
+        LOG_WARN << "[erosion] water steps / breach asked of the CPU backend, which has neither: the ground bakes without them";
+#else
     if (!forceCpuErosion() && erodeGpu(hm, p)) return;
+#endif
     std::mt19937 gen(p.seed);
     std::uniform_real_distribution<float> pos(0.0f, static_cast<float>(hm.n - 1));
 

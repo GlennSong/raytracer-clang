@@ -54,9 +54,13 @@ struct CarBodyRecipe {
     std::vector<Attachment> lights;
     Vec3 size{0, 0, 0};
     std::string className;
-    // SEE-THROUGH GLASS, for a vehicle you are meant to look into (the bus).
-    // Empty for ordinary traffic, whose dark glass is merged into `mesh`.
+    // THE GLASS, its own part for every slot. A see-into vehicle (the bus: `seeInto`) always draws it
+    // clear; ordinary traffic draws it opaque and reflective, and clear only near the player (fleet v2).
     RenderMesh glass;
+    // The cabin, apart from the shell for ordinary traffic (drawn only near the player); a see-into
+    // vehicle has it in `mesh` and leaves this empty.
+    RenderMesh interior;
+    bool seeInto = false;
     // Seat hip points (body-local), for drawing people IN the vehicle: the
     // driver, and one per passenger seat. Empty when the recipe has none.
     std::vector<Vec3> seats;
@@ -89,6 +93,11 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
 // is no fleet to count (no global, not an array), which the caller reads as
 // "use the built-in fleet".
 int fleetSlotCount(ScriptVM& vm);
+
+// Point `vehicle.fleet` at one of the script's NAMED fleets (vehicles.lua: fleet_kit, classic, fleet_mixed),
+// after the script has run -- a level's citysim.fleet. False (err filled, fleet untouched) when there is no
+// such table.
+bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err = nullptr);
 
 // The CATALOGUE half of a slot — its class name and its size — without building
 // any geometry. A recipe may publish its body behind a `build()` function; this

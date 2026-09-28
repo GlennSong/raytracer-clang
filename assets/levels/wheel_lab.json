@@ -1,0 +1,106 @@
+{
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": true,
+    "cars": 13,
+    "debugWidgets": false,
+    "detailDistance": 300,
+    "downtownRadius": 60,
+    "facadeDistance": 950,
+    "hoursPerSecond": 0.0,
+    "hubRadius": 200,
+    "midtownRadius": 150,
+    "pedestrians": 0,
+    "perceptionReliability": 1.0,
+    "plinth": 0.45,
+    "seed": 3,
+    "sidewalk": 3.5,
+    "wander": true,
+    "_note": "WHEEL LAB (#35 follow-up): one of every fleet body on a small road net with a freeway loop, ramps, streets, hills and a valley, to test how cars sit on the road in isolation. 13 wandering drivers = every fleet slot once, the bus included (ambientBus), so the bus drives the ramps and freeway too; no bus routes. Probe: ground? x z r with RT_GROUND_DUMP.",
+    "vehicles": "vehicles.lua",
+    "maxAmbient": 13,
+    "busRoutes": 0,
+    "buses": 0,
+    "tiered": false,
+    "dormancy": false,
+    "startHour": 12.0,
+    "physicalCars": 0,
+    "ambientBus": true
+  },
+  "entities": [
+    {
+      "id": 1,
+      "lanelab": {
+        "graph": "assets/lanelab/ring_city.json"
+      },
+      "name": "ring_city",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "shape": "lanelab"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      20.0,
+      0.0
+    ]
+  },
+  "vehicles": [
+    {
+      "recipe": "offroad",
+      "seed": 1,
+      "position": [
+        4.0,
+        20.8,
+        0.0
+      ],
+      "yaw": 0
+    },
+    {
+      "recipe": "sedan",
+      "seed": 2,
+      "position": [
+        -4.0,
+        20.8,
+        0.0
+      ],
+      "yaw": 0
+    }
+  ],
+  "version": 1
+}

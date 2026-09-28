@@ -45,6 +45,30 @@ struct ErosionParams {
     float talus = 1.2f;           // max height drop per cell before material slips
     float thermalRate = 0.5f;
     uint32_t seed = 0;
+    // Vulkan builds only (ADR-0122): run on the GPU when the terrain asks for it (terrain "erodeGpu").
+    // Off by default so switching a Linux build to GPU erosion does not quietly re-shape every level baked
+    // on the CPU sim (the two agree statistically, not bit for bit). Apple's Metal path ignores it.
+    bool vulkan = false;
+    // WATER AND SEDIMENT (ADR-0123; Vulkan only, 0 steps = off): the Mei et al. 2007 pipe model after the
+    // droplets -- water that pools, spreads and floods, carries sediment and drops it where it slows. Units
+    // are metres and seconds on the grid's real cell size (Heightmap::worldSize / (n - 1)).
+    int   waterSteps = 0;
+    float waterDt = 0.0f;          // s a step; 0 = derived from the cell size
+    float waterRain = 0.002f;      // m/s on land
+    float waterCapacity = 0.6f;    // Kc
+    float waterDissolve = 0.25f;   // Ks, 1/s
+    float waterDeposit = 0.4f;     // Kd, 1/s
+    float waterEvaporate = 0.02f;  // Ke, 1/s
+    float waterMinTilt = 0.02f;
+    float waterMaxCut = 0.05f;     // m a step
+    float waterRockHardness = 0.15f;   // bedrock's pick-up rate as a fraction of loose sediment's (ADR-0124)
+    float waterCreep = 1.0e-4f;        // soil creep a step (ADR-0125)
+    // BREACHING (ADR-0124; 0 = off): before the water, every closed hollow whose rim stands less than this
+    // (m) above its floor gets a gently falling channel cut out to the sea or the map's edge -- the way
+    // overflow breaches real basins. Deeper hollows stay closed: lakes. Noise relief is full of pits, and
+    // the water filled every one flat with sediment.
+    float breachDepth = 0.0f;
+    float seaLevel = -1e30f;       // below it: the sea, held at its level
 };
 
 // Runs the GPU (Metal) port when available — same model, seconds instead of
@@ -54,7 +78,8 @@ void erode(Heightmap& hm, const ErosionParams& params);
 // Which backend erode() will use: "gpu-erosion-v1" (Metal compute) or "cpu".
 // Folded into content-hash cache keys so CPU- and GPU-baked terrain caches
 // never cross-contaminate, and a future kernel revision invalidates cleanly.
-const char* erosionBackendTag();
+// The backend a bake with `p` will run on (null: the platform default) -- part of every erosion cache key.
+const char* erosionBackendTag(const ErosionParams* p = nullptr);
 
 // Build a terrain mesh from a (possibly eroded) heightmap: smooth normals,
 // planar UVs, and the same height/slope/altitude vertex coloring as

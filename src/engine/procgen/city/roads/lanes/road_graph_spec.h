@@ -57,7 +57,9 @@ enum class BarrierKind { None = 0, Wall, Guardrail };
 // `offset` is how far OUTBOARD of the road's own outline the barrier stands, `thick` its body. Offset 0 hugs
 // the pavement edge, which is the only place the lab can guarantee ground under it; push it out only where
 // the class's shoulder is really paved.
-struct BarrierSpec { BarrierKind kind = BarrierKind::None; double h = 0.9, offset = 0.0, thick = 0.4; bool set = false; };
+// minDrop > 0: built only where the ground 5 m out falls at least that far below the deck -- a mountain road's
+// guardrail stands where there is somewhere to fall, not along every verge (ADR-0117)
+struct BarrierSpec { BarrierKind kind = BarrierKind::None; double h = 0.9, offset = 0.0, thick = 0.4, minDrop = 0.0; bool set = false; };
 
 struct RoadClassSpec {
     std::string name;
@@ -65,6 +67,11 @@ struct RoadClassSpec {
     double shoulder = 0, sidewalk = 0, median = 0;   // rings outside the lanes (median: divider axes)
     int rank = 1;
     double gMax = 0.09, window = 40, thick = 0.5;
+    // CUT AND FILL (ADR-0116): 0 = the profile only fills (the grade-limited envelope from above, every
+    // city's roads); 0.5 = halfway between that and the envelope from below -- a mountain road that cuts
+    // through the rise it cannot climb instead of riding a viaduct off it (the island pass was 2.7 km of
+    // bridge in 4.2). Both envelopes keep the grade, so any blend does.
+    double balance = 0.0;
     // indexed by EdgeRole: seam, median, vs street, elevated, at grade
     std::array<BarrierSpec, 5> edges{};
 };
@@ -73,6 +80,7 @@ struct Rules {
     double step = 1.0, sameLevelDz = 1.0, blendLen = 20.0, closing = 0.0, bridgeH = 4.0, pierSpacing = 24.0;
     double slope = 0.5, conformW = 14.0, skirt = 1.6, skirtDrop = 0.15, endpointTol = 0.5;
     double underClearance = 5.0, structureDepth = 1.6;   // free height under a deck's structure over any road it crosses, and the girder depth below the slab
+    bool freewaySeparates = false;             // a freeway is never met at grade by a road crossing it (not a ramp): structure at any height. Off by default -- authored scenes (freeway_cross, ring_city) cross streets over freeways at grade -- and on for the island (ADR-0114)
     double rampLevelDz = 1.5;                  // a ramp within this of a street it crosses is at grade with it (the street meets it); above, it is structure (the ramp clears it)
 };
 
@@ -87,6 +95,15 @@ struct TerrainSpec {
     struct Hill { double x = 0, y = 0, r = 1, h = 0; };
     std::vector<Hill> hills;
     bool hasTilt = false; double dzdx = 0, x0 = 0, dzdy = 0, y0 = 0;
+    // THE WORLD UNDERNEATH: a level's own `terrain` block, evaluated by the engine's terrainHeight —
+    // the same function the level renders outside this grid — with the relief above (octaves,
+    // valleys, hills) added on top. Null: no base.
+    nlohmann::json base;
+    // Where that relief applies: fully within fadeR0 of the fade centre, not at all past fadeR1 —
+    // so at the grid's edge the ground IS the level's and the seam cannot show — and calmed
+    // toward a coast: fully before calmFrom along (calmDx, calmDy), not at all past calmTo.
+    bool hasFade = false; double fadeX = 0, fadeY = 0, fadeR0 = 0, fadeR1 = 0;
+    bool hasCalm = false; double calmDx = 1, calmDy = 0, calmFrom = 0, calmTo = 0;
 };
 
 struct RampInfo {

@@ -151,3 +151,18 @@ TEST_CASE(renderer_default_instanced_draw_loops_draw_mesh) {
     r.drawMeshInstanced(MeshHandle{1, 1}, xf, RenderMaterial{});
     CHECK(r.meshDraws == 3);             // default fans out to drawMesh (Metal then batches)
 }
+
+// #50: an instance matrix's bottom row can carry data (the grass clump's thinning rank). The cull must
+// not divide the world position by it: a clump 2.6 km from the origin whose mesh bounds sit off-centre
+// was culled from a view looking straight down at it.
+TEST_CASE(instance_cull_is_affine_bottom_row_data_does_not_move_the_sphere) {
+    const Vec3 eye(-2600, 21.7, -2300);
+    const Mat4 view = Mat4::lookAt(eye, Vec3(-2600, 20, -2299.99), Vec3(0, 0, -1));
+    const Mat4 proj = Mat4::perspective(1.2, 16.0 / 9.0, 0.1, 2000.0);
+    const Frustum f = Frustum::fromViewProjection(proj * view);
+    Mat4 m = Mat4::trs(Vec3(-2600, 20, -2300), Quat(), Vec3(1, 1, 1));
+    m.m[3][0] = 0.9;   // the rank
+    std::vector<Mat4> out;
+    frustumCullInstances({m}, f, Vec3(0.05, 0.3, 0.0), 0.4, eye, 0, out);   // bounds centre a little off x = 0
+    CHECK(out.size() == 1);
+}

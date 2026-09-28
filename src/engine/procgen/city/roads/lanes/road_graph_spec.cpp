@@ -182,7 +182,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         const nlohmann::json& j = it.value();
         c.lanes.w = num(j, "w", c.lanes.w); c.lanes.fwd = static_cast<int>(num(j, "fwd", c.lanes.fwd)); c.lanes.back = static_cast<int>(num(j, "back", c.lanes.back));
         c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
-        c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.thick = num(j, "thick", c.thick);
+        c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
         if (j.contains("edges") && j["edges"].is_object()) {
             static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
             for (size_t i = 0; i < 5; ++i) {
@@ -191,7 +191,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 const std::string kind = e.value("kind", std::string("none"));
                 b.kind = kind == "wall" ? BarrierKind::Wall : kind == "guardrail" ? BarrierKind::Guardrail : BarrierKind::None;
                 b.h = num(e, "h", kind == "guardrail" ? 0.75 : 0.9);
-                b.offset = num(e, "offset", 0.0); b.thick = num(e, "thick", kind == "guardrail" ? 0.1 : 0.4); b.set = true;
+                b.offset = num(e, "offset", 0.0); b.thick = num(e, "thick", kind == "guardrail" ? 0.1 : 0.4); b.minDrop = num(e, "min_drop", 0.0); b.set = true;
                 c.edges[i] = b;
             }
         }
@@ -201,6 +201,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         R.step = num(r, "step", R.step); R.sameLevelDz = num(r, "same_level_dz", R.sameLevelDz); R.blendLen = num(r, "blend_len", R.blendLen); R.closing = num(r, "closing", R.closing);
         R.bridgeH = num(r, "bridge_h", R.bridgeH); R.pierSpacing = num(r, "pier_spacing", R.pierSpacing); R.slope = num(r, "slope", R.slope); R.conformW = num(r, "conform_w", R.conformW); R.underClearance = num(r, "under_clearance", R.underClearance); R.structureDepth = num(r, "structure_depth", R.structureDepth);
         R.rampLevelDz = num(r, "ramp_level_dz", R.rampLevelDz);
+        if (r.contains("freeway_separates") && r["freeway_separates"].is_boolean()) R.freewaySeparates = r["freeway_separates"].get<bool>();
         R.skirt = num(r, "skirt", R.skirt); R.skirtDrop = num(r, "skirt_drop", R.skirtDrop); R.endpointTol = num(r, "endpoint_tol", R.endpointTol);
     }
     if (spec.contains("terrain")) {
@@ -211,6 +212,9 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         if (t.contains("valleys")) for (const auto& v : t["valleys"]) { TerrainSpec::Valley V; V.alongY = v.contains("y") && !v.contains("x"); V.c = V.alongY ? v.at("y").get<double>() : v.at("x").get<double>(); V.width = num(v, "width", 40.0); V.depth = num(v, "depth", 0.0); T.valleys.push_back(V); }
         if (t.contains("hills")) for (const auto& h : t["hills"]) T.hills.push_back({num(h, "x", 0), num(h, "y", 0), num(h, "r", 1), num(h, "h", 0)});
         if (t.contains("tilt")) { T.hasTilt = true; const auto& k = t["tilt"]; T.dzdx = num(k, "dzdx", 0); T.x0 = num(k, "x0", 0); T.dzdy = num(k, "dzdy", 0); T.y0 = num(k, "y0", 0); }
+        if (t.contains("base")) T.base = t["base"];
+        if (t.contains("relief_fade")) { T.hasFade = true; const auto& k = t["relief_fade"]; T.fadeX = k.at("centre").at(0).get<double>(); T.fadeY = k.at("centre").at(1).get<double>(); T.fadeR0 = num(k, "r0", 0); T.fadeR1 = num(k, "r1", 1); }
+        if (t.contains("relief_calm")) { T.hasCalm = true; const auto& k = t["relief_calm"]; T.calmDx = k.at("dir").at(0).get<double>(); T.calmDy = k.at("dir").at(1).get<double>(); T.calmFrom = num(k, "from", 0); T.calmTo = num(k, "to", 1); }
         if (t.contains("file")) { T.file = t["file"].get<std::string>(); if (!T.file.empty() && T.file[0] != '/') T.file = baseDir + "/" + T.file; }
     }
     for (const auto& ej : spec.at("edges")) {

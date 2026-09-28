@@ -262,9 +262,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                 emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.0, 0.35, 1.0)},
                         PartId::Trim, stone * 0.9);
                 const Vec3 hedge(0.24 + rng.range(0, 0.05), 0.40, 0.20);
-                emitBox(kit, Scope{o + Vec3(0, 0.35, 0) + t3 * 0.1 + n3 * 0.1,
-                                   {t3, up, n3}, Vec3(0.8, 0.55, 0.8)},
-                        PartId::Foliage, hedge);
+                emitSoftBox(kit, Scope{o + Vec3(0, 0.35, 0) + t3 * 0.1 + n3 * 0.1,
+                                       {t3, up, n3}, Vec3(0.8, 0.55, 0.8)},
+                            PartId::Foliage, hedge, 0u);
             }
         }
         // FLOWER BEDS: a stone curb with a bright planted top, on the plaza
@@ -284,9 +284,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             Vec3 o = Vec3(fp.x, by, fp.y) - t3 * 0.55 - n3 * 0.55;
             emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.1, 0.22, 1.1)},
                     PartId::Trim, stone * 0.92);
-            emitBox(kit, Scope{o + Vec3(0, 0.22, 0) + t3 * 0.12 + n3 * 0.12,
-                               {t3, up, n3}, Vec3(0.86, 0.14, 0.86)},
-                    PartId::Foliage, bloom[static_cast<int>(rng.unit() * 2.99)]);
+            emitSoftBox(kit, Scope{o + Vec3(0, 0.22, 0) + t3 * 0.12 + n3 * 0.12,
+                                   {t3, up, n3}, Vec3(0.86, 0.18, 0.86)},
+                        PartId::Foliage, bloom[static_cast<int>(rng.unit() * 2.99)], 0u);
         }
         // SHRUBS: loose clipped bushes scattered on the lawn, off everything.
         Real mnx = 1e30, mnz = 1e30, mxx = -1e30, mxz = -1e30;
@@ -307,9 +307,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             Vec3 t3(std::cos(a2), 0, std::sin(a2)), n3(-t3.z, 0, t3.x);
             const Real sw = rng.range(0.7, 1.15), sh = rng.range(0.5, 0.85);
             const Vec3 bush(0.20 + rng.range(0, 0.06), 0.38 + rng.range(0, 0.06), 0.18);
-            emitBox(kit, Scope{Vec3(sp.x, by, sp.y) - t3 * (sw * 0.5) - n3 * (sw * 0.5),
-                               {t3, up, n3}, Vec3(sw, sh, sw)},
-                    PartId::Foliage, bush);
+            emitSoftBox(kit, Scope{Vec3(sp.x, by, sp.y) - t3 * (sw * 0.5) - n3 * (sw * 0.5),
+                                   {t3, up, n3}, Vec3(sw, sh, sw)},
+                        PartId::Foliage, bush, 0u);
         }
         // The FENCE: post-and-rail around the lot line, with OPENINGS where
         // the walking paths meet the street (and one gap on tiny greens with
@@ -653,10 +653,10 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
                 Vec3 t3(dir.x, 0, dir.y), n3(nrm.x, 0, nrm.y);
                 // Bedded 5 cm: ground-relative, so the base sits in the grass
                 // at every corner once draped.
-                emitBox(kit, Scope{Vec3(hc.x, -0.05, hc.y) - t3 * 0.9 -
-                                       n3 * 0.3,
-                                   {t3, up, n3}, Vec3(1.8, 0.70, 0.6)},
-                        PartId::Foliage, hedgeCol);
+                emitSoftBox(kit, Scope{Vec3(hc.x, -0.05, hc.y) - t3 * 0.9 -
+                                           n3 * 0.3,
+                                       {t3, up, n3}, Vec3(1.8, 0.70, 0.6)},
+                            PartId::Foliage, hedgeCol, 0u);
             }
         }
         appendKit(kit, outParts, /*draped=*/true);
@@ -1138,56 +1138,6 @@ Vertex lerpVertex(const Vertex& a, const Vertex& b, Real t) {
     return v;
 }
 
-// Cut every triangle of `m` along the lines f(x, z) = k (integer k) and
-// re-triangulate the convex pieces as fans. `f` must be affine.
-void splitAlongLines(RenderMesh& m, const std::function<Real(const Vec3&)>& f) {
-    RenderMesh out;
-    out.materialIndex = m.materialIndex;
-    out.vertices.reserve(m.vertices.size());
-    out.indices.reserve(m.indices.size());
-    auto emitPoly = [&](const std::vector<Vertex>& poly) {
-        if (poly.size() < 3) return;
-        const uint32_t base = static_cast<uint32_t>(out.vertices.size());
-        for (const Vertex& v : poly) out.vertices.push_back(v);
-        for (std::size_t i = 1; i + 1 < poly.size(); ++i) {
-            out.indices.push_back(base);
-            out.indices.push_back(base + static_cast<uint32_t>(i));
-            out.indices.push_back(base + static_cast<uint32_t>(i + 1));
-        }
-    };
-    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
-        std::vector<Vertex> rest = {m.vertices[m.indices[t]], m.vertices[m.indices[t + 1]],
-                                    m.vertices[m.indices[t + 2]]};
-        Real lo = 1e30, hi = -1e30;
-        for (const Vertex& v : rest) {
-            const Real fv = f(v.position);
-            lo = std::min(lo, fv);
-            hi = std::max(hi, fv);
-        }
-        // Peel off the piece below each line crossing the triangle, low to high.
-        for (Real k = std::floor(lo) + 1; k < hi - 1e-9; k += 1) {
-            if (k <= lo + 1e-9) continue;
-            std::vector<Vertex> below, above;
-            for (std::size_t i = 0; i < rest.size(); ++i) {
-                const Vertex& a = rest[i];
-                const Vertex& b = rest[(i + 1) % rest.size()];
-                const Real fa = f(a.position) - k, fb = f(b.position) - k;
-                if (fa <= 0) below.push_back(a);
-                if (fa >= 0) above.push_back(a);
-                if ((fa < 0 && fb > 0) || (fa > 0 && fb < 0)) {
-                    const Vertex x = lerpVertex(a, b, fa / (fa - fb));
-                    below.push_back(x);
-                    above.push_back(x);
-                }
-            }
-            emitPoly(below);
-            rest.swap(above);
-            if (rest.size() < 3) break;
-        }
-        emitPoly(rest);
-    }
-    m = std::move(out);
-}
 }  // namespace
 
 void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground, Real gridStep,
@@ -1196,9 +1146,60 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
     if (gridStep > Real(1e-6) && !m.indices.empty()) {
         const Real inv = Real(1) / gridStep;
         const Real ox = gridOrigin.x, oz = gridOrigin.y;
-        splitAlongLines(m, [=](const Vec3& p) { return (p.x - ox) * inv; });
-        splitAlongLines(m, [=](const Vec3& p) { return (p.z - oz) * inv; });
-        splitAlongLines(m, [=](const Vec3& p) { return (p.x - ox) * inv - (p.z - oz) * inv; });
+        // ONLY AS FINE AS THE GROUND NEEDS (ADR-0095). Cutting every draped mesh along every
+        // grid line shredded each lawn and path into cell-sized pieces -- at the baked 1 m cell,
+        // +950 MB of dressing on metro_planned. Instead a triangle is kept whole when the drawn
+        // ground under it (checked at every grid node of the cells it touches) lies within
+        // kDrapeTol of the plane through its corners, and otherwise split at the middle of its
+        // longest edge and checked again, down to the grid cell. Flat pads stay one piece, a
+        // gentle hill a few metre-scale pieces, a kerb crease its cell. Where neighbours split
+        // differently the seam is off the ground by at most kDrapeTol.
+        constexpr Real kDrapeTol = 0.03;
+        auto withinTol = [&](const Vertex& A, const Vertex& B, const Vertex& C) {
+            const Real ga = ground(A.position.x, A.position.z), gb = ground(B.position.x, B.position.z),
+                       gc = ground(C.position.x, C.position.z);
+            const Real x1 = B.position.x - A.position.x, z1 = B.position.z - A.position.z;
+            const Real x2 = C.position.x - A.position.x, z2 = C.position.z - A.position.z;
+            const Real det = x1 * z2 - x2 * z1;
+            if (std::fabs(det) < Real(1e-9)) return true;   // degenerate: nothing to follow
+            const Real bx = ((gb - ga) * z2 - (gc - ga) * z1) / det, bz = ((gc - ga) * x1 - (gb - ga) * x2) / det;
+            const Real mnx = std::min({A.position.x, B.position.x, C.position.x}), mxx = std::max({A.position.x, B.position.x, C.position.x});
+            const Real mnz = std::min({A.position.z, B.position.z, C.position.z}), mxz = std::max({A.position.z, B.position.z, C.position.z});
+            const long i0 = static_cast<long>(std::floor((mnx - ox) * inv)), i1 = static_cast<long>(std::ceil((mxx - ox) * inv));
+            const long j0 = static_cast<long>(std::floor((mnz - oz) * inv)), j1 = static_cast<long>(std::ceil((mxz - oz) * inv));
+            for (long j = j0; j <= j1; ++j)
+                for (long i = i0; i <= i1; ++i) {
+                    const Real x = ox + i * gridStep, z = oz + j * gridStep;
+                    if (std::fabs(ground(x, z) - (ga + bx * (x - A.position.x) + bz * (z - A.position.z))) > kDrapeTol) return false;
+                }
+            return true;
+        };
+        RenderMesh out;
+        out.materialIndex = m.materialIndex;
+        std::vector<std::array<Vertex, 3>> work;
+        for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3)
+            work.push_back({m.vertices[m.indices[t]], m.vertices[m.indices[t + 1]], m.vertices[m.indices[t + 2]]});
+        while (!work.empty()) {
+            std::array<Vertex, 3> tri = work.back();
+            work.pop_back();
+            auto len2 = [&](int u, int w) {
+                const Real dx = tri[u].position.x - tri[w].position.x, dz = tri[u].position.z - tri[w].position.z;
+                return dx * dx + dz * dz;
+            };
+            int e = 0;   // longest edge: (e, e+1)
+            for (int k = 1; k < 3; ++k) if (len2(k, (k + 1) % 3) > len2(e, (e + 1) % 3)) e = k;
+            if (len2(e, (e + 1) % 3) <= gridStep * gridStep || withinTol(tri[0], tri[1], tri[2])) {
+                const uint32_t base = static_cast<uint32_t>(out.vertices.size());
+                for (const Vertex& v : tri) out.vertices.push_back(v);
+                out.indices.insert(out.indices.end(), {base, base + 1, base + 2});
+                continue;
+            }
+            const int e1 = (e + 1) % 3, o = (e + 2) % 3;
+            const Vertex mid = lerpVertex(tri[e], tri[e1], Real(0.5));
+            work.push_back({tri[e], mid, tri[o]});
+            work.push_back({mid, tri[e1], tri[o]});
+        }
+        m = std::move(out);
     }
     for (Vertex& v : m.vertices)
         v.position.y += ground(v.position.x, v.position.z);
@@ -1292,8 +1293,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // downtown and every recipe's height lift read this one function; before,
     // it was sqrt(1 - d/innerRadius) in two places and 0 for every lot outside
     // the financial rim, which is why a "downtown" was seven buildings.
+    // From the NEAREST downtown: every financial hub zones a downtown of its own (DistrictMap), and
+    // measuring height from `center` alone left a second one — metro_planned's mountain city — a
+    // financial district of low-rise.
     auto corenessAt = [&](const Vec2& q) {
-        const Real d = (q - p.center).length();
+        Real d = (q - p.center).length();
+        for (const auto& h : p.hubs) if (h.second == 0) d = std::min(d, (q - h.first).length());
         const Real plateau = 0.5 * std::max(Real(1), p.innerRadius);
         const Real edge = std::max(p.midRadius, p.innerRadius + Real(1));
         if (d <= plateau) return Real(1);

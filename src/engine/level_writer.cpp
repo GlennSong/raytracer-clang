@@ -48,10 +48,11 @@ static json entityToJson(const Transform& t, const SourceSpec& spec,
         // it). The generator owns size and color, so neither is written here.
         ent["shape"] = spec.shape;
         json recipe = json::parse(spec.recipe);
-        if (spec.shape == "script") {
+        if (spec.shape == "script" || spec.shape == "road_signs") {
             // A Lua recipe entity (ADR-0042) reads its params (file/seed) from
             // the entity's top level, not a nested block — emit them flat so the
-            // round-trip reproduces the original `{shape:"script", file, seed}`.
+            // round-trip reproduces the original `{shape:"script", file, seed}`. Road signs
+            // (ADR-0110) are flat the same way: `{shape:"road_signs", file}`.
             for (auto it = recipe.begin(); it != recipe.end(); ++it)
                 ent[it.key()] = it.value();
         } else {

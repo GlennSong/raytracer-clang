@@ -87,4 +87,22 @@ LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& l
     return s;
 }
 
+LotGround lotGroundFor(std::shared_ptr<TerrainParams> params, unsigned seed) {
+    LotGround g;
+    g.params = params;
+    g.noise = std::make_shared<Noise>(seed);
+    auto tp0 = params;
+    auto nz = g.noise;
+    g.ground = [tp0, nz](double x, double z) { return terrainHeight(*tp0, *nz, x, z); };
+    g.groundWith = [tp0, nz](const std::vector<TerrainFlatten>& extra) {
+        auto tp = std::make_shared<TerrainParams>(*tp0);
+        tp->flatten.insert(tp->flatten.end(), extra.begin(), extra.end());
+        rebuildFlattenIndex(*tp);
+        return [tp, nz](Real x, Real z, Real dilate) {
+            return terrainHeight(*tp, *nz, x, z, static_cast<double>(dilate));
+        };
+    };
+    return g;
+}
+
 }  // namespace engine

@@ -5,6 +5,9 @@
 #include "../../profile.h"
 
 #include <algorithm>
+#include <cstring>
+#include <fstream>
+#include <filesystem>
 #include <chrono>
 #include <cmath>
 #include <cstdio>    // RT_CRASH_DEBUG contact telemetry
@@ -321,6 +324,8 @@ Real CitySim::brainUnit(Agent& a) {
 
 void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32_t seed) {
     nav_ = &graph;
+    // "There and back by car" for the whole build, once (engine::stronglyConnected).
+    const std::vector<int> buildCarComp = engine::stronglyConnected(graph, /*onFoot=*/false);
     agents_.clear();
     vehicles_.clear();
     sensed_.clear();
@@ -556,9 +561,11 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             // BOTH directions must route (the graph is directed — one-way ramps):
             // a valid home->work with no work->home used to retry a failing A*
             // every single tick once the agent wanted to come home.
+            // (There and back is one strongly connected component -- engine::stronglyConnected, computed
+            // once for the build, not two searches a try.)
             auto commutable = [&](int h, int w) {
-                return w != h && engine::findRoute(graph, h, w).valid() &&
-                       engine::findRoute(graph, w, h).valid();
+                return w != h && h >= 0 && w >= 0 &&
+                       buildCarComp[static_cast<std::size_t>(h)] == buildCarComp[static_cast<std::size_t>(w)];
             };
             bool ok = commutable(a.home, a.work);
             for (int tries = 0; tries < 8 && !ok && n > 1; ++tries) {
@@ -684,6 +691,34 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     measureCommute(graph);
 }
 
+
+namespace {
+// ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
+constexpr uint32_t kPopulationFormat = 1;   // bump when assignPlaces' rules or this record change
+struct Fnv {
+    uint64_t h = 1469598103934665603ull;
+    void bytes(const void* p, std::size_t n) {
+        const unsigned char* c = static_cast<const unsigned char*>(p);
+        for (std::size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ull; }
+    }
+    template <typename T> void pod(const T& v) { bytes(&v, sizeof v); }
+    void real(Real v) { const double d = static_cast<double>(v); pod(d); }
+    void vec(const engine::Vec2& v) { real(v.x); real(v.y); }
+};
+// One agent's assignment, as stored.
+struct PopRecord {
+    int32_t home, work, shop, restNode;
+    uint32_t homePlace, workPlace, shopPlace;
+    double homeDoor[2], workDoor[2], shopDoor[2], pos[2];
+    double heading[2], departHome, departWork, commuteSeconds;
+    uint8_t role, archetype, mode, indoors;
+};
+struct PopTail {
+    int32_t crossTownDrivers, driversWithJobs, busCommuters, busCommuteTried;
+    double driverCommute, medianAll, medianDrive, medianWalk;
+};
+}  // namespace
+
 void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     relationships_.clear();
     for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; }
@@ -699,12 +734,24 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     venues_.clear();
     if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
 
-    // The nav node a place routes through (nearest to its snapped entrance).
-    auto nodeOf = [&](PlaceId id) { return graph.nearestNode(places[id].entrance); };
-    auto commutable = [&](int h, int w) {
-        return w != h && engine::findRoute(graph, h, w).valid() &&
-               engine::findRoute(graph, w, h).valid();
+    // The nav node a place routes through (nearest to its snapped entrance), each looked up once:
+    // nearestNode scans every node, and the job search below asks it again and again.
+    std::vector<int> placeNode(places.places().size(), -2);
+    auto nodeOf = [&](PlaceId id) {
+        int& n = placeNode[static_cast<std::size_t>(id)];
+        if (n == -2) n = graph.nearestNode(places[id].entrance);
+        return n;
     };
+    // THERE AND BACK by car: two places are commutable exactly when they sit in the same strongly
+    // connected component of the road graph (findRoute's own link rules). This was two A* searches a
+    // candidate -- up to 24 candidates for each of 28,000 agents -- and on an island of separate street
+    // networks a failed search floods everything it can reach first: a warm island_8_nature load spent
+    // ~9 of its 10.5 minutes here before the first frame.
+    const std::vector<int> carComp = engine::stronglyConnected(graph, /*onFoot=*/false);
+    auto sameComp = [&](int u, int v) {
+        return u >= 0 && v >= 0 && carComp[static_cast<std::size_t>(u)] == carComp[static_cast<std::size_t>(v)];
+    };
+    auto commutable = [&](int h, int w) { return w != h && sameComp(h, w); };
 
     // A place's DOORSTEP: its sidewalk entrance nudged toward the building site,
     // so a resting body stands at the door — clearly off the carriageway.
@@ -728,6 +775,90 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // Scratch for the on-foot job search, hoisted: one allocation, not one
     // per walker.
     std::vector<std::pair<Real, PlaceId>> jobDist;
+    int crossTownDrivers = 0, driversWithJobs = 0, busCommuters = 0, busCommuteTried = 0;
+    Real driverCommute = 0;
+
+    // THE POPULATION CACHE: the key is everything the decisions below read.
+    popCache_ = PopulationCacheReport{};
+    std::string popPath;
+    std::vector<PopRecord> cached;
+    PopTail cachedTail{};
+    const bool verify = std::getenv("RT_POPULATION_VERIFY") != nullptr;
+    if (!populationCacheDir_.empty()) {
+        Fnv k;
+        k.pod(kPopulationFormat);
+        k.pod(static_cast<int32_t>(graph.nodeCount()));
+        for (const Vec2& p : graph.nodes) k.vec(p);
+        for (const engine::NavLink& L : graph.links) {
+            k.pod(L.from); k.pod(L.to); k.real(L.length); k.real(L.width); k.pod(L.klass); k.pod(L.walkable); k.pod(L.oneWay);
+        }
+        for (const Place& p : places.places()) {
+            k.pod(p.id); k.pod(p.type); k.vec(p.site); k.vec(p.entrance); k.pod(p.entranceLink); k.real(p.entranceT);
+            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours);
+        }
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            const Agent& a = agents_[i];
+            k.pod(a.uid); k.pod(a.brain); k.pod(a.archetype); k.pod(a.mode); k.real(a.speedFactor);
+            k.real(a.departHome); k.real(a.departWork);
+            k.pod(isBus(static_cast<int>(i))); k.pod(isTaxi(static_cast<int>(i)));
+        }
+        k.real(busCommuteShare_); k.real(busMaxWalk_); k.real(longCommuteShare_);
+        for (int r = 0; r < buses_.routeCount(); ++r) {
+            const BusRoute& br = buses_.route(r);
+            k.pod(br.regional); k.pod(br.network); k.real(br.pace);
+            for (int nd : br.pathNodes) k.pod(nd);
+            for (const BusStop& st : br.stops) { k.pod(st.node); k.pod(st.pathIndex); }
+        }
+        popCache_.used = true;
+        popCache_.key = k.h;
+        char name[40];
+        std::snprintf(name, sizeof name, "%016llx.pop", static_cast<unsigned long long>(k.h));
+        popPath = populationCacheDir_ + "/" + name;
+        std::ifstream in(popPath, std::ios::binary);
+        char magic[6] = {0};
+        uint32_t fmt = 0, count = 0;
+        uint64_t key = 0;
+        if (in && in.read(magic, 6) && std::string(magic, 6) == "RTPOP1" && in.read(reinterpret_cast<char*>(&fmt), 4) &&
+            fmt == kPopulationFormat && in.read(reinterpret_cast<char*>(&key), 8) && key == k.h &&
+            in.read(reinterpret_cast<char*>(&count), 4) && count == agents_.size()) {
+            cached.resize(count);
+            if (in.read(reinterpret_cast<char*>(cached.data()), static_cast<std::streamsize>(count * sizeof(PopRecord))) &&
+                in.read(reinterpret_cast<char*>(&cachedTail), sizeof cachedTail))
+                popCache_.hit = true;
+            else
+                cached.clear();
+        }
+    }
+    auto restore = [&](Agent& a, const PopRecord& r) {
+        a.home = r.home; a.work = r.work; a.shop = r.shop; a.restNode = r.restNode;
+        a.homePlace = r.homePlace; a.workPlace = r.workPlace; a.shopPlace = r.shopPlace;
+        a.homeDoor = Vec2(r.homeDoor[0], r.homeDoor[1]); a.workDoor = Vec2(r.workDoor[0], r.workDoor[1]);
+        a.shopDoor = Vec2(r.shopDoor[0], r.shopDoor[1]); a.pos = Vec2(r.pos[0], r.pos[1]);
+        a.heading = Vec2(r.heading[0], r.heading[1]); a.departHome = r.departHome; a.departWork = r.departWork;
+        a.commuteSeconds = r.commuteSeconds;
+        a.role = static_cast<Agent::Role>(r.role); a.archetype = static_cast<Agent::Mode>(r.archetype);
+        a.mode = static_cast<Agent::Mode>(r.mode); a.indoors = r.indoors != 0;
+    };
+    auto record = [](const Agent& a) {
+        PopRecord r;
+        std::memset(&r, 0, sizeof r);   // padding too: VERIFY compares records byte for byte
+        r.home = a.home; r.work = a.work; r.shop = a.shop; r.restNode = a.restNode;
+        r.homePlace = a.homePlace; r.workPlace = a.workPlace; r.shopPlace = a.shopPlace;
+        r.homeDoor[0] = a.homeDoor.x; r.homeDoor[1] = a.homeDoor.y; r.workDoor[0] = a.workDoor.x; r.workDoor[1] = a.workDoor.y;
+        r.shopDoor[0] = a.shopDoor.x; r.shopDoor[1] = a.shopDoor.y; r.pos[0] = a.pos.x; r.pos[1] = a.pos.y;
+        r.heading[0] = a.heading.x; r.heading[1] = a.heading.y; r.departHome = a.departHome; r.departWork = a.departWork; r.commuteSeconds = a.commuteSeconds;
+        r.role = static_cast<uint8_t>(a.role); r.archetype = static_cast<uint8_t>(a.archetype);
+        r.mode = static_cast<uint8_t>(a.mode); r.indoors = a.indoors ? 1 : 0;
+        return r;
+    };
+    if (popCache_.hit && !verify) {
+        for (std::size_t i = 0; i < agents_.size(); ++i) restore(agents_[i], cached[i]);
+        crossTownDrivers = cachedTail.crossTownDrivers; driversWithJobs = cachedTail.driversWithJobs;
+        busCommuters = cachedTail.busCommuters; busCommuteTried = cachedTail.busCommuteTried;
+        driverCommute = cachedTail.driverCommute;
+        commuteSecondsMedian_ = cachedTail.medianAll; commuteSecondsDrive_ = cachedTail.medianDrive;
+        commuteSecondsWalk_ = cachedTail.medianWalk;
+    } else {
     for (Agent& a : agents_) {
         // Home: deterministic pick from the agent's own brain bits (no rng
         // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
@@ -843,7 +974,43 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             // Keyed on ARCHETYPE, not mode: mode flips when a driver parks and
             // walks away, and archetype is what measureCommute samples -- branch
             // on the wrong one and the metric never moves.
-            if (a.archetype == Agent::Mode::Pedestrian) {
+            // BUS COMMUTERS (Glenn, 2026-09-23: "regional buses ... that go between towns").
+            // Nobody on foot could reach another town, so a regional bus would run empty.
+            // A level-set share of walkers (their own bits, no rng draw) work in ANOTHER
+            // street network -- the city from a town, a town from the city -- at the
+            // nearest of 24 sampled jobs there that the buses can take them to and back.
+            // On the day they walk to a stop, ride, change, and walk the last stretch.
+            if (a.archetype == Agent::Mode::Pedestrian && busCommuteShare_ > 0 && buses_.hasRegional()) {
+                uint32_t bc = a.brain * 0x85EBCA6Bu;
+                bc ^= bc >> 13; bc *= 0xC2B2AE35u; bc ^= bc >> 16;
+                if (static_cast<Real>(bc & 0x3FF) < busCommuteShare_ * 1024.0) {
+                    ++busCommuteTried;
+                    const int homeNet = buses_.networkOf(hn);
+                    const Vec2 homeAt = graph.nodes[static_cast<std::size_t>(hn)];
+                    std::vector<std::pair<Real, PlaceId>> far;
+                    for (int c = 0; c < 24; ++c) {
+                        uint32_t hh = bc + static_cast<uint32_t>(c) * 0x9E3779B9u;
+                        hh ^= hh >> 16; hh *= 0x7feb352dU; hh ^= hh >> 15;
+                        const PlaceId cand = jobs[hh % jobs.size()];
+                        const int net = buses_.networkOf(nodeOf(cand));
+                        if (net < 0 || net == homeNet) continue;
+                        far.push_back({(places[cand].site - homePos).lengthSquared(), cand});
+                    }
+                    std::sort(far.begin(), far.end());
+                    for (const auto& fc : far) {
+                        const Vec2 jobAt = graph.nodes[static_cast<std::size_t>(nodeOf(fc.second))];
+                        if (buses_.planTrip(homeAt, jobAt, busMaxWalk_).valid() &&
+                            buses_.planTrip(jobAt, homeAt, busMaxWalk_).valid()) {
+                            pick = fc.second;
+                            ++busCommuters;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (pick != kNoPlace) {
+                // a bus commuter: chosen above
+            } else if (a.archetype == Agent::Mode::Pedestrian) {
                 // A WALK WORTH TAKING (Glenn, 2026-09-17: "I haven't seen
                 // anybody in the suburbs"). Taking the NEAREST job put walkers
                 // ~70 m from home, so they reached work almost at once and sat
@@ -910,7 +1077,29 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     if (x.first != y.first) return x.first < y.first;
                     return x.second < y.second;
                 });
-                for (int c = 0; c < nc; ++c)
+                // CROSS-TOWN COMMUTERS (Glenn, 2026-09-22: "I'd like more traffic on the
+                // freeway"). Nearest-of-24 keeps car commutes short — measured on
+                // metro_lanes, 19 of 2279 drivers lived more than 1.5 km from work, and
+                // a ring freeway only pays on a trip across town. A level-set share of
+                // drivers (their own brain bits, no rng draw) instead takes the nearest
+                // sampled job at least kLongCommute away — the outskirts-to-downtown
+                // commute — and failing that the farthest one that routes.
+                constexpr Real kLongCommute = 1800.0;
+                uint32_t ct = a.brain * 0x9E3779B9u;   // own bits, decorrelated from the role roll
+                ct ^= ct >> 15; ct *= 0x2c1b3c6dU; ct ^= ct >> 12;
+                const bool crossTown =
+                    longCommuteShare_ > 0 &&
+                    static_cast<Real>(ct & 0x3FF) < longCommuteShare_ * 1024.0;
+                if (crossTown) {
+                    ++crossTownDrivers;
+                    for (int c = 0; c < nc && pick == kNoPlace; ++c)
+                        if (cands[c].first >= kLongCommute * kLongCommute &&
+                            commutable(hn, nodeOf(cands[c].second)))
+                            pick = cands[c].second;
+                    for (int c = nc - 1; c >= 0 && pick == kNoPlace; --c)
+                        if (commutable(hn, nodeOf(cands[c].second))) pick = cands[c].second;
+                }
+                for (int c = 0; c < nc && pick == kNoPlace; ++c)
                     if (commutable(hn, nodeOf(cands[c].second))) {
                         pick = cands[c].second;
                         break;
@@ -928,6 +1117,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.workPlace = pick;
                 a.work = nodeOf(pick);
                 a.workDoor = doorOf(pick);
+                if (a.archetype == Agent::Mode::Driver) {
+                    ++driversWithJobs;
+                    driverCommute += (places[pick].site - homePos).length();
+                }
                 {   // An errand stop: the nearest shop to HOME that is routable
                     // from work, so the last leg home is short. Deterministic:
                     // nearest first, ties by place id.
@@ -941,8 +1134,15 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                         if (d2 >= bestD2) continue;
                         const int sn = nodeOf(sp);
                         if (sn == a.work || sn == hn) continue;
-                        if (!engine::findRoute(graph, a.work, sn).valid()) continue;
-                        if (!engine::findRoute(graph, sn, hn).valid()) continue;
+                        // work -> shop -> home, with home -> work already there and back, closes a cycle: the
+                        // shop is in their component, exactly. (A job the car graph does not join to home --
+                        // a bus commuter's -- still asks the router.)
+                        if (sameComp(a.work, hn)) {
+                            if (!sameComp(a.work, sn)) continue;
+                        } else {
+                            if (!engine::findRoute(graph, a.work, sn).valid()) continue;
+                            if (!engine::findRoute(graph, sn, hn).valid()) continue;
+                        }
                         bestD2 = d2; a.shop = sn; a.shopPlace = sp; a.shopDoor = doorOf(sp);
                     }
                 }
@@ -989,6 +1189,37 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     }
 
     measureCommute(graph);
+    PopTail tail;
+    std::memset(&tail, 0, sizeof tail);
+    tail.crossTownDrivers = crossTownDrivers; tail.driversWithJobs = driversWithJobs;
+    tail.busCommuters = busCommuters; tail.busCommuteTried = busCommuteTried;
+    tail.driverCommute = driverCommute; tail.medianAll = commuteSecondsMedian_;
+    tail.medianDrive = commuteSecondsDrive_; tail.medianWalk = commuteSecondsWalk_;
+    if (popCache_.hit && verify) {   // decided again: does the cache agree, field for field?
+        int bad = 0;
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            const PopRecord now = record(agents_[i]);
+            if (std::memcmp(&cached[i], &now, sizeof(PopRecord)) != 0) ++bad;
+        }
+        if (std::memcmp(&cachedTail, &tail, sizeof tail) != 0) ++bad;
+        popCache_.mismatches = bad;
+        std::fprintf(stderr, "[citysim] population cache VERIFY: %d of %zu records differ\n", bad, agents_.size());
+    } else if (popCache_.used) {
+        std::error_code ec;
+        std::filesystem::create_directories(populationCacheDir_, ec);
+        const std::string tmp = popPath + ".tmp";
+        std::ofstream out(tmp, std::ios::binary);
+        const uint32_t fmt = kPopulationFormat, count = static_cast<uint32_t>(agents_.size());
+        out.write("RTPOP1", 6);
+        out.write(reinterpret_cast<const char*>(&fmt), 4);
+        out.write(reinterpret_cast<const char*>(&popCache_.key), 8);
+        out.write(reinterpret_cast<const char*>(&count), 4);
+        for (const Agent& a : agents_) { const PopRecord r = record(a); out.write(reinterpret_cast<const char*>(&r), sizeof r); }
+        out.write(reinterpret_cast<const char*>(&tail), sizeof tail);
+        out.close();
+        if (out) { std::filesystem::rename(tmp, popPath, ec); popCache_.saved = !ec; }
+    }
+    }   // decided (not read from the cache)
 
     // Seed the surface-level social graph: agents sharing a workplace are
     // coworkers; those sharing a home are neighbors (housemates).
@@ -1038,6 +1269,12 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             }
         }
     }
+    commuteStats_.crossTownDrivers = crossTownDrivers;
+    commuteStats_.busCommuters = busCommuters;
+    commuteStats_.busCommuteTried = busCommuteTried;
+    if (busCommuteTried) buses_.resetPlanStats();   // the choosing is not ridership
+    commuteStats_.driversWithJobs = driversWithJobs;
+    commuteStats_.meanDriverCommute = driversWithJobs ? driverCommute / driversWithJobs : 0;
 }
 
 // MEDIAN COMMUTE, in sim-seconds. Sampled (every 64th commuter) because each
@@ -1408,18 +1645,100 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
         const engine::NavLink& out = nav_->links[r.links.front()];
         return out.from == in.to && out.to == in.from;
     };
+    // A DEAD END: the only way out is back along the link it arrived on, so every route reverses
+    // it and the scan below would search the WHOLE graph (thousands of A* runs, a second of one
+    // step in the morning rush) only to take its fallback -- the first valid goal. Take that
+    // goal at once: the same trip, without the search.
+    bool forcedUTurn = false;
+    if (a.arrivedLink >= 0 && static_cast<std::size_t>(from) < nav_->outLinks.size()) {
+        const engine::NavLink& in = nav_->links[static_cast<std::size_t>(a.arrivedLink)];
+        forcedUTurn = true;
+        for (int li : nav_->outLinks[static_cast<std::size_t>(from)]) {
+            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+            if (a.mode == Agent::Mode::Pedestrian &&
+                (L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp || !L.walkable))
+                continue;
+            if (!(L.from == in.to && L.to == in.from)) { forcedUTurn = false; break; }
+        }
+    }
     // Scan EVERY node from a random start, so a non-reversing goal is found
     // whenever one exists — dice rolls occasionally picked only U-turn goals,
     // and each of those flipped the car to the other side of the road in place.
+    // (A cap on the scan was tried: it brought those flips back.) The searches
+    // price the U-turn link like startTrip's bay exit does, so a route takes
+    // the way round the block whenever there is one and the first reachable
+    // goal nearly always serves: one search, not thousands.
+    int uturn = -1;
+    if (a.arrivedLink >= 0 && static_cast<std::size_t>(a.arrivedLink) < twinOf_.size())
+        uturn = twinOf_[static_cast<std::size_t>(a.arrivedLink)];
+    if (uturn >= 0 && static_cast<std::size_t>(uturn) < departScale_.size()) departScale_[static_cast<std::size_t>(uturn)] = 50.0;
+    else uturn = -1;
+    struct RestoreScale {   // however the scan ends
+        std::vector<Real>& s; int li; bool& priced;
+        ~RestoreScale() { if (li >= 0) s[static_cast<std::size_t>(li)] = 1.0; priced = false; }
+    } restore{departScale_, uturn, wanderPriced_};
+    wanderPriced_ = uturn >= 0;
     int start = static_cast<int>(tripRnd(a) % static_cast<uint32_t>(n));
     int fallback = -1;
+    // After the first unreachable goal, flood what IS reachable once and skip the rest without
+    // searching: a failed A* explores everything reachable before it gives up, the costliest
+    // search there is, and an agent on a scrap of network met dozens of them per trip.
+    std::vector<char> reach;
+    // ...and after a run of goals that are reachable only by turning back, flood once what lies AHEAD
+    // (from `from` by any exit but the one it arrived on, never through `from` again) and search only
+    // that: an agent whose other exit is a dead-end stub routed all 2313 nodes of island_8_saltwood
+    // in one step (357 ms, the hitch Glenn felt driving the pass) to take its fallback.
+    std::vector<char> ahead;
+    int reversing = 0;
+    auto floodAhead = [&] {
+        std::vector<char> seen(static_cast<std::size_t>(n), 0);
+        std::vector<int> stack;
+        const bool walk = a.mode == Agent::Mode::Pedestrian;
+        auto usable = [&](const engine::NavLink& L) {
+            return !walk || (L.klass != engine::RoadClass::Freeway && L.klass != engine::RoadClass::Ramp && L.walkable);
+        };
+        const engine::NavLink* in = a.arrivedLink >= 0 ? &nav_->links[static_cast<std::size_t>(a.arrivedLink)] : nullptr;
+        for (int li : nav_->outLinks[static_cast<std::size_t>(from)]) {
+            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+            if (!usable(L) || (in && L.from == in->to && L.to == in->from)) continue;
+            if (!seen[static_cast<std::size_t>(L.to)]) { seen[static_cast<std::size_t>(L.to)] = 1; stack.push_back(L.to); }
+        }
+        seen[static_cast<std::size_t>(from)] = 1;   // never back through the start
+        while (!stack.empty()) {
+            const int v = stack.back(); stack.pop_back();
+            for (int li : nav_->outLinks[static_cast<std::size_t>(v)]) {
+                const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+                if (!usable(L) || seen[static_cast<std::size_t>(L.to)]) continue;
+                seen[static_cast<std::size_t>(L.to)] = 1; stack.push_back(L.to);
+            }
+        }
+        seen[static_cast<std::size_t>(from)] = 0;
+        return seen;
+    };
     for (int k = 0; k < n; ++k) {
         int goal = (start + k) % n;
         if (goal == from) continue;
+        if (!reach.empty() && !reach[static_cast<std::size_t>(goal)]) continue;
+        if (!ahead.empty() && !ahead[static_cast<std::size_t>(goal)]) continue;
         engine::Route r = engine::findRoute(*nav_, from, goal,
-                                            a.mode == Agent::Mode::Pedestrian);
-        if (!r.valid()) continue;
-        if (reversesArrival(r)) { if (fallback < 0) fallback = goal; continue; }
+                                            a.mode == Agent::Mode::Pedestrian,
+                                            uturn >= 0 ? &departScale_ : nullptr);
+        if (!r.valid()) {
+            if (reach.empty()) reach = engine::reachableFrom(*nav_, from, a.mode == Agent::Mode::Pedestrian);
+            continue;
+        }
+        if (reversesArrival(r) && !forcedUTurn) {
+            if (fallback < 0) fallback = goal;
+            if (++reversing == 16 && ahead.empty()) {
+                ahead = floodAhead();
+                if (std::find(ahead.begin(), ahead.end(), 1) == ahead.end()) break;   // nothing ahead: the fallback it is
+                // every goal ahead HAS a way on without turning back, but a long one: at 50x the U-turn
+                // still won A* each time (1176 searches in one step). Price it out; the next goal goes on.
+                if (uturn >= 0) departScale_[static_cast<std::size_t>(uturn)] = 1e6;
+            }
+            if (reversing >= 64) break;   // bounded, whatever the graph: take the fallback
+            continue;
+        }
         startTrip(a, from, goal, fromRest);
         return a.moving;
     }
@@ -1497,6 +1816,14 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
                         a.activity = s.activity;
                         return true;    // walking to the stop IS the trip now
                     }
+                } else {
+                    // ALREADY AT THE STOP -- the usual case after a change of bus at a
+                    // shared stop. This fell through to walking the whole trip, which
+                    // between towns there is no walk for: wait here (awaitingRide
+                    // holds them).
+                    a.indoors = false;
+                    a.activity = s.activity;
+                    return true;
                 }
                 buses_.stopWaiting(busSelf);   // could not reach the stop
             }
@@ -1631,6 +1958,9 @@ CitySim::GoalFire CitySim::tryGoalEvent(Agent& a, GoalEvent event) {
         if (a.archetype == Agent::Mode::Driver && !a.far() && !isBus(indexOf(a)) &&
             !launchClear(a, from))
             return GoalFire::Blocked;
+        if (!isBus(indexOf(a)) && departuresThisStep_ >= kDeparturesPerStep)
+            return GoalFire::Blocked;   // the step's routing budget is spent: leave next tick
+        ++departuresThisStep_;
         a.goal = next;
         a.goalHours = 0;
         startGoalTrip(a, from, /*fromRest=*/true);
@@ -1711,8 +2041,11 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
             }
             // Archetype, for the same reason as tryGoalEvent above.
             if (a.archetype != Agent::Mode::Driver || a.far() ||
-                isBus(indexOf(a)) || launchClear(a, from))
+                isBus(indexOf(a)) || launchClear(a, from)) {
+                if (!isBus(indexOf(a)) && departuresThisStep_ >= kDeparturesPerStep) return;   // retries next tick
+                if (!isBus(indexOf(a))) ++departuresThisStep_;
                 startGoalTrip(a, from, /*fromRest=*/true);
+            }
         }
         return;
     }
@@ -2023,12 +2356,32 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     if (buses_.empty()) return;
     if (busTable_.stateCount() == 0) busTable_ = busGoals();
     // Buses come off the DRIVER pool, spread by index like the cabs, and are
-    // dealt round-robin across the routes so no route is left without one.
+    // dealt across the routes BY LAP TIME -- one each first, then to whichever
+    // route is furthest short of its share -- so every route runs about the same
+    // headway. Round-robin gave a town's 3 km loop as many buses as the 25 km
+    // regional one once places out along the freeway had routes of their own.
+    const int R = buses_.routeCount();
+    std::vector<Real> lapShare(static_cast<std::size_t>(R), 0);
+    {
+        Real total = 0;
+        for (int r = 0; r < R; ++r) {
+            const BusRoute& br = buses_.route(r);
+            lapShare[static_cast<std::size_t>(r)] = buses_.rideSeconds(r, 0, 0) > 0 ? buses_.rideSeconds(r, 0, 0) : br.loopLength;
+            total += lapShare[static_cast<std::size_t>(r)];
+        }
+        for (Real& l : lapShare) l = total > 0 ? l / total : 1.0 / R;
+    }
+    std::vector<int> dealt(static_cast<std::size_t>(R), 0);
     int made = 0;
     for (std::size_t i = 0; i < agents_.size() && made < busCount; ++i) {
         if (agents_[i].archetype != Agent::Mode::Driver) continue;
         if (isTaxi(static_cast<int>(i))) continue;   // a cab is not also a bus
-        const int r = made % buses_.routeCount();
+        int r = made < R ? made : 0;
+        if (made >= R)
+            for (int q = 1; q < R; ++q)
+                if (lapShare[static_cast<std::size_t>(q)] * (made + 1) - dealt[static_cast<std::size_t>(q)] >
+                    lapShare[static_cast<std::size_t>(r)] * (made + 1) - dealt[static_cast<std::size_t>(r)]) r = q;
+        ++dealt[static_cast<std::size_t>(r)];
         busRoute_[i] = r;
         agents_[i].goal = busTable_.entry();
         agents_[i].goalHours = 0;
@@ -2143,6 +2496,30 @@ Real CitySim::busDistanceToStop(const Agent& a) const {
 // links "short of the node on the last link" was 2.4 m: the bus dwelt up to
 // 40 s inside the junction (Glenn, 2026-09-19: "That creates an instant
 // traffic jam"). Never behind the previous junction on its route.
+Real CitySim::busStandBackAt(int inLink) const {
+    if (!nav_ || inLink < 0 || inLink >= nav_->linkCount()) return 0;
+    const int node = nav_->links[static_cast<std::size_t>(inLink)].to;
+    Real approach = 0;
+    int li = inLink;
+    for (int guard = 0; guard < 16 && li >= 0 && approach < 80.0; ++guard) {
+        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+        approach += L.length;
+        if (nav_->isJunction(L.from)) break;
+        // the single street link arriving at a plain node (not the way back)
+        int prev = -1;
+        for (int k = 0; k < nav_->linkCount() && prev < 0; ++k) {
+            const engine::NavLink& P = nav_->links[static_cast<std::size_t>(k)];
+            if (P.to == L.from && P.from != L.to) prev = k;
+        }
+        li = prev;
+    }
+    Real busLen = 12.0;
+    for (int i = 0; i < static_cast<int>(agents_.size()); ++i)
+        if (isBus(i)) { busLen = vehicleLength(i); break; }
+    const Real want = junctionRadius(node) + kCrosswalkFarEdge + kStopLineMargin + 0.5 * busLen;
+    return std::min(want, approach * 0.6);
+}
+
 Real CitySim::busStandBack(const Agent& a) const {
     if (a.route.links.empty()) return 0;
     const int legs = static_cast<int>(a.route.links.size());
@@ -2353,6 +2730,8 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         a.targetBay = -1;
     }
     a.tripGoal = goal;
+    a.stopAtDist = -1;   // an ordinary trip ends at its node
+
     // DRIVE TO A SPACE NEAR THE DESTINATION: reserve the nearest free bay to
     // it and end the route AT that bay (its street, stopping at its station).
     // The nearest few free bays, tried in order: a bay whose approach would
@@ -2375,7 +2754,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
                                      : -1;
                 if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 50.0;
                 r = engine::findRoute(*nav_, origin, BL.from, false,
-                                      twin >= 0 ? &departScale_ : nullptr);
+                                      (twin >= 0 || wanderPriced_) ? &departScale_ : nullptr);
                 if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 1.0;
                 if (!r.valid()) continue;
                 const engine::NavLink& last =
@@ -2402,7 +2781,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 50.0;
         a.route = engine::findRoute(*nav_, origin, goal,
                                     a.mode == Agent::Mode::Pedestrian,
-                                    twin >= 0 ? &departScale_ : nullptr);
+                                    (twin >= 0 || wanderPriced_) ? &departScale_ : nullptr);
         if (twin >= 0) departScale_[static_cast<std::size_t>(twin)] = 1.0;
     }
     a.leg = 0;
@@ -2564,15 +2943,10 @@ void CitySim::refreshPose(Agent& a) {
         // node elevations along the link; layer keeps legacy bridges lifted
         const engine::NavLink& EL = nav_->links[li];
         const Real et = L > 1e-9 ? s / L : 0.0;
-        if (EL.elevAbsolute) {
-            a.deckY = EL.elevA + (EL.elevB - EL.elevA) * et;
-            a.elevation = a.deckY;   // sensors gate on RELATIVE height; an
-                                     // absolute deck vs a street reads > 3 m
-        } else {
-            a.deckY = -1e30;
-            a.elevation = EL.layer * kLayerClearance +
-                          EL.elevA + (EL.elevB - EL.elevA) * et;
-        }
+        // one convention for the same-level tests: height ABOVE THE GROUND on every link (NavLink::aboveA/B,
+        // resolved at load); the absolute Y only draws the car on a deck
+        a.elevation = EL.aboveA + (EL.aboveB - EL.aboveA) * et;
+        a.deckY = EL.elevAbsolute ? EL.elevA + (EL.elevB - EL.elevA) * et : Real(-1e30);
         a.grade = (EL.elevB - EL.elevA) / std::max(Real(1), EL.length);
     }
 
@@ -2829,6 +3203,16 @@ Real CitySim::stopLineBack(const Agent& a, const JunctionAhead& ja) const {
 // the box-occupancy / turn-yield / exit-room scan. Returns the speed target
 // after those caps plus the stop line the hard clamp in advance() holds at.
 // Pure query: no rng draws, no agent mutation.
+Move CitySim::moveFor(const Agent& a, int li) const {
+    for (std::size_t k = static_cast<std::size_t>(std::max(0, a.leg)); k + 1 < a.route.links.size(); ++k)
+        if (a.route.links[k] == li) return moveOf(nav_->direction(li), nav_->direction(a.route.links[k + 1]));
+    return Move::Straight;   // its last leg (or not on its route): straight on
+}
+
+SignalState CitySim::signalFor(const Agent& a, int li) const {
+    return signals_.stateFor(li, moveFor(a, li));
+}
+
 CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                                                 Real target) const {
     JunctionGate gate;
@@ -2879,7 +3263,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
         // remains as bonus all-red scramble time.) Turning cars crossing the
         // walkway on green brake for peds via the vision wedge, as before.
         bool signalHolds =
-            car ? signals_.stateForLink(li) != SignalState::Green
+            car ? signalFor(a, li) != SignalState::Green
                 : !(signals_.stateForLink(li) == SignalState::Green ||
                     signals_.walkRemainingAt(toNode) >= 6.5);
         if (distToLine >= 0 && distToLine < kSignalApproach && signals_.hasSignal(li) &&
@@ -2914,6 +3298,8 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
             Vec2 jc = nav_->nodes[toNode];
             Real jr = junctionRadius(toNode);
             Real range = jr + 6.0;
+            // on its green ARROW a left turn is protected: everything it would cross is red
+            const bool protectedTurn = turning && signals_.protectedLeft(li) && moveFor(a, li) == Move::Left;
             // Gridlock escape: held this long by nothing but STALLED occupants, a
             // real driver inches through the box. Staggered per agent (brain bits)
             // so a ring of mutual waiters releases one at a time, deterministic.
@@ -2941,7 +3327,7 @@ CitySim::JunctionGate CitySim::junctionSpeedCap(const Agent& a, int li,
                     break;
                 }
                 // 2: turn yield against oncoming approach traffic.
-                if (!turning || along >= -0.3) continue;
+                if (!turning || along >= -0.3 || protectedTurn) continue;
                 if (b.speed > 0.5) { yieldAtLine = true; break; }  // live traffic
                 // A gridlocked car stops waiting on anything STALLED — including
                 // the stopped-turner tie-break below, whose cross-junction chains
@@ -3276,7 +3662,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     if (car) {
         const int jli = gate.approachLink;
         const bool redAhead = jli >= 0 && signals_.hasSignal(jli) &&
-                              signals_.stateForLink(jli) != SignalState::Green;
+                              signalFor(a, jli) != SignalState::Green;
         const bool nearJunc = gate.node >= 0 && gate.distToNode < kSignalApproach + 12.0;
         // The gridlock clock also runs for a WEDGE-PINNED car ANYWHERE on the
         // road — a wreck pile at a link ENTRANCE (post-crash bodies
@@ -3310,7 +3696,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         const int toNode = gate.node;
         const int jli = gate.approachLink;
         bool redAhead = signals_.hasSignal(jli) &&
-                        (car ? signals_.stateForLink(jli) != SignalState::Green
+                        (car ? signalFor(a, jli) != SignalState::Green
                              : !(signals_.stateForLink(jli) == SignalState::Green ||
                                  signals_.walkRemainingAt(toNode) >= 6.5));
         // A car that the cap has just brought to the line can overshoot it by a
@@ -3551,6 +3937,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             a.leg = legCount;
     }
 
+    // A DIRECTOR'S ERRAND ENDS WHERE IT WAS SENT (ADR-0091), part-way down the
+    // last link rather than at its node — the difference between arriving at
+    // the car and arriving twenty metres from it.
+    if (a.stopAtDist >= 0 && a.leg == legCount - 1 && a.distOnLeg >= a.stopAtDist)
+        a.leg = legCount;
+
     if (a.leg >= legCount) {
         arriveOrChain(a, a.speed);   // pass the still-rolling speed: a chain keeps it
     } else {
@@ -3675,8 +4067,17 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     int lastLink = a.route.links.back();
     // Rest at the ARRIVAL link's elevation — zeroing it parked bridge-deck
     // arrivals at ground level, under their own road.
-    a.elevation = nav_->links[lastLink].layer * kLayerClearance +
-                  nav_->links[lastLink].elevB;
+    a.elevation = nav_->links[lastLink].aboveB;
+    // A DIRECTED AGENT ARRIVES AND WAITS (ADR-0091). Its plan belongs to the
+    // director, so the goal table does not get to chain the next trip — it
+    // stands where it was sent until told otherwise. restNode still moves, so
+    // `direct off` hands the schedule an agent standing somewhere real.
+    if (a.directed) {
+        a.restNode = nav_->links[static_cast<std::size_t>(lastLink)].to;
+        a.arrivedLink = lastLink;
+        a.state = Agent::State::Resting;
+        return;
+    }
     const GoalTable& t = tableFor(a);
     int next = t.onEvent(a.goal, GoalEvent::Arrived);
     if (a.mode == Agent::Mode::Driver && next >= 0 &&
@@ -4084,7 +4485,7 @@ void CitySim::computeCarWedge() {
                 const int bLi = b.route.links[b.leg];
                 const bool redBound =
                     signals_.hasSignal(bLi) &&
-                    signals_.stateForLink(bLi) != SignalState::Green &&
+                    signalFor(b, bLi) != SignalState::Green &&
                     b.distOnLeg < nav_->links[bLi].length - 3.0;
                 if (redBound) continue;           // the signal will stop them
             }
@@ -4112,6 +4513,7 @@ void CitySim::computeCarWedge() {
 }
 
 void CitySim::step(Real dt, Real hoursPerSecond) {
+    departuresThisStep_ = 0;
     // Cadence gate. Traffic is not physics: agents follow lanes, so advancing
     // by a bigger dt costs precision, not correctness. Bank the time and tick
     // when the period is due; everything downstream (including the far tier's
@@ -4211,7 +4613,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         if (a.playerControlled || a.released) continue;
         // A RIDER does not re-plan: its GoTo state would see !moving and
         // relaunch the trip on foot every tick, walking it out of the car.
-        if (!riding(ai) && !awaitingRide(ai)) goalThink(a, dt * hoursPerSecond);
+        // A DIRECTED agent's plan is the director's (ADR-0091): no schedule.
+        if (!a.directed && !riding(ai) && !awaitingRide(ai))
+            goalThink(a, dt * hoursPerSecond);
         // A departure moved the pose (idle verge -> lane start): re-hash NOW so
         // every later grid consumer this step sees current positions.
         grid_.place(static_cast<int>(i), a.pos);
@@ -4263,6 +4667,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     computeGaps();
     computeCarWedge();   // S7 senses: bodies in the forward corridor
     phaseMark(phase_.gaps);
+    int tetherHeldThisTick = 0;   // stranded by the leash, city-wide
     for (int ai : active_) {
         Agent& a = agents_[ai];
         const std::size_t i = static_cast<std::size_t>(ai);
@@ -4287,11 +4692,16 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             if (std::sqrt(dx * dx + dy * dy) > a.tetherLead) {
                 a.speed = 0;
                 a.state = Agent::State::Waiting;
+                ++tetherHeldThisTick;
                 continue;
             }
         }
         if (a.moving) { advance(a, dt, gaps_[i], minGaps_[i]); advanced[i] = 1; }
     }
+    // Keep the flags: "did this agent get stepped" is the question a director
+    // asks when its agent stands still (ADR-0091).
+    advancedLast_ = advanced;
+    tetherHeld_ = tetherHeldThisTick;
 
     // FENDER-BENDERS (device: cars must collide, not ghost). Ambient cars are
     // planner-owned (ADR-0062) — no rigid bodies between them — so contact is
@@ -4839,6 +5249,13 @@ void CitySim::tierPass(Real hoursPerSecond) {
             Agent& a = agents_[i];
             if (a.tier != Agent::Tier::V) continue;
             if (a.playerControlled || a.released || a.tethered) continue;
+            // NEVER A BUS, NOR ANYONE MID-JOURNEY ON ONE. A bus is the city's shared
+            // state: frozen out past the bubble it stranded every rider waiting along
+            // its loop, and the riders aboard with it -- measured on metro_planned, 38 of
+            // 40 buses far, 5 moved in five minutes, and the regional loop (18 km, nearly
+            // all of it far) carried nobody. A rider rebuilt from their schedule on waking
+            // would also lose the ride. Forty buses ticking at 1 Hz cost nothing.
+            if (isBus(static_cast<int>(i)) || buses_.tripOf(static_cast<int>(i))) continue;
             const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
             if (dx * dx + dy * dy <= dormantRadius * dormantRadius) continue;
             a.tier = Agent::Tier::D;
@@ -5002,7 +5419,8 @@ void CitySim::tickV(int i, Real hoursPerSecond) {
     a.vLastTick = simSeconds_;
     if (dts <= 1e-9) return;
     if (a.playerControlled || a.released) return;
-    if (!a.moving && !riding(i) && !awaitingRide(i)) goalThink(a, dts * hoursPerSecond);
+    if (!a.directed && !a.moving && !riding(i) && !awaitingRide(i))
+        goalThink(a, dts * hoursPerSecond);
     if (a.moving) vAdvance(a, dts);
     grid_.place(i, a.pos);   // the far tier re-hashes on its tick, not per step
 }

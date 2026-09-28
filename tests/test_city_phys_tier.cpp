@@ -80,7 +80,7 @@ TEST_CASE(city_phys_tier_soak) {
     world.add<RoadEntity>(world.create(), cityGrid());
 
     CityRenderParams params;
-    params.cars = 24;
+    params.cars = 40;   // busy near the player (24 had drifted to 5 within the ring)
     params.pedestrians = 0;
     params.seed = 7;
     params.wander = true;   // perpetual trips: drivers keep moving all soak
@@ -113,6 +113,8 @@ TEST_CASE(city_phys_tier_soak) {
 
     const Real dt = 1.0 / 60.0;
     std::size_t maxPossessed = 0;
+    int maxInRing = 0;
+    long ticksShort = 0;   // ticks the tier held fewer than the ring offered (beyond one acquisition's lag)
     Real minUp = 1.0, worstDiv = 0.0;
     long ticksHeld = 0, ticksAbove3 = 0;
     Real worstExcursion = 0;                  // longest continuous d>3 spell (s)
@@ -157,6 +159,16 @@ TEST_CASE(city_phys_tier_soak) {
         }
         age.swap(next);
         maxPossessed = std::max(maxPossessed, bridge.possessed().size());
+        // The tier possesses every ELIGIBLE car in its ring, up to its budget: count the moving, near-tier
+        // drivers inside the 90 m ring (the 1.3x drop band keeps a few more held past it).
+        int inRing = 0;
+        for (const Agent& a : city.sim().agents()) {
+            if (a.mode != Agent::Mode::Driver || !a.moving || a.released || a.far()) continue;
+            const Real dx = a.pos.x - 120, dz = a.pos.y - 120;
+            if (dx * dx + dz * dz < 90 * 90) ++inRing;
+        }
+        maxInRing = std::max(maxInRing, inRing);
+        if (static_cast<int>(bridge.possessed().size()) < std::min(inRing, 12) - 1) ++ticksShort;
     }
 
     // Walk the player out of the city: every body must be released.
@@ -174,7 +186,14 @@ TEST_CASE(city_phys_tier_soak) {
         "fracAbove3=%.3f worstSpell=%.1fs snaps=%d released=%zu\n",
         maxPossessed, minUp, worstDiv, fracAbove3, worstExcursion,
         bridge.snapCount(), bridge.possessed().size());
-    CHECK(maxPossessed >= 6);          // the tier engages on a busy grid
+    std::printf("    [tier] eligible in the ring at most %d; ticks holding fewer than offered: %ld\n", maxInRing, ticksShort);
+    // The tier engages on a busy grid. This used to be only `maxPossessed >= 6` with 24 cars -- a claim about
+    // TRAFFIC (how many cars wander within 90 m of the player), which drifted to 5 as the drivers' routing
+    // changed while the tier kept possessing every car it was offered. Now: the grid is busy (40 cars), and the
+    // tier holds what its ring offers, up to its budget.
+    CHECK(maxInRing >= 6);             // the scenario really is busy near the player
+    CHECK(maxPossessed >= 6);          // the tier engages
+    CHECK(ticksShort < 60);            // and keeps up with its ring (under a second short, all soak)
     CHECK(maxPossessed <= 12);         // and respects its budget
     CHECK(minUp > 0.5);                // zero flips (plan gate)
     // "No visible rubber-band", measured against what a PLAYER can see —

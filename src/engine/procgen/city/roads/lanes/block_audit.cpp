@@ -54,7 +54,8 @@ std::vector<Ring> pavementHoles(const Result& r, double minArea) {
     return holes;
 }
 
-std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth) {
+std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth,
+                                   const std::vector<Ring>* water) {
     std::vector<Poly2> blocks; std::vector<Ring> rings;
     for (const Ring& h : holes) {
         if (insetBy <= 0) { rings.push_back(h); continue; }
@@ -65,6 +66,16 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
         // would then keep 7 m verges as blocks.
         const double stripHalf = std::max(3.0, (minWidth > 0 ? minWidth : 2.0 * (insetBy + 3.0)) * 0.5 - insetBy);
         for (const Polygon2& q : offsetSet(fromRing(h), -insetBy)) if (std::fabs(ringArea(q.outer)) >= 135.0 && !offsetSet(PolySet{q}, -stripHalf).empty()) rings.push_back(q.outer);
+    }
+    // THE WATER (rivers and lakes, ADR-0104): a block the river runs through is two blocks, one each
+    // side; a block only grazed by it loses the wet strip. Pieces under 135 m2 are not blocks.
+    if (water && !water->empty()) {
+        const PolySet wet = unionRings(*water);
+        std::vector<Ring> dry;
+        for (const Ring& h : rings)
+            for (const Polygon2& q : differenceSets(fromRing(h), wet))
+                if (std::fabs(ringArea(q.outer)) >= 135.0) dry.push_back(q.outer);
+        rings = std::move(dry);
     }
     for (const Ring& h : rings) {
         Ring closed = h; closed.push_back(h.front());   // DP wants an open run: split the loop at its first point
@@ -88,12 +99,33 @@ namespace {
 // A flatten footprint shrunk by its own feather and clipped to the block, so the graded plane plus its
 // ramp never leaves the block: the block edge is the back of the sidewalk, and anything past it lifts
 // pavement (the flatten outranks the road). Returns the pieces (a footprint can split).
-PolySet blocksInset(const std::vector<Poly2>& blocks, double falloff) {   // every block, inset by the feather, as one set: no per-lot lookup (a concave block's centroid can lie outside it)
-    PolySet all; for (const Poly2& b : blocks) all = unionSets(all, offsetSet(fromRing(b), -falloff)); return all;
+// Every block inset by the feather, as its pieces with their bounds -- the clip set a footprint is cut to.
+// (A concave block's centroid can lie outside it, so there is no per-lot "its block" lookup.) The pieces are
+// NOT unioned: blocks are disjoint and an inset of a simple ring has no holes, and Clipper's NonZero clip
+// already treats a list of pieces as their union. The first cut unioned them one block at a time
+// (quadratic) and then cut every lot against all of them at once: on island_8_nature's 12,856 lots that
+// was about half of a 100 s load. A footprint is now cut against the pieces its bounds touch -- the same
+// region, since the rest cannot overlap it.
+struct BlockInset { PolySet pieces; std::vector<Box2> box; };
+BlockInset blocksInset(const std::vector<Poly2>& blocks, double falloff) {
+    BlockInset in;
+    for (const Poly2& b : blocks)
+        for (Polygon2& pg : offsetSet(fromRing(b), -falloff)) { in.box.push_back(bounds(pg)); in.pieces.push_back(std::move(pg)); }
+    return in;
 }
-std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, const PolySet& blocks, double falloff, bool shrinkSelf = true) {
+std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, const BlockInset& blocks, double falloff, bool shrinkSelf = true) {
     Ring ring; for (const Vec3& v : polygon) ring.emplace_back(v.x, v.z);
-    PolySet ps = intersectSets(shrinkSelf ? offsetSet(fromRing(ring), -falloff) : fromRing(ring), blocks);   // the blocks inset too: a terrace wider than its block would otherwise feather from the block line outward
+    const PolySet self = shrinkSelf ? offsetSet(fromRing(ring), -falloff) : fromRing(ring);
+    if (self.empty()) return {};
+    const Box2 sb = bounds(self);
+    PolySet near;
+    for (std::size_t i = 0; i < blocks.pieces.size(); ++i) {
+        const Box2& b = blocks.box[i];
+        if (b.maxX < sb.minX || b.minX > sb.maxX || b.maxY < sb.minY || b.minY > sb.maxY) continue;
+        near.push_back(blocks.pieces[i]);
+    }
+    if (near.empty()) return {};
+    PolySet ps = intersectSets(self, near);   // the blocks inset too: a terrace wider than its block would otherwise feather from the block line outward
     std::vector<std::vector<Vec3>> out;
     for (const Polygon2& pg : ps) { if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 1.0) continue; std::vector<Vec3> poly; for (const Vec2& q : pg.outer) poly.push_back(Vec3(q.x, 0, q.y)); out.push_back(std::move(poly)); }
     return out;
@@ -101,7 +133,7 @@ std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, con
 }  // namespace
 
 std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lots, const std::vector<Poly2>& blocks, double sidewalk) {
-    std::vector<TerrainFlatten> out; const double falloff = lanesPadFalloff(sidewalk); const PolySet inside = blocksInset(blocks, falloff);
+    std::vector<TerrainFlatten> out; const double falloff = lanesPadFalloff(sidewalk); const BlockInset inside = blocksInset(blocks, falloff);
     for (const LotBuilding& lb : lots) {
         if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
         // THE PAD HOLDS ITS WHOLE PARCEL; only the BLOCK EDGE gives up the feather. Shrinking the pad
@@ -117,7 +149,7 @@ std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lot
 }
 
 std::vector<TerrainFlatten> lanesTerraces(const std::vector<TerrainFlatten>& grades, const std::vector<Poly2>& blocks, double sidewalk) {
-    std::vector<TerrainFlatten> out; const double falloff = lanesPadFalloff(sidewalk); const PolySet inside = blocksInset(blocks, falloff);
+    std::vector<TerrainFlatten> out; const double falloff = lanesPadFalloff(sidewalk); const BlockInset inside = blocksInset(blocks, falloff);
     for (const TerrainFlatten& g : grades) {
         if (g.polygon.size() < 3) continue;
         for (std::vector<Vec3>& poly : insideBlock(g.polygon, inside, falloff)) { TerrainFlatten f = g; f.polygon = std::move(poly); f.falloff = falloff; f.minX = f.minZ = 1e300; f.maxX = f.maxZ = -1e300; for (const Vec3& v : f.polygon) { f.minX = std::min(f.minX, v.x); f.maxX = std::max(f.maxX, v.x); f.minZ = std::min(f.minZ, v.z); f.maxZ = std::max(f.maxZ, v.z); } out.push_back(std::move(f)); }

@@ -1,0 +1,778 @@
+{
+ "_comment": "Island 8 with its terrain grown from uplift and weathered by water (ADR-0122..0126): no roads or cities yet (they are planned on the old ground). First open bakes the weathered ground (~4 min) into cache/terrain/.",
+ "dayNight": {
+  "dayMinutes": 1440.0,
+  "timeOfDay": 0.32292,
+  "weather": "fair"
+ },
+ "entities": [],
+ "environment": {
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.38,
+   "density": 0.05,
+   "lightSteps": 6,
+   "noiseScale": 0.0007,
+   "steps": 96,
+   "top": 1600,
+   "wind": 14
+  },
+  "fog": {
+   "density": 0.00016
+  },
+  "sky": {
+   "aerial": 4.0,
+   "model": "scattering",
+   "turbidity": 2.0
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.75,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "name": "island_8_weathered",
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   -3334.448356017423,
+   14.02377077153313,
+   -797.5833894759727
+  ]
+ },
+ "terrain": {
+  "cdlod": {
+   "baked": true,
+   "worldHalf": 10000.0
+  },
+  "erode": true,
+  "erodeDroplets": 1500000,
+  "erodeLandOnly": true,
+  "erodeRadius": 3,
+  "erodeRes": 1024,
+  "erodeThermal": 16,
+  "groundCover": {
+   "beachHeight": 3,
+   "dirt": [
+    0.12,
+    0.085,
+    0.05
+   ],
+   "dirtPatches": 0.15,
+   "grass": [
+    0.055,
+    0.085,
+    0.018
+   ],
+   "grassDry": [
+    0.1,
+    0.1,
+    0.04
+   ],
+   "mountainHeight": 300,
+   "rock": [
+    0.15,
+    0.14,
+    0.12
+   ],
+   "rockSlopeDeg": 42,
+   "seed": 5,
+   "snowHeight": 720,
+   "uplandHeight": 90
+  },
+  "heightScale": 6,
+  "island": {
+   "angle": 117.84326076507568,
+   "aspect": 1.5514637947082521,
+   "cliffs": {
+    "from": 28.701289892196655,
+    "height": 98.85647773742676,
+    "to": 75.73035478591919
+   },
+   "coastNoise": 0.21829410552978518,
+   "coastScale": 0.0003765980303287506,
+   "peninsula": {
+    "bearing": 288.41194331645966,
+    "length": 3784.3425571918488,
+    "width": 808.7177991867065
+   },
+   "plainHeight": 12,
+   "radius": 5044.0,
+   "shelfDepth": 45
+  },
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 335.909264087677,
+  "mountainMaskScale": 0,
+  "mountainScale": 0.0009,
+  "noiseScale": 0.0006,
+  "octaves": 5,
+  "rangeHeight": 845.1857483386993,
+  "rangeSpine": [
+   [
+    1743.0,
+    -4611.0
+   ],
+   [
+    1648.0,
+    -1895.0
+   ],
+   [
+    -53.0,
+    -28.0
+   ],
+   [
+    -978.0,
+    2249.0
+   ],
+   [
+    -2129.0,
+    4407.0
+   ]
+  ],
+  "rangeVariation": 0.65,
+  "rangeWidth": 2774.3785196717245,
+  "resolution": 1000,
+  "rivers": {
+   "bankSteep": 2.5,
+   "cell": 20,
+   "incisionMin": 1.5,
+   "lakeMinArea": 80000,
+   "region": 20000.0,
+   "riverArea": 2000000.0,
+   "widthK": 0.02,
+   "widthMax": 70,
+   "widthMin": 8
+  },
+  "rockLine": 520,
+  "seaLevel": 0.0,
+  "seed": 108,
+  "size": 20000.0,
+  "snowLine": 1300,
+  "warp": 0.35,
+  "weather": {
+   "res": 4096,
+   "grow": {
+    "res": 1024,
+    "iterations": 250,
+    "blur": 600
+   },
+   "water": {
+    "steps": 0,
+    "breach": 0,
+    "thermal": 0
+   },
+   "roughness": 0.6,
+   "shapeKeep": 1.0,
+   "shapeScale": 1500,
+   "massifs": 0.6,
+   "massifScale": 2500,
+   "peaks": {
+    "height": 450,
+    "spacing": 2200,
+    "uplift": 1.0
+   },
+   "refine": {
+    "detail": 40,
+    "roughness": 0.8,
+    "wavelength": 8,
+    "slopeDamp": 0.3,
+    "incise": 0.012,
+    "iterations": 20
+   }
+  },
+  "forest": {
+   "seed": 8,
+   "spacing": 7.5,
+   "coverage": 0.42,
+   "standScale": 650,
+   "treeline": 640,
+   "shoreClear": 4,
+   "maxSlopeDeg": 40,
+   "cell": 256,
+   "near": 150,
+   "nearFade": 40,
+   "far": 7000,
+   "species": [
+    {
+     "kind": "oak",
+     "variants": 3,
+     "altLo": 0,
+     "altHi": 200,
+     "weight": 1.0
+    },
+    {
+     "kind": "maple",
+     "variants": 3,
+     "altLo": 10,
+     "altHi": 300,
+     "weight": 0.8
+    },
+    {
+     "kind": "beech",
+     "variants": 3,
+     "altLo": 40,
+     "altHi": 360,
+     "weight": 1.0
+    },
+    {
+     "kind": "birch",
+     "variants": 3,
+     "altLo": 60,
+     "altHi": 480,
+     "weight": 0.45
+    },
+    {
+     "kind": "aspen",
+     "variants": 2,
+     "altLo": 150,
+     "altHi": 520,
+     "weight": 0.35
+    },
+    {
+     "kind": "willow",
+     "variants": 2,
+     "altLo": 0,
+     "altHi": 250,
+     "weight": 0.15,
+     "wet": 1.0
+    },
+    {
+     "kind": "alder",
+     "variants": 2,
+     "altLo": 0,
+     "altHi": 400,
+     "weight": 0.25,
+     "wet": 0.8
+    },
+    {
+     "kind": "pine",
+     "variants": 3,
+     "altLo": 0,
+     "altHi": 420,
+     "weight": 0.5
+    },
+    {
+     "kind": "spruce",
+     "variants": 3,
+     "altLo": 220,
+     "altHi": 720,
+     "weight": 1.2
+    },
+    {
+     "kind": "fir",
+     "variants": 3,
+     "altLo": 320,
+     "altHi": 720,
+     "weight": 1.0
+    },
+    {
+     "kind": "shrub",
+     "variants": 4,
+     "altLo": 0,
+     "altHi": 600,
+     "weight": 1.0,
+     "understory": true
+    }
+   ],
+   "understorySpacing": 5.0,
+   "understoryDensity": 0.3,
+   "rocks": [
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 2.2,
+     "variants": 5,
+     "ground": "scree",
+     "spacing": 7,
+     "density": 0.9,
+     "draw": 700
+    },
+    {
+     "family": "slab",
+     "stone": "granite",
+     "size": 2.8,
+     "variants": 3,
+     "ground": "scree",
+     "spacing": 14,
+     "density": 0.8,
+     "draw": 700
+    },
+    {
+     "family": "pebbles",
+     "stone": "granite",
+     "size": 1.4,
+     "variants": 3,
+     "ground": "scree",
+     "spacing": 5,
+     "density": 0.7,
+     "draw": 250
+    },
+    {
+     "family": "outcrop",
+     "stone": "granite",
+     "size": 4.5,
+     "variants": 4,
+     "ground": "outcrop",
+     "spacing": 30,
+     "density": 0.7,
+     "draw": 1500
+    },
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 3.2,
+     "variants": 4,
+     "ground": "field",
+     "spacing": 60,
+     "density": 0.35,
+     "draw": 900,
+     "moss": 0.25
+    },
+    {
+     "family": "boulder",
+     "stone": "mossy",
+     "size": 1.6,
+     "variants": 4,
+     "ground": "field",
+     "spacing": 30,
+     "density": 0.35,
+     "draw": 400
+    },
+    {
+     "family": "slab",
+     "stone": "granite",
+     "size": 2.6,
+     "variants": 3,
+     "ground": "field",
+     "spacing": 70,
+     "density": 0.3,
+     "draw": 700,
+     "moss": 0.3
+    },
+    {
+     "family": "boulder",
+     "stone": "mossy",
+     "size": 3.8,
+     "variants": 4,
+     "ground": "forest",
+     "spacing": 45,
+     "density": 0.45,
+     "draw": 600,
+     "moss": 0.85
+    },
+    {
+     "family": "boulder",
+     "stone": "mossy",
+     "size": 1.6,
+     "variants": 4,
+     "ground": "forest",
+     "spacing": 16,
+     "density": 0.5,
+     "draw": 300,
+     "moss": 0.8
+    },
+    {
+     "family": "slab",
+     "stone": "mossy",
+     "size": 2.8,
+     "variants": 3,
+     "ground": "forest",
+     "spacing": 35,
+     "density": 0.4,
+     "draw": 450,
+     "moss": 0.8
+    },
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 2.2,
+     "variants": 3,
+     "ground": "forest",
+     "spacing": 40,
+     "density": 0.35,
+     "draw": 450,
+     "moss": 0.5
+    },
+    {
+     "family": "pebbles",
+     "stone": "mossy",
+     "size": 1.0,
+     "variants": 3,
+     "ground": "forest",
+     "spacing": 9,
+     "density": 0.4,
+     "draw": 150,
+     "moss": 0.7
+    },
+    {
+     "family": "pebbles",
+     "stone": "granite",
+     "size": 1.2,
+     "variants": 4,
+     "ground": "shore",
+     "spacing": 2.5,
+     "density": 0.55,
+     "draw": 180
+    },
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 1.6,
+     "variants": 4,
+     "ground": "shore",
+     "spacing": 3.2,
+     "density": 0.7,
+     "draw": 450,
+     "moss": 0.15
+    },
+    {
+     "family": "boulder",
+     "stone": "granite",
+     "size": 3.0,
+     "variants": 3,
+     "ground": "shore",
+     "spacing": 8,
+     "density": 0.55,
+     "draw": 700,
+     "moss": 0.2
+    },
+    {
+     "family": "slab",
+     "stone": "granite",
+     "size": 2.4,
+     "variants": 3,
+     "ground": "shore",
+     "spacing": 7,
+     "density": 0.5,
+     "draw": 600,
+     "moss": 0.1
+    },
+    {
+     "family": "boulder",
+     "stone": "sandstone",
+     "size": 1.8,
+     "variants": 3,
+     "ground": "beach",
+     "spacing": 35,
+     "density": 0.35,
+     "draw": 600
+    }
+   ]
+  }
+ },
+ "vehicles": [
+  {
+   "position": [
+    70.0,
+    12.0,
+    70.0
+   ],
+   "recipe": "sedan",
+   "seed": 1,
+   "yaw": 0
+  }
+ ],
+ "version": 1,
+ "water": {
+  "cell": 20,
+  "color": [
+   0.012,
+   0.05,
+   0.08
+  ],
+  "foamBand": 36,
+  "opacity": 0.82,
+  "region": 10000.0,
+  "roughness": 0.04,
+  "seaLevel": 0.0
+ },
+ "grass": {
+  "blades": 18,
+  "clumpRadius": 0.22,
+  "fadeEnd": 60,
+  "fadeStart": 44,
+  "height": 0.55,
+  "lean": 0.35,
+  "maxSlopeDeg": 32,
+  "nearRadius": 24,
+  "patchiness": 0.35,
+  "radius": 62,
+  "rootColor": [
+   0.018,
+   0.032,
+   0.008
+  ],
+  "seed": 7,
+  "spacing": 0.3,
+  "tipColor": [
+   0.1,
+   0.14,
+   0.03
+  ],
+  "variantTint": 0.18,
+  "width": 0.045,
+  "cardRadius": 320,
+  "cardSpacing": 1.6
+ },
+ "grassLayers": [
+  {
+   "where": "tall",
+   "seed": 21,
+   "blades": 24,
+   "height": 1.05,
+   "width": 0.03,
+   "clumpRadius": 0.3,
+   "lean": 0.45,
+   "spacing": 0.55,
+   "rootColor": [
+    0.03,
+    0.04,
+    0.012
+   ],
+   "tipColor": [
+    0.16,
+    0.16,
+    0.05
+   ],
+   "variantTint": 0.22,
+   "radius": 55,
+   "nearRadius": 22,
+   "fadeStart": 40,
+   "fadeEnd": 55,
+   "cardRadius": 220,
+   "cardSpacing": 1.8
+  },
+  {
+   "where": "reeds",
+   "seed": 33,
+   "blades": 16,
+   "height": 2.2,
+   "width": 0.022,
+   "clumpRadius": 0.25,
+   "lean": 0.12,
+   "spacing": 0.6,
+   "shoreBand": 7,
+   "rootColor": [
+    0.03,
+    0.035,
+    0.012
+   ],
+   "tipColor": [
+    0.11,
+    0.12,
+    0.045
+   ],
+   "variantTint": 0.25,
+   "radius": 55,
+   "nearRadius": 22,
+   "fadeStart": 40,
+   "fadeEnd": 55,
+   "cardRadius": 180,
+   "cardSpacing": 1.6,
+   "clumpScale": 0.07,
+   "clumpCut": 0.15
+  },
+  {
+   "clumpRadius": 0.28,
+   "lean": 0.25,
+   "width": 0.03,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "radius": 80,
+   "nearRadius": 30,
+   "fadeStart": 60,
+   "fadeEnd": 80,
+   "cards": false,
+   "where": "flowers",
+   "seed": 51,
+   "blades": 6,
+   "height": 0.78,
+   "flowers": 10,
+   "flowerSize": 0.1,
+   "spacing": 0.45,
+   "variants": 7,
+   "clumpScale": 0.02,
+   "clumpCut": 0.0,
+   "flowerColors": [
+    [
+     0.75,
+     0.74,
+     0.68
+    ],
+    [
+     0.8,
+     0.6,
+     0.04
+    ],
+    [
+     0.3,
+     0.09,
+     0.55
+    ],
+    [
+     0.14,
+     0.24,
+     0.7
+    ],
+    [
+     0.8,
+     0.24,
+     0.38
+    ],
+    [
+     0.7,
+     0.05,
+     0.03
+    ],
+    [
+     0.85,
+     0.32,
+     0.05
+    ]
+   ]
+  },
+  {
+   "clumpRadius": 0.28,
+   "lean": 0.25,
+   "width": 0.03,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "radius": 80,
+   "nearRadius": 30,
+   "fadeStart": 60,
+   "fadeEnd": 80,
+   "cards": false,
+   "where": "clearing",
+   "seed": 61,
+   "blades": 5,
+   "height": 0.8,
+   "flowers": 12,
+   "flowerSize": 0.1,
+   "spacing": 0.45,
+   "variants": 4,
+   "clumpScale": 0.02,
+   "clumpCut": 0.0,
+   "flowerColors": [
+    [
+     0.32,
+     0.1,
+     0.6
+    ],
+    [
+     0.75,
+     0.74,
+     0.68
+    ],
+    [
+     0.82,
+     0.62,
+     0.05
+    ],
+    [
+     0.4,
+     0.14,
+     0.62
+    ]
+   ]
+  },
+  {
+   "clumpRadius": 0.28,
+   "lean": 0.25,
+   "width": 0.03,
+   "rootColor": [
+    0.02,
+    0.035,
+    0.01
+   ],
+   "tipColor": [
+    0.09,
+    0.13,
+    0.035
+   ],
+   "variantTint": 0.1,
+   "radius": 80,
+   "nearRadius": 30,
+   "fadeStart": 60,
+   "fadeEnd": 80,
+   "cards": false,
+   "where": "shore",
+   "seed": 71,
+   "blades": 8,
+   "height": 1.0,
+   "flowers": 6,
+   "flowerSize": 0.11,
+   "petals": 3,
+   "spacing": 0.8,
+   "variants": 3,
+   "clumpScale": 0.08,
+   "clumpCut": 0.15,
+   "shoreBand": 6,
+   "flowerColors": [
+    [
+     0.82,
+     0.66,
+     0.05
+    ],
+    [
+     0.45,
+     0.08,
+     0.42
+    ],
+    [
+     0.78,
+     0.76,
+     0.7
+    ]
+   ]
+  }
+ ]
+}

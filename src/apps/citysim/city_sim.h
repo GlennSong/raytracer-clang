@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_APPS_CITYSIM_CITY_SIM_H
 #define RAYTRACER_APPS_CITYSIM_CITY_SIM_H
 
+#include <algorithm>
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
@@ -21,12 +22,8 @@ namespace citysim {
 
 using engine::Real;   // the engine's scalar (double); used throughout the sim
 
-// How high one grade-separation LAYER sits above the one below (m). A legacy
-// bridge link carries `layer > 0` instead of an absolute deck elevation, so
-// everything that places geometry on such a link — the sim's agent height, the
-// render bridge's decals, parked cars and bay outlines — must lift by the same
-// amount. Shared so those readings cannot drift apart.
-constexpr Real kLayerClearance = 5.8;
+// kLayerClearance: nav_graph.h (the graph resolves a link's height above the ground with it).
+using engine::kLayerClearance;
 
 // The agent-based city simulation (ADR-0060). An Agent is a brain (data): it
 // either WALKS (a pedestrian) or POSSESSES and drives a SimVehicle. A car has no
@@ -132,7 +129,19 @@ struct Agent {
     // departs in the same 90 minutes has almost nobody asleep at any moment.
     Real wakeAt = -1;
     Real sleptAt = 0;
-    bool playerControlled = false;   // brain = host input; the sim won't auto-drive it
+    bool playerControlled = false;
+    // DIRECTED (ADR-0091): a director owns this agent's plan — the possession
+    // channel now, a model later. The goal layer leaves it entirely alone (no
+    // schedule, no chained trip on arrival) while the stepper keeps moving it
+    // along whatever route the director gave. This is NOT `released`, which
+    // stops the agent being stepped at all, nor `playerControlled`, which hands
+    // the body to the host: a directed agent is still the sim's to move.
+    // WHERE ON THE LAST LEG THE ERRAND ACTUALLY ENDS, in metres along it, or
+    // -1 for "at the node" (every ordinary trip). A route is a list of LINKS,
+    // so arrival used to mean reaching the end of the last one — which on a
+    // 40 m link leaves an agent 20 m from the door, or the car, it was sent to.
+    Real stopAtDist = -1;
+    bool directed = false;   // brain = host input; the sim won't auto-drive it
     bool released = false;           // ejected by the player (ADR-0062): the sim stops
                                      // driving this agent's ghost so it can't fight the
                                      // now player-driven physical car
@@ -350,6 +359,11 @@ const VehicleBody& vehicleFleetBody(int slot);   // slot wraps into [0, size)
 
 // A drivable car. Kinematic in the sim core; its pose tracks its driver. Inert
 // when `driver < 0`. Its body (type + dimensions) comes from the fleet table.
+// How far off its final street a director's destination may sit and still be
+// walked to exactly. Beyond this it is not really "along that street" and the
+// agent arrives at the node instead.
+constexpr Real kErrandOffLink = 15.0;
+
 struct SimVehicle {
     Real length = 4.2;
     Real width = 1.8;
@@ -397,9 +411,13 @@ public:
     // ordinary rotation it broke 692 parking-band checks, because one car in
     // thirteen became a bus and no bay is that long. The sim and the renderer
     // both go through this, so a body and its mesh can never disagree.
+    // A test lab can put the bus in the ambient rotation (citysim.ambientBus) to drive it over every
+    // road with the rest -- a wandering driver never parks, so the bay problem above does not arise.
+    bool ambientBus = false;
     int ambientSlotFor(int i) const {
         const int n = fleetSize();
         if (n <= 0) return 0;
+        if (ambientBus) return ((i % n) + n) % n;
         int usable = 0;
         for (int s2 = 0; s2 < n; ++s2)
             if (fleetBody(s2).type != VehicleType::Bus) ++usable;
@@ -613,6 +631,167 @@ public:
         grid_.query(pos, radius, out);
     }
 
+    // TAKE THE BUS (ADR-0091). The same choice the goal layer makes at every
+    // trip, offered to a director: plan a ride from where the agent stands to
+    // `dest`, register it as waiting, and walk it to the boarding stop —
+    // walking to the stop IS the trip. From there the sim does the rest, and
+    // it already knows how: arriveOrChain stands a rider at its stop, the bus
+    // picks up everyone waiting for its route, and sets them down at theirs.
+    // False when no route helps, which for a short hop is the common answer
+    // and means "just walk".
+    bool sendAgentByBus(int agentIndex, engine::Vec2 dest) {
+        if (!nav_ || agentIndex < 0 ||
+            agentIndex >= static_cast<int>(agents_.size()))
+            return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.mode != Agent::Mode::Pedestrian || buses_.empty() ||
+            isBus(agentIndex) || isTaxi(agentIndex) || buses_.tripOf(agentIndex))
+            return false;
+        const int origin = nav_->nearestNode(a.pos);
+        const int to = nav_->nearestNode(dest);
+        if (origin < 0 || to < 0 || origin == to) return false;
+        BusTrip bt = buses_.planTrip(nav_->nodes[static_cast<std::size_t>(origin)],
+                                     nav_->nodes[static_cast<std::size_t>(to)],
+                                     busMaxWalk_);
+        if (!bt.valid()) return false;
+        const int stopNode =
+            buses_.route(bt.route).stops[static_cast<std::size_t>(bt.fromStop)].node;
+        // PROVE THE WALK BEFORE TAKING IT. startTrip's no-path branch PARKS the
+        // agent — clears its route and moves it to an idle pose at the origin —
+        // so calling it speculatively means every REFUSED ride still shunts the
+        // agent about. Fourteen refusals in half a minute is a person flickering
+        // around the street, which is exactly what Glenn watched happen. Same
+        // rule as sendAgentTo: nothing is mutated until the answer is yes.
+        if (stopNode != origin &&
+            !engine::findRoute(*nav_, origin, stopNode, /*pedestrian=*/true).valid())
+            return false;
+        if (!buses_.waitFor(agentIndex, bt)) return false;
+        a.wakeAt = -1;
+        if (stopNode != origin) {
+            startTrip(a, origin, stopNode, /*fromRest=*/!a.moving);
+            if (!a.moving) { buses_.stopWaiting(agentIndex); return false; }
+            a.state = Agent::State::Walking;
+        }
+        a.activity = Activity::Outing;
+        return true;
+    }
+
+    // GO INSIDE (ADR-0091). A place is somewhere people are hidden from the
+    // street while they are in it — pedVisible() is false for a still agent
+    // that is indoors, so its body is reaped and it is simply "in there" until
+    // it comes out. The director decides it has arrived; the engine has no
+    // opinion about doors.
+    void setAgentIndoors(int agentIndex, bool inside) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
+            return;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.mode != Agent::Mode::Pedestrian) return;   // not while driving
+        a.indoors = inside;
+        if (inside) {
+            a.moving = false;
+            a.speed = 0;
+            a.route = engine::Route{};
+            a.leg = 0;
+            a.distOnLeg = 0;
+            a.state = Agent::State::Resting;
+            a.tethered = false;
+        }
+    }
+
+    // GET IN AND DRIVE (ADR-0091). A possessed pedestrian walks up to a car
+    // and takes it. Everything else follows from `mode`, because every pass
+    // already reads it: pedVisible() goes false so the walker system reaps its
+    // body, the vehicle bridge draws the car instead, findRoute switches from
+    // the pavement to the road graph, and the stepper advances it as traffic.
+    // The agent's pose BECOMES the car's — you are where the car is once you
+    // are in it — so the planner ghost and the thing on screen stay one object.
+    // Refuses a car that already has a driver. The caller owns the question of
+    // how far away is too far to reach.
+    bool boardVehicle(int agentIndex, int vehicleIndex) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
+            return false;
+        if (vehicleIndex < 0 || vehicleIndex >= static_cast<int>(vehicles_.size()))
+            return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        SimVehicle& v = vehicles_[static_cast<std::size_t>(vehicleIndex)];
+        if (v.driver >= 0 || a.vehicle >= 0) return false;
+        a.pos = v.pos;
+        a.heading = v.heading;
+        a.mode = Agent::Mode::Driver;
+        a.vehicle = vehicleIndex;
+        v.driver = agentIndex;
+        v.offStreet = false;              // on the street the moment it is driven
+        a.indoors = false;
+        a.tethered = false;               // the walker body it had is gone
+        a.moving = false;
+        a.speed = 0;
+        a.route = engine::Route{};
+        a.leg = 0;
+        a.distOnLeg = 0;
+        a.state = Agent::State::Waiting;
+        a.tickFromPos = a.pos;            // a placement, not a motion
+        a.tickFromHeading = a.heading;
+        grid_.place(agentIndex, a.pos);
+        return true;
+    }
+
+    // Get out again, on the kerb beside the car, leaving it where it stands.
+    bool alightVehicle(int agentIndex) {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size()))
+            return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.vehicle < 0 || a.vehicle >= static_cast<int>(vehicles_.size()))
+            return false;
+        SimVehicle& v = vehicles_[static_cast<std::size_t>(a.vehicle)];
+        v.pos = a.pos;
+        v.heading = a.heading;
+        v.driver = -1;
+        parkedGrid_.place(a.vehicle, v.pos);
+        a.vehicle = -1;
+        a.mode = Agent::Mode::Pedestrian;
+        a.moving = false;
+        a.speed = 0;
+        a.route = engine::Route{};
+        a.leg = 0;
+        a.distOnLeg = 0;
+        a.state = Agent::State::Resting;
+        // Step out onto the pavement rather than into the lane you parked in.
+        const engine::Vec2 side(a.heading.y, -a.heading.x);
+        a.pos = pushPoseClearOfLanes(engine::Vec2(a.pos.x + side.x * 2.0,
+                                                  a.pos.y + side.y * 2.0), 1.0);
+        a.tickFromPos = a.pos;
+        grid_.place(agentIndex, a.pos);
+        return true;
+    }
+
+    // The nearest car with nobody in it within `radius` of `p` — what a
+    // director means by "that one". Skips off-street cars (in a garage, not
+    // drawn, not reachable on foot). -1 when there is none.
+    int nearestFreeVehicle(engine::Vec2 p, Real radius) const {
+        int best = -1;
+        Real bestD2 = radius * radius;
+        for (std::size_t i = 0; i < vehicles_.size(); ++i) {
+            const SimVehicle& v = vehicles_[i];
+            if (v.driver >= 0 || v.offStreet) continue;
+            const Real dx = v.pos.x - p.x, dy = v.pos.y - p.y;
+            const Real d2 = dx * dx + dy * dy;
+            if (d2 <= bestD2) { bestD2 = d2; best = static_cast<int>(i); }
+        }
+        return best;
+    }
+
+    // Hand an agent's PLAN to a director (ADR-0091). Idempotent; -1 or an
+    // out-of-range index is a no-op. Turning it off returns the agent to its
+    // schedule from wherever it is standing.
+    void setAgentDirected(int agentIndex, bool on) {
+        if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
+            agents_[static_cast<std::size_t>(agentIndex)].directed = on;
+    }
+    bool agentDirected(int agentIndex) const {
+        return agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()) &&
+               agents_[static_cast<std::size_t>(agentIndex)].directed;
+    }
+
     // Mark an agent as host-driven (the player): the sim won't run its AI brain.
     void setPlayerControlled(int agentIndex, bool on) {
         if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
@@ -658,12 +837,135 @@ public:
         if (!nav_ || agentIndex < 0 ||
             agentIndex >= static_cast<int>(agents_.size()))
             return false;
-        Agent& a = agents_[agentIndex];
-        const int from = nav_->nearestNode(a.pos);
-        const int to = nav_->nearestNode(dest);
-        if (from < 0 || to < 0 || from == to) return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        // WHERE THE ERRAND STARTS. startTrip PLACES an agent on its new route's
+        // first leg, so routing from the node nearest its position teleports it
+        // — and a drawn walker's planner ghost is leashed to its physical body
+        // (ADR-0062, 5 m), so the stepper then skips it for ever: speed 0,
+        // state Waiting, a perfectly valid route, and a possessed pedestrian
+        // that never moves again. Measured: a 40 m errand moved the ghost 290 m.
+        // An agent already under way therefore finishes the leg it stands on and
+        // routes from the node AHEAD of it, and the leg is prepended below.
+        const int legLink =
+            (a.moving && a.route.valid() &&
+             a.leg < static_cast<int>(a.route.links.size()))
+                ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+        const int from = legLink >= 0
+                             ? nav_->links[static_cast<std::size_t>(legLink)].to
+                             : nav_->nearestNode(a.pos);
+        if (from < 0) return false;
+        // A DESTINATION THAT ROUTES. The single nearest node to `dest` can have
+        // no path from here at all — 394 -> 86 in metro are 32 m apart with no
+        // route for a pedestrian OR a car (different components of the graph),
+        // and every walk_to that snapped to such a node was refused. Try the
+        // nearest few and take the first that routes.
+        engine::Route route;
+        int to = -1;
+        int finalLink = -1;
+        // ARRIVE ALONG THE STREET THE DESTINATION IS ON. A door, a parked car
+        // and a bus stop all belong to a LINK, not to a junction, so routing to
+        // the nearest node leaves the agent wherever that junction happens to
+        // be — measured at 23 m from a civic entrance it had been sent to.
+        // Routing to the near end of the destination's own link and appending
+        // that link makes the last street it walks the one it was sent to, and
+        // the stop-short below then lands it beside the address.
+        if (a.mode == Agent::Mode::Pedestrian) {
+            const int dl = nav_->nearestLink(dest);
+            if (dl >= 0) {
+                const engine::NavLink& L = nav_->links[static_cast<std::size_t>(dl)];
+                if (L.from != from) {
+                    engine::Route r = engine::findRoute(*nav_, from, L.from, true);
+                    if (r.valid()) { route = std::move(r); to = L.from; finalLink = dl; }
+                } else if (L.to != from) {
+                    engine::Route r = engine::findRoute(*nav_, from, L.to, true);
+                    if (r.valid()) { route = std::move(r); to = L.to; }
+                }
+            }
+        }
+        if (to < 0) for (int cand : nearestNodesTo(dest, 8)) {
+            if (cand == from) continue;
+            engine::Route r = engine::findRoute(*nav_, from, cand,
+                                                a.mode == Agent::Mode::Pedestrian);
+            if (r.valid()) { route = std::move(r); to = cand; break; }
+        }
+        // NOTHING has been mutated yet, so a refusal really does leave the agent
+        // its day. startTrip's no-path branch parks the agent, clears its route
+        // and keeps the caller's goal — validating first is what makes this
+        // function's contract ("the agent keeps its current plan") true.
+        if (to < 0) return false;
+        const Real keepDist = a.distOnLeg;
+        // WAKE THEM. A sleeping agent is not in the active list at all, so the
+        // stepper never reaches it: the errand sets moving, a valid route and a
+        // destination, and the agent stands in its doorway until its OWN alarm
+        // goes off — measured, with `stepped=0` and the ghost sitting 0.4 m
+        // from its body, so neither the leash nor the route was to blame. A
+        // director's errand overrides the day, and that includes the lie-in.
+        a.wakeAt = -1;
         startTrip(a, from, to, /*fromRest=*/!a.moving);
-        return a.route.valid();
+        if (!a.route.valid()) return false;
+        if (finalLink >= 0 &&
+            (a.route.links.empty() ||
+             a.route.links.back() != finalLink))
+            a.route.links.push_back(finalLink);
+        if (legLink >= 0) {
+            // Finish the leg it is standing on (the same idiom as a bus pulling
+            // away from where it actually stopped): prepend that link and put
+            // the pose back, so the errand changes the PLAN and never the pose.
+            a.route.links.insert(a.route.links.begin(), legLink);
+            a.leg = 0;
+            a.distOnLeg = keepDist;
+            refreshPose(a);
+        }
+        // END AT THE POINT, not at the node. Project the destination onto the
+        // last link of the route: if it lies alongside it, that is where the
+        // agent stops. A destination that is not beside its final street (a
+        // door round the corner) keeps the old behaviour and arrives at the
+        // node, which is the honest answer rather than a wrong one.
+        a.stopAtDist = -1;
+        if (!a.route.links.empty()) {
+            const engine::NavLink& last =
+                nav_->links[static_cast<std::size_t>(a.route.links.back())];
+            const engine::Vec2 A = nav_->nodes[static_cast<std::size_t>(last.from)];
+            const engine::Vec2 B = nav_->nodes[static_cast<std::size_t>(last.to)];
+            const engine::Vec2 AB(B.x - A.x, B.y - A.y);
+            const Real len2 = AB.x * AB.x + AB.y * AB.y;
+            if (len2 > 1e-6) {
+                Real t = ((dest.x - A.x) * AB.x + (dest.y - A.y) * AB.y) / len2;
+                t = std::max(Real(0), std::min(Real(1), t));
+                const engine::Vec2 foot(A.x + AB.x * t, A.y + AB.y * t);
+                const Real off = std::sqrt((dest.x - foot.x) * (dest.x - foot.x) +
+                                           (dest.y - foot.y) * (dest.y - foot.y));
+                if (off <= kErrandOffLink)
+                    a.stopAtDist = t * last.length;
+            }
+        }
+        // A DIRECTOR'S ERRAND OVERRIDES THE DAY. startTrip sets the trip
+        // (moving, indoors, route) but not the reactive state the stepper reads,
+        // so an agent sent from rest kept state=Resting and stood still holding
+        // a valid route. Its activity has to move too: left at AtHome the goal
+        // layer parks it again on its own schedule.
+        a.state = a.mode == Agent::Mode::Driver ? Agent::State::Cruising
+                                                : Agent::State::Walking;
+        a.activity = Activity::Outing;
+        return true;
+    }
+
+    // The `k` nav nodes nearest `p`, nearest first. Linear scan + partial sort:
+    // a director's command, not a per-frame path (nearestNode is a scan too).
+    std::vector<int> nearestNodesTo(engine::Vec2 p, int k) const {
+        std::vector<int> idx;
+        if (!nav_) return idx;
+        const int n = nav_->nodeCount();
+        idx.resize(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) idx[static_cast<std::size_t>(i)] = i;
+        k = std::min(k, n);
+        auto d2 = [&](int i) {
+            return (nav_->nodes[static_cast<std::size_t>(i)] - p).lengthSquared();
+        };
+        std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
+                          [&](int A, int B) { return d2(A) < d2(B); });
+        idx.resize(static_cast<std::size_t>(k));
+        return idx;
     }
 
     // Sample agent `agentIndex`'s current route as a polyline of lane-centre
@@ -709,6 +1011,32 @@ public:
     void alightRide(int passenger, int atNode = -1);   // atNode: where they step off
     const RideBook& rides() const { return rides_; }
     bool riding(int i) const { return rides_.driverOf(i) >= 0; }
+    // Which agent is driving the thing carrying `i` — a bus, a cab, anything.
+    // -1 when it is on its own feet. `riding` answers whether; this answers
+    // what, which is the question a director actually has.
+    int carrierOf(int i) const { return rides_.driverOf(i); }
+
+    // Why is this agent standing still? The question splits in two: advance()
+    // was never called (a guard above the call site), or it ran and something
+    // inside clamped the motion to zero. These three answer it.
+    // How many agents the ADR-0062 leash held this tick, across the whole city.
+    // A city where this sits above zero for minutes has people stranded in it —
+    // the ghost cannot advance and the body cannot catch up — and that is the
+    // one number that says so without possessing anybody.
+    int tetherHeld() const { return tetherHeld_; }
+
+    bool steppedLastTick(int i) const {
+        return i >= 0 && i < static_cast<int>(advancedLast_.size()) &&
+               advancedLast_[static_cast<std::size_t>(i)] != 0;
+    }
+    Real gapOf(int i) const {
+        return i >= 0 && i < static_cast<int>(gaps_.size())
+                   ? gaps_[static_cast<std::size_t>(i)] : Real(-1);
+    }
+    Real minGapOf(int i) const {
+        return i >= 0 && i < static_cast<int>(minGaps_.size())
+                   ? minGaps_[static_cast<std::size_t>(i)] : Real(-1);
+    }
 
     // HAILING (city_dispatch.h). `hail` queues a walker for a ride; a free
     // taxi picks the cheapest reachable one up in the goal pass. Exposed so a
@@ -819,6 +1147,23 @@ public:
     // the build stream is unchanged). Call AFTER build()/setWander with the same
     // graph; a no-op when `places` has no homes. `graph` must be the built one.
     void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    // THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load
+    // that information?"). What assignPlaces decides for each agent -- home, job, errand stop, role, hours,
+    // commute, starting pose -- plus its commute statistics, written to `<dir>/<key>.pop` keyed by a hash
+    // of EVERYTHING it reads (the nav graph, the places, each agent's state before assignment, the bus
+    // network, the shares, the format). A later load with the same inputs reads it instead of deciding
+    // again. "" (the default) = no cache. RT_POPULATION_VERIFY=1 decides anyway and reports any field that
+    // differs from the cache.
+    void setPopulationCacheDir(std::string dir) { populationCacheDir_ = std::move(dir); }
+    struct PopulationCacheReport { bool used = false, hit = false, saved = false; uint64_t key = 0; int mismatches = -1; };
+    const PopulationCacheReport& populationCache() const { return popCache_; }
+    // Share of drivers assignPlaces gives a CROSS-TOWN job (1.2 km+ away); the rest
+    // take the nearest of their sampled jobs. Set before assignPlaces.
+    void setLongCommuteShare(Real share) { longCommuteShare_ = share; }
+    void setBusCommuteShare(Real share) { busCommuteShare_ = share; }
+    // What the last assignPlaces did with the drivers' jobs (for the load log).
+    struct CommuteStats { int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0; int busCommuters = 0, busCommuteTried = 0; };
+    const CommuteStats& commuteStats() const { return commuteStats_; }
     const RelationshipTable& relationships() const { return relationships_; }
 
     // How often an agent re-DECIDES its reactive behaviour (seconds). Between
@@ -858,6 +1203,12 @@ private:
     }
     enum class GoalFire { NoRow, Blocked, Fired };
     GoalFire tryGoalEvent(Agent& a, GoalEvent event);
+    // DEPARTURES PER STEP: each departure routes, and a clock window can send thousands at once --
+    // measured on island_8_saltwood, 2313 wander routes in ONE step (357 ms), the hitch Glenn felt
+    // driving the pass. Past the budget a departure reports Blocked and retries next tick, as a
+    // driver waiting for launch clearance does. Buses are exempt.
+    static constexpr int kDeparturesPerStep = 200;
+    int departuresThisStep_ = 0;
     // Execute the agent's (GoTo) goal state: start the trip toward its target.
     // False when no trip launched (then a NoRoute row, if any, has been taken).
     bool startGoalTrip(Agent& a, int origin, bool fromRest);
@@ -908,6 +1259,12 @@ private:
     void releaseBays(Agent& a);          // free both the held and the reserved bay
     Real busDistanceToStop(const Agent& a) const;
     Real busStandBack(const Agent& a) const;   // route metres short of its stop node
+public:
+    // The same stand-back for a bus arriving at `inLink`'s end node, measured from that node back along the
+    // link to the bus's CENTRE -- where the stop's furniture belongs (#36). Walks back through plain nodes
+    // like busStandBack; the bus length is the fleet's.
+    Real busStandBackAt(int inLink) const;
+private:
     std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k) const;
     bool parksInBays(const Agent& a) const;   // a private car that parks (not a bus/cab/wanderer)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
@@ -923,6 +1280,10 @@ private:
         Real distToNode = 0;        // route metres to the node
         Real distToLine = 0;        // route metres to the stop line (< 0: past it)
     };
+    // The signal a car faces at an approach, for ITS movement there (read off its route): during a
+    // lead arrow its left may be green while going straight is red (ADR-0109).
+    Move moveFor(const Agent& a, int approachLink) const;
+    SignalState signalFor(const Agent& a, int approachLink) const;
     JunctionGate junctionSpeedCap(const Agent& a, int li, Real target) const;
     // The next junction on the route within `horizon` route metres: the leg
     // whose link enters it, the distance to its node, and the length of the
@@ -996,6 +1357,9 @@ private:
     Real rndUnit();
 
     const engine::NavGraph* nav_ = nullptr;
+    Real longCommuteShare_ = 0;   // setLongCommuteShare
+    Real busCommuteShare_ = 0;    // setBusCommuteShare
+    CommuteStats commuteStats_;
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
     // Adopted fleet catalogue; empty = use the built-in table (see setFleet).
@@ -1005,8 +1369,13 @@ private:
     // scale kept at 1 except while a bay departure prices its own twin.
     std::vector<int> twinOf_;
     std::vector<Real> departScale_;
+    // True while startWanderTrip has priced the U-turn in departScale_: startTrip's own searches
+    // must see the same prices, or the trip it builds could U-turn after all.
+    bool wanderPriced_ = false;
     std::vector<std::vector<int>> baysOnLink_;   // link -> bay indices
     std::vector<char> bayNarrowed_;   // link (or its reverse) carries bays
+    std::vector<uint8_t> advancedLast_;   // did advance() step agent i last tick
+    int tetherHeld_ = 0;                 // agents the leash held last tick
     std::vector<Real> gaps_;
     std::vector<Real> minGaps_;   // per-agent follow gap to ITS leader (length-aware)
     std::vector<Real> leaderSpeeds_;   // leader's speed where gaps_ < INF (IDM dv)
@@ -1053,6 +1422,8 @@ private:
     std::vector<int> busRoute_, busStop_;   // per agent; -1 = not a bus
     GoalTable busTable_;
     Real busMaxWalk_ = 0;
+    std::string populationCacheDir_;      // setPopulationCacheDir
+    PopulationCacheReport popCache_;
     Real busServiceStart_ = 0, busServiceEnd_ = 0;   // 0/0 = around the clock
     bool busServiceWas_ = true;                      // edge detect for the events
     long busSkippedLegs_ = 0;

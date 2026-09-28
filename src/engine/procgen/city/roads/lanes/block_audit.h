@@ -75,7 +75,10 @@ std::vector<Ring> pavementHoles(const Result& r, double minArea);
 // `minWidth` (0 = the old 2 * (insetBy + 3)): a hole piece narrower than this is a verge or a
 // median, not a block. The holes already stop at the back of the drawn sidewalk, so a lane-built
 // level insets by kBlockMarginBehindSidewalk and passes the width a block must have.
-std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth = 0.0);
+// `water` (optional): rings -- outer CCW, holes CW -- that blocks stand back from (the rivers and
+// lakes, Hydrology::corridorRings): each block is cut by them, and what is left of it stays a block.
+std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simplify, double insetBy, double minWidth = 0.0,
+                                   const std::vector<Ring>* water = nullptr);
 constexpr double kBlockMarginBehindSidewalk = 0.3;   // the block begins just behind the drawn sidewalk
 constexpr double kMinBlockWidth = 16.0;              // the old effective rule at a 5 m inset
 

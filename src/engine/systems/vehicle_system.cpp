@@ -1,4 +1,7 @@
 #include "vehicle_system.h"
+#ifdef RT_ENABLE_IMGUI
+#include <imgui.h>
+#endif
 #include "../vehicle_steering.h"
 
 #include "../vehicle_lamps.h"
@@ -68,6 +71,16 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_horn", KeyCode::H);
     ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
     ctx.actions.setActionContext("vehicle_horn", engine::InputContext::InVehicle);
+    // The car picker: - and = cycle the drivable catalogue; N drops the pick.
+    // NOT , and . -- those are DevControlSystem's sim slower/faster, and picking
+    // a car three places along ran the world at 8x ("super speed mode") -- nor
+    // [ and ], the spectator's. The boot log names any clash ([input] key clash).
+    ctx.actions.bindButton("vehicle_pick_prev", KeyCode::Minus);
+    ctx.actions.bindButton("vehicle_pick_next", KeyCode::Equal);
+    // A part-time 4x4's transfer case: 2WD (rear) <-> 4WD (#41).
+    ctx.actions.bindButton("drive_4wd", KeyCode::Z);
+    ctx.actions.bindButton("drive_4wd", GamepadButton::DpadDown);
+    ctx.actions.setActionContext("drive_4wd", engine::InputContext::InVehicle);
     // Debug: spawn a fresh car in front of the player (always on solid ground,
     // since the player is standing on a collider).
     ctx.actions.bindButton("spawn_vehicle", KeyCode::N);
@@ -100,12 +113,59 @@ void VehicleSystem::spawnInFront(FrameContext& ctx) {
     openModuleLoader(vm, makeModuleSource(""));
     std::string err;
     if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
+    loadCatalogue();
+    std::string recipe = "sedan", label = "Sedan", drive = "awd";
+    if (!catalogue_.empty()) {
+        const Pick& p = catalogue_[static_cast<std::size_t>(pick_)];
+        recipe = p.recipe;
+        label = p.label;
+        drive = p.drive;
+    }
     VehicleSpec spec;
-    if (loadVehicleSpec(vm, "return vehicle.sedan(seed, {})",
-                        static_cast<uint32_t>(++spawnCount_), spec, &err))
+    if (loadVehicleSpec(vm, "return vehicle." + recipe + "(seed, {})",
+                        static_cast<uint32_t>(++spawnCount_), spec, &err)) {
         spawnVehicle(ctx.world, ctx.assets, spec, spawn, yawDeg);
-    else
+        panelText_ = "Dropped: " + label + "  -  " + driveLabel(drive);
+        panelUntil_ = clock_ + 3.0;
+        LOG_INFO << "[vehicle] " << panelText_;
+    } else {
         LOG_WARN << "spawn_vehicle: " << err;
+    }
+#else
+    (void)ctx;
+#endif
+}
+
+void VehicleSystem::loadCatalogue() {
+#ifdef RT_ENABLE_SCRIPTING
+    if (catalogueTried_) return;
+    catalogueTried_ = true;
+    const std::string lib = loadScriptCode("vehicles.lua", "");
+    if (lib.empty()) return;
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(""));
+    std::string err;
+    if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
+    std::vector<DrivableEntry> entries;
+    if (!loadDrivableCatalogue(vm, entries, &err)) { LOG_WARN << "car picker: " << err; return; }
+    for (const DrivableEntry& e : entries) catalogue_.push_back({e.recipe, e.label, e.drive});
+    LOG_INFO << "[vehicle] car picker: " << catalogue_.size() << " drivable vehicles (, . to pick, N to drop)";
+#endif
+}
+
+void VehicleSystem::render(FrameContext& ctx) {
+#ifdef RT_ENABLE_IMGUI
+    if (clock_ > panelUntil_ || panelText_.empty()) return;
+    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(ctx.windowWidth) * 0.5f, static_cast<float>(ctx.windowHeight) - 24.0f),
+                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##carpicker", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+    ImGui::TextUnformatted(panelText_.c_str());
+    ImGui::TextDisabled("-  =  pick      N  drop      Z  2WD/4WD");
+    ImGui::End();
 #else
     (void)ctx;
 #endif
@@ -534,8 +594,55 @@ void VehicleSystem::update(FrameContext& ctx) {
             });
     }
 
-    // Debug: drop a fresh car in front of the player.
+    // Shift a part-time 4x4 in or out of four-wheel drive.
+    if (ctx.actions.pressed("drive_4wd")) {
+        ctx.world.each<ControlledBy, InVehicle>(
+            [&](Entity, ControlledBy&, InVehicle& iv) {
+                Vehicle* v = iv.vehicle.valid() ? ctx.world.get<Vehicle>(iv.vehicle) : nullptr;
+                if (!v || !v->partTime4wd || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+                v->fourWheel = !v->fourWheel;
+                physicsSys.physicsWorld().setVehicleFrontDriveShare(v->vehicleId, v->fourWheel ? 0.5 : 0.0);
+                LOG_INFO << "[vehicle] " << (v->fourWheel ? "4WD engaged" : "2WD (rear)");
+                panelText_ = v->fourWheel ? "4WD ENGAGED" : "2WD (rear)";
+                panelUntil_ = clock_ + 2.5;
+            });
+    }
+
+    // The car picker.
+    clock_ += ctx.frameDelta;
+    const int step = ctx.actions.pressed("vehicle_pick_next") ? 1 : ctx.actions.pressed("vehicle_pick_prev") ? -1 : 0;
+    if (step != 0) {
+        loadCatalogue();
+        if (!catalogue_.empty()) {
+            const int n = static_cast<int>(catalogue_.size());
+            pick_ = ((pick_ + step) % n + n) % n;
+            const Pick& p = catalogue_[static_cast<std::size_t>(pick_)];
+            panelText_ = std::to_string(pick_ + 1) + "/" + std::to_string(n) + "  " + p.label + "  -  " + driveLabel(p.drive);
+            panelUntil_ = clock_ + 4.0;
+            LOG_INFO << "[vehicle] pick " << panelText_;
+        }
+    }
+    // Drop the picked car in front of the player.
     if (ctx.actions.pressed("spawn_vehicle")) spawnInFront(ctx);
+
+    // The player's car for the control channel's `vehicle?`.
+    std::string telem = "none";
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+        const Vehicle* v = iv.vehicle.valid() ? ctx.world.get<Vehicle>(iv.vehicle) : nullptr;
+        const Transform* t = iv.vehicle.valid() ? ctx.world.get<Transform>(iv.vehicle) : nullptr;
+        if (!v || !t || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+        const auto tel = physicsSys.physicsWorld().vehicleTelemetry(v->vehicleId);
+        const Vec3 right = t->orientation.rotate(Vec3(1, 0, 0)), fwd = t->orientation.rotate(Vec3(0, 0, 1));
+        const Real roll = std::asin(std::clamp(right.y, Real(-1), Real(1))) * 57.2958;
+        const Real pitch = std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * 57.2958;
+        const Real yaw = std::atan2(fwd.x, fwd.z) * 57.2958;
+        char b[256];
+        std::snprintf(b, sizeof(b), "kmh %.1f rpm %.0f gear %d drive %s pos %.2f %.2f %.2f roll %.1f pitch %.1f yaw %.1f",
+                      tel.speed * 3.6, tel.rpm, tel.gear, v->partTime4wd ? (v->fourWheel ? "4wd" : "2wd") : "fixed",
+                      t->position.x, t->position.y, t->position.z, roll, pitch, yaw);
+        telem = b;
+    });
+    ctx.settings.setString("vehicle.telemetry", telem);
 
     updateHorn(ctx);
     updateEngines(ctx);

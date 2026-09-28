@@ -295,6 +295,41 @@ void Application::runFrame() {
                 inputMap.processEvent(up);
                 pendingTapRelease_ = KeyCode::Unknown;
             }
+            // `hold <Key> <seconds>`: the same real path, held down (throttle,
+            // steering) until its sim-time runs out -- so a probe can DRIVE.
+            const std::string holdReq = settingsStore.getString("input.hold", "");
+            if (!holdReq.empty()) {
+                settingsStore.setString("input.hold", "");
+                char name[32] = {0};
+                double secs = 0.0;
+                if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2) {
+                    const KeyCode k = keyCodeFromName(name);
+                    if (k != KeyCode::Unknown) {
+                        Event down(EventType::KeyPressed);
+                        down.key = k;
+                        inputMap.processEvent(down);
+                        heldKeys_.push_back({k, secs});
+                    }
+                }
+            }
+            for (std::size_t i = 0; i < heldKeys_.size();) {
+                heldKeys_[i].second -= frameDelta * clock.timeScale();
+                if (heldKeys_[i].second <= 0.0) {
+                    Event up(EventType::KeyReleased);
+                    up.key = heldKeys_[i].first;
+                    inputMap.processEvent(up);
+                    heldKeys_.erase(heldKeys_.begin() + static_cast<std::ptrdiff_t>(i));
+                } else {
+                    ++i;
+                }
+            }
+        }
+        // ONE KEY, TWO JOBS, SAME MODE: said once, loudly. The car picker shipped
+        // on , and . -- already the sim slower/faster keys -- and Glenn's first
+        // pick ran the world at 8x. `keys?` would have said so; nobody asked it.
+        if (!keyClashChecked_ && frameCounter > 2) {
+            keyClashChecked_ = true;
+            for (const std::string& c : inputMap.collisions()) LOG_WARN << "[input] key clash: " << c;
         }
         for (const Event& event : window->getEvents()) {
             inputMap.processEvent(event);
@@ -804,6 +839,25 @@ std::string Application::handleControlCommand(const std::string& line) {
                       std::atan2(fwd.x, -fwd.z) * kRadToDeg);
         return buf;
     }
+    if (cmd.name == "mem?") {
+        // WHAT IS ON THE GPU: the backend's live allocations, then the meshes grouped by
+        // name, largest first (AssetManager::meshBytesByPrefix). The rest of what the
+        // driver reports -- render targets, shadow maps, instance and uniform buffers --
+        // is the difference against nvidia-smi.
+        std::string out = "ok " + rendererPtr->memoryReport();
+        std::size_t total = 0;
+        const auto groups = assetManager->meshBytesByPrefix();
+        for (const auto& g : groups) total += g.bytes;
+        char head[96];
+        std::snprintf(head, sizeof(head), " || mesh data by name, %.0f MB in all:", total / 1048576.0);
+        out += head;
+        for (std::size_t i = 0; i < groups.size() && i < 16; ++i) {
+            char b[160];
+            std::snprintf(b, sizeof(b), "  %s %zu meshes %.1f MB", groups[i].prefix.c_str(), groups[i].meshes, groups[i].bytes / 1048576.0);
+            out += b;
+        }
+        return out;
+    }
     if (cmd.name == "tap") {
         // Press and release a key through the real input path (see the frame
         // loop). Tests the KEY, not a verb that imitates what the key does.
@@ -812,6 +866,23 @@ std::string Application::handleControlCommand(const std::string& line) {
             return "err unknown key: " + cmd.args[0];
         settingsStore.setString("input.tap", cmd.args[0]);
         return "ok tap " + cmd.args[0] + " staged";
+    }
+
+    if (cmd.name == "hold") {
+        // Hold a key down through the real input path for <seconds> of sim time.
+        double secs = 0.0;
+        if (cmd.args.size() < 2 || !num(cmd.args[1], secs) || secs <= 0.0)
+            return "err usage: hold <KeyName> <seconds>";
+        if (keyCodeFromName(cmd.args[0]) == KeyCode::Unknown)
+            return "err unknown key: " + cmd.args[0];
+        settingsStore.setString("input.hold", cmd.args[0] + " " + cmd.args[1]);
+        return "ok hold " + cmd.args[0] + " staged";
+    }
+    if (cmd.name == "vehicle?") {
+        // The player's car: speed km/h, rpm, gear, drive mode, position, sim speed
+        // (VehicleSystem publishes it each frame).
+        return "ok " + settingsStore.getString("vehicle.telemetry", "none") +
+               " timescale " + std::to_string(clock.timeScale());
     }
 
     if (cmd.name == "keys?") {
@@ -1159,6 +1230,37 @@ std::string Application::handleControlCommand(const std::string& line) {
                 " " + cmd.args[1]);
         return "ok staged (poll possess?)";
     }
+    // Hold the goal layer off the possessed agent so a director's plan is not
+    // overwritten by its schedule seconds later (ADR-0091).
+    if (cmd.name == "direct") {
+        if (cmd.args.size() != 1 || (cmd.args[0] != "on" && cmd.args[0] != "off"))
+            return "err usage: direct on|off";
+        settingsStore.setString("possess.cmd", "direct " + cmd.args[0]);
+        return "ok staged (poll possess?)";
+    }
+    // Get into the nearest free car / get out again (ADR-0091).
+    if (cmd.name == "board") {
+        std::string arg;
+        if (cmd.args.size() >= 2) arg = " " + cmd.args[0] + " " + cmd.args[1];
+        settingsStore.setString("possess.cmd", "board" + arg);
+        return "ok staged (poll possess?)";
+    }
+    if (cmd.name == "ride") {
+        double x, z;
+        if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
+            return "err usage: ride <x> <z>";
+        settingsStore.setString("possess.cmd",
+                                "ride " + cmd.args[0] + " " + cmd.args[1]);
+        return "ok staged (poll possess?)";
+    }
+    if (cmd.name == "enter" || cmd.name == "exit") {
+        settingsStore.setString("possess.cmd", cmd.name);
+        return "ok staged (poll possess?)";
+    }
+    if (cmd.name == "alight") {
+        settingsStore.setString("possess.cmd", "alight");
+        return "ok staged (poll possess?)";
+    }
     if (cmd.name == "possess_stop") {
         settingsStore.setString("possess.cmd", "stop");
         return "ok staged";
@@ -1169,6 +1271,16 @@ std::string Application::handleControlCommand(const std::string& line) {
     }
     if (cmd.name == "possess?")
         return "ok " + settingsStore.getString("possess.status", "none");
+    // The possessed agent's own mind: activity, goal state, and the fields that
+    // decide whether it walks (ADR-0091). Written every frame by
+    // CityPossessSystem; "none" when nothing is possessed.
+    // What the agent can SEE: the places, people and transit around it, each
+    // with a point walk_to accepts (ADR-0091). Written every frame by
+    // CityPossessSystem; "none" when nothing is possessed.
+    if (cmd.name == "look?")
+        return "ok " + settingsStore.getString("look.status", "none");
+    if (cmd.name == "agent?")
+        return "ok " + settingsStore.getString("agent.status", "none");
 
     // Ground probe (the planting/seam diagnosis tool): `ground? x z` stages a
     // query CityRenderSystem answers next frame (carved field, road lift, and
@@ -1176,8 +1288,8 @@ std::string Application::handleControlCommand(const std::string& line) {
     // echoes your coordinates — the same ask-again idiom as possess?.
     if (cmd.name == "ground?") {
         if (cmd.args.size() >= 2) {
-            settingsStore.setString("ground.query",
-                                    cmd.args[0] + " " + cmd.args[1]);
+            settingsStore.setString("ground.query",   // `ground? x z [r]`: r dumps the area (RT_GROUND_DUMP)
+                                    cmd.args[0] + " " + cmd.args[1] + (cmd.args.size() >= 3 ? " " + cmd.args[2] : ""));
             return "ok staged (poll `ground?` with no args)";
         }
         return "ok " + settingsStore.getString("ground.result", "none");
@@ -1190,7 +1302,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|possess_stop|release|possess?|ground?|bundle?)";
+           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?)";
 }
 
 }  // namespace engine

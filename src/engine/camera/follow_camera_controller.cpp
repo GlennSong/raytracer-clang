@@ -58,23 +58,32 @@ void FollowCameraController::update(const CameraInput& input, Real dt) {
     // Scroll dollies the chase distance (negative zoomDelta pushes out).
     distance = std::clamp(distance - input.zoomDelta * 0.8, minDistance, maxDistance);
 
-    // Spring the followed pose toward the raw target (header comment).
-    // Teleports snap: gliding across a respawn reads worse than a cut.
-    const Vec3 jump = targetPos - smoothedPos;
-    const Real jump2 = jump.x * jump.x + jump.y * jump.y + jump.z * jump.z;
-    if (jump2 > snapDistance * snapDistance) {
+    // The target's velocity, low-passed (the feed is quantized by the physics step).
+    if (dt > 1e-6) {
+        if (velocityPrimed) {
+            const Vec3 raw = (targetPos - velocityPrev) / dt;
+            const Real k = velocitySmoothTime > 0 ? 1.0 - std::exp(-dt / velocitySmoothTime) : 1.0;
+            targetVelocity = targetVelocity + (raw - targetVelocity) * k;
+        }
+        velocityPrev = targetPos;
+        velocityPrimed = true;
+    }
+    // The safety net: a rig this far behind (a target moved without setTarget) cuts to it.
+    const Vec3 gap = targetPos - smoothedPos;
+    if (gap.x * gap.x + gap.y * gap.y + gap.z * gap.z > maxTrail * maxTrail) {
         smoothedPos = targetPos;
         smoothedYaw = targetYaw;
         posVelocity = Vec3(0, 0, 0);
         yawVelocity = 0.0;
         return;
     }
-    smoothedPos.x = smoothDamp(smoothedPos.x, targetPos.x, posVelocity.x,
-                               posSmoothTime, dt);
-    smoothedPos.y = smoothDamp(smoothedPos.y, targetPos.y, posVelocity.y,
-                               posSmoothTime, dt);
-    smoothedPos.z = smoothDamp(smoothedPos.z, targetPos.z, posVelocity.z,
-                               posSmoothTime, dt);
+    // Spring toward the target led by velocity x smoothTime (feed-forward, header): no steady trail. The
+    // discrete spring's own lag is half a frame short of smoothTime, so lead by that much less (measured:
+    // without it the rig ran v x dt / 2 AHEAD of the car at every frame rate).
+    const Vec3 goal = targetPos + targetVelocity * std::max(Real(0), posSmoothTime - 0.5 * dt);
+    smoothedPos.x = smoothDamp(smoothedPos.x, goal.x, posVelocity.x, posSmoothTime, dt);
+    smoothedPos.y = smoothDamp(smoothedPos.y, goal.y, posVelocity.y, posSmoothTime, dt);
+    smoothedPos.z = smoothDamp(smoothedPos.z, goal.z, posVelocity.z, posSmoothTime, dt);
     // Yaw takes the short arc: smooth the wrapped delta around the current
     // heading, then re-anchor.
     const Real yawGoal = smoothedYaw + wrapDegrees(targetYaw - smoothedYaw);

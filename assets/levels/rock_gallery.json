@@ -1,0 +1,212 @@
+{
+ "version": 1,
+ "_comment": "Rock library gallery: every family x stone on flat ground.",
+ "environment": {
+  "skyColor": [
+   0.46,
+   0.64,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.6,
+  "exposure": 1.0,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1.0,
+    0.96,
+    0.86
+   ],
+   "direction": [
+    0.4,
+    0.85,
+    0.3
+   ],
+   "intensity": 7.0
+  }
+ },
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   0.0,
+   3.0,
+   30.0
+  ]
+ },
+ "terrain": {
+  "heightScale": 0.6,
+  "material": {
+   "albedo": [
+    1,
+    1,
+    1
+   ],
+   "roughness": 1.0,
+   "surface": "terrain"
+  },
+  "noiseScale": 0.02,
+  "octaves": 2,
+  "resolution": 128,
+  "seed": 3,
+  "size": 160,
+  "groundCover": {
+   "dirtPatches": 0.3,
+   "seed": 5
+  }
+ },
+ "rocks": {
+  "count": 260,
+  "region": 44,
+  "seed": 5,
+  "spacingFactor": 1.1,
+  "maxSlopeDeg": 60,
+  "minScale": 0.9,
+  "maxScale": 1.1,
+  "species": [
+   {
+    "kind": "stylized_rock",
+    "family": "boulder",
+    "stone": "granite",
+    "size": 2.2,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "boulder",
+    "stone": "sandstone",
+    "size": 2.2,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "boulder",
+    "stone": "basalt",
+    "size": 2.2,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "boulder",
+    "stone": "mossy",
+    "size": 2.2,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "slab",
+    "stone": "granite",
+    "size": 2.8,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "slab",
+    "stone": "sandstone",
+    "size": 2.8,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "slab",
+    "stone": "basalt",
+    "size": 2.8,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "slab",
+    "stone": "mossy",
+    "size": 2.8,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "pebbles",
+    "stone": "granite",
+    "size": 1.6,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "pebbles",
+    "stone": "sandstone",
+    "size": 1.6,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "pebbles",
+    "stone": "basalt",
+    "size": 1.6,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "pebbles",
+    "stone": "mossy",
+    "size": 1.6,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "outcrop",
+    "stone": "granite",
+    "size": 3.4,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "outcrop",
+    "stone": "sandstone",
+    "size": 3.4,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "outcrop",
+    "stone": "basalt",
+    "size": 3.4,
+    "variants": 2
+   },
+   {
+    "kind": "stylized_rock",
+    "family": "outcrop",
+    "stone": "mossy",
+    "size": 3.4,
+    "variants": 2
+   }
+  ]
+ },
+ "grass": {
+  "seed": 7,
+  "spacing": 0.3,
+  "nearRadius": 24,
+  "radius": 62,
+  "fadeStart": 44,
+  "fadeEnd": 60,
+  "blades": 18,
+  "height": 0.3,
+  "width": 0.045,
+  "clumpRadius": 0.22,
+  "lean": 0.35,
+  "rootColor": [
+   0.012,
+   0.035,
+   0.006
+  ],
+  "tipColor": [
+   0.075,
+   0.16,
+   0.022
+  ],
+  "maxSlopeDeg": 32,
+  "patchiness": 0.35,
+  "variantTint": 0.18
+ }
+}

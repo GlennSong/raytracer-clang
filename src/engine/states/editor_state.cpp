@@ -9,6 +9,8 @@
 #include "../systems/camera_panel_system.h"
 #include "../systems/planet_lab_system.h"
 #include "../systems/terrain_lod_system.h"
+#include "../systems/residency_system.h"
+#include "../systems/grass_system.h"
 #include "../systems/render_system.h"
 #ifdef __EMSCRIPTEN__
 #include "../systems/day_night_system.h"
@@ -31,6 +33,8 @@ EditorState::EditorState(Window& window, Renderer& renderer,
     // editors keep a static sky and reach the cycle via play mode's ImGui.
     addSystem<DayNightSystem>();
 #endif
+    addSystem<GrassSystem>();
+    addSystem<ResidencySystem>();    // what is on the GPU, by where the camera is (ADR-0095)
     addSystem<TerrainLodSystem>();   // CDLOD terrain draws (ADR-0036)
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);

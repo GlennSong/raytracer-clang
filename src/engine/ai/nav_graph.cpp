@@ -261,6 +261,11 @@ NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
         l.elevA = elev[a];
         l.elevB = elev[b];
         l.elevAbsolute = elevAbs[a] || elevAbs[b];
+        l.elevAbsA = elevAbs[a] != 0;
+        l.elevAbsB = elevAbs[b] != 0;
+        // a relative end is exact here; an absolute end needs the ground (CityRenderSystem resolves it at load)
+        l.aboveA = l.elevAbsA ? 0 : l.layer * kLayerClearance + l.elevA;
+        l.aboveB = l.elevAbsB ? 0 : l.layer * kLayerClearance + l.elevB;
         int idx = static_cast<int>(g.links.size());
         g.links.push_back(l);
         g.outLinks[a].push_back(idx);

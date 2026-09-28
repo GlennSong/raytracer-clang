@@ -10,8 +10,10 @@
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
 #include "procgen/terrain.h"
+#include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
 #include "world.h"
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <memory>
 #include <vector>
@@ -164,6 +166,36 @@ struct InstanceGroup {
     DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
 };
 
+// A GRASS FIELD around the camera (GrassSystem, the flora plan): clumps of geometry blades
+// (procgen/grass.h) instanced on a jittered grid in tiles that come and go with the camera --
+// full density near, half beyond `nearRadius`, blades shrinking away over [fadeStart,
+// fadeEnd] (RenderMaterial::FLAG_GRASS). Where it grows is `density` (0..1); the ground-cover
+// map will supply it, and until then the loader's slope rule does.
+struct GrassField {
+    std::function<double(double, double)> ground;    // the drawn ground height at (x, z)
+    // How much grass grows at (x, z), 0..1, given the ground's height y there and the cosine of its
+    // slope (the caller has both from its own ground samples: density must not re-sample the ground).
+    // Called from worker threads: it must be a pure function.
+    std::function<double(double x, double z, double y, double slopeCos)> density;
+    std::vector<MeshHandle> clumps;                   // the clump variants
+    RenderMaterial material;
+    double spacing = 0.3;       // grid step inside nearRadius (m); 1.6x beyond
+    double nearRadius = 24.0;
+    double radius = 62.0;       // tiles are kept out to here
+    double tile = 16.0;
+    double fadeStart = 44.0, fadeEnd = 60.0;
+    uint32_t seed = 1;
+    // THE FAR FIELD: grass cards (procgen/grass.h grassCardMesh) from where the clumps fade out
+    // to cardRadius, fading in over [cardFadeIn, fadeEnd - 4] and out over the last cardFadeOut
+    // metres, in bigger tiles. No card mesh: the field ends with the clumps.
+    MeshHandle card;
+    RenderMaterial cardMaterial;
+    double cardSpacing = 1.1;
+    double cardRadius = 150.0;
+    double cardFadeIn = 38.0, cardFadeOut = 40.0;
+    double cardTile = 32.0;
+};
+
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a
 // terrain block opts in via "cdlod", the loader stamps this instead of static chunk
 // entities, and TerrainLodSystem reads it each frame to select a quadtree of nodes
@@ -190,6 +222,10 @@ struct TerrainLodConfig {
     // Bumped whenever `params` changes at runtime (a re-conform). TerrainLodSystem
     // watches it and rebuilds its tile cache + collider window when it changes.
     uint32_t revision = 0;
+    // BAKED (ADR-0095): the final ground as a height pyramid. When set, worldHalf/numLods/
+    // gridRes are the pyramid's grid (bakedCdlodGeometry) and TerrainLodSystem draws its
+    // stored tiles instead of evaluating `params` per vertex.
+    std::shared_ptr<const pyramid::Pyramid> baked;
 };
 
 // The ears of the scene (ADR-0069): AudioSystem drives the AudioEngine
@@ -324,6 +360,10 @@ struct MeshCollider {
 // refreshes from the wheels. UNVERIFIED submodule-gated path (needs Jolt).
 struct Vehicle {
     PhysicsWorld::VehicleConfig config;
+    // A PART-TIME 4x4 (spec drive = "4wd"): the driver switches 2WD (rear) <-> 4WD (VehicleSystem, key
+    // `drive_4wd`); fourWheel is the current mode.
+    bool partTime4wd = false;
+    bool fourWheel = false;
     PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
     Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
     // Live driver input, written by VehicleSystem each step (for inspection/debug).
@@ -568,6 +608,16 @@ struct CitySimConfig {
     int pedestrians = 40;
     float carsPerLaneKm = 10.0f;   // density mode: ambient cars per lane-km
     float pedsPerKm = 6.0f;        // density mode: walkers per sidewalk-km
+    // Share of DRIVERS who commute across town: their job is drawn from 1.2 km+
+    // away, so a city with a ring freeway sees it used (Glenn, 2026-09-22: "I'd
+    // like more traffic on the freeway"). 0 = everyone takes the nearest of their
+    // sampled jobs (the short-commute rule).
+    float longCommuteShare = 0.0f;
+    // Share of WALKERS who work in another town and ride there: their job is
+    // drawn from a different street network (a town, the mountain city, the
+    // city) that the buses — local, regional, local — can take them to. 0 =
+    // every walker works within walking distance (the old rule).
+    float busCommuteShare = 0.0f;
     // Ceiling on EACH density-derived count. This was a literal 400 in the
     // bridge, which silently halved metro v2: its own network asks for 769
     // cars and 788 walkers, and got 400 of each (measured 2026-09-16,
@@ -636,6 +686,7 @@ struct CitySimConfig {
     bool showPlan = false;               // boot with block/lot outlines on
                                          // (plan-only demarcation levels)
     bool wander = false;                 // agents take perpetual random trips
+    bool ambientBus = false;             // a test lab's ambient rotation includes the bus body (wheel_lab)
                                          // (no schedule) — the lab car keeps lapping
     // Scripted goal tables (ADR-0064): the loaded TEXT of the level's
     // `"agents"` script (an agents.lua-style file resolved by level_loader).
@@ -667,6 +718,9 @@ struct CitySimConfig {
     // builds each instanced fleet mesh from its `vehicle.fleet` recipes. Any
     // "" = this level draws no cars (vehicles are optional content).
     std::string vehicleScript;
+    // Which of the script's named fleets to draw (vehicles.lua: fleet_kit, classic, fleet_mixed); "" = its
+    // default `vehicle.fleet`. From the level's citysim.fleet.
+    std::string fleet;
     // Level-authored places (ADR-0066): labelled destinations (home/shop/office/
     // park/civic) the citysim bridge turns into a routable PlaceMap at build.
     // Empty for levels that don't author any (the generator emits them later).

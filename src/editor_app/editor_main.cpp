@@ -22,6 +22,10 @@
 #include <imgui.h>
 #endif
 #include "../renderer/gamepad_gc.h"
+#include "../engine/screenshot.h"
+#ifdef RT_EDITOR_GLFW_GAMEPADS
+#include "../renderer/gamepad_glfw.h"
+#endif
 #include "../log.h"
 #include "city_planner_panel.h"
 #include "bake_dialog.h"
@@ -73,6 +77,8 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QShortcut>
+#include <QKeySequence>
 #include <QHeaderView>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
@@ -131,6 +137,7 @@ KeyCode mapQtKey(int key) {
         case Qt::Key_BracketLeft:  return KeyCode::LeftBracket;
         case Qt::Key_BracketRight: return KeyCode::RightBracket;
         case Qt::Key_QuoteLeft: return KeyCode::GraveAccent;
+        case Qt::Key_F12:       return KeyCode::F12;   // screenshot (F11 is the big-view shortcut)
         default:                return KeyCode::Unknown;
     }
 }
@@ -167,7 +174,21 @@ public:
     // cursor, inject the offset from the viewport center as a delta, warp
     // back to center. A global override cursor keeps it hidden wherever
     // the (pinned) pointer happens to sit.
-    void setCaptured(bool on) {
+    // The engine asks for capture (Play); the host can RELEASE it without the
+    // engine knowing — while the sim is paused or a dialog is up — so the pointer
+    // is free to resize or maximize the window (Glenn: "the mouse is completely
+    // consumed by the game window"). Captured = the engine wants it and nothing
+    // has released it.
+    void setCaptured(bool on) { engineWants = on; applyCapture(); }
+    void setReleased(bool on) { if (released == on) return; released = on; applyCapture(); }
+
+    // Esc during play goes here instead of to the engine (whose "quit" action
+    // stops the playtest outright); true = handled, swallow the key.
+    std::function<bool()> onPlayEscape;
+
+private:
+    void applyCapture() {
+        const bool on = engineWants && !released;
         if (captured == on) return;
         captured = on;
         if (on) {
@@ -179,6 +200,7 @@ public:
         }
     }
 
+public:
     // Once per host frame, before the engine consumes input.
     void pollCapturedMouse() {
         if (!captured || !isVisible() || width() <= 0 || height() <= 0)
@@ -226,6 +248,10 @@ protected:
         hosted.injectScroll(e->angleDelta().y() / 120.0);
     }
     void keyPressEvent(QKeyEvent* e) override {
+        if (e->key() == Qt::Key_Escape && !e->isAutoRepeat() && onPlayEscape && onPlayEscape()) {
+            swallowEscRelease = true;
+            return;
+        }
         KeyCode key = mapQtKey(e->key());
         if (key != KeyCode::Unknown)
             hosted.injectKey(key, true, e->isAutoRepeat());
@@ -233,6 +259,7 @@ protected:
             QWidget::keyPressEvent(e);
     }
     void keyReleaseEvent(QKeyEvent* e) override {
+        if (e->key() == Qt::Key_Escape && swallowEscRelease) { swallowEscRelease = false; return; }
         KeyCode key = mapQtKey(e->key());
         if (key != KeyCode::Unknown && !e->isAutoRepeat())
             hosted.injectKey(key, false);
@@ -243,7 +270,9 @@ protected:
 private:
     HostedWindow& hosted;
     bool captured = false;
+    bool engineWants = false, released = false;
     bool resyncCapture = false;
+    bool swallowEscRelease = false;
 };
 
 // Engine log -> console dock. The sink fires on whatever thread logged
@@ -798,6 +827,17 @@ int main(int argc, char** argv) {
     mainWindow.statusBar()->addPermanentWidget(bakeStage);
     mainWindow.statusBar()->addPermanentWidget(bakeBar);
     // Mode indicator, pinned right: EDITING / PLAYING / PAUSED.
+    // Which gamepad the game hears (Glenn: "showed somewhere in the ui that the
+    // joystick was plugged in"). Updated with the chrome; connects and
+    // disconnects also flash in the status bar.
+    // (see the frame timer below for the per-frame poll)
+    engine::GamepadSet editorGamepads;
+#ifdef RT_EDITOR_GLFW_GAMEPADS
+    engine::initWindowlessGlfwGamepads("gamecontrollerdb.txt");
+#endif
+    auto* padLabel = new QLabel("No gamepad");
+    padLabel->setEnabled(false);
+    mainWindow.statusBar()->addPermanentWidget(padLabel);
     auto* modeLabel = new QLabel("EDITING");
     mainWindow.statusBar()->addPermanentWidget(modeLabel);
 
@@ -931,6 +971,35 @@ int main(int argc, char** argv) {
         });
     });
     fileMenu->insertMenu(fileTailSeparator, recentMenu);
+
+    // SCREENSHOTS (engine/screenshot.h): F12 in the viewport takes one, in play or
+    // edit; these put the same thing on the menu, and let the folder be chosen.
+    // The choice is saved to settings.json at once, so the viewer uses it too.
+    fileMenu->insertSeparator(fileTailSeparator);
+    auto* shotAction = new QAction("Take &Screenshot", &mainWindow);
+    shotAction->setShortcut(QKeySequence(Qt::Key_F12));
+    shotAction->setShortcutContext(Qt::WidgetShortcut);   // F12 in the viewport is the engine's own key
+    QObject::connect(shotAction, &QAction::triggered, [&]() {
+        const std::string path = engine::nextScreenshotPath(engine::screenshotFolder(app.settings()));
+        if (path.empty()) { mainWindow.statusBar()->showMessage("Screenshot folder cannot be created", 6000); return; }
+        if (app.renderer().requestFrameDump(path))
+            mainWindow.statusBar()->showMessage(QString::fromStdString("Screenshot: " + path), 6000);
+        else
+            mainWindow.statusBar()->showMessage("This renderer cannot capture frames", 6000);
+    });
+    fileMenu->insertAction(fileTailSeparator, shotAction);
+    fileMenu->insertAction(fileTailSeparator, [&]() {
+        auto* a = new QAction("Screenshot &Folder...", &mainWindow);
+        QObject::connect(a, &QAction::triggered, [&]() {
+            const QString now = QString::fromStdString(engine::screenshotFolder(app.settings()));
+            const QString dir = QFileDialog::getExistingDirectory(&mainWindow, "Save screenshots to", now);
+            if (dir.isEmpty()) return;
+            app.settings().setString(engine::kScreenshotFolderKey, dir.toStdString());
+            app.settings().save(app.settingsFilePath());
+            mainWindow.statusBar()->showMessage("Screenshots go to " + dir + " (F12)", 6000);
+        });
+        return a;
+    }());
 
     // Level menu: document-level properties (they belong to the level, not
     // ---- Render menu: feature switches + cloud tuning -------------------
@@ -1078,7 +1147,7 @@ int main(int argc, char** argv) {
         viewport->setFocus();
     });
     pauseAction->setCheckable(true);
-    pauseAction->setToolTip("Pause / resume the simulation (Space)");
+    pauseAction->setToolTip("Pause / resume the simulation (Enter). Paused, the mouse is yours again.");
     auto* stepAction = toolbar->addAction(
         style->standardIcon(QStyle::SP_MediaSeekForward), "Step", [&]() {
         app.simClock().requestStep();
@@ -1090,7 +1159,34 @@ int main(int argc, char** argv) {
         app.requestState(makeEditor());
         viewport->setFocus();
     });
-    stopAction->setToolTip("Stop and return to edit mode (Esc)");
+    stopAction->setToolTip("Stop and return to edit mode (Esc asks first)");
+
+    // Esc while playing: pause, free the mouse, and ASK (Glenn: "a dialog ... if I want to
+    // quit the simulation so I can cancel out of it"). Keep playing restores the pause state
+    // it found. In edit mode Esc goes to the engine as before.
+    bool escDialogOpen = false;
+    viewport->onPlayEscape = [&]() {
+        if (bridge.editable() || !bridge.attached() || escDialogOpen) return false;
+        const bool wasPaused = app.simClock().paused();
+        app.simClock().setPaused(true);
+        escDialogOpen = true;
+        viewport->setReleased(true);
+        QMessageBox box(QMessageBox::Question, "Stop the simulation?",
+                        "Stop the simulation and return to the editor?", QMessageBox::NoButton, &mainWindow);
+        QPushButton* stopBtn = box.addButton("Stop", QMessageBox::AcceptRole);
+        QPushButton* keepBtn = box.addButton("Keep playing", QMessageBox::RejectRole);
+        box.setDefaultButton(keepBtn);
+        box.setEscapeButton(keepBtn);   // a second Esc cancels
+        box.exec();
+        escDialogOpen = false;
+        if (box.clickedButton() == stopBtn) {
+            app.requestState(makeEditor());
+        } else {
+            app.simClock().setPaused(wasPaused);
+        }
+        viewport->setFocus();
+        return true;
+    };
     auto* restartAction = toolbar->addAction(
         style->standardIcon(QStyle::SP_BrowserReload), "Restart", [&]() {
         if (bridge.editable() || !bridge.attached()) return;
@@ -1267,7 +1363,25 @@ int main(int argc, char** argv) {
     // Window chrome that mirrors engine state: action enables, dirty title,
     // mode indicator. Run on the slow poll AND immediately when a bridge
     // notice arrives, so mode/selection flips don't wait out the timer.
+    QString padShown;
+    auto refreshPad = [&]() {
+        QString name;
+        for (int jid = 0; jid < engine::MAX_GAMEPADS && name.isEmpty(); ++jid) {
+            if (!editorGamepads[static_cast<std::size_t>(jid)].connected) continue;
+#ifdef RT_EDITOR_GLFW_GAMEPADS
+            name = QString::fromStdString(engine::glfwGamepadName(jid));
+#endif
+            if (name.isEmpty()) name = "gamepad " + QString::number(jid);
+        }
+        if (name == padShown) return;
+        if (name.isEmpty()) mainWindow.statusBar()->showMessage("Gamepad disconnected: " + padShown, 5000);
+        else mainWindow.statusBar()->showMessage("Gamepad connected: " + name, 5000);
+        padShown = name;
+        padLabel->setText(name.isEmpty() ? "No gamepad" : "Gamepad: " + name);
+        padLabel->setEnabled(!name.isEmpty());
+    };
     auto refreshChrome = [&]() {
+        refreshPad();
         const bool editing = bridge.editable();
         plannerPanel->refresh();   // grays out while playing; reloads on attach
         playButton->setEnabled(editing);
@@ -1309,10 +1423,11 @@ int main(int argc, char** argv) {
     // Qt owns the loop; the engine steps per timer tick, panels poll slower
     // — except when the engine notifies (mode/selection/save), which
     // refreshes on the very next frame.
-    // Gamepads: the Qt host has no GLFW, so poll the GCController backend each
-    // frame and push the snapshot into the hosted window (no-op off macOS).
-    // The engine's player input + fly camera then respond in the editor.
-    engine::GamepadSet editorGamepads;
+    // Gamepads: the Qt host has no GLFW window. On macOS the GCController
+    // backend is polled; elsewhere GLFW runs windowless for its joystick API
+    // (a pad did nothing in the Linux editor before). The snapshot goes into
+    // the hosted window each frame, so player input + fly camera respond.
+    // (editorGamepads is declared with the status bar's gamepad label.)
 
     QTimer frameTimer;
     QObject::connect(&frameTimer, &QTimer::timeout, [&]() {
@@ -1320,8 +1435,14 @@ int main(int argc, char** argv) {
             qtApp.quit();
             return;
         }
+#ifdef RT_EDITOR_GLFW_GAMEPADS
+        engine::pumpWindowlessGlfw();   // hot-plug
+        engine::pollGlfwGamepads(editorGamepads);
+#endif
         engine::gcPollGamepads(editorGamepads);
         hosted->setGamepads(editorGamepads);
+        // paused, or asking whether to stop: the pointer is free
+        viewport->setReleased(!bridge.editable() && (app.simClock().paused() || escDialogOpen));
         viewport->pollCapturedMouse();   // relative look while playing
         app.runFrame();
         console.drain();
@@ -1362,6 +1483,26 @@ int main(int argc, char** argv) {
         }
         app.requestState(makeEditor()); viewport->setFocus();
     };
+    // F11: the game view as large as it goes — docks hidden, window maximized — and back.
+    // An application shortcut, so it works while the viewport has the keyboard.
+    std::vector<QDockWidget*> hiddenDocks;
+    bool bigView = false, wasMaximized = false;
+    auto* bigViewShortcut = new QShortcut(QKeySequence(Qt::Key_F11), &mainWindow);
+    bigViewShortcut->setContext(Qt::ApplicationShortcut);
+    QObject::connect(bigViewShortcut, &QShortcut::activated, [&]() {
+        bigView = !bigView;
+        if (bigView) {
+            hiddenDocks.clear();
+            for (QDockWidget* d : mainWindow.findChildren<QDockWidget*>())
+                if (d->isVisible()) { hiddenDocks.push_back(d); d->hide(); }
+            wasMaximized = mainWindow.isMaximized();
+            mainWindow.showMaximized();
+        } else {
+            for (QDockWidget* d : hiddenDocks) d->show();
+            if (!wasMaximized) mainWindow.showNormal();
+        }
+        viewport->setFocus();
+    });
     QTimer panelTimer;
     QObject::connect(&panelTimer, &QTimer::timeout, [&]() {
         panels.refresh();
@@ -1374,5 +1515,8 @@ int main(int argc, char** argv) {
     bakeJob.cancel = true;
     if (bakeJob.thread.joinable()) bakeJob.thread.join();
     app.end();
+#ifdef RT_EDITOR_GLFW_GAMEPADS
+    engine::shutdownWindowlessGlfwGamepads();
+#endif
     return result;
 }

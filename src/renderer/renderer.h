@@ -118,6 +118,45 @@ struct RenderMaterial {
     // is left the glass colour, so the day look is untouched. Vulkan; Metal
     // owed. Bit 16: bits 8-15 are the surface id (SURFACE_MASK below).
     static constexpr uint32_t FLAG_INTERIOR_MAP = 1u << 16;
+    // GROUND COVER (the grass field, GrassSystem): each instance shrinks to nothing as the
+    // camera distance to its origin crosses [fadeStart, fadeEnd] below, so the field thins
+    // away instead of popping at a draw distance; and it casts no shadow (a field of blades
+    // in the shadow map is noise and cost). Vulkan; Metal draws it unfaded, with shadows.
+    static constexpr uint32_t FLAG_GRASS = 1u << 17;
+    // FLAG_SHADOW_ONLY (bit 18): drawn into the shadow maps and nowhere else -- an object the
+    // occlusion test hid from the camera (engine/occlusion.h) still shades what the camera sees.
+    // Set by RenderSystem per draw, never by a level. Vulkan (the only backend with occlusion).
+    static constexpr uint32_t FLAG_SHADOW_ONLY = 1u << 18;
+    // FLAG_LOD_BAND (bit 19, ADR-0129): the surface is drawn only inside a distance band from the
+    // camera, dithered in over [lodIn0, lodIn1] and out over [lodOut0, lodOut1] (an edge pair left
+    // equal is open) -- so a near model and its far impostor CROSSFADE per pixel instead of popping.
+    // Not with FLAG_GRASS (which owns the same push slot). Vulkan.
+    static constexpr uint32_t FLAG_LOD_BAND = 1u << 19;
+    float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
+    float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
+    // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
+    // clumps leave); off when equal. With FLAG_ALPHA_TEST the cut-out keeps its coverage down the
+    // mip chain (a thin blade's alpha averages away otherwise, and a far card vanishes).
+    float fadeInStart = 0.0f, fadeInEnd = 0.0f;
+    // FLAG_GRASS: continuous thinning. Each clump carries a random RANK (its transform's bottom
+    // row, GrassSystem); across [thinStart, thinEnd] the clumps ranked above a falling threshold
+    // (to `keepFar`) shrink away and the rest grow toward `growFar` -- so the sparse outer ring,
+    // exactly the survivors of the dense inner one, swaps in with nothing left to pop.
+    float thinStart = 0.0f, thinEnd = 0.0f, keepFar = 1.0f, growFar = 1.0f;
+    // MATERIAL FEATURES (ADR-0098): generic, any surface, each off at 0 (Vulkan; Metal owed).
+    // Triplanar: the albedo and normal maps are sampled in WORLD space, one tile per
+    // `triplanarScale` metres, on three axes blended by the normal -- no UVs needed, nothing
+    // stretches. Feature albedo maps are sRGB (gamma-encoded, the procedural bakes' convention).
+    float triplanarScale = 0.0f;
+    float normalStrength = 1.0f;
+    // Per-instance variation: brightness / hue and the triplanar offset hashed from each
+    // instance's position, so every copy of one mesh looks its own.
+    float variation = 0.0f;
+    // Top layer: `topColor` on faces whose normal looks up past `topThreshold` (its y), broken by
+    // noise at `topNoiseScale` metres and preferring the albedo map's LOW spots (its alpha as a
+    // height) -- moss, snow, dust, sand. `topAmount` 0 = off.
+    float topAmount = 0.0f, topThreshold = 0.55f, topNoiseScale = 1.5f;
+    Vec3 topColor{0.045, 0.10, 0.02};
 
     // World-space procedural surface library (applySurface in surfaces.metal /
     // scene.cpp): an analytic material — brick, concrete, roof tiles, asphalt,
@@ -156,6 +195,16 @@ struct RenderMaterial {
         // Interior floor finishes (ADR-0080): polished veined stone and a
         // soft cut-pile floor covering, baked like the facade surfaces.
         Marble, Carpet,
+        // TERRAIN LAYERS (procgen/ground_layers.h): the vertex colour is the ground-cover
+        // WEIGHTS (r grass, g dirt, b sand, rock the rest) and the four texture slots are the
+        // layers -- albedo slot grass, metallic-roughness dirt, normal sand, AO rock (rgb
+        // gamma-encoded colour, a height) -- height-blended, world-planar, rock triplanar.
+        TerrainLayers,
+        // RIVER (procgen/hydrology.h, ADR-0099): moving water on a ribbon -- u across the river
+        // (0..1), v the distance along it (m), vertex colour r its flow SPEED (0..1). Shallows at
+        // the banks, foam at the banks and where it runs fast, ripples scrolling downstream along
+        // the tangent. Lakes are the same surface at speed 0 (u = 0.5).
+        River,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
@@ -237,9 +286,35 @@ struct RenderMesh {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     int materialIndex;
+    // The tangent slot carries DATA, not a direction: a CDLOD terrain node's morph target
+    // (terrain_lod.cpp). A renderer that packs tangents as unit vectors keeps this mesh in
+    // its full vertex layout (ADR-0096). Every other tangent is a direction, of any length.
+    bool tangentIsData = false;
 
     RenderMesh() : materialIndex(0) {}
 };
+
+// A mesh made ready to upload OFF the render thread (ADR-0096). Renderer::prepareMesh converts
+// it to the backend's GPU vertex layout on any thread -- no device calls -- and uploadPrepared
+// hands the bytes to the upload queue on the render thread, which is then only a copy. A
+// backend with no layout of its own keeps the RenderMesh (`raw`) and uploads it as usual.
+struct PreparedMesh {
+    RenderMesh raw;                    // used when vertexBytes is empty
+    std::vector<uint8_t> vertexBytes;  // the backend's own vertex layout
+    std::vector<uint32_t> indices;     // with vertexBytes
+    BoundingSphere bounds;
+    std::size_t vertexCount = 0, indexCount = 0;
+    uint32_t layout = 0;               // backend-private
+};
+// The default preparation: keep the mesh as it is.
+inline PreparedMesh prepareRawMesh(RenderMesh&& mesh) {
+    PreparedMesh p;
+    p.bounds = computeBoundingSphere(mesh.vertices.data(), mesh.vertices.size());
+    p.vertexCount = mesh.vertices.size();
+    p.indexCount = mesh.indices.size();
+    p.raw = std::move(mesh);
+    return p;
+}
 
 // Light units (ADR-0017 Phase 1): for the sun, color * intensity is the
 // illuminance arriving from its direction. For point/spot lights it is the
@@ -459,6 +534,10 @@ struct SceneLighting {
     // RenderSystem merges them into the frame's lights ON A COPY, like the
     // street lamps, so authored spot lights are never displaced. Never saved.
     std::vector<SpotLight> vehicleSpots;
+    // Spots a hand-held TOOL casts (the flashlight): owned and rebuilt every frame by the tool's own
+    // render() -- separate from vehicleSpots, which VehicleSystem rebuilds only in fixed steps (a frame
+    // with none kept the old list, and a beam appended to it every frame stacked up)
+    std::vector<SpotLight> toolSpots;
     // Transient interior room lights (ADR-0080): BuildingInteriorSystem
     // clears and refills this every fixed step with warm ceiling lights for
     // the streamed interior nearest the player; RenderSystem merges them into
@@ -496,6 +575,20 @@ struct ReflectionProbe {
     ReflectionProbe() : influenceRadius(10.0f) {}
     ReflectionProbe(const Vec3& pos, float radius, const Vec3& bMin, const Vec3& bMax)
         : position(pos), influenceRadius(radius), boxMin(bMin), boxMax(bMax) {}
+};
+
+// OCCLUSION DEPTH (engine/occlusion.h): a small readback of a recent frame's depth, each texel
+// the FARTHEST depth in its screen tile (reverse-Z: the minimum), and the clip transform that frame
+// used (pixel y down: row 0 is the top). A few frames old by the time it is read.
+struct OcclusionDepth {
+    int width = 0, height = 0;        // tiles
+    int tilePixels = 16;
+    std::vector<float> depth;         // width * height, row-major from the top
+    Mat4 viewProj;                    // world -> clip, y flipped (Vulkan framebuffer)
+    Vec3 eye{0, 0, 0};
+    Vec3 forward{0, 0, -1};
+    uint64_t frame = 0;               // the renderer frame it was drawn in
+    bool valid = false;
 };
 
 struct RenderStats {
@@ -637,6 +730,11 @@ public:
     virtual void resize(int width, int height) = 0;
 
     virtual MeshHandle uploadMesh(const RenderMesh& mesh) = 0;
+    // Two-phase upload (PreparedMesh above): prepareMesh is safe on any thread and touches no
+    // renderer state; uploadPrepared runs on the render thread. The defaults keep the mesh and
+    // upload it through uploadMesh.
+    virtual PreparedMesh prepareMesh(RenderMesh&& mesh) const { return prepareRawMesh(std::move(mesh)); }
+    virtual MeshHandle uploadPrepared(PreparedMesh&& mesh) { return uploadMesh(mesh.raw); }
     virtual void removeMesh(MeshHandle handle) = 0;
     virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
     virtual TextureHandle uploadTexture(int width, int height, int channels,
@@ -664,6 +762,9 @@ public:
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}
     virtual RenderStats getRenderStats() const = 0;
+    // The newest occlusion depth the GPU has finished (engine/occlusion.h), or null where the
+    // backend has none (the caller then culls by frustum only).
+    virtual const OcclusionDepth* occlusionDepth() const { return nullptr; }
 
     // Per-frame instance buffer capacities (general/shadow/foliage). A big level
     // (8 km city) raises these at load; small levels keep the lean defaults.
@@ -698,6 +799,9 @@ public:
     // today), so callers can report "unsupported" instead of hanging on a
     // file that will never appear.
     virtual bool requestFrameDump(const std::string& /*path*/) { return false; }
+    // What the backend holds on the GPU, one line (the control channel's mem?). Empty
+    // when it does not count.
+    virtual std::string memoryReport() const { return ""; }
 
     virtual void beginFrame() = 0;
     virtual void setCamera(const CameraState& camera) = 0;

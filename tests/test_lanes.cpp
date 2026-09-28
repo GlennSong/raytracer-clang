@@ -1,8 +1,10 @@
 // lanelab (ADR-0083): the geometry seam and, as the modules land, the generator's invariants.
 #include "test_framework.h"
+#include <CDT.h>
 #include <filesystem>
 #include <fstream>
 #include "engine/procgen/city/roads/lanes/geom2d.h"
+#include "engine/procgen/city/roads/lanes/deck_mesh.h"
 
 using namespace engine;
 using namespace engine::roads::lanes;
@@ -462,7 +464,8 @@ TEST_CASE(lanes_lots_producer_identity_follows_its_inputs_and_the_city_key) {
     LevelInputs seed = in; seed.level["citysim"]["seed"] = 4242; CHECK(lp->identity(seed).key != a.key);                 // the citysim block
     LevelInputs cell = in; cell.level["citysim"]["renderCell"] = 125.0; CHECK(lp->identity(cell).key != a.key);         // through the city key
     LevelInputs spawn = in; spawn.level["player"]["position"][0] = spawn.level["player"]["position"][0].get<double>() + 5.0; CHECK(lp->identity(spawn).key != a.key);
-    LevelInputs terrain = in; terrain.level["terrain"] = nlohmann::json::object(); CHECK(!lp->applies(terrain));       // terrain levels grow in the pre-pass
+    LevelInputs terrain = in; terrain.level["terrain"] = nlohmann::json::object(); CHECK(lp->applies(terrain));        // terrain levels bake too, on the loader's ground (ADR-0095)...
+    LevelInputs shaped = terrain; shaped.level["entities"].push_back(nlohmann::json{{"shape", "script"}, {"onTerrain", true}}); CHECK(!lp->applies(shaped));   // ...unless a script shapes it
     LevelInputs plain = in; plain.level["citysim"].erase("buildLots"); plain.level["citysim"].erase("planOnly"); CHECK(!lp->applies(plain));
     LevelInputs road = in; road.level["entities"].push_back(nlohmann::json{{"shape", "road"}}); CHECK(!lp->applies(road));
 }
@@ -475,7 +478,7 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
     // The producer's grow, twice, from the cached ring scene's products: byte-identical lots.
     const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
-    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes;
+    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.lotNav; city.pavedSidewalk = p.bands.sidewalkWidth;
     nlohmann::json ra, rb;
     const NetLotResult ga = growLotsForLevel(in, city, &ra), gb = growLotsForLevel(in, city, &rb);
     CHECK(ga.lots.size() > 100 && ga.lots.size() == gb.lots.size() && ra["units"] == rb["units"] && !ga.parts.empty());
@@ -503,4 +506,187 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     const nlohmann::json lotsEntry = manifestProducer(b->manifest(), kLotsProducerName);
     CHECK(!lotsEntry.is_null() && lotsEntry.value("key", std::string()) == hex16(findProducer(kLotsProducerName)->identity(in).key));
     std::printf("    %s; %zu cell parts (grow %.1f s, write %.1f s)\n", rep.reports.at(kLotsProducerName).report.value("summary", std::string()).c_str(), cps.size(), rep.reports.at(kLotsProducerName).timings.at("grow"), rep.reports.at(kLotsProducerName).timings.at("write"));
+}
+
+// ADR-0104: a river through a block leaves TWO blocks, one each side, and none of either is wet.
+TEST_CASE(lanes_blocks_stand_back_from_a_river_through_them) {
+    using namespace engine::roads::lanes;
+    const std::vector<Ring> holes{{Vec2(0, 0), Vec2(200, 0), Vec2(200, 100), Vec2(0, 100)}};
+    const std::vector<Ring> water{{Vec2(-10, 40), Vec2(210, 40), Vec2(210, 60), Vec2(-10, 60)}};   // a 20 m river across it
+    const std::vector<Poly2> dry = blocksFromHoles(holes, 0.5, 0.0, 0.0, &water);
+    const std::vector<Poly2> all = blocksFromHoles(holes, 0.5, 0.0, 0.0);
+    CHECK(all.size() == 1);
+    CHECK(dry.size() == 2);
+    for (const Poly2& b : dry)
+        for (const Vec2& p : b) CHECK(p.y <= 40.0 + 1e-6 || p.y >= 60.0 - 1e-6);
+}
+
+// LANE ARROWS (Glenn, 2026-09-25: "lane signs like arrows for where to turn ... they should be a part
+// of the road to define if you have a protected turn"): each lane of an approach is painted with what
+// it may do. The usual assignment, and the turn pockets that change it.
+TEST_CASE(lanes_arrows_assign_turns_to_the_lanes_that_make_them) {
+    using engine::roads::lanes::assignLaneMoves;
+    // a four-way, two lanes: left + straight, straight + right
+    auto m = assignLaneMoves(2, true, true, true);
+    CHECK(m[0].left && m[0].straight && !m[0].right);
+    CHECK(!m[1].left && m[1].straight && m[1].right);
+    // three lanes: the middle one goes straight only
+    m = assignLaneMoves(3, true, true, true);
+    CHECK(m[1].straight && !m[1].left && !m[1].right);
+    // a left-turn pocket turns left only; the lane beside it carries straight on
+    m = assignLaneMoves(3, true, true, true, true, false);
+    CHECK(m[0].left && !m[0].straight);
+    CHECK(m[1].straight);
+    // the stem of a T (no straight): the left lane turns left, the right lane right
+    m = assignLaneMoves(2, true, false, true);
+    CHECK(m[0].left && !m[0].straight && !m[0].right);
+    CHECK(m[1].right && !m[1].straight && !m[1].left);
+    // the top of a T with the cross street on the left: left + straight, straight only
+    m = assignLaneMoves(2, true, true, false);
+    CHECK(m[0].left && m[0].straight);
+    CHECK(m[1].straight && !m[1].right);
+}
+
+// ADR-0116: a mountain road CUTS through the rise it cannot climb. The profile used to be the grade-limited
+// envelope from above only -- it fills and never cuts -- so a pass over rough ground rode viaducts off every
+// bump (2.7 km of bridge in 4.2). `balance` blends toward the envelope from below: closer to the ground,
+// the grade kept, and a floor (a bridge's hold) still cleared.
+TEST_CASE(lanes_a_balanced_profile_cuts_as_well_as_fills) {
+    // a 2 km climb of 200 m (10%) with 25 m bumps every 150 m: steeper than 12% in places
+    const HeightField ground = [](double x, double) { return 0.1 * x + 12.5 * std::sin(x / 150.0 * 6.2831853); };
+    auto profile = [&](double balance, bool hold) {
+        EdgeSpec e;
+        for (double x = 0; x <= 2000.0; x += 2.0) e.xy.emplace_back(x, 0.0);
+        if (hold) e.floorPts.push_back({1000.0, 0.0, 0.1 * 1000.0 + 30.0, 20.0});   // a hold 30 m over the ground at 1 km
+        RoadClassSpec c; c.gMax = 0.15; c.window = 60.0; c.balance = balance;
+        throughProfile(e, ground, c);
+        return e;
+    };
+    const EdgeSpec fill = profile(0.0, false), bal = profile(0.5, false), held = profile(0.5, true);
+    // what makes a viaduct is how high the deck stands over the ground: the tallest fill
+    auto stats = [](const EdgeSpec& e, double& maxFill, double& maxGrade) {
+        maxFill = 0; maxGrade = 0;
+        for (std::size_t i = 0; i < e.z.size(); ++i) {
+            maxFill = std::max(maxFill, e.z[i] - e.t[i]);
+            if (i) maxGrade = std::max(maxGrade, std::fabs(e.z[i] - e.z[i - 1]) / (e.s[i] - e.s[i - 1]));
+        }
+    };
+    double gapF, gradeF, gapB, gradeB;
+    stats(fill, gapF, gradeF); stats(bal, gapB, gradeB);
+    std::printf("    [balance] tallest fill: fill-only %.1f m, balanced %.1f m; grade %.3f / %.3f\n", gapF, gapB, gradeF, gradeB);
+    CHECK(gapB < 0.7 * gapF);                          // it stands far lower off the ground
+    CHECK(gradeB <= 0.8 * 0.15 + 1e-6);                 // and keeps the design grade
+    const std::size_t mid = 500;                        // x = 1000
+    CHECK(held.z[mid] >= 0.1 * 1000.0 + 30.0 - 1e-6);   // a hold is still cleared
+    double gapH, gradeH; stats(held, gapH, gradeH);
+    CHECK(gradeH <= 0.8 * 0.15 + 1e-6);
+}
+
+// NEAR-DEGENERATE CROSSINGS (regenerating island_8_nature: a freeway waypoint moved a metre, the city bake
+// threw "Intersection of constraint edges ... can not be resolved: computed split vertex is invalid", and the
+// level loaded with no roads or city at all). CDT's own recorded case (its issue #211) throws at a vanishing
+// snap distance; constrainedTriangulation retries at coarser ones and returns a triangulation.
+#include <fstream>
+TEST_CASE(lanes_triangulation_survives_a_near_degenerate_crossing) {
+    std::ifstream f(std::string(RT_SOURCE_DIR) + "/third_party/CDT/CDT/tests/inputs/issue-211.txt");
+    CHECK(f.good());
+    if (!f.good()) return;
+    std::size_t nv = 0, ne = 0;
+    f >> nv >> ne;
+    std::vector<engine::Vec2> pts(nv);
+    for (auto& p : pts) f >> p.x >> p.y;
+    std::vector<std::pair<int, int>> edges;
+    for (std::size_t i = 0; i < ne; ++i) {
+        std::pair<int, int> e;
+        f >> e.first >> e.second;
+        // the file's last edge names vertex 97 of 97 (0..96): CDT's own test only checks it throws, and read
+        // raw it overran CDT's tables -- this test then failed differently run to run
+        if (e.first < static_cast<int>(nv) && e.second < static_cast<int>(nv)) edges.push_back(e);
+    }
+    bool threw = false;
+    engine::roads::lanes::Triangulation t;
+    try {
+        t = engine::roads::lanes::constrainedTriangulation(pts, edges, 5e-17);
+    } catch (const std::exception& e) {
+        threw = true;
+        std::printf("    threw: %s\n", e.what());
+    } catch (...) {
+        threw = true;
+    }
+    std::printf("    issue-211 input: %zu points, %zu valid edges -> %zu triangles%s\n", nv, edges.size(), t.tris.size(), threw ? " (THREW)" : "");
+    // and the raw 5e-17 attempt really does fail on it: the retry is what rescued it
+    bool rawThrows = false;
+    {
+        std::vector<CDT::V2d<double>> v; for (const auto& p : pts) v.push_back({p.x, p.y});
+        std::vector<CDT::Edge> es; for (const auto& e : edges) es.emplace_back(static_cast<CDT::VertInd>(e.first), static_cast<CDT::VertInd>(e.second));
+        CDT::RemoveDuplicatesAndRemapEdges(v, es);
+        CDT::Triangulation<double> raw(CDT::VertexInsertionOrder::Auto, CDT::IntersectingConstraintEdges::TryResolve, 5e-17);
+        try { raw.insertVertices(v); raw.insertEdges(es); } catch (const CDT::InvalidEdgeSplitVertex&) { rawThrows = true; }
+    }
+    CHECK(rawThrows);
+    CHECK(!threw);
+    CHECK(!t.tris.empty());
+}
+
+// PADS CLIPPED TO THEIR BLOCKS, FAST (island_8_nature: clipPadsToBlocks was about half of a 100 s load -- every
+// lot cut against the union of all 1,407 blocks, the union built block by block). Now each lot is cut against
+// the inset blocks its bounds touch. The same region: checked against the old algorithm, reimplemented here,
+// over a town of rectangular and L-shaped blocks with lots straddling their edges.
+TEST_CASE(lanes_pads_clip_to_their_blocks_same_as_the_full_union) {
+    using namespace engine::roads::lanes;
+    std::vector<engine::Poly2> blocks;
+    for (int by = 0; by < 6; ++by)
+        for (int bx = 0; bx < 6; ++bx) {
+            const double x0 = bx * 70.0, y0 = by * 70.0;
+            if ((bx + by) % 3 == 0)   // an L
+                blocks.push_back({{x0, y0}, {x0 + 50, y0}, {x0 + 50, y0 + 20}, {x0 + 25, y0 + 20}, {x0 + 25, y0 + 50}, {x0, y0 + 50}});
+            else
+                blocks.push_back({{x0, y0}, {x0 + 50, y0}, {x0 + 50, y0 + 50}, {x0, y0 + 50}});
+        }
+    std::vector<engine::LotBuilding> lots;
+    uint32_t seed = 7;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+    for (int i = 0; i < 300; ++i) {
+        engine::LotBuilding lb;
+        lb.type = "home";
+        const double cx = rnd() * 420 - 10, cy = rnd() * 420 - 10, w = 6 + rnd() * 20, d = 6 + rnd() * 20;
+        lb.plan = {{cx, cy}, {cx + w, cy}, {cx + w, cy + d}, {cx, cy + d}};
+        lb.site = engine::Vec2(cx + w * 0.5, cy + d * 0.5);
+        lb.groundY = rnd() * 10;
+        lots.push_back(lb);
+    }
+    const double sidewalk = 5.0;
+    const std::vector<engine::TerrainFlatten> fast = clipPadsToBlocks(lots, blocks, sidewalk);
+    // THE OLD WAY: the union of every inset block, built block by block, and every lot cut against all of it
+    const double falloff = lanesPadFalloff(sidewalk);
+    PolySet all;
+    for (const engine::Poly2& b : blocks) all = unionSets(all, offsetSet(fromRing(Ring(b.begin(), b.end())), -falloff));
+    std::vector<engine::TerrainFlatten> slow;
+    for (const engine::LotBuilding& lb : lots) {
+        const engine::TerrainFlatten raw = engine::lotPadFlatten(lb, 2.2 + falloff, falloff);
+        Ring ring; for (const engine::Vec3& v : raw.polygon) ring.emplace_back(v.x, v.z);
+        for (const Polygon2& pg : intersectSets(fromRing(ring), all)) {
+            if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 1.0) continue;
+            std::vector<engine::Vec3> poly; for (const engine::Vec2& q : pg.outer) poly.push_back(engine::Vec3(q.x, 0, q.y));
+            slow.push_back(engine::makeFlattenPad(std::move(poly), lb.groundY, falloff));
+        }
+    }
+    auto signature = [](const std::vector<engine::TerrainFlatten>& v) {
+        std::vector<std::pair<double, double>> s;   // (plane height, footprint area), sorted
+        for (const engine::TerrainFlatten& f : v) {
+            double a = 0;
+            for (std::size_t i = 0; i < f.polygon.size(); ++i) {
+                const engine::Vec3& p = f.polygon[i]; const engine::Vec3& q = f.polygon[(i + 1) % f.polygon.size()];
+                a += p.x * q.z - q.x * p.z;
+            }
+            s.push_back({std::round(f.c * 1000) / 1000, std::round(std::fabs(a) * 0.5 * 100) / 100});
+        }
+        std::sort(s.begin(), s.end());
+        return s;
+    };
+    const auto sf = signature(fast), ss = signature(slow);
+    std::printf("    %zu lots -> %zu pads (fast) / %zu pads (full union)\n", lots.size(), fast.size(), slow.size());
+    CHECK(fast.size() == slow.size());
+    CHECK(sf == ss);
+    CHECK(!fast.empty() && fast.size() < lots.size() * 2);
 }

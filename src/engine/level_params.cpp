@@ -1,11 +1,30 @@
 #include "level_params.h"
+#include "procgen/terrain_weather.h"   // the weathered ground (ADR-0126)
+#include "procgen/terrain_maps.h"      // its maps (ADR-0128)
+#include "procgen/forest.h"            // its forest (ADR-0129)
+#include "procgen/trails.h"            // its trails (ADR-0134)
+#include "procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
 
 #include "procgen/erosion.h"
+#include "procgen/ground_cover.h"
+#include "procgen/hydrology.h"
+#include "../log.h"
+#include <chrono>
+#include <map>
+#include <mutex>
 #include "procgen/noise.h"
 
 using json = nlohmann::json;
 
 namespace engine {
+
+std::vector<std::vector<Vec2>> levelWaterKeepOut(const json& rootIn, double margin) {
+    if (!rootIn.contains("terrain") || !rootIn["terrain"].is_object() || !rootIn["terrain"].contains("rivers")) return {};
+    json root = rootIn;
+    propagateWaterSeaLevel(root);   // the hydrology ends its rivers at the sea
+    const TerrainParams p = readTerrainParams(root["terrain"]);
+    return p.hydro ? p.hydro->corridorRings(margin) : std::vector<std::vector<Vec2>>{};
+}
 
 void propagateWaterSeaLevel(json& root) {
     if (!root.contains("water")) return;
@@ -28,6 +47,8 @@ void propagateWaterSeaLevel(json& root) {
         if (!g.contains("beach_rise")) g["beach_rise"] = beach;
     }
 }
+
+std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tj);
 
 TerrainParams readTerrainParams(const json& t) {
     TerrainParams p;
@@ -78,6 +99,7 @@ TerrainParams readTerrainParams(const json& t) {
         }
     }
     p.seaLevel = t.value("seaLevel", p.seaLevel);   // loaders may override from the water block
+    p.erodeLandOnly = t.value("erodeLandOnly", p.erodeLandOnly);
     // The earthwork field's knobs (procgen/earthwork.h):
     //   "earthwork": { "enabled": true, "reach": 100, "cell": 4, "margin": 0 }
     if (t.contains("earthwork") && t["earthwork"].is_object()) {
@@ -103,6 +125,23 @@ TerrainParams readTerrainParams(const json& t) {
     p.rangeWidth = t.value("rangeWidth", p.rangeWidth);
     p.rangeHeight = t.value("rangeHeight", p.rangeHeight);
     p.rangeVariation = t.value("rangeVariation", p.rangeVariation);
+    if (t.contains("island") && t["island"].is_object()) {   // ADR-0105
+        const json& il = t["island"];
+        TerrainParams::Island& I = p.island;
+        I.on = il.value("on", true);
+        if (il.contains("center") && il["center"].is_array()) { I.cx = il["center"][0].get<double>(); I.cz = il["center"][1].get<double>(); }
+        I.radius = il.value("radius", I.radius); I.aspect = il.value("aspect", I.aspect); I.angleDeg = il.value("angle", I.angleDeg);
+        I.coastNoise = il.value("coastNoise", I.coastNoise); I.coastScale = il.value("coastScale", I.coastScale);
+        if (il.contains("peninsula") && il["peninsula"].is_object()) {
+            const json& pn = il["peninsula"];
+            I.penDeg = pn.value("bearing", 0.0); I.penLength = pn.value("length", I.penLength); I.penWidth = pn.value("width", I.penWidth);
+        }
+        if (il.contains("cliffs") && il["cliffs"].is_object()) {
+            const json& c = il["cliffs"];
+            I.cliffFromDeg = c.value("from", 0.0); I.cliffToDeg = c.value("to", 0.0); I.cliffHeight = c.value("height", 0.0);
+        }
+        I.plainHeight = il.value("plainHeight", I.plainHeight); I.shelfDepth = il.value("shelfDepth", I.shelfDepth);
+    }
     if (t.contains("range") && t["range"].is_object()) {
         const auto& r = t["range"];
         p.rangeRidges = buildRangeRidges(
@@ -112,6 +151,94 @@ TerrainParams readTerrainParams(const json& t) {
             r.value("depthFalloff", 0.62f), r.value("angleJitter", 12.0f),
             r.value("seed", 0u));
         p.rangeWidth = r.value("width", p.rangeWidth);
+    }
+    // THE GROUND-COVER MAP (procgen/ground_cover.h): "groundCover": {...} in the terrain block.
+    // Its sea level is the terrain's (the water block's, via propagateWaterSeaLevel).
+    if (t.contains("groundCover") && t["groundCover"].is_object()) {
+        const json& g = t["groundCover"];
+        GroundCoverParams gp;
+        gp.seaLevel = p.seaLevel;
+        gp.beachHeight = g.value("beachHeight", gp.beachHeight);
+        gp.uplandHeight = g.value("uplandHeight", gp.uplandHeight);
+        gp.mountainHeight = g.value("mountainHeight", gp.mountainHeight);
+        gp.snowHeight = g.value("snowHeight", gp.snowHeight);
+        gp.rockSlopeDeg = g.value("rockSlopeDeg", gp.rockSlopeDeg);
+        gp.dirtPatches = g.value("dirtPatches", gp.dirtPatches);
+        gp.seed = g.value("seed", gp.seed);
+        auto col = [&](const char* key, Vec3& into) {
+            if (g.contains(key) && g[key].is_array() && g[key].size() == 3)
+                into = Vec3(g[key][0].get<double>(), g[key][1].get<double>(), g[key][2].get<double>());
+        };
+        col("grass", gp.grass); col("grassDry", gp.grassDry); col("dirt", gp.dirt);
+        col("sand", gp.sand); col("rock", gp.rock); col("snow", gp.snow);
+        if (t.value("erode", false)) gp.maps = weatheredMapsFor(t);   // ADR-0128: nullptr unless weathered
+        if (t.contains("trails") && t["trails"].is_array())                 // ADR-0134: the hiking trails
+            gp.trails = std::make_shared<const TrailNetwork>(TrailNetwork::fromJson(t["trails"]));
+        if (t.contains("forest") && t["forest"].is_object())                // ADR-0129: litter under the canopy
+            gp.forest = std::make_shared<const ForestParams>(forestFromJson(t["forest"]));
+        p.cover = std::make_shared<const GroundCover>(gp);
+        p.coverWeights = g.value("layered", true);   // textured layers (the loader binds them) or a flat colour
+    }
+    // HYDROLOGY (procgen/hydrology.h, ADR-0099): "rivers": {...} in the terrain block. The network
+    // is computed on the terrain's own base relief, once per process for a given terrain block
+    // (readTerrainParams runs many times a load, and every copy shares the network).
+    if (t.contains("rivers") && t["rivers"].is_object()) {
+        static std::mutex memoMutex;
+        static std::map<std::string, std::shared_ptr<const Hydrology>> memo;
+        const std::string key = t.dump();
+        std::lock_guard<std::mutex> lock(memoMutex);
+        auto it = memo.find(key);
+        if (it == memo.end()) {
+            const json& r = t["rivers"];
+            HydroParams hp;
+            hp.half = r.value("region", static_cast<double>(p.size)) * 0.5;
+            hp.cell = r.value("cell", hp.cell);
+            hp.seaLevel = p.seaLevel;
+            hp.riverArea = r.value("riverArea", hp.riverArea);
+            hp.widthMin = r.value("widthMin", hp.widthMin);
+            hp.widthMax = r.value("widthMax", hp.widthMax);
+            hp.widthK = r.value("widthK", hp.widthK);
+            hp.widthVariation = r.value("widthVariation", hp.widthVariation);
+            hp.depthMin = r.value("depthMin", hp.depthMin);
+            hp.depthMax = r.value("depthMax", hp.depthMax);
+            hp.depthK = r.value("depthK", hp.depthK);
+            hp.bankSlope = r.value("bankSlope", hp.bankSlope);
+            hp.incisionMin = r.value("incisionMin", hp.incisionMin);
+            hp.incisionMax = r.value("incisionMax", hp.incisionMax);
+            hp.incisionK = r.value("incisionK", hp.incisionK);
+            hp.bankSteep = r.value("bankSteep", hp.bankSteep);
+            hp.lakeMinArea = r.value("lakeMinArea", hp.lakeMinArea);
+            hp.autoRivers = r.value("auto", hp.autoRivers);
+            if (r.contains("courses") && r["courses"].is_array())
+                for (const json& c : r["courses"]) {
+                    HydroParams::Course course;
+                    for (const json& q : c.value("points", json::array())) course.points.emplace_back(q[0].get<double>(), q[1].get<double>());
+                    if (c.contains("width") && c["width"].is_array() && c["width"].size() == 2) {
+                        course.width0 = c["width"][0].get<double>();
+                        course.width1 = c["width"][1].get<double>();
+                    }
+                    course.meander = c.value("meander", course.meander);
+                    hp.courses.push_back(std::move(course));
+                }
+            hp.lakeMinDepth = r.value("lakeMinDepth", hp.lakeMinDepth);
+            TerrainParams base = p;   // the relief the water runs over: no flatten, no earthwork
+            base.flatten.clear();
+            base.earthwork.reset();
+            base.hydro.reset();
+            const Noise n(t.value("seed", 0u));
+            const auto t0 = std::chrono::steady_clock::now();
+            // the ground the water runs over: the ERODED relief when the terrain erodes (its valleys
+            // are where the rivers belong), else the raw relief
+            std::function<double(double, double)> over = [base, n](double x, double z) { return terrainBaseHeight(base, n, x, z); };
+            if (t.value("erode", false))
+                if (auto eb = erodedForTerrain(t)) over = [eb](double x, double z) { return (*eb)(x, z); };
+            auto hy = Hydrology::build(over, hp);
+            LOG_INFO << "[hydrology] " << hy->rivers().size() << " rivers, " << hy->lakes().size() << " lakes on a "
+                     << hy->gridSize() << "^2 grid (" << hp.cell << " m) in "
+                     << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
+            it = memo.emplace(key, std::move(hy)).first;
+        }
+        p.hydro = it->second;
     }
     return p;
 }
@@ -151,11 +278,42 @@ TreeParams readTreeParams(const json& ent, uint32_t& seedOut) {
     return tp;
 }
 
+double levelDrawnGroundCell(const json& root) {
+    if (!root.contains("terrain") || !root["terrain"].contains("cdlod")) return 0.0;
+    const json& cj = root["terrain"]["cdlod"];
+    const double worldHalf = cj.is_object() ? cj.value("worldHalf", 1024.0) : 1024.0;
+    const int numLods = cj.is_object() ? cj.value("numLods", 6) : 6;
+    const int gridRes = cj.is_object() ? cj.value("gridRes", 32) : 32;
+    const char* bakedEnv = std::getenv("RT_BAKED_TERRAIN");
+    if (cj.is_object() && cj.value("baked", false) && !(bakedEnv && bakedEnv[0] == '0')) return kBakedCell0;
+    return (worldHalf * 2.0 / double(1 << (numLods - 1))) / std::max(1, gridRes);
+}
+
 std::shared_ptr<const std::function<double(double, double)>>
 readErodedBase(const json& root) {
     if (!root.contains("terrain") || !root["terrain"].value("erode", false))
         return nullptr;
-    const json& tj = root["terrain"];
+    return erodedForTerrain(root["terrain"]);
+}
+
+std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tjIn) {
+    // once per terrain block (a load reads it several times; the island planner and the level agree).
+    // Its "rivers" are left out: they are computed ON this, and reading them here would recurse.
+    json tj = tjIn;
+    tj.erase("rivers");
+    static std::mutex memoMutex;
+    static std::map<std::string, std::shared_ptr<const std::function<double(double, double)>>> memo;
+    const std::string key = tj.dump();
+    std::lock_guard<std::mutex> lock(memoMutex);
+    if (auto it = memo.find(key); it != memo.end()) return it->second;
+    // THE WEATHERED GROUND (ADR-0126): grown from uplift and weathered by water offline, cached on disk
+    if (tj.contains("weather") && tj["weather"].is_object()) {
+        auto grid = std::make_shared<const Heightmap>(weatheredTerrainCached(tj));
+        auto f = std::make_shared<const std::function<double(double, double)>>(
+            [grid](double x, double z) { return static_cast<double>(grid->sampleWorld(static_cast<float>(x), static_cast<float>(z))); });
+        memo[key] = f;
+        return f;
+    }
     TerrainParams eb = readTerrainParams(tj);
     Noise en(tj.value("seed", 0u));
     ErosionParams ep;
@@ -164,7 +322,9 @@ readErodedBase(const json& root) {
     ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
     ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
     ep.talus = tj.value("erodeTalus", ep.talus);
+    ep.vulkan = tj.value("erodeGpu", false);   // ADR-0122: opt-in on Vulkan builds
     bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
+    memo[key] = eb.erodedBase;
     return eb.erodedBase;
 }
 

@@ -43,6 +43,16 @@ private:
     void spawnWalkers(engine::FrameContext& ctx);
     void driveWalkers(engine::FrameContext& ctx);
 
+public:
+    // How many times a wedged body has been moved to its own plan (see the
+    // deadlock note in driveWalkers). A healthy city leaves this near zero;
+    // a climbing count means the pedestrian network runs through something
+    // solid, which is a LEVEL bug this only papers over.
+    long unwedged() const { return unwedged_; }
+
+private:
+    long unwedged_ = 0;
+
     struct Walker {
         engine::Entity entity;             // the character-capsule entity
         int agentId = -1;                  // the CitySim ghost that plans for it
@@ -52,6 +62,9 @@ private:
         engine::Vec2 facing{0, 1};         // last real travel direction (render yaw)
         int outfit = 0;                    // deterministic shirt/pants/skin pick
         engine::Real stride = 0;           // walk-cycle phase (advances with speed)
+        engine::Real heldFor = 0;          // seconds its plan has been leashed
+                                           // to a body that is not CLOSING on it
+        engine::Real lastLead = -1;        // last distance body -> ghost
     };
 
     // PHYSICAL-BODY BUDGET. A walker's Jolt capsule is stepped every tick and

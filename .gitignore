@@ -39,3 +39,9 @@ build-visionos-dev/
 
 # Viewer camera bookmarks: per-machine editor state, never checked in (Glenn, 2026-09-20).
 *.cameras.json
+
+# citywalk director decision log: per-run telemetry written to the repo root by
+# tools/citywalk.py (ADR-0091), never checked in.
+citywalk-log.jsonl
+# Python bytecode.
+__pycache__/

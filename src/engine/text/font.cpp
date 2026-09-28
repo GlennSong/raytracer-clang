@@ -175,6 +175,39 @@ void Font::draw(TextImage& img, const std::string& text, float x, float baseline
     }
 }
 
+std::string Font::svgPath(const std::string& text, float x, float baselineY, float pixelHeight, float xScale) const {
+    if (!info_) return {};
+    const float sy = stbtt_ScaleForPixelHeight(info_.get(), pixelHeight);
+    const float sx = sy * xScale;
+    const std::vector<int> cps = codepoints(text);
+    char buf[96];
+    std::string d;
+    for (std::size_t i = 0; i < cps.size(); ++i) {
+        stbtt_vertex* v = nullptr;
+        const int n = stbtt_GetCodepointShape(info_.get(), cps[i], &v);
+        auto X = [&](float fx) { return x + fx * sx; };
+        auto Y = [&](float fy) { return baselineY - fy * sy; };   // font units are y up
+        for (int k = 0; k < n; ++k) {
+            const stbtt_vertex& e = v[k];
+            if (e.type == STBTT_vmove) std::snprintf(buf, sizeof buf, "%sM%.3f %.3f", d.empty() ? "" : "Z", X(e.x), Y(e.y));
+            else if (e.type == STBTT_vline) std::snprintf(buf, sizeof buf, "L%.3f %.3f", X(e.x), Y(e.y));
+            else if (e.type == STBTT_vcurve) std::snprintf(buf, sizeof buf, "Q%.3f %.3f %.3f %.3f", X(e.cx), Y(e.cy), X(e.x), Y(e.y));
+            else std::snprintf(buf, sizeof buf, "C%.3f %.3f %.3f %.3f %.3f %.3f", X(e.cx), Y(e.cy), X(e.cx1), Y(e.cy1), X(e.x), Y(e.y));
+            d += buf;
+        }
+        if (n > 0) d += "Z";
+        stbtt_FreeShape(info_.get(), v);
+        int adv, lsb;
+        stbtt_GetCodepointHMetrics(info_.get(), cps[i], &adv, &lsb);
+        x += adv * sx;
+        if (i + 1 < cps.size()) x += stbtt_GetCodepointKernAdvance(info_.get(), cps[i], cps[i + 1]) * sx;
+    }
+    // a contour's own "Z" before the next M was added above; "ZZ" / leading Z are harmless but tidy them
+    std::string out;
+    for (std::size_t k = 0; k < d.size(); ++k) if (!(d[k] == 'Z' && k + 1 < d.size() && d[k + 1] == 'Z')) out += d[k];
+    return out;
+}
+
 const Font* signFont() {
     static std::once_flag once;
     static Font font;

@@ -10,6 +10,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
@@ -28,6 +29,7 @@
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -155,7 +157,10 @@ inline Mat4 fromJolt(const JPH::Mat44& m) {
     return r;
 }
 
-constexpr JPH::uint MAX_BODIES = 10240;
+// 65536: island_8_saltwood's load (5918 buildings, lots, road cells, trees, the fleet) filled 10240, and
+// the terrain collider under the spawn failed to add for eight fixed steps -- rebuilt on the main thread
+// each time (60 ms a step) -- until streaming freed some. A full pool drops ANY body silently.
+constexpr JPH::uint MAX_BODIES = 65536;
 constexpr JPH::uint MAX_BODY_PAIRS = 10240;
 constexpr JPH::uint MAX_CONTACT_CONSTRAINTS = 10240;
 
@@ -238,6 +243,12 @@ struct PhysicsWorld::Impl {
         float wheelbase = 2.7f;
         float yawAssist = 0.0f;
         float gripAccel = 9.0f;   // the lateral acceleration the assist lets the car keep (m/s²)
+        std::vector<char> diffFront;   // per differential: a front axle's?
+        float frontShare = 0.5f;
+        float dragArea = 0.0f;         // Cd x A (m^2); > 0 applies quadratic aero drag each step
+        float centerLimitedSlip = 1.4f; // the coupling between axles in 4WD (open in 2WD)
+        bool tractionSplit = false;     // VehicleConfig::tractionSplit
+        float appliedShare = -1.0f;     // the front share the differentials carry this step
     };
     std::vector<Vehicle> vehicles;
 
@@ -364,10 +375,13 @@ PhysicsBodyId PhysicsWorld::addCapsule(Real halfHeight, Real radius,
                       restitution, friction, lockRotation, continuous);
 }
 
-PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
-                                    const std::vector<uint32_t>& indices,
-                                    const Vec3& position, Real friction) {
-    if (!impl || vertices.empty() || indices.size() < 3) return INVALID_PHYSICS_BODY;
+struct PreparedMeshShape {
+    JPH::RefConst<JPH::Shape> shape;
+};
+
+std::shared_ptr<const PreparedMeshShape> PhysicsWorld::prepareMeshShape(const std::vector<Vec3>& vertices,
+                                                                        const std::vector<uint32_t>& indices) {
+    if (vertices.empty() || indices.size() < 3) return nullptr;
     JPH::VertexList verts;
     verts.reserve(vertices.size());
     for (const Vec3& v : vertices)
@@ -384,9 +398,24 @@ PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
 
     JPH::MeshShapeSettings shapeSettings(verts, tris);
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
-    if (result.HasError()) return INVALID_PHYSICS_BODY;
-    return createBody(impl->bodies(), result.Get(), position, Quat::identity(),
+    if (result.HasError()) return nullptr;
+    auto out = std::make_shared<PreparedMeshShape>();
+    out->shape = result.Get();
+    return out;
+}
+
+PhysicsBodyId PhysicsWorld::addPreparedMesh(const PreparedMeshShape& shape, const Vec3& position, Real friction) {
+    if (!impl || !shape.shape) return INVALID_PHYSICS_BODY;
+    return createBody(impl->bodies(), shape.shape.GetPtr(), position, Quat::identity(),
                       BodyMotion::Static, 0.0, friction);
+}
+
+PhysicsBodyId PhysicsWorld::addMesh(const std::vector<Vec3>& vertices,
+                                    const std::vector<uint32_t>& indices,
+                                    const Vec3& position, Real friction) {
+    if (!impl) return INVALID_PHYSICS_BODY;
+    const auto shape = prepareMeshShape(vertices, indices);
+    return shape ? addPreparedMesh(*shape, position, friction) : INVALID_PHYSICS_BODY;
 }
 
 void PhysicsWorld::removeBody(PhysicsBodyId id) {
@@ -671,15 +700,55 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     // attach points are body-frame) are unaffected.
     const float carve = std::min(static_cast<float>(cfg.floorClearance),
                                  static_cast<float>(cfg.chassisHalfExtent.y));
-    JPH::Vec3 half = toJolt(cfg.chassisHalfExtent);
-    half.SetY(half.GetY() - carve * 0.5f);
-    JPH::BoxShapeSettings shapeSettings(half);
-    JPH::ShapeSettings::ShapeResult shapeRes = shapeSettings.Create();
-    if (shapeRes.HasError()) return INVALID_VEHICLE;
-    JPH::RotatedTranslatedShapeSettings floorSettings(
-        JPH::Vec3(0, carve * 0.5f, 0), JPH::Quat::sIdentity(), shapeRes.Get());
-    JPH::ShapeSettings::ShapeResult floorRes = floorSettings.Create();
-    if (floorRes.HasError()) return INVALID_VEHICLE;
+    JPH::ShapeSettings::ShapeResult floorRes;
+    if (cfg.approachDegrees > 0.0 || cfg.departureDegrees > 0.0) {
+        // The carved box as a hull, its lower nose and tail cut back along the approach and departure
+        // lines: each rises from the ground (the body box's floor, where the drawn tyres stand) under
+        // its axle, and the floor runs between where the two lines cross it.
+        const float hx = static_cast<float>(cfg.chassisHalfExtent.x);
+        const float hy = static_cast<float>(cfg.chassisHalfExtent.y);
+        const float hz = static_cast<float>(cfg.chassisHalfExtent.z);
+        float frontAxle = -hz, rearAxle = hz;
+        for (const VehicleWheel& w : cfg.wheels) {
+            frontAxle = std::max(frontAxle, static_cast<float>(w.position.z));
+            rearAxle = std::min(rearAxle, static_cast<float>(w.position.z));
+        }
+        if (cfg.wheels.empty()) { frontAxle = hz; rearAxle = -hz; }
+        const float ground = -hy, floorY = -hy + carve, roofCut = hy - 0.1f;
+        JPH::Array<JPH::Vec3> pts;
+        auto end = [&](float sign, float axleZ, Real deg) {   // sign +1 = the nose (+z), -1 = the tail
+            const float edgeZ = sign * hz;
+            if (deg <= 0.0) {   // square: the floor runs to the end
+                for (float x : {-hx, hx}) pts.push_back(JPH::Vec3(x, floorY, edgeZ));
+            } else {
+                const float t = std::tan(JPH::DegreesToRadians(static_cast<float>(std::min(deg, Real(80)))));
+                const float over = sign * (edgeZ - axleZ);   // overhang past the axle (>= 0 normally)
+                const float lipY = std::min(roofCut, std::max(floorY, ground + std::max(over, 0.0f) * t));
+                const float floorEnd = axleZ + sign * std::max(0.0f, (floorY - ground) / t);
+                const float fz = sign > 0 ? std::min(floorEnd, edgeZ) : std::max(floorEnd, edgeZ);
+                for (float x : {-hx, hx}) {
+                    pts.push_back(JPH::Vec3(x, floorY, fz));
+                    pts.push_back(JPH::Vec3(x, lipY, edgeZ));
+                }
+            }
+            for (float x : {-hx, hx}) pts.push_back(JPH::Vec3(x, hy, edgeZ));
+        };
+        end(1.0f, frontAxle, cfg.approachDegrees);
+        end(-1.0f, rearAxle, cfg.departureDegrees);
+        JPH::ConvexHullShapeSettings hull(pts, 0.03f);
+        floorRes = hull.Create();
+        if (floorRes.HasError()) return INVALID_VEHICLE;
+    } else {
+        JPH::Vec3 half = toJolt(cfg.chassisHalfExtent);
+        half.SetY(half.GetY() - carve * 0.5f);
+        JPH::BoxShapeSettings shapeSettings(half);
+        JPH::ShapeSettings::ShapeResult shapeRes = shapeSettings.Create();
+        if (shapeRes.HasError()) return INVALID_VEHICLE;
+        JPH::RotatedTranslatedShapeSettings floorSettings(
+            JPH::Vec3(0, carve * 0.5f, 0), JPH::Quat::sIdentity(), shapeRes.Get());
+        floorRes = floorSettings.Create();
+        if (floorRes.HasError()) return INVALID_VEHICLE;
+    }
     // Lower the centre of mass below the chassis centre so the car resists rolling
     // in corners (the classic anti-tip tweak).
     JPH::OffsetCenterOfMassShapeSettings comSettings(
@@ -694,6 +763,7 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         JPH::EOverrideMassProperties::CalculateInertia;
     bodySettings.mMassPropertiesOverride.mMass = static_cast<float>(cfg.mass);
     bodySettings.mFriction = static_cast<float>(cfg.friction);
+    if (cfg.dragArea > 0.0) bodySettings.mLinearDamping = 0.0f;   // real aero drag instead (update())
     bodySettings.mAllowSleeping = false;
     JPH::Body* chassis = impl->bodies().CreateBody(bodySettings);
     if (!chassis) return INVALID_VEHICLE;
@@ -719,7 +789,19 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         ws->mMaxSteerAngle = w.steered
             ? JPH::DegreesToRadians(static_cast<float>(cfg.maxSteerDegrees))
             : 0.0f;
-        ws->mMaxBrakeTorque = static_cast<float>(cfg.brakeTorque);
+        {   // brake balance: brakeTorque is the per-wheel average; the front axle takes brakeFrontBias of it
+            int nFront = 0, nRear = 0;
+            Real lo = 1e30, hi = -1e30;
+            for (const VehicleWheel& o : cfg.wheels) { lo = std::min(lo, o.position.z); hi = std::max(hi, o.position.z); }
+            const Real mid = 0.5 * (lo + hi);
+            for (const VehicleWheel& o : cfg.wheels) (o.position.z > mid ? nFront : nRear) += 1;
+            const Real total = cfg.brakeTorque * static_cast<Real>(cfg.wheels.size());
+            const Real bias = std::clamp(cfg.brakeFrontBias, Real(0), Real(1));
+            Real t = cfg.brakeTorque;
+            if (nFront > 0 && nRear > 0)
+                t = w.position.z > mid ? total * bias / nFront : total * (1.0 - bias) / nRear;
+            ws->mMaxBrakeTorque = static_cast<float>(t);
+        }
         // The lateral slip curve at the config's grip (Jolt's shape: a peak
         // at 3 degrees of slip, 85 % of it once sliding past 20).
         ws->mLateralFriction.Clear();
@@ -753,23 +835,68 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     controller->mEngine.mMaxTorque = static_cast<float>(cfg.engineTorque);
     controller->mEngine.mMaxRPM = static_cast<float>(cfg.maxRPM);
 
-    // One differential per driven wheel pair (in declaration order), torque split
-    // evenly across them. A standard 4-wheeler with two driven fronts/rears gets
-    // one differential; an all-wheel-drive layout gets two.
-    std::vector<int> driven;
-    for (int i = 0; i < static_cast<int>(cfg.wheels.size()); ++i)
-        if (cfg.wheels[i].driven) driven.push_back(i);
-    for (size_t i = 0; i + 1 < driven.size(); i += 2) {
+    // ONE DIFFERENTIAL PER DRIVEN AXLE (VehicleConfig drivetrain): driven wheels grouped by their z, the
+    // left one the larger x (as the anti-roll bars take it), front axles those ahead of the axles' middle.
+    struct Axle { Real z; std::vector<int> wheels; };
+    std::vector<Axle> axles;
+    for (int i = 0; i < static_cast<int>(cfg.wheels.size()); ++i) {
+        if (!cfg.wheels[i].driven) continue;
+        const Real z = cfg.wheels[i].position.z;
+        Axle* hit = nullptr;
+        for (Axle& a : axles) if (std::fabs(a.z - z) < 0.10) { hit = &a; break; }
+        if (hit) hit->wheels.push_back(i);
+        else axles.push_back({z, {i}});
+    }
+    Real zMid = 0.0;
+    {
+        Real lo = 1e30, hi = -1e30;
+        for (const VehicleWheel& w : cfg.wheels) { lo = std::min(lo, w.position.z); hi = std::max(hi, w.position.z); }
+        if (!cfg.wheels.empty()) zMid = 0.5 * (lo + hi);
+    }
+    std::vector<char> diffFront;
+    bool anyFront = false, anyRear = false;
+    for (const Axle& a : axles) {
+        int left = a.wheels.front(), right = a.wheels.front();
+        for (int i : a.wheels) {
+            if (cfg.wheels[i].position.x > cfg.wheels[left].position.x) left = i;
+            if (cfg.wheels[i].position.x < cfg.wheels[right].position.x) right = i;
+        }
         JPH::VehicleDifferentialSettings d;
-        d.mLeftWheel = driven[i];
-        d.mRightWheel = driven[i + 1];
+        d.mLeftWheel = left;
+        d.mRightWheel = right == left ? -1 : right;
+        d.mLimitedSlipRatio = static_cast<float>(cfg.axleLimitedSlip);
         controller->mDifferentials.push_back(d);
+        const bool front = a.z > zMid;
+        diffFront.push_back(front ? 1 : 0);
+        (front ? anyFront : anyRear) = true;
     }
-    if (!controller->mDifferentials.empty()) {
-        float ratio = 1.0f / static_cast<float>(controller->mDifferentials.size());
-        for (JPH::VehicleDifferentialSettings& d : controller->mDifferentials)
-            d.mEngineTorqueRatio = ratio;
+    float share = cfg.frontDriveShare >= 0.0 ? static_cast<float>(std::clamp(cfg.frontDriveShare, Real(0), Real(1)))
+                                             : (anyFront && anyRear ? 0.5f : (anyFront ? 1.0f : 0.0f));
+    // THE CENTRE COUPLING. Jolt's between-differentials limited slip sends ALL torque to the slower axle once
+    // the other spins past the ratio -- at its default 1.4 a "rear-drive" car handed its torque to the fronts
+    // the moment the rears slipped, and drove as a 4x4 (measured: RWD, FWD and 4WD climbed identically). A
+    // one-axle split therefore runs it OPEN (FLT_MAX), as a part-time 4x4's transfer case in 2WD does.
+    const bool oneAxle = share <= 0.001f || share >= 0.999f;
+    controller->mDifferentialLimitedSlipRatio =
+        oneAxle || cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
+    // GEARBOX (VehicleConfig): quicker shifts, optional ratios
+    controller->mTransmission.mSwitchTime = static_cast<float>(cfg.shiftTime);
+    controller->mTransmission.mClutchReleaseTime = static_cast<float>(cfg.clutchReleaseTime);
+    controller->mTransmission.mSwitchLatency = static_cast<float>(cfg.shiftLatency);
+    if (!cfg.gearRatios.empty()) {
+        controller->mTransmission.mGearRatios.clear();
+        for (Real g : cfg.gearRatios) controller->mTransmission.mGearRatios.push_back(static_cast<float>(g));
     }
+    auto applyShare = [](JPH::Array<JPH::VehicleDifferentialSettings>& diffs, const std::vector<char>& isFront, float frontShare) {
+        int nf = 0, nr = 0;
+        for (char f : isFront) (f ? nf : nr) += 1;
+        float fs = frontShare;
+        if (nf == 0) fs = 0.0f;
+        if (nr == 0) fs = 1.0f;
+        for (std::size_t i = 0; i < diffs.size(); ++i)
+            diffs[i].mEngineTorqueRatio = isFront[i] ? (nf ? fs / nf : 0.0f) : (nr ? (1.0f - fs) / nr : 0.0f);
+    };
+    applyShare(controller->mDifferentials, diffFront, share);
     vs.mController = controller;
 
     JPH::VehicleConstraint* constraint = new JPH::VehicleConstraint(*chassis, vs);
@@ -790,6 +917,12 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.wheels = static_cast<int>(cfg.wheels.size());
     v.maxSteerRad = JPH::DegreesToRadians(static_cast<float>(cfg.maxSteerDegrees));
     v.yawAssist = static_cast<float>(std::max(Real(0), cfg.yawAssist));
+    v.diffFront = diffFront;
+    v.frontShare = share;
+    v.centerLimitedSlip = cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
+    v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
+    v.tractionSplit = cfg.tractionSplit;
+    v.appliedShare = share;
     // The assist's yaw-rate cap: the grip on a 0.85 road (the city's), with
     // 10 % in hand so it only ever trims a slide, never a cornering car.
     v.gripAccel = static_cast<float>(1.1 * cfg.lateralGrip * std::sqrt(0.85) * 9.81);
@@ -925,9 +1058,95 @@ void PhysicsWorld::applyYawAssist(std::size_t index) {
     bi.AddTorque(v.body, up * (-v.yawAssist * excess / invIup));
 }
 
+namespace {
+// Write a front/rear torque split onto the differentials (each axle's share divided among its differentials).
+float writeDriveShare(JPH::WheeledVehicleController* wc, const std::vector<char>& diffFront, float share) {
+    JPH::Array<JPH::VehicleDifferentialSettings>& diffs = wc->GetDifferentials();
+    int nf = 0, nr = 0;
+    for (char f : diffFront) (f ? nf : nr) += 1;
+    float fs = std::clamp(share, 0.0f, 1.0f);
+    if (nf == 0) fs = 0.0f;
+    if (nr == 0) fs = 1.0f;
+    for (std::size_t i = 0; i < diffs.size() && i < diffFront.size(); ++i)
+        diffs[i].mEngineTorqueRatio = diffFront[i] ? (nf ? fs / nf : 0.0f) : (nr ? (1.0f - fs) / nr : 0.0f);
+    return fs;
+}
+}  // namespace
+
+void PhysicsWorld::setVehicleFrontDriveShare(VehicleId id, Real share) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    Impl::Vehicle& v = impl->vehicles[id];
+    if (!v.constraint) return;
+    auto* wc = static_cast<JPH::WheeledVehicleController*>(v.constraint->GetController());
+    const float fs = writeDriveShare(wc, v.diffFront, static_cast<float>(share));
+    // the centre coupling: open with one axle driven, limited-slip in 4WD (see addVehicle)
+    wc->SetDifferentialLimitedSlipRatio(fs <= 0.001f || fs >= 0.999f ? FLT_MAX : v.centerLimitedSlip);
+    v.frontShare = fs;
+    v.appliedShare = fs;
+}
+
+// THE TRACTION SPLIT (VehicleConfig::tractionSplit): in 4WD, an axle with no tyre touching hands its torque to
+// the axle that has one; both down (or both up), the driver's split.
+void PhysicsWorld::applyTractionSplit(std::size_t index) {
+    Impl::Vehicle& v = impl->vehicles[index];
+    if (!v.tractionSplit || !v.constraint) return;
+    float want = v.frontShare;
+    if (v.frontShare > 0.001f && v.frontShare < 0.999f) {
+        auto* wc = static_cast<JPH::WheeledVehicleController*>(v.constraint->GetController());
+        const JPH::Array<JPH::VehicleDifferentialSettings>& diffs = wc->GetDifferentials();
+        bool frontDown = false, rearDown = false;
+        for (std::size_t i = 0; i < diffs.size() && i < v.diffFront.size(); ++i)
+            for (int wi : {diffs[i].mLeftWheel, diffs[i].mRightWheel})
+                if (wi >= 0 && v.constraint->GetWheel(static_cast<JPH::uint>(wi))->HasContact())
+                    (v.diffFront[i] ? frontDown : rearDown) = true;
+        if (frontDown && !rearDown) want = 1.0f;
+        else if (rearDown && !frontDown) want = 0.0f;
+    }
+    if (want != v.appliedShare) {
+        writeDriveShare(static_cast<JPH::WheeledVehicleController*>(v.constraint->GetController()), v.diffFront, want);
+        v.appliedShare = want;
+    }
+}
+
+Real PhysicsWorld::vehicleFrontDriveShare(VehicleId id) const {
+    if (!impl || id >= impl->vehicles.size()) return 0.0;
+    return impl->vehicles[id].frontShare;
+}
+
+PhysicsWorld::VehicleTelemetry PhysicsWorld::vehicleTelemetry(VehicleId id) const {
+    VehicleTelemetry t;
+    if (!impl || id >= impl->vehicles.size()) return t;
+    const Impl::Vehicle& v = impl->vehicles[id];
+    if (!v.constraint) return t;
+    const JPH::BodyInterface& bi = impl->bodies();
+    const JPH::Vec3 fwd = bi.GetRotation(v.body) * JPH::Vec3(0, 0, 1);
+    t.speed = bi.GetLinearVelocity(v.body).Dot(fwd);
+    const auto* wc = static_cast<const JPH::WheeledVehicleController*>(v.constraint->GetController());
+    t.rpm = wc->GetEngine().GetCurrentRPM();
+    t.gear = wc->GetTransmission().GetCurrentGear();
+    for (int i = 0; i < v.wheels; ++i) {
+        const JPH::Wheel* w = v.constraint->GetWheel(static_cast<JPH::uint>(i));
+        t.wheelSpin.push_back(w->GetAngularVelocity());
+        t.wheelContact.push_back(w->HasContact() ? 1 : 0);
+        t.wheelSlip.push_back(static_cast<const JPH::WheelWV*>(w)->mLongitudinalSlip);
+    }
+    return t;
+}
+
+// AERO DRAG (VehicleConfig::dragArea): 0.5 rho CdA |v| v against the chassis' motion, each step.
+void PhysicsWorld::applyAeroDrag(std::size_t index) {
+    Impl::Vehicle& v = impl->vehicles[index];
+    if (v.dragArea <= 0.0f || !v.constraint) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    const JPH::Vec3 vel = bi.GetLinearVelocity(v.body);
+    const float speed = vel.Length();
+    if (speed < 0.1f) return;
+    bi.AddForce(v.body, vel * (-0.5f * 1.225f * v.dragArea * speed));
+}
+
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
-        for (std::size_t i = 0; i < impl->vehicles.size(); ++i) applyYawAssist(i);
+        for (std::size_t i = 0; i < impl->vehicles.size(); ++i) { applyYawAssist(i); applyAeroDrag(i); applyTractionSplit(i); }
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,
                                    &impl->tempAllocator, impl->jobSystem.get());
     }

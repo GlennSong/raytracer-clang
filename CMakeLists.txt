@@ -60,6 +60,8 @@ add_library(engine_core STATIC
     src/engine/states/playing_state.cpp
     src/engine/states/debug_overlay_state.cpp
     src/engine/states/editor_state.cpp
+    src/engine/screenshot.cpp
+    src/engine/mesh_shapes.cpp
     src/engine/mesh_builder.cpp
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp
@@ -68,6 +70,7 @@ add_library(engine_core STATIC
     src/engine/bundle/bundle_glb.cpp
     src/engine/procgen/city/lot_cache.cpp
     src/engine/lot_grow_setup.cpp
+    src/engine/city_grow.cpp
     src/engine/city_prepass.cpp
     src/engine/procgen/city/citylots_producer.cpp
     src/engine/editable_curve.cpp
@@ -80,6 +83,7 @@ add_library(engine_core STATIC
     src/engine/procgen/terrain.cpp
     src/engine/procgen/terrain_horizon.cpp
     src/engine/procgen/terrain_lod.cpp
+    src/engine/procgen/height_pyramid.cpp
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
@@ -92,16 +96,37 @@ add_library(engine_core STATIC
     src/engine/procgen/terrain_field.cpp
     src/engine/procgen/earthwork.cpp
     src/engine/procgen/erosion.cpp
+    src/engine/procgen/stream_power.cpp
+    src/engine/procgen/terrain_weather.cpp
+    src/engine/procgen/terrain_maps.cpp
+    src/engine/procgen/real_tree.cpp
+    src/engine/procgen/polymesh.cpp
+    src/engine/procgen/forest.cpp
+    src/engine/procgen/trails.cpp
     src/engine/procgen/rock.cpp
     src/engine/procgen/cellular.cpp
     src/engine/procgen/planet.cpp
     src/engine/procgen/atmosphere.cpp
     src/engine/procgen/scatter.cpp
+    src/engine/procgen/grass.cpp
+    src/engine/procgen/stylized_tree.cpp
+    src/engine/procgen/ground_cover.cpp
+    src/engine/procgen/ground_layers.cpp
+    src/engine/procgen/stylized_rock.cpp
+    src/engine/procgen/material_recipes.cpp
+    src/engine/procgen/hydrology.cpp
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
     src/engine/procgen/city/city_svg.cpp
     src/engine/procgen/city/parcel.cpp
+    src/engine/procgen/city/plan/city_plan.cpp
+    src/engine/procgen/city/plan/plan_scene.cpp
+    src/engine/procgen/city/plan/land_shape.cpp
+    src/engine/procgen/world/place_names.cpp
+    src/engine/procgen/world/road_signs.cpp
+    src/engine/procgen/world/road_sign_build.cpp
+    src/engine/procgen/world/island_scene.cpp
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
@@ -120,6 +145,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/triangulate.cpp
     src/engine/procgen/city/metro.cpp
     src/engine/procgen/city/water_mesh.cpp
+    src/engine/procgen/city/terrain_route.cpp
+    src/engine/procgen/world/island_world.cpp
     src/engine/procgen/city/buildability.cpp
     src/engine/procgen/city/corridor_bake.cpp
     src/engine/procgen/city/corridor_plan.cpp
@@ -195,6 +222,11 @@ add_library(engine_core STATIC
     src/engine/systems/elevator_system.cpp
     src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
+    src/engine/systems/residency_system.cpp
+    src/engine/systems/grass_system.cpp
+    src/engine/systems/flashlight_system.cpp
+    src/engine/residency.cpp
+    src/engine/occlusion.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
     # APPLICATION of the engine, built as its own `citysim` static library below
     # (src/apps/citysim). engine_core is the platform-free, city-free engine; a
@@ -399,6 +431,14 @@ endif()
 # them builds an engine that simply does not know the lanes builder.
 # ============================================================
 option(RT_BUILD_ROADS_LANES "Build the lanes road builder (needs the Clipper2 and CDT submodules)" ON)
+# The city planner: design a city as data (a road graph and blocks with a use),
+# score it with the engine's own parcel walk and router, draw it (ADR-0092).
+# Engine-only — it plans a city, it does not build one, so no roads builder here.
+add_executable(city_plan tools/city_plan.cpp)
+target_include_directories(city_plan PRIVATE src)
+target_compile_options(city_plan PRIVATE -Wall -Wextra)
+target_link_libraries(city_plan PRIVATE engine_core citysim)   # citysim: the bus network (local routes on the island's map)
+
 if(RT_BUILD_ROADS_LANES)
     foreach(dep IN ITEMS Clipper2 CDT)
         if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/${dep}/LICENSE" AND Git_FOUND)
@@ -435,6 +475,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/level_import.cpp
             src/engine/procgen/city/roads/lanes/road_twin.cpp
             src/engine/procgen/city/roads/lanes/block_audit.cpp
+            src/engine/procgen/city/roads/lanes/interchange.cpp
             src/engine/procgen/city/roads/lanes/city_producer.cpp
             src/engine/procgen/city/roads/lanes/lots_producer.cpp
             src/engine/procgen/city/roads/lanes_builder.cpp
@@ -453,8 +494,8 @@ if(RT_BUILD_ROADS_LANES)
         target_include_directories(lanes_tests PRIVATE src tests)
         target_compile_options(lanes_tests PRIVATE -Wall -Wextra)
         target_compile_definitions(lanes_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-        target_link_libraries(lanes_tests PRIVATE engine_core citysim)
-        add_test(NAME lanes_tests COMMAND lanes_tests)
+        target_link_libraries(lanes_tests PRIVATE engine_core citysim CDT::CDT)
+        add_test(NAME lanes_tests COMMAND lanes_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     else()
         message(WARNING "roads/lanes: Clipper2/CDT submodules missing — the lanes builder is not in this build")
     endif()
@@ -465,6 +506,11 @@ endif()
 # editor's "Bake level cache" button calls. Producers register from whichever producer libraries
 # are linked in; a build with none prints "no producers are registered in this build".
 # ============================================================
+# rt_erode (ADR-0123): a level's terrain through the erosion stages, grids out for tools/erosion_preview.py
+add_executable(rt_erode tools/rt_erode.cpp)
+target_link_libraries(rt_erode PRIVATE engine_core Threads::Threads)
+target_include_directories(rt_erode PRIVATE src)
+
 add_executable(rt_bake tools/rt_bake.cpp)
 target_link_libraries(rt_bake PRIVATE engine_core Threads::Threads)
 target_include_directories(rt_bake PRIVATE src)
@@ -641,6 +687,9 @@ add_executable(run_tests
     tests/test_planet.cpp
     tests/test_atmosphere.cpp
     tests/test_scatter.cpp
+    tests/test_polymesh.cpp
+    tests/test_vehicle_kit.cpp
+    tests/test_terrain_route.cpp
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
@@ -693,6 +742,8 @@ add_executable(run_tests
     tests/test_curb_return.cpp
     tests/test_animation_path.cpp
     tests/test_terrain_lod.cpp
+    tests/test_height_pyramid.cpp
+    tests/test_residency.cpp
     tests/test_terrain_async.cpp
     tests/test_nav_graph.cpp
     tests/test_pathfind.cpp
@@ -740,6 +791,8 @@ add_executable(run_tests
     tests/test_architect.cpp
     tests/test_erosion_gpu.cpp
     tests/test_lot_road_clearance.cpp
+    tests/test_city_plan.cpp
+    tests/test_road_signs.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -765,7 +818,8 @@ if(RT_ENABLE_AUDIO AND NOT EMSCRIPTEN)
     target_sources(run_tests PRIVATE tests/test_audio.cpp)
 endif()
 enable_testing()
-add_test(NAME unit_tests COMMAND run_tests)
+# from the repo: the tests read assets/ by relative path (street names, the sign font, places)
+add_test(NAME unit_tests COMMAND run_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ============================================================
 # Content gate: every SHIPPED level is playable (AGENTS.md § Playable Scenes)
@@ -789,7 +843,8 @@ target_compile_options(level_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(level_tests PRIVATE citysim engine_core)
 # Reads assets/levels + assets/scripts from the source tree, like the game does.
 target_compile_definitions(level_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-add_test(NAME level_tests COMMAND level_tests)
+# from the repo: the tests read assets/ by relative path (street names, the sign font, places)
+add_test(NAME level_tests COMMAND level_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 # Loading every shipped city is minutes of procgen; the default 1500s ctest
 # timeout is generous but not obviously enough on a cold CI runner.
 set_tests_properties(level_tests PROPERTIES TIMEOUT 1800)
@@ -933,6 +988,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/teleport_system.cpp
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
+        src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
@@ -950,6 +1006,8 @@ if(RT_ENABLE_PHYSICS)
         tests/test_physics.cpp
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
+        tests/test_vehicle_drivetrain.cpp
+        tests/test_offroad_course.cpp
         tests/test_physics_system.cpp
         tests/test_city_phys_tier.cpp
         tests/test_city_ride.cpp
@@ -1007,11 +1065,11 @@ function(rt_build_vulkan_shaders)
     endif()
     set(VK_SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders/vulkan)
     file(MAKE_DIRECTORY ${VK_SHADER_OUT_DIR})
-    set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert terrain.vert
+    set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert mesh_shadow_alpha.vert mesh_shadow_alpha.frag terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
-                   ui.vert ui.frag)
+                   ui.vert ui.frag occlusion_reduce.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(
@@ -1024,8 +1082,49 @@ function(rt_build_vulkan_shaders)
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
     endforeach()
+    # the erosion bake's kernels (ADR-0122): one GLSL source, one SPIR-V module per kernel
+    foreach(kernel droplets clamp apply_applied thermal apply)
+        string(TOUPPER ${kernel} KERNEL_UP)
+        add_custom_command(
+            OUTPUT ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} -DKERNEL_${KERNEL_UP}=1
+                    ${VK_SHADER_SRC_DIR}/erosion.comp
+                    -o ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            DEPENDS ${VK_SHADER_SRC_DIR}/erosion.comp
+            COMMENT "glslc erosion.comp (${kernel}) -> erosion_${kernel}.comp.spv"
+            VERBATIM)
+        list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv)
+    endforeach()
+    # the water-and-sediment kernels (ADR-0123): erosion_water.comp, one module per kernel
+    foreach(kernel w_flux w_water w_erode w_transport)
+        string(TOUPPER ${kernel} KERNEL_UP)
+        add_custom_command(
+            OUTPUT ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            COMMAND ${Vulkan_GLSLC_EXECUTABLE} -DKERNEL_${KERNEL_UP}=1
+                    ${VK_SHADER_SRC_DIR}/erosion_water.comp
+                    -o ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
+            DEPENDS ${VK_SHADER_SRC_DIR}/erosion_water.comp
+            COMMENT "glslc erosion_water.comp (${kernel}) -> erosion_${kernel}.comp.spv"
+            VERBATIM)
+        list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv)
+    endforeach()
     add_custom_target(vulkan_shaders DEPENDS ${VK_SPV_FILES})
 endfunction()
+
+# GPU erosion bake on Vulkan (ADR-0122): the Linux/Windows twin of erosion_gpu.mm, compiled into
+# engine_core when the SDK is present (every binary that bakes terrain -- viewer, city_plan, the tests
+# -- gets it); without it the CPU sim runs, as before.
+if(NOT APPLE)
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE)
+        rt_build_vulkan_shaders()
+        target_sources(engine_core PRIVATE src/engine/procgen/erosion_gpu_vk.cpp)
+        target_compile_definitions(engine_core PUBLIC RT_HAVE_VULKAN_EROSION=1
+                                   "RT_VULKAN_SHADER_DIR=\"${VK_SHADER_OUT_DIR}\"")
+        target_link_libraries(engine_core PUBLIC Vulkan::Vulkan)
+        add_dependencies(engine_core vulkan_shaders)
+    endif()
+endif()
 
 # ============================================================
 # visionOS immersive app. Built ONLY when cross-compiling for visionOS, which
@@ -1198,6 +1297,7 @@ if(glfw3_FOUND)
 set(VIEWER_SOURCES
     src/viewer_main.cpp
     src/renderer/window.cpp
+    src/renderer/gamepad_glfw.cpp
     src/game/arena_state.cpp
 )
 
@@ -1228,7 +1328,7 @@ else()
     # ADR-0057; see src/renderer/vulkan/AGENTS.md.
     find_package(Vulkan QUIET)
     if(Vulkan_FOUND)
-        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp)
+        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp)
         set(PLATFORM_LIBS Vulkan::Vulkan)
 
         # Compile the SPIR-V shaders (shared target; sets VK_SHADER_OUT_DIR).
@@ -1253,7 +1353,7 @@ add_executable(viewer
 target_compile_options(viewer PRIVATE -Wall -Wextra -Wpedantic)
 # Vendored headers (tinygltf/stb/nlohmann) are SYSTEM so our strict warnings
 # apply only to our own code, not to libraries we don't maintain.
-target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
+target_include_directories(viewer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party ${CMAKE_SOURCE_DIR}/third_party/VulkanMemoryAllocator)
 target_link_libraries(viewer PRIVATE citysim engine_core glfw Threads::Threads ${PLATFORM_LIBS})
 target_compile_definitions(viewer PRIVATE ${PLATFORM_DEFINES})
 # Build the SPIR-V shaders before the viewer that loads them (Vulkan builds only).
@@ -1352,8 +1452,10 @@ if(Qt6_FOUND)
             rt_build_vulkan_shaders()   # shared target; sets VK_SHADER_OUT_DIR
             target_sources(editor_app PRIVATE
                 src/renderer/vulkan/vulkan_renderer.cpp
+                src/renderer/vulkan/vma_impl.cpp
                 src/editor_app/vulkan_viewport.cpp
             )
+            target_include_directories(editor_app SYSTEM PRIVATE third_party/VulkanMemoryAllocator)
             target_link_libraries(editor_app PRIVATE Vulkan::Vulkan)
             target_compile_definitions(editor_app PRIVATE
                 RT_HAVE_VULKAN=1
@@ -1370,6 +1472,18 @@ if(Qt6_FOUND)
         else()
             target_sources(editor_app PRIVATE src/renderer/null_renderer.cpp)
             message(STATUS "Vulkan not found — editor uses NullRenderer (no GPU output)")
+        endif()
+    endif()
+
+    # Gamepads off macOS: the Qt host has no GLFW window, so it inits GLFW
+    # windowless for its joystick API (gamepad_glfw.cpp). macOS keeps the
+    # GCController path above.
+    if(NOT APPLE)
+        find_package(glfw3 QUIET)
+        if(glfw3_FOUND)
+            target_sources(editor_app PRIVATE src/renderer/gamepad_glfw.cpp)
+            target_link_libraries(editor_app PRIVATE glfw)
+            target_compile_definitions(editor_app PRIVATE RT_EDITOR_GLFW_GAMEPADS=1)
         endif()
     endif()
 
@@ -1541,3 +1655,8 @@ if(EMSCRIPTEN)
 
     message(STATUS "Emscripten toolchain — building the WebGPU/WASM viewer_web target")
 endif()
+
+# rt_trees (ADR-0129): the real-tree gallery -- impostor pictures + foliage textures per species
+add_executable(rt_trees tools/rt_trees.cpp)
+target_link_libraries(rt_trees PRIVATE engine_core Threads::Threads)
+target_include_directories(rt_trees PRIVATE src)

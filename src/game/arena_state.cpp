@@ -15,6 +15,10 @@
 #include "../engine/systems/elevator_system.h"
 #include "../engine/systems/beacon_light_system.h"
 #include "../engine/systems/terrain_lod_system.h"
+#include "../engine/systems/residency_system.h"
+#include "../engine/systems/grass_system.h"
+#include "../engine/systems/flashlight_system.h"
+#include "../engine/systems/nature_collider_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
 #include "../apps/citysim/city_traffic_audio.h"
@@ -199,18 +203,23 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
+    addSystem<FlashlightSystem>();               // tool slot 4: its beam, staged in render() before RenderSystem
 #else
     // physics-off build: no collider/vehicle/walker bridges; the spectate camera
     // above still follows the sim ghosts (citySys is consumed there).
 #endif
+    addSystem<GrassSystem>();            // the grass field around the camera (flora plan)
     addSystem<DayNightSystem>();
     addSystem<BeaconLightSystem>();   // aviation-beacon sprites + near point lights (skyscrapers v2 M4)
 #ifdef RT_ENABLE_PHYSICS
+    addSystem<ResidencySystem>();           // what is on the GPU, by where the camera is (ADR-0095)
     addSystem<TerrainLodSystem>(&physSys);  // CDLOD draws + near-node colliders (ADR-0036)
+    addSystem<NatureColliderSystem>(physSys);   // trunk + rock colliders round the player (#55)
     addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
 #else
+    addSystem<ResidencySystem>();
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
 #endif
     // LAST camera writer: when a headset tracks, rewrite the shared camera to

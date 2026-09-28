@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_TERRAIN_LOD_H
 
 #include "terrain.h"   // TerrainParams, Noise, RenderMesh, terrainHeight
+#include "height_pyramid.h"
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -111,6 +112,31 @@ double lodVertexHeight(const TerrainParams& params, const Noise& noise, double x
 // stands on this stands on what the player walks and drives on.
 double lodSurfaceHeight(const TerrainParams& params, const Noise& noise, double x, double z,
                         double worldHalf, int numLods, int gridRes);
+
+// ---- baked terrain (ADR-0095) -------------------------------------------------------------
+// A level whose cdlod block says "baked": true draws the ground from a height pyramid
+// (height_pyramid.h) instead of evaluating the field per vertex. Its CDLOD grid IS the
+// pyramid's: 128-cell nodes, `cell0` metres at the finest level, a centred square of
+// 128 * cell0 * 2^(levels-1) that covers the authored world. Every consumer that derives the
+// drawn ground from (worldHalf, numLods, gridRes) -- lodSurfaceHeight, the lot pass's mesh
+// cell, the dressing drape -- then agrees with the baked surface without knowing it exists.
+struct CdlodGeometry { double worldHalf = 1024.0; int numLods = 6; int gridRes = 32; };
+constexpr double kBakedCell0 = 1.0;   // metres; a quarter of the narrowest drawn feature (a kerb band)
+CdlodGeometry bakedCdlodGeometry(double authoredWorldHalf, double cell0 = kBakedCell0);
+// The pyramid behind it: centred on the origin (so CDLOD node (level, index) IS tile
+// (level, index)), covering the authored world.
+constexpr double kBakedTolerance = 0.05;   // m: a child is stored where the parent errs more
+pyramid::PyramidSpec bakedPyramidSpec(double authoredWorldHalf, double cell0 = kBakedCell0,
+                                      double tolerance = kBakedTolerance);
+
+// A baked tile's render mesh: the tile's own samples, normals from the drawn surface at one
+// world-wide `normalEps`, the CDLOD morph target in `tangent` (as generateLodNodeMesh), and
+// SKIRTS -- short walls hanging from the four edges (1 m + the tile's error) that hide the
+// crack where a stored leaf meets a finer neighbour.
+LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::HeightTile& t,
+                                  const TerrainParams& params, const Noise& noise, double normalEps);
+// A collider patch for the square `node` (any size): the drawn surface sampled every cell0.
+LodNodeMesh generateBakedPatch(const pyramid::Pyramid& p, const LodNode& node);
 
 // Bookkeeping for streaming node meshes off the render thread (JobSystem,
 // ADR-0014). The render thread `begin`s a cache key before enqueueing its build

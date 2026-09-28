@@ -1,3 +1,5 @@
+#include <chrono>
+#include "../../log.h"
 #include "terrain_lod_system.h"
 #include "physics_system.h"
 #include "../components.h"
@@ -5,6 +7,7 @@
 #include "../procgen/terrain_lod.h"
 #include "../procgen/noise.h"
 #include "../../profile.h"
+#include "../../job_system.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,7 +29,23 @@ struct TerrainGenInputs {
     int gridRes = 0;
     double normalEps = 0.0;
     uint32_t revision = 0;
+    std::shared_ptr<const pyramid::Pyramid> baked;   // ADR-0095: tiles, not the formula
 };
+
+namespace {
+// A node's tile in a baked pyramid (the spec is centred, so node (level, index) IS the tile).
+pyramid::TileKey tileKeyOf(const pyramid::Pyramid& p, const LodNode& n) {
+    return {n.level, static_cast<int>(std::lround((n.minX - p.spec.originX) / n.size)),
+            static_cast<int>(std::lround((n.minZ - p.spec.originZ) / n.size))};
+}
+LodNodeMesh buildNode(const TerrainGenInputs& gi, const LodNode& node) {
+    if (gi.baked) {
+        const pyramid::HeightTile* t = gi.baked->find(tileKeyOf(*gi.baked, node));
+        if (t) return generateBakedTileMesh(*gi.baked, *t, gi.params, gi.noise, gi.normalEps);
+    }
+    return generateLodNodeMesh(gi.params, gi.noise, node, gi.gridRes, gi.normalEps);
+}
+}  // namespace
 
 namespace {
 // Exact cache key for a node: level (4 bits) + integer grid coords (26 bits each,
@@ -87,6 +106,9 @@ void TerrainLodSystem::render(FrameContext& ctx) {
     float leafSize = (cfg->worldHalf * 2.0f) /
                      static_cast<float>(1 << std::max(0, cfg->numLods - 1));
     double normalEps = leafSize / static_cast<float>(std::max(2, cfg->gridRes));
+    // Baked (ADR-0095): normals of the drawn surface at 2 m, every level -- the 1 m leaf
+    // step would alias to glitter on the far tiles that share it.
+    if (cfg->baked) normalEps = 2.0 * cfg->baked->spec.cell0;
 
     ++frame_;
 
@@ -104,15 +126,26 @@ void TerrainLodSystem::render(FrameContext& ctx) {
     std::vector<LodNode> nodes;
     if (syncOnly) {
         RT_PROFILE_ZONE_NAMED("cdlod_generate_sync");
-        Noise noise(cfg->seed);
-        nodes = selectLodNodes(
-            cfg->worldHalf, cfg->numLods, ranges,
-            static_cast<float>(cam.position.x), static_cast<float>(cam.position.z));
+        TerrainGenInputs gi;
+        gi.params = cfg->params;
+        gi.noise = Noise(cfg->seed);
+        gi.gridRes = cfg->gridRes;
+        gi.normalEps = normalEps;
+        gi.baked = cfg->baked;
+        if (cfg->baked) {
+            // Only nodes the pyramid stores; a missing child leaves its parent drawn.
+            nodes = selectLodNodesGated(cfg->worldHalf, cfg->numLods, ranges,
+                                        static_cast<float>(cam.position.x), static_cast<float>(cam.position.z),
+                                        [&](const LodNode& n) { return cfg->baked->find(tileKeyOf(*cfg->baked, n)) != nullptr; });
+        } else {
+            nodes = selectLodNodes(
+                cfg->worldHalf, cfg->numLods, ranges,
+                static_cast<float>(cam.position.x), static_cast<float>(cam.position.z));
+        }
         for (const LodNode& node : nodes) {
             int64_t key = nodeKey(node);
             if (cache_.count(key)) continue;
-            insertNode(key, generateLodNodeMesh(cfg->params, noise, node,
-                                                cfg->gridRes, normalEps));
+            insertNode(key, buildNode(gi, node));
         }
     } else {
         if (!stream_) stream_ = std::make_shared<LodMeshStream>();
@@ -123,6 +156,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
             gi->gridRes = cfg->gridRes;
             gi->normalEps = normalEps;
             gi->revision = cfg->revision;
+            gi->baked = cfg->baked;
             genInputs_ = std::move(gi);
         }
 
@@ -138,6 +172,10 @@ void TerrainLodSystem::render(FrameContext& ctx) {
         // built inline so there is always ground, even on the first frame.
         std::vector<LodNode> missing;
         auto ensure = [&](const LodNode& node) {
+            // A baked pyramid stores children only where they change the ground: a node it
+            // does not store is simply not a split (its parent is the finest there is).
+            if (genInputs_->baked && !genInputs_->baked->find(tileKeyOf(*genInputs_->baked, node)))
+                return false;
             int64_t key = nodeKey(node);
             auto it = cache_.find(key);
             if (it != cache_.end()) {
@@ -146,10 +184,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
             }
             if (node.level >= cfg->numLods - 2) {
                 RT_PROFILE_ZONE_NAMED("cdlod_generate_coarse");
-                insertNode(key, generateLodNodeMesh(genInputs_->params,
-                                                    genInputs_->noise, node,
-                                                    genInputs_->gridRes,
-                                                    genInputs_->normalEps));
+                insertNode(key, buildNode(*genInputs_, node));
                 return true;
             }
             missing.push_back(node);
@@ -176,8 +211,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
                 LodMeshStream::Result r;
                 r.key = key;
                 r.revision = gi->revision;
-                r.built = generateLodNodeMesh(gi->params, gi->noise, node,
-                                              gi->gridRes, gi->normalEps);
+                r.built = buildNode(*gi, node);
                 stream->complete(std::move(r));
             });
         }
@@ -310,29 +344,64 @@ void TerrainLodSystem::fixedUpdate(FrameContext& ctx) {
               [](const Missing& a, const Missing& b) {
                   return a.d2 != b.d2 ? a.d2 < b.d2 : a.key < b.key;
               });
-    const double feet2 = leafSize * static_cast<double>(leafSize);
-    int budget = 1;
-    for (const Missing& m : missing) {
-        const bool underFeet = m.d2 <= feet2;   // player's own / adjacent cell
-        if (!underFeet && budget <= 0) continue;
-        LodNodeMesh built = generateLodNodeMesh(cfg->params, noise, m.node,
-                                                cfg->gridRes, normalEps);
+    // Finished jobs first: a tile still wanted, at this revision, and not built meanwhile.
+    {
+        std::vector<ColliderInbox::Done> done;
+        {
+            std::lock_guard<std::mutex> lock(colliderInbox_->m);
+            done.swap(colliderInbox_->done);
+        }
+        for (ColliderInbox::Done& d : done) {
+            colliderPending_.erase(d.key);
+            if (d.revision != colliderRevision_ || !d.shape || !desired.count(d.key) || colliders_.count(d.key)) continue;
+            const PhysicsBodyId id = physics_->physicsWorld().addPreparedMesh(*d.shape, Vec3(0, 0, 0), 0.8);
+            if (id != INVALID_PHYSICS_BODY) colliders_[d.key] = id;
+        }
+    }
+    // The tile (patch + collision shape): the same on the spot or on a worker.
+    auto buildShape = [](std::shared_ptr<const pyramid::Pyramid> baked, const TerrainParams* params, const Noise* nz,
+                         LodNode node, int gridRes, double eps) {
+        LodNodeMesh built = baked ? generateBakedPatch(*baked, node) : generateLodNodeMesh(*params, *nz, node, gridRes, eps);
         std::vector<Vec3> verts;
         verts.reserve(built.mesh.vertices.size());
         for (const Vertex& v : built.mesh.vertices) verts.push_back(v.position);
-        PhysicsBodyId id = physics_->physicsWorld().addMesh(
-            verts, built.mesh.indices, Vec3(0, 0, 0), 0.8);
-        if (id != INVALID_PHYSICS_BODY) colliders_[m.key] = id;
-        if (!underFeet) --budget;
-    }
-    for (auto it = colliders_.begin(); it != colliders_.end();) {
-        if (desired.count(it->first)) { ++it; continue; }
-        physics_->physicsWorld().removeBody(it->second);
-        it = colliders_.erase(it);
+        return PhysicsWorld::prepareMeshShape(verts, built.mesh.indices);
+    };
+    const double feet2 = leafSize * static_cast<double>(leafSize);
+    for (const Missing& m : missing) {
+        if (colliders_.count(m.key)) continue;   // arrived above
+        const bool underFeet = m.d2 <= feet2;   // player's own / adjacent cell: the floor is never deferred
+        if (underFeet) {
+            static const bool trace = std::getenv("RT_COLLIDER_TRACE") != nullptr;
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto shape = buildShape(cfg->baked, &cfg->params, &noise, m.node, cfg->gridRes, normalEps);
+            const PhysicsBodyId id = shape ? physics_->physicsWorld().addPreparedMesh(*shape, Vec3(0, 0, 0), 0.8)
+                                           : INVALID_PHYSICS_BODY;
+            if (id != INVALID_PHYSICS_BODY) colliders_[m.key] = id;
+            if (trace) LOG_INFO << "[colliders] SYNC tile (" << m.node.minX << ", " << m.node.minZ << ") d " << std::sqrt(m.d2)
+                                << " m, pending " << colliderPending_.count(m.key) << " (" << colliderPending_.size() << " jobs), "
+                                << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms, have " << colliders_.size()
+                                << ", revision " << colliderRevision_ << (shape ? (id == INVALID_PHYSICS_BODY ? ", ADD FAILED" : "") : ", NO SHAPE");
+            continue;
+        }
+        if (colliderPending_.count(m.key) || colliderPending_.size() >= kMaxColliderJobs) continue;
+        colliderPending_.insert(m.key);
+        // the job's own inputs: the pyramid by shared_ptr, the formula's params and noise by copy
+        auto params = cfg->baked ? nullptr : std::make_shared<TerrainParams>(cfg->params);
+        auto nz = cfg->baked ? nullptr : std::make_shared<Noise>(cfg->seed);
+        ctx.jobs.run([inbox = colliderInbox_, baked = cfg->baked, params, nz, node = m.node, key = m.key,
+                      rev = colliderRevision_, gridRes = cfg->gridRes, eps = normalEps, buildShape] {
+            auto shape = buildShape(baked, params.get(), nz.get(), node, gridRes, eps);
+            std::lock_guard<std::mutex> lock(inbox->m);
+            inbox->done.push_back({key, rev, std::move(shape)});
+        });
     }
 }
 
 void TerrainLodSystem::onStop(FrameContext&) {
+    // jobs still running land in the old inbox; start clean
+    colliderInbox_ = std::make_shared<ColliderInbox>();
+    colliderPending_.clear();
     if (!physics_) return;
     for (auto& kv : colliders_) physics_->physicsWorld().removeBody(kv.second);
     colliders_.clear();

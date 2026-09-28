@@ -91,6 +91,18 @@ void addColoredBox(RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
 
 }  // namespace
 
+bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "vehicle");
+    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "no global `vehicle` table"); }
+    lua_getfield(L, -1, name.c_str());
+    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "no `vehicle." + name + "` table"); }
+    lua_setfield(L, -2, "fleet");   // vehicle.fleet = vehicle[name]
+    lua_settop(L, base);
+    return true;
+}
+
 bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
                       std::string* err) {
     lua_State* L = luaState(vm);
@@ -260,6 +272,14 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
             lua_settop(L, base);
             return fail(err, where + ": `glass` is not a Mesh");
         }
+        bool hasInterior = false;
+        if (!optMeshField(L, rec, "interior", body.interior, hasInterior)) {
+            lua_settop(L, base);
+            return fail(err, where + ": `interior` is not a Mesh");
+        }
+        lua_getfield(L, rec, "see_into");
+        body.seeInto = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
         auto readPoints = [&](const char* key, std::vector<Vec3>& out) {
             lua_getfield(L, rec, key);
             if (lua_istable(L, -1)) {

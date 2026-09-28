@@ -63,9 +63,29 @@ public:
         SparseSet<First>* firstPool = poolIfExists<First>();
         if (!firstPool) return;
 
-        const std::vector<uint32_t>& indices = firstPool->entityIndices();
-        for (std::size_t i = 0; i < indices.size(); i++) {
-            uint32_t index = indices[i];
+        // Drive the walk from the SMALLEST pool: each<Transform, ControlledBy> used to walk every
+        // Transform in the city (tens of thousands) to find the one player -- ~0.2 ms in each of
+        // the half-dozen systems that ask, every fixed step.
+        const std::vector<uint32_t>* drive = &firstPool->entityIndices();
+        bool missing = false;
+        auto consider = [&](const auto* p) {
+            if (!p) { missing = true; return; }
+            if (p->entityIndices().size() < drive->size()) drive = &p->entityIndices();
+        };
+        (consider(poolIfExists<Ts>()), ...);
+        if (missing) return;
+        if (drive == &firstPool->entityIndices()) {
+            const std::vector<uint32_t>& indices = *drive;
+            for (std::size_t i = 0; i < indices.size(); i++) {
+                uint32_t index = indices[i];
+                if (!(poolHas<Ts>(index) && ...)) continue;
+                fn(entities.handleAt(index), *poolIfExists<Ts>()->get(index)...);
+            }
+            return;
+        }
+        // Another type's pool: walk a copy, so `fn` may add or remove that component safely.
+        const std::vector<uint32_t> indices = *drive;
+        for (uint32_t index : indices) {
             if (!(poolHas<Ts>(index) && ...)) continue;
             fn(entities.handleAt(index), *poolIfExists<Ts>()->get(index)...);
         }

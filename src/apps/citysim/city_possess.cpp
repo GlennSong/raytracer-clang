@@ -21,6 +21,63 @@
 
 namespace citysim {
 
+namespace {
+
+// Names for the agent's OWN mind, kept local: the goal layer's activityName()
+// lives in city_goals.cpp without a header declaration, and telemetry is not
+// worth widening an interface for.
+const char* activityLabel(Activity a) {
+    switch (a) {
+        case Activity::AtHome:    return "at-home";
+        case Activity::Commuting: return "commuting";
+        case Activity::AtWork:    return "at-work";
+        case Activity::Returning: return "returning";
+        case Activity::Shopping:  return "shopping";
+        case Activity::Outing:    return "outing";
+        case Activity::Lunch:     return "lunch";
+    }
+    return "?";
+}
+
+const char* stateLabel(Agent::State s) {
+    using S = Agent::State;
+    switch (s) {
+        case S::Resting:   return "resting";
+        case S::Walking:   return "walking";
+        case S::Avoiding:  return "avoiding";
+        case S::Waiting:   return "waiting";
+        case S::Cruising:  return "cruising";
+        case S::Following: return "following";
+        case S::Yielding:  return "yielding";
+        case S::Turning:   return "turning";
+        case S::Count:     break;
+    }
+    return "?";
+}
+
+// How far a director's menu reaches. Places are a destination you would cross
+// a street for; agents are who is actually around you.
+constexpr engine::Real kLookRadiusPlaces = 250.0;
+constexpr engine::Real kLookRadiusAgents = 40.0;
+constexpr int kLookMaxAgents = 6;
+// How close you have to be to open a car door. Measured rather than guessed: a
+// walker sent to a parked car stops on the PAVEMENT, and the car is parked on
+// the far side of the carriageway — 8.3 m off the street's centreline one way,
+// the footway the other, about 20 m apart on a metro street with nothing
+// wrong. Reaching a car you can see across the road is a person crossing it,
+// so the reach is a street's width. Getting to the STREET is still the
+// director's problem, which is the part that matters.
+constexpr engine::Real kBoardReach = 25.0;
+// ...and how close to a door you have to be to walk through it.
+constexpr engine::Real kEnterReach = 25.0;
+
+char tierLabel(Agent::Tier t) {
+    using T = Agent::Tier;
+    return t == T::K ? 'K' : (t == T::V ? 'V' : 'D');
+}
+
+}  // namespace
+
 using engine::Entity;
 using engine::Vec2;
 using engine::Vec3;
@@ -62,17 +119,27 @@ void CityPossessSystem::update(engine::FrameContext& ctx) {
 
     updateCamera(ctx);
     publishStatus(ctx);
+    publishLook(ctx);
 }
 
 void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
                                       const PossessCmd& cmd) {
-    error_.clear();
     switch (cmd.kind) {
         case PossessCmd::Kind::None:
+            // NOTHING STAGED. Clearing the error here — which is what this did
+            // — meant a refusal lived for exactly one frame: a director that
+            // sends a command and polls a second later NEVER sees why it was
+            // refused, and reads the stale success instead. The error stands
+            // until the next real command replaces it.
             return;
         case PossessCmd::Kind::Invalid:
             error_ = cmd.error;
             return;
+        default:
+            break;
+    }
+    error_.clear();   // a real command: start clean, then let it set its own
+    switch (cmd.kind) {
         case PossessCmd::Kind::Car:
             possessCar(ctx, cmd);
             return;
@@ -99,6 +166,77 @@ void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
             state_ = (car_.valid() || walkerAgent_ >= 0) ? PossessState::Idle
                                                          : PossessState::None;
             return;
+        case PossessCmd::Kind::Direct:
+            // THE GOAL LAYER STOPS FIGHTING THE DIRECTOR (ADR-0091). Without
+            // this an errand ends, the schedule chains the next trip seconds
+            // later, and a director spends the session arguing with the table
+            // it is supposed to be replacing.
+            if (walkerAgent_ >= 0) {
+                city_.simMutable().setAgentDirected(walkerAgent_, cmd.on);
+                directed_ = cmd.on;
+            } else {
+                error_ = "nothing possessed — `possess walker` first";
+            }
+            return;
+        case PossessCmd::Kind::Board:
+            boardNearby(ctx, cmd);
+            return;
+        case PossessCmd::Kind::Alight:
+            alightHere(ctx);
+            return;
+        case PossessCmd::Kind::Ride:
+            if (walkerAgent_ < 0) { error_ = "nothing possessed"; return; }
+            if (!city_.simMutable().sendAgentByBus(walkerAgent_, Vec2(cmd.x, cmd.z))) {
+                error_ = "no bus route helps from here — walk instead";
+                state_ = PossessState::NoRoute;
+            } else {
+                LOG_INFO << "ride: agent " << walkerAgent_ << " is walking to a stop for "
+                         << cmd.x << "," << cmd.z;
+                hasDest_ = true;
+                dest_ = Vec2(cmd.x, cmd.z);
+                state_ = PossessState::Walking;
+            }
+            return;
+        case PossessCmd::Kind::Enter:
+        case PossessCmd::Kind::Exit: {
+            if (walkerAgent_ < 0) { error_ = "nothing possessed"; return; }
+            const bool inside = cmd.kind == PossessCmd::Kind::Enter;
+            // YOU HAVE TO BE AT A DOOR. Without this `enter` is teleportation
+            // into the nearest wall: the director could put the agent inside a
+            // building from across the district, and the one thing possession
+            // has to keep true is that the agent only does what it could walk
+            // up and do.
+            std::string what = "the street";
+            if (inside) {
+                const auto& agents = city_.sim().agents();
+                if (walkerAgent_ >= static_cast<int>(agents.size())) return;
+                const Vec2 me = agents[static_cast<std::size_t>(walkerAgent_)].pos;
+                const PlaceMap& places = city_.places();
+                engine::Real bestD = kEnterReach;
+                PlaceId bestId = kNoPlace;
+                for (int t = 0; t < static_cast<int>(PlaceType::Count); ++t) {
+                    const PlaceId id = places.nearest(static_cast<PlaceType>(t), me);
+                    if (id == kNoPlace) continue;
+                    const Place& pl = places[id];
+                    if (!placeIsIndoors(pl.type)) continue;
+                    const engine::Real d =
+                        std::sqrt((pl.entrance.x - me.x) * (pl.entrance.x - me.x) +
+                                  (pl.entrance.y - me.y) * (pl.entrance.y - me.y));
+                    if (d < bestD) { bestD = d; bestId = id; }
+                }
+                if (bestId == kNoPlace) {
+                    error_ = "no door within reach — walk to one first";
+                    return;
+                }
+                what = placeTypeName(places[bestId].type);
+            }
+            city_.simMutable().setAgentIndoors(walkerAgent_, inside);
+            LOG_INFO << (inside ? "enter: agent " : "exit: agent ") << walkerAgent_
+                     << " " << (inside ? "into " : "out of ") << what;
+            hasDest_ = false;
+            state_ = PossessState::Idle;
+            return;
+        }
         case PossessCmd::Kind::Release:
             releasePossession(ctx);
             return;
@@ -309,13 +447,106 @@ void CityPossessSystem::walkTo(engine::FrameContext& ctx, engine::Real x,
                                engine::Real z) {
     (void)ctx;
     if (!city_.sim().graph()) { error_ = "no nav graph"; return; }
+    const engine::NavGraph& nav = *city_.sim().graph();
+    // One line per director errand. It prints where the agent STOOD and where
+    // it was placed, because those differing is the whole bug this path had:
+    // sendAgentTo used to put the planner ghost on its new route's first leg,
+    // away from the physical body, and the ADR-0062 tether then held it for
+    // ever. They should now be the same point.
+    const Vec2 was = city_.sim().agents()[static_cast<std::size_t>(walkerAgent_)].pos;
     if (!city_.simMutable().sendAgentTo(walkerAgent_, Vec2(x, z))) {
+        LOG_INFO << "walk_to: agent " << walkerAgent_ << " REFUSED " << x << ","
+                 << z << " — nothing near it routes from where the agent stands;"
+                 << " it keeps its own plan";
         state_ = PossessState::NoRoute;
         return;
+    }
+    {
+        const Agent& a = city_.sim().agents()[static_cast<std::size_t>(walkerAgent_)];
+        // Why an errand ends where it does: the last link it walks, how far the
+        // destination sits OFF that link, and the stop-short it derived.
+        double off = -1, tpar = -1, footX = 0, footY = 0;
+        if (a.route.valid()) {
+            const engine::NavLink& last =
+                nav.links[static_cast<std::size_t>(a.route.links.back())];
+            const Vec2 A = nav.nodes[static_cast<std::size_t>(last.from)];
+            const Vec2 B = nav.nodes[static_cast<std::size_t>(last.to)];
+            const Vec2 AB(B.x - A.x, B.y - A.y);
+            const double len2 = AB.x * AB.x + AB.y * AB.y;
+            if (len2 > 1e-6) {
+                double t = ((x - A.x) * AB.x + (z - A.y) * AB.y) / len2;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                tpar = t;
+                footX = A.x + AB.x * t;
+                footY = A.y + AB.y * t;
+                off = std::sqrt((x - footX) * (x - footX) + (z - footY) * (z - footY));
+            }
+        }
+        LOG_INFO << "walk_to: agent " << walkerAgent_ << " -> " << x << "," << z
+                 << " | stood at " << was.x << "," << was.y << ", placed at "
+                 << a.pos.x << "," << a.pos.y << " on leg " << a.leg << "/"
+                 << a.route.links.size() << " | dest sits " << off
+                 << " m off the last link at t=" << tpar
+                 << ", stopAtDist=" << a.stopAtDist << ", foot=" << footX << ","
+                 << footY;
     }
     dest_ = Vec2(x, z);
     hasDest_ = true;
     state_ = PossessState::Walking;
+}
+
+// WALK UP TO A CAR AND TAKE IT (ADR-0091). The reach is deliberately short —
+// a director has to actually send the agent to the car first, which is the
+// whole point of the exercise: the errand, the arrival and the boarding are
+// three decisions, not one teleport.
+void CityPossessSystem::boardNearby(engine::FrameContext& ctx,
+                                    const PossessCmd& cmd) {
+    (void)ctx;
+    if (walkerAgent_ < 0) {
+        error_ = "nothing possessed — `possess walker` first";
+        return;
+    }
+    CitySim& sim = city_.simMutable();
+    const auto& agents = sim.agents();
+    if (walkerAgent_ >= static_cast<int>(agents.size())) return;
+    const Agent& a = agents[static_cast<std::size_t>(walkerAgent_)];
+    if (a.vehicle >= 0) { error_ = "already driving"; return; }
+    const Vec2 from = cmd.hasPos ? Vec2(cmd.x, cmd.z) : a.pos;
+    const int veh = sim.nearestFreeVehicle(from, kBoardReach);
+    if (veh < 0) {
+        error_ = "no free car within reach — walk to one first";
+        state_ = PossessState::Idle;
+        return;
+    }
+    const Vec2 where = sim.vehicles()[static_cast<std::size_t>(veh)].pos;
+    const engine::Real walk = std::sqrt((where.x - a.pos.x) * (where.x - a.pos.x) +
+                                        (where.y - a.pos.y) * (where.y - a.pos.y));
+    if (walk > kBoardReach) {
+        error_ = "that car is too far to get into — walk to it first";
+        return;
+    }
+    if (!sim.boardVehicle(walkerAgent_, veh)) {
+        error_ = "that car is taken";
+        return;
+    }
+    LOG_INFO << "board: agent " << walkerAgent_ << " took car " << veh << " at "
+             << where.x << "," << where.y << " (" << walk << " m away)";
+    configureFollow(follow_, /*car=*/true);
+    hasDest_ = false;
+    state_ = PossessState::Idle;
+}
+
+void CityPossessSystem::alightHere(engine::FrameContext& ctx) {
+    (void)ctx;
+    if (walkerAgent_ < 0) { error_ = "nothing possessed"; return; }
+    if (!city_.simMutable().alightVehicle(walkerAgent_)) {
+        error_ = "not in a car";
+        return;
+    }
+    LOG_INFO << "alight: agent " << walkerAgent_ << " got out";
+    configureFollow(follow_, /*car=*/false);
+    hasDest_ = false;
+    state_ = PossessState::Idle;
 }
 
 void CityPossessSystem::releasePossession(engine::FrameContext& ctx) {
@@ -325,6 +556,12 @@ void CityPossessSystem::releasePossession(engine::FrameContext& ctx) {
         ctx.world.has<engine::AgentDriver>(car_))
         ctx.world.remove<engine::AgentDriver>(car_);
     car_ = Entity{};
+    // GIVE THE AGENT ITS DAY BACK. A released agent left `directed` would stand
+    // wherever the director abandoned it for the rest of the run, because the
+    // goal layer has been told to leave it alone (ADR-0091).
+    if (walkerAgent_ >= 0 && city_.built())
+        city_.simMutable().setAgentDirected(walkerAgent_, false);
+    directed_ = false;
     walkerAgent_ = -1;
     hasDest_ = false;
     follower_ = engine::LaneFollower{};
@@ -481,6 +718,175 @@ void CityPossessSystem::updateCamera(engine::FrameContext& ctx) {
     ctx.view.activeCameraEntity = Entity{};
 }
 
+// WHAT THE AGENT CAN SEE (ADR-0091). The menu a director chooses from, and the
+// reason it is built HERE rather than by the director: every entry carries a
+// point `walk_to` accepts, so a choice is one command and never a coordinate
+// the agent cannot reach. A place's `at` is its ENTRANCE — already snapped to
+// the pedestrian network by PlaceMap — not its footprint centroid, which is
+// inside a building and routes to nothing.
+//
+// Bearings are degrees from where the agent faces, positive to its RIGHT, the
+// same convention (and the same two lines of arithmetic) as the bus HUD the
+// player reads, so the two never disagree about which way "left" is.
+void CityPossessSystem::publishLook(engine::FrameContext& ctx) {
+    if (!city_.built() || walkerAgent_ < 0) {
+        ctx.settings.setString("look.status", "none");
+        return;
+    }
+    const std::vector<Agent>& agents = city_.sim().agents();
+    if (walkerAgent_ >= static_cast<int>(agents.size())) {
+        ctx.settings.setString("look.status", "none");
+        return;
+    }
+    const CitySim& sim = city_.sim();
+    const Agent& me = agents[static_cast<std::size_t>(walkerAgent_)];
+    const Vec2 eye = me.pos;
+    Vec2 f = me.heading;
+    const engine::Real fl = std::sqrt(f.x * f.x + f.y * f.y);
+    f = fl > 1e-6 ? Vec2(f.x / fl, f.y / fl) : Vec2(0, 1);
+    const engine::Real clock = sim.clockHours();
+
+    auto bearing = [&](Vec2 to) {
+        const Vec2 d(to.x - eye.x, to.y - eye.y);
+        return std::atan2(-d.x * f.y + d.y * f.x, d.x * f.x + d.y * f.y) *
+               57.29577951308232;
+    };
+    auto dist = [&](Vec2 to) {
+        const engine::Real dx = to.x - eye.x, dy = to.y - eye.y;
+        return std::sqrt(dx * dx + dy * dy);
+    };
+
+    std::string out;
+    char buf[320];
+    std::snprintf(buf, sizeof(buf), "clock=%.2f pos=%.1f,%.1f facing=%.1f,%.1f",
+                  static_cast<double>(clock), static_cast<double>(eye.x),
+                  static_cast<double>(eye.y), static_cast<double>(f.x),
+                  static_cast<double>(f.y));
+    out = buf;
+
+    // WHERE ITS OWN PLAN GOES NEXT, so a director can see what it is
+    // interrupting before it interrupts it.
+    if (const engine::NavGraph* nav = sim.graph()) {
+        if (me.route.valid() &&
+            me.leg < static_cast<int>(me.route.links.size())) {
+            const Vec2 wp = nav->nodes[static_cast<std::size_t>(
+                nav->links[static_cast<std::size_t>(
+                               me.route.links[static_cast<std::size_t>(me.leg)])]
+                    .to)];
+            std::snprintf(buf, sizeof(buf),
+                          " | next d=%.0f b=%.0f at=%.1f,%.1f legs=%d",
+                          static_cast<double>(dist(wp)),
+                          static_cast<double>(bearing(wp)),
+                          static_cast<double>(wp.x), static_cast<double>(wp.y),
+                          static_cast<int>(me.route.links.size()) - me.leg);
+            out += buf;
+        }
+    }
+
+    // ONE PLACE OF EACH KIND, the nearest. A menu of seven is a menu a model
+    // can hold in its head; every shop in the district is a search problem.
+    const PlaceMap& places = city_.places();
+    for (int t = 0; t < static_cast<int>(PlaceType::Count); ++t) {
+        const PlaceType type = static_cast<PlaceType>(t);
+        const PlaceId id = places.nearest(type, eye);
+        if (id == kNoPlace) continue;
+        const Place& pl = places[id];
+        const engine::Real d = dist(pl.entrance);
+        if (d > kLookRadiusPlaces) continue;
+        std::string name = pl.name;
+        for (char& ch : name) if (ch == ' ') ch = '_';   // one token per field
+        std::snprintf(buf, sizeof(buf),
+                      " | place=%s id=%u d=%.0f b=%.0f open=%d at=%.1f,%.1f%s%s",
+                      placeTypeName(type), static_cast<unsigned>(id),
+                      static_cast<double>(d), static_cast<double>(bearing(pl.entrance)),
+                      pl.openAt(clock) ? 1 : 0,
+                      static_cast<double>(pl.entrance.x),
+                      static_cast<double>(pl.entrance.y),
+                      name.empty() ? "" : " name=", name.c_str());
+        out += buf;
+    }
+
+    // THE NEAREST BUS STOP AND WHAT CALLS THERE. The agent's own transit state
+    // is in `agent?`; this is the option it has not taken yet.
+    {
+        const BusNetwork& net = sim.buses();
+        int bestR = -1, bestS = -1;
+        engine::Real bestD = 0;
+        for (int r = 0; r < net.routeCount(); ++r) {
+            const BusRoute& route = net.route(r);
+            for (std::size_t si = 0; si < route.stops.size(); ++si) {
+                const engine::Real d = dist(route.stops[si].pos);
+                if (bestR < 0 || d < bestD) {
+                    bestR = r; bestS = static_cast<int>(si); bestD = d;
+                }
+            }
+        }
+        if (bestR >= 0 && bestD <= kLookRadiusPlaces) {
+            const BusStop& st = net.route(bestR).stops[static_cast<std::size_t>(bestS)];
+            std::snprintf(buf, sizeof(buf),
+                          " | stop route=%d d=%.0f b=%.0f at=%.1f,%.1f node=%d",
+                          bestR, static_cast<double>(bestD),
+                          static_cast<double>(bearing(st.pos)),
+                          static_cast<double>(st.pos.x),
+                          static_cast<double>(st.pos.y), st.node);
+            out += buf;
+        }
+    }
+
+    // A CAR IT COULD TAKE — the nearest one with nobody in it, out to the same
+    // range as the places, because a car two streets away is a destination you
+    // can walk to. `boardable` is the different question: can it reach in and
+    // open the door from where it is standing right now.
+    {
+        const int veh = sim.nearestFreeVehicle(eye, kLookRadiusPlaces);
+        if (veh >= 0) {
+            const Vec2 vp = sim.vehicles()[static_cast<std::size_t>(veh)].pos;
+            const engine::Real d = dist(vp);
+            std::snprintf(buf, sizeof(buf),
+                          " | car_free=%d d=%.1f b=%.0f at=%.1f,%.1f boardable=%d",
+                          veh, static_cast<double>(d),
+                          static_cast<double>(bearing(vp)),
+                          static_cast<double>(vp.x), static_cast<double>(vp.y),
+                          d <= kBoardReach ? 1 : 0);
+            out += buf;
+        }
+    }
+
+    // THE PEOPLE AROUND IT, nearest first, capped. The grid answers by CELL, so
+    // this is a superset — the distance test below is the exact one.
+    {
+        std::vector<int> near;
+        sim.queryAgentsNear(eye, kLookRadiusAgents, near);
+        std::vector<std::pair<engine::Real, int>> byDist;
+        byDist.reserve(near.size());
+        for (int ai : near) {
+            if (ai == walkerAgent_ || ai < 0 ||
+                ai >= static_cast<int>(agents.size()))
+                continue;
+            const Agent& o = agents[static_cast<std::size_t>(ai)];
+            if (o.indoors || o.released) continue;   // not on the street
+            const engine::Real d = dist(o.pos);
+            if (d <= kLookRadiusAgents) byDist.emplace_back(d, ai);
+        }
+        std::sort(byDist.begin(), byDist.end());
+        int shown = 0;
+        for (const auto& [d, ai] : byDist) {
+            if (shown++ >= kLookMaxAgents) break;
+            const Agent& o = agents[static_cast<std::size_t>(ai)];
+            std::snprintf(buf, sizeof(buf),
+                          " | %s=%d d=%.1f b=%.0f state=%s speed=%.1f",
+                          o.mode == Agent::Mode::Driver ? "car" : "ped", ai,
+                          static_cast<double>(d), static_cast<double>(bearing(o.pos)),
+                          stateLabel(o.state), static_cast<double>(o.speed));
+            out += buf;
+        }
+        std::snprintf(buf, sizeof(buf), " | crowd=%d", static_cast<int>(byDist.size()));
+        out += buf;
+    }
+
+    ctx.settings.setString("look.status", out);
+}
+
 void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
     std::string line;
     if (!error_.empty()) {
@@ -520,6 +926,62 @@ void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
         line = city_.built() ? "none" : "none (city not built — play mode only)";
     }
     ctx.settings.setString("possess.status", line);
+
+    // THE AGENT'S OWN MIND (ADR-0091 telemetry). possess.status answers "what
+    // is the puppeteer doing"; this answers "what is this person doing" — the
+    // activity and goal state the sim is running them under, and the four
+    // fields that decide whether they take a step (moving/indoors/restDwell/
+    // route). A director cannot reason about an agent it cannot read, and the
+    // walk_to freeze was invisible precisely because none of this was exposed.
+    std::string agentLine = "none";
+    if (walkerAgent_ >= 0) {
+        const auto& sim = city_.sim();
+        const auto& agents = sim.agents();
+        if (walkerAgent_ < static_cast<int>(agents.size())) {
+            const Agent& a = agents[static_cast<std::size_t>(walkerAgent_)];
+            char buf[512];
+            std::snprintf(
+                buf, sizeof(buf),
+                "agent=%d mode=%s activity=%s state=%s tier=%c moving=%d "
+                "indoors=%d restDwell=%.1f speed=%.2f pos=%.1f,%.1f "
+                "leg=%d/%d routeValid=%d tripGoal=%d home=%d work=%d "
+                "busDwell=%.1f busStoodLeg=%d riding=%d awaitingRide=%d "
+                "busRoute=%d busNextStop=%d stepped=%d gap=%.1f minGap=%.1f "
+                "tethered=%d anchorDist=%.1f lead=%.1f playerCtl=%d released=%d "
+                "carrier=%d cityHeld=%d",
+                walkerAgent_,
+                a.mode == Agent::Mode::Driver ? "car" : "ped",
+                activityLabel(a.activity), stateLabel(a.state),
+                tierLabel(a.tier), a.moving ? 1 : 0, a.indoors ? 1 : 0,
+                static_cast<double>(a.restDwell), static_cast<double>(a.speed),
+                static_cast<double>(a.pos.x), static_cast<double>(a.pos.y),
+                a.leg, static_cast<int>(a.route.links.size()),
+                a.route.valid() ? 1 : 0, a.tripGoal, a.home, a.work,
+                // The transit half of its mind: `advance` returns early while
+                // busDwell runs, so an agent queued for a bus stands still no
+                // matter how valid its route is.
+                static_cast<double>(a.busDwell), a.busStoodLeg,
+                sim.riding(walkerAgent_) ? 1 : 0,
+                sim.awaitingRide(walkerAgent_) ? 1 : 0,
+                sim.busRouteOf(walkerAgent_), sim.busNextStopOf(walkerAgent_),
+                sim.steppedLastTick(walkerAgent_) ? 1 : 0,
+                static_cast<double>(sim.gapOf(walkerAgent_)),
+                static_cast<double>(sim.minGapOf(walkerAgent_)),
+                // The ADR-0062 leash from the director's side: a ghost more than
+                // `lead` metres from its physical body is held, not stepped.
+                a.tethered ? 1 : 0,
+                a.tethered ? static_cast<double>((a.pos - a.tetherAnchor).length())
+                           : -1.0,
+                static_cast<double>(a.tetherLead),
+                a.playerControlled ? 1 : 0, a.released ? 1 : 0,
+                // WHAT IS CARRYING IT. `riding` only says yes; a director
+                // (and a tour script) needs to know whether that is the bus
+                // it asked for, somebody's cab, or its own car.
+                sim.carrierOf(walkerAgent_), sim.tetherHeld());
+            agentLine = buf;
+        }
+    }
+    ctx.settings.setString("agent.status", agentLine);
 }
 
 }  // namespace citysim

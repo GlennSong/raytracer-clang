@@ -1,0 +1,203 @@
+#version 450
+// WATER AND SEDIMENT: the "pipe model" of Mei, Decaudin & Hu, "Fast Hydraulic Erosion Simulation and
+// Visualization on GPU" (Pacific Graphics 2007) -- the shallow-water half of the erosion bake (ADR-0123).
+// The droplet kernels (erosion.comp) carve drainage; they cannot hold water, so they make no lakes, no
+// pools and no floodplains, and a river is only as wide as their brush. Here every cell holds a DEPTH of
+// water that flows to its four neighbours through virtual pipes driven by the water-surface difference:
+// water spreads, ponds, floods over its banks and drops what it carries where it slows. River width,
+// floodplains and fans come out of the simulation.
+//
+// One source, one SPIR-V module per kernel (-DKERNEL_W_*), dispatched in order each step by
+// erosion_gpu_vk.cpp. Each kernel writes only its own cell, from what the previous kernel wrote -- no
+// atomics, run to run deterministic. Units: metres and seconds; cellSize is the real spacing, so the same
+// constants behave alike at any resolution.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) buffer Height { float b[]; };      // terrain (m)
+layout(std430, set = 0, binding = 1) buffer Water  { float d[]; };      // water depth (m)
+layout(std430, set = 0, binding = 2) buffer Flux   { vec4 f[]; };       // outflow along the 8 pipes, two vec4 a cell (m^3/s)
+layout(std430, set = 0, binding = 3) buffer Vel    { vec2 v[]; };       // velocity (m/s)
+layout(std430, set = 0, binding = 4) buffer Sed0   { float s0[]; };     // suspended sediment (m of height), ping
+layout(std430, set = 0, binding = 5) buffer Sed1   { float s1[]; };     // ... pong
+layout(std430, set = 0, binding = 6) buffer Tilt   { float tilt[]; };   // sin of the local slope
+layout(std430, set = 0, binding = 7) buffer Wet    { float wet[]; };    // accumulated water depth x time (a wetness map)
+layout(std430, set = 0, binding = 8) buffer Relief { vec4 relief[]; };  // the bed's 8-neighbour lowest / highest / mean, for step 3
+// LOOSE SEDIMENT (ADR-0124, after Stava et al. 2008's layered materials): how much of b is deposited
+// material lying on the bedrock. Water cuts it easily and bedrock slowly, and whatever settles joins it --
+// so a river re-cuts its own floodplain and stays incised instead of filling its valley flat.
+layout(std430, set = 0, binding = 9) buffer Soil   { float soil[]; };
+
+layout(push_constant) uniform U {
+    int   n;
+    int   parity;        // 0: sediment reads s0 writes s1; 1: the other way
+    float cellSize;      // m
+    float dt;            // s
+    float gravity;       // m/s^2
+    float rain;          // m/s of water added to every land cell
+    float capacity;      // Kc: sediment a unit of flow can carry (per unit tilt x speed)
+    float dissolve;      // Ks: pick-up rate (1/s)
+    float deposit;       // Kd: settle rate (1/s)
+    float evaporate;     // Ke: 1/s
+    float seaLevel;      // cells below it are sea: held at sea level (a sink for water, a sink for sediment)
+    float minTilt;       // a floor on the slope term, so flat water still carries a little
+    float maxErodeDepth; // m: no step cuts deeper than this below the water (keeps pits from running away)
+    float rockHardness;  // bedrock's pick-up rate as a fraction of loose sediment's (0..1)
+    float creep;         // soil creep: each step the bed moves this fraction toward its neighbours' mean
+} u;
+
+int idx(int x, int z) { return z * u.n + x; }
+bool inside(int x, int z) { return x >= 0 && z >= 0 && x < u.n && z < u.n; }
+float surf(int i) { return b[i] + d[i]; }
+
+// EIGHT PIPES (ADR-0124): four pipes only let water run along the grid's axes, and every rill and ridge the
+// model cut lined up with them -- short horizontal and vertical dashes over the whole terrain. The
+// diagonals make flow close to isotropic. Paired so the opposite of pipe k is k ^ 1; a diagonal is sqrt 2
+// longer, so it conducts less. f[2i] holds pipes 0-3 (+x -x +z -z), f[2i+1] pipes 4-7.
+const ivec2 kDir[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1),
+                               ivec2(1, 1), ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1));
+const float kInvLen[8] = float[8](1.0, 1.0, 1.0, 1.0, 0.70710678, 0.70710678, 0.70710678, 0.70710678);
+float fluxOf(int i, int k) { vec4 q = f[2 * i + (k >> 2)]; int c = k & 3; return c == 0 ? q.x : c == 1 ? q.y : c == 2 ? q.z : q.w; }
+// the flow arriving at cell (x, z) along pipe k from the neighbour on that side (0 off the grid)
+float inflow(int x, int z, int k) {
+    int nx = x + kDir[k].x, nz = z + kDir[k].y;
+    return inside(nx, nz) ? fluxOf(idx(nx, nz), k ^ 1) : 0.0;
+}
+
+#ifdef KERNEL_W_FLUX
+// 1. OUTFLOW FLUX: each pipe accelerates with the surface drop to that neighbour; then all eight are scaled
+//    down together if they would drain more than the cell holds this step.
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= u.n * u.n) return;
+    int x = i % u.n, z = i / u.n;
+    float h = surf(i);
+    const float A = u.cellSize * u.cellSize;                     // pipe cross-section
+    float fl[8];
+    float total = 0.0;
+    for (int k = 0; k < 8; ++k) {
+        int nx = x + kDir[k].x, nz = z + kDir[k].y;
+        // a neighbour off the grid drains like the open sea (water leaves the map)
+        float hn = inside(nx, nz) ? surf(idx(nx, nz)) : min(h, u.seaLevel);
+        fl[k] = max(0.0, fluxOf(i, k) + u.dt * A * u.gravity * kInvLen[k] / u.cellSize * (h - hn));
+        total += fl[k];
+    }
+    float outV = total * u.dt, have = d[i] * A;
+    float scale = (outV > have && outV > 0.0) ? have / outV : 1.0;
+    f[2 * i] = vec4(fl[0], fl[1], fl[2], fl[3]) * scale;
+    f[2 * i + 1] = vec4(fl[4], fl[5], fl[6], fl[7]) * scale;
+}
+#endif
+
+#ifdef KERNEL_W_WATER
+// 2. WATER: net inflow minus outflow changes the depth; the net flow through the cell is its velocity. Rain
+//    falls on land, the sea stays at sea level, water evaporates. The local slope and the bed's 8-neighbour
+//    range are recorded for step 3 (which rewrites b, so it cannot read its neighbours' heights itself).
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= u.n * u.n) return;
+    int x = i % u.n, z = i / u.n;
+    const float A = u.cellSize * u.cellSize;
+    float sumIn = 0.0, sumOut = 0.0;
+    vec2 w = vec2(0.0);
+    for (int k = 0; k < 8; ++k) {
+        float o = fluxOf(i, k), in_ = inflow(x, z, k);
+        sumOut += o; sumIn += in_;
+        w += vec2(kDir[k]) * kInvLen[k] * (o - in_) * 0.5;   // flow along pipe k's direction, net
+    }
+    float d1 = d[i];
+    float d2 = max(0.0, d1 + u.dt * (sumIn - sumOut) / A);
+    float dm = 0.5 * (d1 + d2);
+    vec2 vel = dm > 1e-4 ? w / (u.cellSize * dm) : vec2(0.0);
+    float vmax = u.cellSize / u.dt;                        // no faster than a cell a step (CFL)
+    float sp = length(vel);
+    if (sp > vmax) vel *= vmax / sp;
+    v[i] = vel;
+    if (b[i] < u.seaLevel) d2 = u.seaLevel - b[i];         // the sea holds its level
+    else d2 = (d2 + u.rain * u.dt) * (1.0 - u.evaporate * u.dt);
+    d[i] = d2;
+    wet[i] += d2 * u.dt;
+    // tilt from central differences; relief over all eight neighbours
+    float bl = b[idx(max(x - 1, 0), z)], br = b[idx(min(x + 1, u.n - 1), z)];
+    float bd = b[idx(x, max(z - 1, 0))], bu = b[idx(x, min(z + 1, u.n - 1))];
+    vec2 g = vec2(br - bl, bu - bd) / (2.0 * u.cellSize);
+    float t2 = dot(g, g);
+    tilt[i] = sqrt(t2 / (1.0 + t2));
+    float lo = 1e30, hi = -1e30, sum = 0.0;
+    for (int k = 0; k < 8; ++k) {
+        int nx = clamp(x + kDir[k].x, 0, u.n - 1), nz = clamp(z + kDir[k].y, 0, u.n - 1);
+        float bn = b[idx(nx, nz)];
+        lo = min(lo, bn); hi = max(hi, bn); sum += bn;
+    }
+    relief[i] = vec4(lo, hi, sum * 0.125, 0.0);
+}
+#endif
+
+#ifdef KERNEL_W_ERODE
+// 3. ERODE / DEPOSIT: flowing water can carry capacity x tilt x speed; below that it picks the bed up,
+//    above it lets sediment settle. The sea only receives.
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= u.n * u.n) return;
+    float s = u.parity == 0 ? s1[i] : s0[i];   // what TRANSPORT just delivered
+    float cap = u.capacity * max(tilt[i], u.minTilt) * length(v[i]);
+    // shallow sheet flow carries little: scale by depth up to a metre (Mei's model has no depth term; without
+    // one, the film of rain on every hillside erodes as hard as a river)
+    // and a THRESHOLD (ADR-0125): sheet flow a few centimetres deep does not cut at all -- on a smooth slope
+    // every sheet cut its own one-cell rill, parallel and grid-aligned; only water that has gathered incises
+    cap *= smoothstep(0.05, 0.6, d[i]);
+    if (b[i] < u.seaLevel) cap = 0.0;
+    float db;
+    float loose = soil[i];
+    if (cap > s) {
+        // cut the loose layer at the full rate, what is left of the step's appetite from bedrock at
+        // rockHardness of it
+        float want = u.dissolve * u.dt * (cap - s);
+        float fromSoil = min(want, loose);
+        db = -min(fromSoil + (want - fromSoil) * u.rockHardness, u.maxErodeDepth);
+    } else {
+        db = u.deposit * u.dt * (s - cap);
+    }
+    // NO SPIKES, NO PITS: a step never cuts the bed below its lowest neighbour nor piles it above its
+    // highest (the droplets' clamp, per step): what cannot be cut stays in the bed, what cannot be laid
+    // stays in the water. Without it deposits grew into 500 m spikes and cuts into 390 m pits.
+    float bi = b[i];
+    vec4 r = relief[i];
+    // SOIL CREEP (ADR-0125): a slow relaxation toward the neighbours' mean damps cell-scale rills and leaves
+    // real valleys (their curvature is gentle at this rate)
+    if (bi >= u.seaLevel) { float c = u.creep * (r.z - bi); bi += c; soil[i] = max(0.0, soil[i] + c); }
+    db = clamp(db, min(0.0, r.x - bi), max(0.0, r.y - bi));
+    if (db > 0.0) db = min(db, s);   // cannot lay more than it carries
+    // the sea floor builds no further than a metre under the surface: sediment reaching the sea along the
+    // whole coast (not just at the rivers) piled every first sea cell up to land and grew a berm round the
+    // island; what cannot settle here washes offshore
+    if (bi < u.seaLevel) { db = min(db, max(0.0, u.seaLevel - 1.0 - bi)); s = min(s, db); }
+    soil[i] = max(0.0, soil[i] + db);   // a deposit thickens the loose layer, a cut thins it (below 0: bedrock)
+    b[i] = bi + db;
+    s -= db;
+    if (u.parity == 0) s1[i] = max(s, 0.0); else s0[i] = max(s, 0.0);
+}
+#endif
+
+#ifdef KERNEL_W_TRANSPORT
+// 4. TRANSPORT (runs after FLUX, before WATER): sediment rides the same eight pipes as the water, at the
+//    sending cell's concentration (sediment / water): what leaves one cell arrives in its neighbour, mass
+//    conserved exactly, and no cell sends more than it holds (its flux is capped at its water). A
+//    semi-Lagrangian fetch duplicated sediment where the flow converges and grew spikes. Ping -> pong.
+float sedIn(int j) { return u.parity == 0 ? s0[j] : s1[j]; }
+float conc(int j) { float dj = d[j]; return dj > 1e-4 ? sedIn(j) / dj : 0.0; }
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= u.n * u.n) return;
+    int x = i % u.n, z = i / u.n;
+    const float A = u.cellSize * u.cellSize;
+    float gain = 0.0, out_ = 0.0;
+    for (int k = 0; k < 8; ++k) {
+        int nx = x + kDir[k].x, nz = z + kDir[k].y;
+        if (inside(nx, nz)) gain += fluxOf(idx(nx, nz), k ^ 1) * conc(idx(nx, nz));
+        out_ += fluxOf(i, k);
+    }
+    float s = max(0.0, sedIn(i) + u.dt * (gain - out_ * conc(i)) / A);
+    if (u.parity == 0) s1[i] = s; else s0[i] = s;
+}
+#endif

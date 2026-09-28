@@ -86,6 +86,50 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
+    // The collision's underside: floor_clearance (m off the body box's floor), approach / departure angles
+    c.floorClearance = numField(L, t, "floor_clearance", c.floorClearance);
+    c.approachDegrees = numField(L, t, "approach_deg", c.approachDegrees);
+    c.departureDegrees = numField(L, t, "departure_deg", c.departureDegrees);
+    // DRIVETRAIN: drive = "fwd" | "rwd" | "awd" | "4wd" (part-time: starts in 2WD, rear, the player
+    // switches -- VehicleSystem), or front_share = 0..1 directly; axle_lsd / center_lsd limited-slip ratios
+    lua_getfield(L, t, "drive");
+    if (lua_isstring(L, -1)) {
+        const std::string d = lua_tostring(L, -1);
+        if (d == "fwd") c.frontDriveShare = 1.0;
+        else if (d == "rwd") c.frontDriveShare = 0.0;
+        else if (d == "awd") c.frontDriveShare = 0.5;
+        else if (d == "4wd") { c.frontDriveShare = 0.0; out.partTime4wd = true; }
+    }
+    lua_pop(L, 1);
+    c.frontDriveShare = numField(L, t, "front_share", c.frontDriveShare);
+    c.axleLimitedSlip = numField(L, t, "axle_lsd", c.axleLimitedSlip);
+    c.centerLimitedSlip = numField(L, t, "center_lsd", c.centerLimitedSlip);
+    lua_getfield(L, t, "traction_split");   // true: in 4WD a hanging axle hands its torque to the grounded one
+    if (lua_isboolean(L, -1)) c.tractionSplit = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    // AERO and GEARBOX
+    c.dragArea = numField(L, t, "drag_area", c.dragArea);
+    c.shiftTime = numField(L, t, "shift_time", c.shiftTime);
+    c.clutchReleaseTime = numField(L, t, "clutch_time", c.clutchReleaseTime);
+    c.shiftLatency = numField(L, t, "shift_latency", c.shiftLatency);
+    lua_getfield(L, t, "gear_ratios");
+    if (lua_istable(L, -1)) {
+        const int gt = lua_gettop(L), n = static_cast<int>(luaL_len(L, gt));
+        for (int i = 1; i <= n; ++i) { lua_rawgeti(L, gt, i); c.gearRatios.push_back(lua_tonumber(L, -1)); lua_pop(L, 1); }
+    }
+    lua_pop(L, 1);
+    // SUSPENSION = { min=, max=, freq=, damp=, rest_drop= } -- the street rig by default; an off-roader's
+    // long travel and soft springs
+    lua_getfield(L, t, "suspension");
+    if (lua_istable(L, -1)) {
+        const int st = lua_gettop(L);
+        out.suspensionMin = numField(L, st, "min", out.suspensionMin);
+        out.suspensionMax = numField(L, st, "max", out.suspensionMax);
+        out.suspensionFrequency = numField(L, st, "freq", out.suspensionFrequency);
+        out.suspensionDamping = numField(L, st, "damp", out.suspensionDamping);
+        out.suspensionRestDrop = numField(L, st, "rest_drop", out.suspensionRestDrop);
+    }
+    lua_pop(L, 1);
 
     // lights = { { name = "headlight_l", pos = {x,y,z} }, ... }
     // Same shape citysim's fleet recipes use, so `mesh.car`'s output drops
@@ -154,13 +198,12 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                 // to a commandeered car — so the player's car rests exactly
                 // where it is drawn instead of 0.30 m above it.
                 w.position = Vec3(numField(L, wi, "x", 0),
-                                  numField(L, wi, "y", 0) +
-                                      PhysicsWorld::kStreetSuspensionRestDrop,
+                                  numField(L, wi, "y", 0) + out.suspensionRestDrop,
                                   numField(L, wi, "z", 0));
-                w.suspensionMin = PhysicsWorld::kStreetSuspensionMin;
-                w.suspensionMax = PhysicsWorld::kStreetSuspensionMax;
-                w.suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
-                w.suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
+                w.suspensionMin = out.suspensionMin;
+                w.suspensionMax = out.suspensionMax;
+                w.suspensionFrequency = out.suspensionFrequency;
+                w.suspensionDamping = out.suspensionDamping;
                 w.radius = numField(L, wi, "radius", wheelRadius);
                 w.width = numField(L, wi, "width", wheelWidth);
                 w.steered = boolField(L, wi, "steered", false);
@@ -199,6 +242,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
 
     Vehicle v;
     v.config = spec.config;
+    v.partTime4wd = spec.partTime4wd;
     v.driverSeat = spec.driverSeat;
     v.hasDriverSeat = spec.hasDriverSeat;
 
@@ -234,6 +278,42 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     }
     world.add<Vehicle>(e, v);
     return e;
+}
+
+}  // namespace engine
+
+namespace engine {
+
+bool loadDrivableCatalogue(ScriptVM& vm, std::vector<DrivableEntry>& out, std::string* err) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "vehicle");
+    if (!lua_istable(L, -1)) { lua_settop(L, base); if (err) *err = "no global `vehicle`"; return false; }
+    lua_getfield(L, -1, "drivable");
+    if (!lua_istable(L, -1)) { lua_settop(L, base); if (err) *err = "no `vehicle.drivable`"; return false; }
+    const int t = lua_gettop(L), n = static_cast<int>(luaL_len(L, t));
+    out.clear();
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, t, i);
+        if (lua_istable(L, -1)) {
+            DrivableEntry e;
+            lua_getfield(L, -1, "recipe"); if (lua_isstring(L, -1)) e.recipe = lua_tostring(L, -1); lua_pop(L, 1);
+            lua_getfield(L, -1, "label"); if (lua_isstring(L, -1)) e.label = lua_tostring(L, -1); lua_pop(L, 1);
+            lua_getfield(L, -1, "drive"); if (lua_isstring(L, -1)) e.drive = lua_tostring(L, -1); lua_pop(L, 1);
+            if (!e.recipe.empty()) out.push_back(std::move(e));
+        }
+        lua_pop(L, 1);
+    }
+    lua_settop(L, base);
+    return !out.empty();
+}
+
+std::string driveLabel(const std::string& d) {
+    if (d == "fwd") return "2WD (front)";
+    if (d == "rwd") return "2WD (rear)";
+    if (d == "awd") return "AWD";
+    if (d == "4wd") return "4WD part-time (Z)";
+    return d;
 }
 
 }  // namespace engine

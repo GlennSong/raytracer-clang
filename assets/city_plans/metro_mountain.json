@@ -1,0 +1,227 @@
+{
+  "center": [
+    0.0,
+    0.0
+  ],
+  "core": {
+    "angle": 19.06279087510491,
+    "arterialEvery": 3,
+    "block": [
+      94.42401007095445,
+      64.38000686655985
+    ],
+    "radius": 403.2500572213321
+  },
+  "freeway": {
+    "radials": 2,
+    "radius": 1022.8024719615474,
+    "wobble": 50.0
+  },
+  "midtown": {
+    "block": [
+      159.34589150835433,
+      108.12756923781185
+    ],
+    "radius": 800.0,
+    "warp": 18.822384985122454
+  },
+  "name": "metro_mountain",
+  "outskirts": {
+    "curvature": 23.627489127946898,
+    "margin": 120.0,
+    "ringSpacing": 140.65973907072558,
+    "spokes": 10,
+    "streetSpacing": 95.0
+  },
+  "roads": {
+    "arterial": 22.0,
+    "collector": 16.0,
+    "freeway": 30.0,
+    "local": 12.0,
+    "sidewalk": 5.0
+  },
+  "seed": 474349,
+  "size": 3000.0,
+  "relief": 60.0,
+  "world": {
+    "_comment": "The world the city stands in (Glenn, 2026-09-23: more hills, mountains in the background, a beach along one edge). 'base' is a level terrain block: the ground under everything, and what the level renders beyond the city's ground grid (city_plan level-world prints it). Tilted 2% down to the east into a sea at seaLevel, a mountain range bending round the west and north into a headland. The brief's relief is laid over it inside the city, faded out between reliefFade's radii before the grid's edge (grid, a half-width) and calmed toward the coast along calm.dir, so the east side is a coastal plain.",
+    "grid": 3000,
+    "reliefFade": [
+      1450,
+      1950
+    ],
+    "calm": {
+      "dir": [
+        1,
+        0
+      ],
+      "from": 500,
+      "to": 1350
+    },
+    "seaLevel": -32.0,
+    "base": {
+      "seed": 11,
+      "size": 12000,
+      "resolution": 1200,
+      "heightScale": 7,
+      "noiseScale": 0.0005,
+      "octaves": 5,
+      "warp": 0.35,
+      "tiltX": -0.02,
+      "mountainHeight": 350,
+      "mountainScale": 0.0015,
+      "mountainAlongRange": true,
+      "mountainMaskScale": 0,
+      "rangeSpine": [
+        [
+          -3000,
+          -6200
+        ],
+        [
+          -3500,
+          -3000
+        ],
+        [
+          -3300,
+          0
+        ],
+        [
+          -3000,
+          2200
+        ],
+        [
+          -1900,
+          3700
+        ],
+        [
+          0,
+          4400
+        ],
+        [
+          2200,
+          4700
+        ],
+        [
+          4200,
+          5200
+        ]
+      ],
+      "rangeWidth": 900,
+      "rangeHeight": 450,
+      "rangeVariation": 0.6,
+      "snowLine": 520,
+      "rockLine": 240,
+      "groundCover": {
+        "beachHeight": 3,
+        "uplandHeight": 90,
+        "mountainHeight": 260,
+        "snowHeight": 470,
+        "rockSlopeDeg": 34,
+        "dirtPatches": 0.15,
+        "seed": 5,
+        "grass": [
+          0.055,
+          0.085,
+          0.018
+        ],
+        "grassDry": [
+          0.1,
+          0.1,
+          0.04
+        ],
+        "rock": [
+          0.15,
+          0.14,
+          0.12
+        ],
+        "dirt": [
+          0.12,
+          0.085,
+          0.05
+        ]
+      }
+    },
+    "water": {
+      "region": 6000,
+      "cell": 20,
+      "foamBand": 36,
+      "color": [
+        0.012,
+        0.05,
+        0.08
+      ],
+      "roughness": 0.04,
+      "opacity": 0.82
+    },
+    "loop": {
+      "_comment": "The outer loop (Glenn, 2026-09-23: 'go around and hug the edge of the mountains and then wrap around to the other small town and connect back to the city ... on ramps for the small towns and multiple ramps for the big mountain city'). It carries the two expressways on round the mountain side, `setback` metres short of the mountain front; places stand along it at polar angles `at` (degrees), `length` along it, `depth` streets deep on the city side.",
+      "setback": 250,
+      "inner": 650,
+      "places": [
+        {
+          "name": "sw town",
+          "at": 226,
+          "length": 500,
+          "depth": 2,
+          "kind": "oldtown",
+          "style": "town",
+          "grid": 3,
+          "cell": 105,
+          "radius": 520
+        },
+        {
+          "name": "mountain city",
+          "_comment": "A city, not a strip (Glenn, 2026-09-23: 'make it a real city'): a gridded centre 33 x 4 blocks following the loop, a downtown in its middle with its own financial hub (towers), shops a third of the way out, industry at one end, and cell-grown residential streets `fringe` metres round it.",
+          "at": 178,
+          "length": 3000,
+          "kind": "commercial",
+          "style": "town",
+          "gridAlong": 33,
+          "gridDeep": 4,
+          "fringe": 480,
+          "cell": 105
+        },
+        {
+          "name": "ne town",
+          "at": 75,
+          "length": 500,
+          "depth": 2,
+          "kind": "oldtown",
+          "style": "town",
+          "grid": 3,
+          "cell": 105,
+          "radius": 520
+        }
+      ]
+    },
+    "_comment_mountainRoads": "Mountain roads (terrain_route.h): out of the mountain city and the sw town up the range to two lookouts, routed within a collector's grade -- contours where they can, switchbacks where the slope is steeper. Glenn, 2026-09-25: 'I'd be curious how they're built especially around and up and down mountains.'",
+    "mountainRoads": [
+      {
+        "from": [
+          -2250,
+          0
+        ],
+        "to": [
+          -2850,
+          600
+        ],
+        "class": "rural",
+        "maxGrade": 0.08,
+        "hardGrade": 0.45
+      },
+      {
+        "from": [
+          -2000,
+          -1700
+        ],
+        "to": [
+          -2880,
+          -1100
+        ],
+        "class": "rural",
+        "maxGrade": 0.08,
+        "hardGrade": 0.45
+      }
+    ]
+  }
+}

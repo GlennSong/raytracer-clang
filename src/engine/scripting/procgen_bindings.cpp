@@ -24,6 +24,10 @@
 #include "../procgen/city/parcel.h"
 #include "../procgen/proc_model.h"
 #include "../procgen/texture_field.h"
+#include "../procgen/stylized_tree.h"
+#include "../procgen/real_tree.h"   // stylized.tree
+#include "../procgen/stylized_rock.h"   // stylized.rock
+#include "../procgen/grass.h"           // stylized.grass
 #include "../procgen/terrain_field.h"
 #include "../procgen/erosion.h"
 #include "../procgen/planet.h"
@@ -32,6 +36,8 @@
 #include "../../rt_math.h"
 
 #include <nlohmann/json.hpp>
+
+#include "../procgen/polymesh.h"
 
 #include <cmath>
 #include <memory>
@@ -737,6 +743,149 @@ int l_mesh_bake_height_color(lua_State* L) {
     Vec3 high = checkVec3(L, 3);
     MeshBuilder::bakeHeightColor(*m, low, high);
     pushMesh(L, m);
+    return 1;
+}
+
+// --- the SHAPE KIT (MeshBuilder, the flora plan): organic and mineral forms from Lua ---
+// mesh.icosphere(subdiv) -> unit icosphere
+int l_mesh_icosphere(lua_State* L) {
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::icosphere(static_cast<int>(luaL_optinteger(L, 1, 1)))));
+    return 1;
+}
+// mesh.displace(mesh, {amp=0.2, freq=1.7, seed=0, center={0,0,0}}) -> lumps along the radius
+int l_mesh_displace(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    Vec3 c(0, 0, 0);
+    if (lua_istable(L, 2)) { lua_getfield(L, 2, "center"); if (lua_istable(L, -1)) c = checkVec3(L, -1); lua_pop(L, 1); }
+    MeshBuilder::displaceNoise(*m, c, optField(L, 2, "amp", 0.2), optField(L, 2, "freq", 1.7), static_cast<uint32_t>(optField(L, 2, "seed", 0)));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.cut(mesh, normal, d, center={0,0,0}) -> clamped onto the plane: a crisp flat break
+int l_mesh_cut(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    const Vec3 n = checkVec3(L, 2);
+    const double d = luaL_checknumber(L, 3);
+    const Vec3 c = lua_istable(L, 4) ? checkVec3(L, 4) : Vec3(0, 0, 0);
+    MeshBuilder::cutByPlane(*m, c, n, d);
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.facet(mesh, center={0,0,0}) -> flat faces wound outward (the low-poly look)
+int l_mesh_facet(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::facet(*m, lua_istable(L, 2) ? checkVec3(L, 2) : Vec3(0, 0, 0));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.lean_normals(mesh, center, radii, t) -> normals leaned toward the ellipsoid's (a soft volume)
+int l_mesh_lean_normals(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::leanNormals(*m, checkVec3(L, 2), checkVec3(L, 3), luaL_checknumber(L, 4));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.color_by(mesh, function(pos, normal) return {r,g,b} end) -> recoloured per vertex
+int l_mesh_color_by(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    for (Vertex& v : m->vertices) {
+        lua_pushvalue(L, 2);
+        pushVec3(L, v.position);
+        pushVec3(L, v.normal);
+        lua_call(L, 2, 1);
+        v.color = checkVec3(L, -1);
+        lua_pop(L, 1);
+    }
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.tube({points...}, {radii...}, sides=6, {colours...}?) -> a tapered generalized cylinder
+int l_mesh_tube(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    std::vector<Vec3> pts, cols;
+    std::vector<double> radii;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 1)); i <= n; ++i) {
+        lua_rawgeti(L, 1, i); pts.push_back(checkVec3(L, -1)); lua_pop(L, 1);
+    }
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 2)); i <= n; ++i) {
+        lua_rawgeti(L, 2, i); radii.push_back(luaL_checknumber(L, -1)); lua_pop(L, 1);
+    }
+    if (lua_istable(L, 4))
+        for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 4)); i <= n; ++i) {
+            lua_rawgeti(L, 4, i); cols.push_back(checkVec3(L, -1)); lua_pop(L, 1);
+        }
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::tube(pts, radii, static_cast<int>(luaL_optinteger(L, 3, 6)), cols)));
+    return 1;
+}
+
+// --- stylized.* : the flora recipes, callable from Lua (procgen/stylized_tree.h, stylized_rock.h,
+// grass.h) -- so a species script, a level script or flora.lua composes with them.
+// stylized.tree(seed, {shape="oak", height=8, crown_radius, clumps}) -> bark, canopy
+int l_stylized_tree(lua_State* L) {
+    StylizedTreeParams p;
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "shape");
+        if (lua_isstring(L, -1) && !stylizedShapeFromName(lua_tostring(L, -1), p.shape)) luaL_error(L, "stylized.tree: unknown shape");
+        lua_pop(L, 1);
+        p.height = optField(L, 2, "height", p.height);
+        p.crownRadius = optField(L, 2, "crown_radius", 0.0);
+        p.clumps = static_cast<int>(optField(L, 2, "clumps", 0));
+    }
+    StylizedTree t = stylizedTree(seed, p);
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.bark)));
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.canopy)));
+    return 2;
+}
+// real.tree(seed, {species="spruce", height}) -> bark, foliage (ADR-0129/0135): the real-tree generator
+// (procgen/real_tree.h) from Lua; the foliage's uv run into the species' spray atlas (the loader's texture)
+int l_real_tree(lua_State* L) {
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    RealSpecies sp = RealSpecies::Spruce;
+    double height = 0.0;
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "species");
+        if (lua_isstring(L, -1) && !realSpeciesFromName(lua_tostring(L, -1), sp)) luaL_error(L, "real.tree: unknown species");
+        lua_pop(L, 1);
+        height = optField(L, 2, "height", 0.0);
+    }
+    RealTree t = realTree(sp, seed, height);
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.bark)));
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(t.foliage)));
+    return 2;
+}
+// stylized.rock(seed, {family="boulder", stone="granite", size=1.5, moss}) -> mesh
+int l_stylized_rock(lua_State* L) {
+    StylizedRockParams p;
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "family");
+        if (lua_isstring(L, -1) && !rockFamilyFromName(lua_tostring(L, -1), p.family)) luaL_error(L, "stylized.rock: unknown family");
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "stone");
+        if (lua_isstring(L, -1) && !rockMaterialFromName(lua_tostring(L, -1), p.material)) luaL_error(L, "stylized.rock: unknown stone");
+        lua_pop(L, 1);
+        p.size = optField(L, 2, "size", p.size);
+        p.moss = optField(L, 2, "moss", p.moss);
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(stylizedRock(seed, p)));
+    return 1;
+}
+// stylized.grass(seed, {blades, height, width, radius, lean}) -> one clump
+int l_stylized_grass(lua_State* L) {
+    GrassClumpParams p;
+    const uint32_t seed = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+    p.blades = static_cast<int>(optField(L, 2, "blades", p.blades));
+    p.flowers = static_cast<int>(optField(L, 2, "flowers", p.flowers));   // ADR-0133: stems with heads
+    p.petals = static_cast<int>(optField(L, 2, "petals", p.petals));
+    p.flowerSize = optField(L, 2, "flower_size", p.flowerSize);
+    p.height = optField(L, 2, "height", p.height);
+    p.width = optField(L, 2, "width", p.width);
+    p.radius = optField(L, 2, "radius", p.radius);
+    p.lean = optField(L, 2, "lean", p.lean);
+    pushMesh(L, std::make_shared<RenderMesh>(grassClump(seed, p)));
     return 1;
 }
 
@@ -1515,6 +1664,33 @@ int l_tex_gradient_y(lua_State* L) {
     pushField(L, fieldGradientY());
     return 1;
 }
+// Tileable primitives (exactly periodic over the unit square): texture.tile_noise{seed, period},
+// tile_fbm{seed, period, octaves}, cells / cell_edges / cell_id{seed, period}, bands(count).
+int l_tex_tile_noise(lua_State* L) {
+    pushField(L, fieldTileNoise(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 4))));
+    return 1;
+}
+int l_tex_tile_fbm(lua_State* L) {
+    pushField(L, fieldTileFbm(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 4)),
+                              static_cast<int>(optField(L, 1, "octaves", 4))));
+    return 1;
+}
+int l_tex_cells(lua_State* L) {
+    pushField(L, fieldCells(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 8))));
+    return 1;
+}
+int l_tex_cell_edges(lua_State* L) {
+    pushField(L, fieldCellEdges(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 8))));
+    return 1;
+}
+int l_tex_cell_id(lua_State* L) {
+    pushField(L, fieldCellId(static_cast<uint32_t>(optField(L, 1, "seed", 0)), static_cast<int>(optField(L, 1, "period", 8))));
+    return 1;
+}
+int l_tex_bands(lua_State* L) {
+    pushField(L, fieldBands(luaL_checknumber(L, 1)));
+    return 1;
+}
 // Field methods (return new fields — immutable composition).
 int l_field_add(lua_State* L) { pushField(L, fieldAdd(checkField(L, 1), checkField(L, 2))); return 1; }
 int l_field_mul(lua_State* L) { pushField(L, fieldMul(checkField(L, 1), checkField(L, 2))); return 1; }
@@ -1527,11 +1703,60 @@ int l_field_scale_bias(lua_State* L) {
                                 luaL_checknumber(L, 3)));
     return 1;
 }
+int l_field_smoothstep(lua_State* L) {
+    pushField(L, fieldSmoothstep(checkField(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3)));
+    return 1;
+}
+int l_field_invert(lua_State* L) { pushField(L, fieldInvert(checkField(L, 1))); return 1; }
+int l_field_min(lua_State* L) { pushField(L, fieldMin(checkField(L, 1), checkField(L, 2))); return 1; }
+int l_field_max(lua_State* L) { pushField(L, fieldMax(checkField(L, 1), checkField(L, 2))); return 1; }
+int l_field_mix_by(lua_State* L) {
+    pushField(L, fieldMixBy(checkField(L, 1), checkField(L, 2), checkField(L, 3)));
+    return 1;
+}
+int l_field_pow(lua_State* L) { pushField(L, fieldPow(checkField(L, 1), luaL_checknumber(L, 2))); return 1; }
+// field:warp(du, dv, amount): sample displaced by two fields (tile-preserving when they tile).
+int l_field_warp(lua_State* L) {
+    pushField(L, fieldWarp(checkField(L, 1), checkField(L, 2), checkField(L, 3), luaL_optnumber(L, 4, 0.05)));
+    return 1;
+}
 int l_field_clamp(lua_State* L) {
     pushField(L, fieldClamp(checkField(L, 1), luaL_optnumber(L, 2, 0.0),
                             luaL_optnumber(L, 3, 1.0)));
     return 1;
 }
+// Colour fields (linear RGB over u, v): texture.color(rgb) -> ColorField; methods
+// color:mix_by(other, t_field), color:mul(field), color:tint(rgb). Baked by texture.bake_rgba.
+constexpr const char* kColorFieldMt = "engine.procgen.ColorField";
+void pushColorField(lua_State* L, ColorField2 f) {
+    void* mem = lua_newuserdatauv(L, sizeof(ColorField2), 0);
+    new (mem) ColorField2(std::move(f));
+    luaL_setmetatable(L, kColorFieldMt);
+}
+ColorField2& checkColorField(lua_State* L, int idx) {
+    return *static_cast<ColorField2*>(luaL_checkudata(L, idx, kColorFieldMt));
+}
+int colorFieldGc(lua_State* L) {
+    static_cast<ColorField2*>(lua_touserdata(L, 1))->~ColorField2();
+    return 0;
+}
+int l_tex_color(lua_State* L) { pushColorField(L, colorConstant(checkVec3(L, 1))); return 1; }
+int l_color_mix_by(lua_State* L) {
+    pushColorField(L, colorMixBy(checkColorField(L, 1), checkColorField(L, 2), checkField(L, 3)));
+    return 1;
+}
+int l_color_mul(lua_State* L) { pushColorField(L, colorMul(checkColorField(L, 1), checkField(L, 2))); return 1; }
+int l_color_tint(lua_State* L) { pushColorField(L, colorTint(checkColorField(L, 1), checkVec3(L, 2))); return 1; }
+// texture.bake_rgba(color, alpha_field, size, gamma=true) -> Image (albedo + height/mask in alpha).
+int l_tex_bake_rgba(lua_State* L) {
+    ColorField2& c = checkColorField(L, 1);
+    Field2& a = checkField(L, 2);
+    const int size = static_cast<int>(luaL_optinteger(L, 3, 256));
+    const bool gamma = lua_isnoneornil(L, 4) ? true : lua_toboolean(L, 4) != 0;
+    pushImage(L, std::make_shared<TextureData>(bakeFieldRGBA(c, a, size, gamma)));
+    return 1;
+}
+
 // texture.bake_gray(field, size) -> Image (roughness/height/AO map).
 int l_tex_bake_gray(lua_State* L) {
     int size = static_cast<int>(luaL_optinteger(L, 2, 256));
@@ -2697,6 +2922,403 @@ int l_planet_gas_ball(lua_State* L) {
     return 1;
 }
 
+
+// --- poly.* : the hard-surface modelling kit (PolyMesh, ADR-0139) ---------------------------------------
+//
+//   local P = poly.loft{ sections = { sec1, sec2, ... }, stations = { z1, z2, ... }, cap_start = true, cap_end = true }
+//   local hood = P:select{ box = { {-1, 0.6, 1.2}, {1, 2, 3} }, normal = {0, 1, 0}, min_dot = 0.5 }
+//   P:assign(hood, { group = "hood" }); P:extrude(sel, 0.05); P:inset(sel, 0.04); P:crease_border(sel, 2)
+//   P:mirror_x(); local smooth = P:subdivide(2); local parts = smooth:to_parts{ autosmooth = 35 }
+//
+// Face indices in a selection are 0-based and only meaningful for the poly they came from (and stay valid
+// across extrude / inset / assign / crease, which never renumber faces; subdivide makes a new poly).
+
+constexpr const char* kPolyMt = "engine.procgen.Poly";
+using PolyPtr = std::shared_ptr<PolyMesh>;
+
+void pushPoly(lua_State* L, PolyPtr p) {
+    void* mem = lua_newuserdatauv(L, sizeof(PolyPtr), 0);
+    new (mem) PolyPtr(std::move(p));
+    luaL_setmetatable(L, kPolyMt);
+}
+PolyMesh& checkPoly(lua_State* L, int idx) { return **static_cast<PolyPtr*>(luaL_checkudata(L, idx, kPolyMt)); }
+int polyGc(lua_State* L) {
+    static_cast<PolyPtr*>(lua_touserdata(L, 1))->~PolyPtr();
+    return 0;
+}
+
+std::vector<Vec2> checkPts2(lua_State* L, int idx) {
+    idx = lua_absindex(L, idx);
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<Vec2> out;
+    const int n = static_cast<int>(luaL_len(L, idx));
+    for (int i = 1; i <= n; ++i) {
+        lua_geti(L, idx, i);
+        const int t = lua_gettop(L);
+        luaL_checktype(L, t, LUA_TTABLE);
+        lua_geti(L, t, 1); const double x = luaL_checknumber(L, -1); lua_pop(L, 1);
+        lua_geti(L, t, 2); const double y = luaL_checknumber(L, -1); lua_pop(L, 1);
+        lua_pop(L, 1);
+        out.push_back(Vec2(x, y));
+    }
+    return out;
+}
+void pushPts2(lua_State* L, const std::vector<Vec2>& pts) {
+    lua_createtable(L, static_cast<int>(pts.size()), 0);
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        lua_createtable(L, 2, 0);
+        lua_pushnumber(L, pts[i].x); lua_seti(L, -2, 1);
+        lua_pushnumber(L, pts[i].y); lua_seti(L, -2, 2);
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+}
+std::vector<int> checkSel(lua_State* L, int idx) {
+    idx = lua_absindex(L, idx);
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<int> out;
+    const int n = static_cast<int>(luaL_len(L, idx));
+    for (int i = 1; i <= n; ++i) {
+        lua_geti(L, idx, i);
+        out.push_back(static_cast<int>(luaL_checkinteger(L, -1)));
+        lua_pop(L, 1);
+    }
+    return out;
+}
+void pushSel(lua_State* L, const std::vector<int>& sel) {
+    lua_createtable(L, static_cast<int>(sel.size()), 0);
+    for (std::size_t i = 0; i < sel.size(); ++i) {
+        lua_pushinteger(L, sel[i]);
+        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+}
+void checkSelRange(lua_State* L, const PolyMesh& m, const std::vector<int>& sel) {
+    for (int f : sel)
+        if (f < 0 || f >= static_cast<int>(m.faces.size())) luaL_error(L, "poly: face %d out of range (%d faces)", f, static_cast<int>(m.faces.size()));
+}
+
+// poly.section(corners, radius | {radii}, segs) -> {{x,y},...}: a rounded 2-D polygon (CCW seen from +z)
+// poly.section(corners, radius | {radii}, segs | {segs per corner; 0 = one sharp point})
+int l_poly_section(lua_State* L) {
+    const auto corners = checkPts2(L, 1);
+    std::vector<double> radii;
+    if (lua_istable(L, 2)) {
+        const int n = static_cast<int>(luaL_len(L, 2));
+        for (int i = 1; i <= n; ++i) { lua_geti(L, 2, i); radii.push_back(luaL_checknumber(L, -1)); lua_pop(L, 1); }
+    } else {
+        radii.push_back(luaL_optnumber(L, 2, 0.0));
+    }
+    std::vector<int> segsPer;
+    int segs = 3;
+    if (lua_istable(L, 3)) {
+        const int n = static_cast<int>(luaL_len(L, 3));
+        for (int i = 1; i <= n; ++i) { lua_geti(L, 3, i); segsPer.push_back(static_cast<int>(luaL_checkinteger(L, -1))); lua_pop(L, 1); }
+    } else {
+        segs = static_cast<int>(luaL_optinteger(L, 3, 3));
+    }
+    pushPts2(L, roundedPolygon(corners, radii, segs, segsPer));
+    return 1;
+}
+// poly.resample(pts, n) -> n points evenly by arc length from the bottom centre
+int l_poly_resample(lua_State* L) {
+    pushPts2(L, resampleClosed(checkPts2(L, 1), static_cast<int>(luaL_checkinteger(L, 2))));
+    return 1;
+}
+// poly.loft{ sections=, stations=, cap_start=true, cap_end=true, cap_crease=1 } -> Poly
+int l_poly_loft(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::vector<Vec2>> secs;
+    std::vector<double> st;
+    lua_getfield(L, 1, "sections");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    const int ns = static_cast<int>(luaL_len(L, -1));
+    for (int i = 1; i <= ns; ++i) { lua_geti(L, -1, i); secs.push_back(checkPts2(L, -1)); lua_pop(L, 1); }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "stations");
+    luaL_checktype(L, -1, LUA_TTABLE);
+    const int nt = static_cast<int>(luaL_len(L, -1));
+    for (int i = 1; i <= nt; ++i) { lua_geti(L, -1, i); st.push_back(luaL_checknumber(L, -1)); lua_pop(L, 1); }
+    lua_pop(L, 1);
+    if (secs.size() != st.size() || secs.size() < 2) return luaL_error(L, "poly.loft: need >= 2 sections and one station each");
+    for (const auto& sct : secs)
+        if (sct.size() != secs[0].size()) return luaL_error(L, "poly.loft: every section needs the same point count (poly.resample)");
+    lua_getfield(L, 1, "cap_start"); const bool c0 = lua_isnil(L, -1) || lua_toboolean(L, -1); lua_pop(L, 1);
+    lua_getfield(L, 1, "cap_end"); const bool c1 = lua_isnil(L, -1) || lua_toboolean(L, -1); lua_pop(L, 1);
+    const float cc = static_cast<float>(optField(L, 1, "cap_crease", 1.0));
+    pushPoly(L, std::make_shared<PolyMesh>(loft(secs, st, c0, c1, cc)));
+    return 1;
+}
+// poly.box{sx, sy, sz} -> Poly centred on the origin
+int l_poly_box(lua_State* L) {
+    const Vec3 s = checkVec3(L, 1) * 0.5;
+    const std::vector<Vec2> r = {Vec2(-s.x, -s.y), Vec2(s.x, -s.y), Vec2(s.x, s.y), Vec2(-s.x, s.y)};
+    PolyMesh m = loft({r, r}, {-s.z, s.z}, true, true);
+    m.creases.clear();
+    pushPoly(L, std::make_shared<PolyMesh>(std::move(m)));
+    return 1;
+}
+
+// P:select{ all=, group=, mat=, box={{lo},{hi}}, normal={x,y,z}, min_dot=0.5, where=function(c, n) } -> sel
+// Every given criterion must hold (AND); `where` gets centroid and normal as {x,y,z}.
+int l_poly_select(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    int group = -2, mat = -2;
+    lua_getfield(L, 2, "group");
+    if (lua_isstring(L, -1)) group = m.findGroup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "mat");
+    if (lua_isstring(L, -1)) mat = m.findMat(lua_tostring(L, -1));
+    lua_pop(L, 1);
+    bool haveBox = false;
+    Vec3 lo, hi;
+    lua_getfield(L, 2, "box");
+    if (lua_istable(L, -1)) {
+        lua_geti(L, -1, 1); lo = checkVec3(L, -1); lua_pop(L, 1);
+        lua_geti(L, -1, 2); hi = checkVec3(L, -1); lua_pop(L, 1);
+        haveBox = true;
+    }
+    lua_pop(L, 1);
+    bool haveN = false;
+    Vec3 dir;
+    lua_getfield(L, 2, "normal");
+    if (lua_istable(L, -1)) { dir = normalize(checkVec3(L, -1)); haveN = true; }
+    lua_pop(L, 1);
+    const double minDot = optField(L, 2, "min_dot", 0.5);
+    lua_getfield(L, 2, "where");
+    const bool haveWhere = lua_isfunction(L, -1);
+    const int whereIdx = lua_gettop(L);
+    std::vector<int> sel;
+    for (std::size_t f = 0; f < m.faces.size(); ++f) {
+        const auto& face = m.faces[f];
+        if (group == -1 || (group >= 0 && face.group != group)) continue;
+        if (mat == -1 || (mat >= 0 && face.mat != mat)) continue;
+        const Vec3 c = m.faceCentroid(static_cast<int>(f));
+        if (haveBox && (c.x < lo.x || c.y < lo.y || c.z < lo.z || c.x > hi.x || c.y > hi.y || c.z > hi.z)) continue;
+        const Vec3 n = m.faceNormal(static_cast<int>(f));
+        if (haveN && dot(n, dir) < minDot) continue;
+        if (haveWhere) {
+            lua_pushvalue(L, whereIdx);
+            pushVec3(L, c);
+            pushVec3(L, n);
+            lua_call(L, 2, 1);
+            const bool ok = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+            if (!ok) continue;
+        }
+        sel.push_back(static_cast<int>(f));
+    }
+    lua_pop(L, 1);   // `where`
+    pushSel(L, sel);
+    return 1;
+}
+// P:extrude(sel, dist [, {dir}]) -> sel
+int l_poly_extrude(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    const Vec3 dir = lua_istable(L, 4) ? checkVec3(L, 4) : Vec3(0, 0, 0);
+    pushSel(L, extrude(m, sel, luaL_checknumber(L, 3), dir));
+    return 1;
+}
+// P:inset(sel, amount) -> sel (the inner faces)
+int l_poly_inset(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushSel(L, inset(m, sel, luaL_checknumber(L, 3)));
+    return 1;
+}
+// P:inset_region(sel, amount) -> sel: the region as one panel, shrunk inside its outline
+int l_poly_inset_region(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushSel(L, insetRegion(m, sel, luaL_checknumber(L, 3)));
+    return 1;
+}
+// P:assign(sel, { group=, mat=, color={r,g,b} })
+int l_poly_assign(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    int g = -1, k = -1;
+    lua_getfield(L, 3, "group"); if (lua_isstring(L, -1)) g = m.groupId(lua_tostring(L, -1)); lua_pop(L, 1);
+    lua_getfield(L, 3, "mat"); if (lua_isstring(L, -1)) k = m.matId(lua_tostring(L, -1)); lua_pop(L, 1);
+    bool haveC = false;
+    Vec3 col;
+    lua_getfield(L, 3, "color"); if (lua_istable(L, -1)) { col = checkVec3(L, -1); haveC = true; } lua_pop(L, 1);
+    for (int f : sel) {
+        auto& face = m.faces[static_cast<std::size_t>(f)];
+        if (g >= 0) face.group = g;
+        if (k >= 0) face.mat = k;
+        if (haveC) face.color = col;
+    }
+    return 0;
+}
+int l_poly_crease_border(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    creaseBorder(m, sel, static_cast<float>(luaL_optnumber(L, 3, PolyMesh::kInfCrease)));
+    return 0;
+}
+// P:crease_corners(sel, angle_deg, sharpness): corners where the region's outline turns by > angle
+int l_poly_crease_corners(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    creaseCorners(m, sel, luaL_optnumber(L, 3, 40.0), static_cast<float>(luaL_optnumber(L, 4, PolyMesh::kInfCrease)));
+    return 0;
+}
+int l_poly_crease_faces(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    creaseFaces(m, sel, static_cast<float>(luaL_optnumber(L, 3, PolyMesh::kInfCrease)));
+    return 0;
+}
+// P:crease_ring(z, sharpness [, tol]): crease every edge whose two ends both lie at z (a loft station)
+int l_poly_crease_ring(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const double z = luaL_checknumber(L, 2), tol = luaL_optnumber(L, 4, 1e-6);
+    const float s = static_cast<float>(luaL_optnumber(L, 3, PolyMesh::kInfCrease));
+    for (const auto& f : m.faces)
+        for (std::size_t i = 0; i < f.v.size(); ++i) {
+            const int a = f.v[i], b = f.v[(i + 1) % f.v.size()];
+            if (std::fabs(m.pts[static_cast<std::size_t>(a)].z - z) <= tol && std::fabs(m.pts[static_cast<std::size_t>(b)].z - z) <= tol)
+                m.setCrease(a, b, s);
+        }
+    return 0;
+}
+int l_poly_mirror_x(lua_State* L) { mirrorX(checkPoly(L, 1), luaL_optnumber(L, 2, 1e-4)); return 0; }
+int l_poly_subdivide(lua_State* L) {
+    pushPoly(L, std::make_shared<PolyMesh>(subdivide(checkPoly(L, 1), static_cast<int>(luaL_optinteger(L, 2, 1)))));
+    return 1;
+}
+int l_poly_copy(lua_State* L) { pushPoly(L, std::make_shared<PolyMesh>(checkPoly(L, 1))); return 1; }
+int l_poly_append(lua_State* L) { checkPoly(L, 1).append(checkPoly(L, 2)); return 0; }
+int l_poly_translate(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const Vec3 d = checkVec3(L, 2);
+    for (Vec3& p : m.pts) p = p + d;
+    return 0;
+}
+int l_poly_scale(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    const Vec3 k = checkVec3(L, 2);
+    for (Vec3& p : m.pts) p = Vec3(p.x * k.x, p.y * k.y, p.z * k.z);
+    return 0;
+}
+// P:map(function(x, y, z) return x, y, z end): reshape every point (taper, bend, bulge)
+int l_poly_map(lua_State* L) {
+    PolyMesh& m = checkPoly(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    for (Vec3& p : m.pts) {
+        lua_pushvalue(L, 2);
+        lua_pushnumber(L, p.x); lua_pushnumber(L, p.y); lua_pushnumber(L, p.z);
+        lua_call(L, 3, 3);
+        p = Vec3(luaL_checknumber(L, -3), luaL_checknumber(L, -2), luaL_checknumber(L, -1));
+        lua_pop(L, 3);
+    }
+    return 0;
+}
+// P:stats([sliver]) -> { faces, points, triangles, corners, creases, slivers, worst }
+int l_poly_stats(lua_State* L) {
+    const PolyStats st = polyStats(checkPoly(L, 1), luaL_optnumber(L, 2, 0.02));
+    lua_createtable(L, 0, 7);
+    lua_pushinteger(L, st.faces); lua_setfield(L, -2, "faces");
+    lua_pushinteger(L, st.points); lua_setfield(L, -2, "points");
+    lua_pushinteger(L, st.triangles); lua_setfield(L, -2, "triangles");
+    lua_pushinteger(L, st.corners); lua_setfield(L, -2, "corners");
+    lua_pushinteger(L, st.creases); lua_setfield(L, -2, "creases");
+    lua_pushinteger(L, st.slivers); lua_setfield(L, -2, "slivers");
+    lua_pushnumber(L, st.worst); lua_setfield(L, -2, "worst");
+    if (st.worstFace >= 0) {
+        const PolyMesh& m = checkPoly(L, 1);
+        pushVec3(L, m.faceCentroid(st.worstFace)); lua_setfield(L, -2, "worst_at");
+        lua_pushinteger(L, st.worstFace); lua_setfield(L, -2, "worst_face");
+        lua_pushstring(L, m.groups[static_cast<std::size_t>(m.faces[static_cast<std::size_t>(st.worstFace)].group)].c_str());
+        lua_setfield(L, -2, "worst_group");
+        const auto& wv = m.faces[static_cast<std::size_t>(st.worstFace)].v;
+        lua_createtable(L, static_cast<int>(wv.size()), 0);
+        for (std::size_t i = 0; i < wv.size(); ++i) { pushVec3(L, m.pts[static_cast<std::size_t>(wv[i])]); lua_seti(L, -2, static_cast<lua_Integer>(i + 1)); }
+        lua_setfield(L, -2, "worst_pts");
+    }
+    return 1;
+}
+// P:raycast({o}, {d}) -> hit {x,y,z}, normal {x,y,z}, face | nil
+int l_poly_raycast(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const Vec3 o = checkVec3(L, 2), d = checkVec3(L, 3);
+    double t = 0;
+    Vec3 n;
+    int f = -1;
+    if (!raycast(m, o, d, t, n, f)) { lua_pushnil(L); return 1; }
+    pushVec3(L, o + d * t);
+    pushVec3(L, n);
+    lua_pushinteger(L, f);
+    return 3;
+}
+// P:extract(sel, offset, flip) -> a new Poly: the region copied, offset along its normals, optionally flipped
+int l_poly_extract(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushPoly(L, std::make_shared<PolyMesh>(extractOffset(m, sel, luaL_checknumber(L, 3), lua_toboolean(L, 4) != 0)));
+    return 1;
+}
+int l_poly_closed(lua_State* L) { lua_pushboolean(L, isClosed(checkPoly(L, 1))); return 1; }
+int l_poly_volume(lua_State* L) { lua_pushnumber(L, signedVolume(checkPoly(L, 1))); return 1; }
+int l_poly_face_count(lua_State* L) { lua_pushinteger(L, static_cast<lua_Integer>(checkPoly(L, 1).faces.size())); return 1; }
+int l_poly_bounds(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+    for (const Vec3& p : m.pts) {
+        lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+        hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+    }
+    pushVec3(L, lo);
+    pushVec3(L, hi);
+    return 2;
+}
+// P:to_parts{ autosmooth = 35, uv_scale = 1 } -> { [mat] = Mesh, ... }
+int l_poly_to_parts(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const double sm = lua_istable(L, 2) ? optField(L, 2, "autosmooth", 35.0) : 35.0;
+    const double uv = lua_istable(L, 2) ? optField(L, 2, "uv_scale", 1.0) : 1.0;
+    const auto parts = toParts(m, sm, uv);
+    lua_createtable(L, 0, static_cast<int>(parts.size()));
+    for (const auto& [name, rm] : parts) {
+        pushMesh(L, std::make_shared<RenderMesh>(rm));
+        lua_setfield(L, -2, name.c_str());
+    }
+    return 1;
+}
+
+void registerPolyMetatable(lua_State* L) {
+    if (luaL_newmetatable(L, kPolyMt)) {
+        lua_pushcfunction(L, polyGc);
+        lua_setfield(L, -2, "__gc");
+        static const luaL_Reg kMethods[] = {
+            {"select", l_poly_select}, {"extrude", l_poly_extrude}, {"inset", l_poly_inset},
+            {"inset_region", l_poly_inset_region}, {"stats", l_poly_stats}, {"raycast", l_poly_raycast},
+            {"extract", l_poly_extract},
+            {"assign", l_poly_assign}, {"crease_border", l_poly_crease_border},
+            {"crease_faces", l_poly_crease_faces}, {"crease_ring", l_poly_crease_ring},
+            {"crease_corners", l_poly_crease_corners},
+            {"mirror_x", l_poly_mirror_x}, {"subdivide", l_poly_subdivide}, {"copy", l_poly_copy},
+            {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
+            {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},
+            {"face_count", l_poly_face_count}, {"bounds", l_poly_bounds}, {"to_parts", l_poly_to_parts},
+            {nullptr, nullptr},
+        };
+        luaL_newlib(L, kMethods);
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+}
+
 }  // namespace
 
 std::shared_ptr<RenderMesh> luaToMesh(lua_State* L, int idx) {
@@ -2766,6 +3388,24 @@ void openProcgenLibrary(ScriptVM& vm) {
         lua_pushcfunction(L, l_field_mix);        lua_setfield(L, -2, "mix");
         lua_pushcfunction(L, l_field_scale_bias); lua_setfield(L, -2, "scale_bias");
         lua_pushcfunction(L, l_field_clamp);      lua_setfield(L, -2, "clamp");
+        lua_pushcfunction(L, l_field_smoothstep); lua_setfield(L, -2, "smoothstep");
+        lua_pushcfunction(L, l_field_invert);     lua_setfield(L, -2, "invert");
+        lua_pushcfunction(L, l_field_min);        lua_setfield(L, -2, "min");
+        lua_pushcfunction(L, l_field_max);        lua_setfield(L, -2, "max");
+        lua_pushcfunction(L, l_field_mix_by);     lua_setfield(L, -2, "mix_by");
+        lua_pushcfunction(L, l_field_pow);        lua_setfield(L, -2, "pow");
+        lua_pushcfunction(L, l_field_warp);       lua_setfield(L, -2, "warp");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+    // The ColorField metatable (texture.color): mix_by / mul / tint.
+    if (luaL_newmetatable(L, kColorFieldMt)) {
+        lua_pushcfunction(L, colorFieldGc);
+        lua_setfield(L, -2, "__gc");
+        lua_newtable(L);
+        lua_pushcfunction(L, l_color_mix_by); lua_setfield(L, -2, "mix_by");
+        lua_pushcfunction(L, l_color_mul);    lua_setfield(L, -2, "mul");
+        lua_pushcfunction(L, l_color_tint);   lua_setfield(L, -2, "tint");
         lua_setfield(L, -2, "__index");
     }
     lua_pop(L, 1);
@@ -2856,10 +3496,41 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"recompute_normals", l_mesh_recompute_normals},
         {"bake_height_color", l_mesh_bake_height_color},
         {"quad", l_mesh_quad},
+        {"icosphere", l_mesh_icosphere},
+        {"displace", l_mesh_displace},
+        {"cut", l_mesh_cut},
+        {"facet", l_mesh_facet},
+        {"lean_normals", l_mesh_lean_normals},
+        {"color_by", l_mesh_color_by},
+        {"tube", l_mesh_tube},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);
     lua_setglobal(L, "mesh");
+
+    registerPolyMetatable(L);
+    static const luaL_Reg kPolyFns[] = {
+        {"section", l_poly_section}, {"resample", l_poly_resample}, {"loft", l_poly_loft}, {"box", l_poly_box},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kPolyFns);
+    lua_setglobal(L, "poly");
+
+    static const luaL_Reg kStylizedFns[] = {
+        {"tree", l_stylized_tree},
+        {"rock", l_stylized_rock},
+        {"grass", l_stylized_grass},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kStylizedFns);
+    lua_setglobal(L, "stylized");
+
+    static const luaL_Reg kRealFns[] = {
+        {"tree", l_real_tree},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kRealFns);
+    lua_setglobal(L, "real");
 
     lua_pushcfunction(L, l_scope);
     lua_setglobal(L, "scope");
@@ -2939,6 +3610,14 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"bake_gray", l_tex_bake_gray},
         {"bake_color", l_tex_bake_color},
         {"bake_normal", l_tex_bake_normal},
+        {"tile_noise", l_tex_tile_noise},
+        {"tile_fbm", l_tex_tile_fbm},
+        {"cells", l_tex_cells},
+        {"cell_edges", l_tex_cell_edges},
+        {"cell_id", l_tex_cell_id},
+        {"bands", l_tex_bands},
+        {"color", l_tex_color},
+        {"bake_rgba", l_tex_bake_rgba},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kTextureFns);

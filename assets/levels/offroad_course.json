@@ -1,0 +1,4787 @@
+{
+ "version": 1,
+ "environment": {
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.7,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "player": {
+  "collider": {
+   "halfHeight": 0.4,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   0.0,
+   1.2,
+   26.0
+  ]
+ },
+ "vehicles": [
+  {
+   "recipe": "offroad",
+   "seed": 1,
+   "position": [
+    4.0,
+    1.4,
+    22.0
+   ],
+   "yaw": 180
+  },
+  {
+   "recipe": "sedan",
+   "seed": 2,
+   "position": [
+    -4.0,
+    1.0,
+    22.0
+   ],
+   "yaw": 180
+  }
+ ],
+ "entities": [
+  {
+   "id": 1,
+   "name": "ground",
+   "shape": "box",
+   "size": [
+    220,
+    1,
+    320
+   ],
+   "position": [
+    0,
+    -0.5,
+    -110
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 2,
+   "name": "start_pad",
+   "shape": "box",
+   "size": [
+    30,
+    0.02,
+    16
+   ],
+   "position": [
+    0,
+    0.01,
+    22
+   ],
+   "material": {
+    "albedo": [
+     0.3,
+     0.32,
+     0.34
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 3,
+   "name": "grip15_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    23.18221983093764
+   ],
+   "position": [
+    -60,
+    2.7102222521132795,
+    -11.273798136237389
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 15
+   }
+  },
+  {
+   "id": 4,
+   "name": "grip15_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    -60,
+    3.0,
+    -25.392304845413264
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 5,
+   "name": "grip15_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    23.18221983093764
+   ],
+   "position": [
+    -60,
+    2.7102222521132795,
+    -39.51081155458914
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -15
+   }
+  },
+  {
+   "id": 6,
+   "name": "grip20_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    17.542826400978523
+   ],
+   "position": [
+    -51,
+    2.7180922137642276,
+    -8.34503830136157
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 20
+   }
+  },
+  {
+   "id": 7,
+   "name": "grip20_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    -51,
+    3.0,
+    -19.484864516727736
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 8,
+   "name": "grip20_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    17.542826400978523
+   ],
+   "position": [
+    -51,
+    2.7180922137642276,
+    -30.624690732093903
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -20
+   }
+  },
+  {
+   "id": 9,
+   "name": "grip25_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    14.19720949891499
+   ],
+   "position": [
+    -42,
+    2.728107663889005,
+    -6.5603062400508865
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 25
+   }
+  },
+  {
+   "id": 10,
+   "name": "grip25_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    -42,
+    3.0,
+    -15.867041523057352
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 11,
+   "name": "grip25_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    14.19720949891499
+   ],
+   "position": [
+    -42,
+    2.728107663889005,
+    -25.17377680606382
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -25
+   }
+  },
+  {
+   "id": 12,
+   "name": "grip30_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    12.000000000000002
+   ],
+   "position": [
+    -33,
+    2.7401923788646685,
+    -5.346152422706632
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 30
+   }
+  },
+  {
+   "id": 13,
+   "name": "grip30_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    -33,
+    3.0,
+    -13.392304845413264
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 14,
+   "name": "grip30_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    12.000000000000002
+   ],
+   "position": [
+    -33,
+    2.7401923788646685,
+    -21.438457268119897
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -30
+   }
+  },
+  {
+   "id": 15,
+   "name": "grip35_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    10.460680773726589
+   ],
+   "position": [
+    -24,
+    2.7542543867133027,
+    -4.456516951131658
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 35
+   }
+  },
+  {
+   "id": 16,
+   "name": "grip35_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    -24,
+    3.0,
+    -11.568888040452688
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 17,
+   "name": "grip35_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    10.460680773726589
+   ],
+   "position": [
+    -24,
+    2.7542543867133027,
+    -18.681259129773714
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -35
+   }
+  },
+  {
+   "id": 18,
+   "name": "mud10_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    34.552622898861806
+   ],
+   "position": [
+    20,
+    2.7045576740963377,
+    -17.06593991215321
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 10
+   }
+  },
+  {
+   "id": 19,
+   "name": "mud10_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    20,
+    3.0,
+    -37.02769091770626
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 20,
+   "name": "mud10_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    34.552622898861806
+   ],
+   "position": [
+    20,
+    2.7045576740963377,
+    -56.989441923259314
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -10
+   }
+  },
+  {
+   "id": 21,
+   "name": "mud10_apron",
+   "shape": "box",
+   "size": [
+    6,
+    0.02,
+    10
+   ],
+   "position": [
+    20,
+    0.01,
+    5.0
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 22,
+   "name": "mud15_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    23.18221983093764
+   ],
+   "position": [
+    29,
+    2.7102222521132795,
+    -11.273798136237389
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 15
+   }
+  },
+  {
+   "id": 23,
+   "name": "mud15_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    29,
+    3.0,
+    -25.392304845413264
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 24,
+   "name": "mud15_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    23.18221983093764
+   ],
+   "position": [
+    29,
+    2.7102222521132795,
+    -39.51081155458914
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -15
+   }
+  },
+  {
+   "id": 25,
+   "name": "mud15_apron",
+   "shape": "box",
+   "size": [
+    6,
+    0.02,
+    10
+   ],
+   "position": [
+    29,
+    0.01,
+    5.0
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 26,
+   "name": "mud20_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    17.542826400978523
+   ],
+   "position": [
+    38,
+    2.7180922137642276,
+    -8.34503830136157
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 20
+   }
+  },
+  {
+   "id": 27,
+   "name": "mud20_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    38,
+    3.0,
+    -19.484864516727736
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 28,
+   "name": "mud20_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    17.542826400978523
+   ],
+   "position": [
+    38,
+    2.7180922137642276,
+    -30.624690732093903
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -20
+   }
+  },
+  {
+   "id": 29,
+   "name": "mud20_apron",
+   "shape": "box",
+   "size": [
+    6,
+    0.02,
+    10
+   ],
+   "position": [
+    38,
+    0.01,
+    5.0
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 30,
+   "name": "mud25_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    14.19720949891499
+   ],
+   "position": [
+    47,
+    2.728107663889005,
+    -6.5603062400508865
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 25
+   }
+  },
+  {
+   "id": 31,
+   "name": "mud25_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    47,
+    3.0,
+    -15.867041523057352
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 32,
+   "name": "mud25_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    14.19720949891499
+   ],
+   "position": [
+    47,
+    2.728107663889005,
+    -25.17377680606382
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -25
+   }
+  },
+  {
+   "id": 33,
+   "name": "mud25_apron",
+   "shape": "box",
+   "size": [
+    6,
+    0.02,
+    10
+   ],
+   "position": [
+    47,
+    0.01,
+    5.0
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 34,
+   "name": "mud30_up",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    12.000000000000002
+   ],
+   "position": [
+    56,
+    2.7401923788646685,
+    -5.346152422706632
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": 30
+   }
+  },
+  {
+   "id": 35,
+   "name": "mud30_top",
+   "shape": "box",
+   "size": [
+    6,
+    6.0,
+    6
+   ],
+   "position": [
+    56,
+    3.0,
+    -13.392304845413264
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 36,
+   "name": "mud30_down",
+   "shape": "box",
+   "size": [
+    6,
+    0.6,
+    12.000000000000002
+   ],
+   "position": [
+    56,
+    2.7401923788646685,
+    -21.438457268119897
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     1,
+     0,
+     0
+    ],
+    "angleDeg": -30
+   }
+  },
+  {
+   "id": 37,
+   "name": "mud30_apron",
+   "shape": "box",
+   "size": [
+    6,
+    0.02,
+    10
+   ],
+   "position": [
+    56,
+    0.01,
+    5.0
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 38,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    -60,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 39,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    -51,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 40,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    -42,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 41,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    -33,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 42,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    -24,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 43,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    20,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 44,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    29,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 45,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    38,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 46,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    47,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 47,
+   "name": "stop_line",
+   "shape": "box",
+   "size": [
+    6,
+    0.03,
+    0.3
+   ],
+   "position": [
+    56,
+    0.015,
+    3.2
+   ],
+   "material": {
+    "albedo": [
+     0.9,
+     0.9,
+     0.85
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.35,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 48,
+   "name": "ledge_20cm",
+   "shape": "box",
+   "size": [
+    5,
+    0.2,
+    6
+   ],
+   "position": [
+    -12,
+    0.1,
+    -42
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 49,
+   "name": "ledge_30cm",
+   "shape": "box",
+   "size": [
+    5,
+    0.3,
+    6
+   ],
+   "position": [
+    -4,
+    0.15,
+    -42
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 50,
+   "name": "ledge_40cm",
+   "shape": "box",
+   "size": [
+    5,
+    0.4,
+    6
+   ],
+   "position": [
+    4,
+    0.2,
+    -42
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 51,
+   "name": "ledge_50cm",
+   "shape": "box",
+   "size": [
+    5,
+    0.5,
+    6
+   ],
+   "position": [
+    12,
+    0.25,
+    -42
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.85,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 52,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5595613794976743,
+    0.5595613794976743,
+    0.5595613794976743
+   ],
+   "position": [
+    -10.02,
+    -0.317,
+    -63.02
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 53,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6678664639072627,
+    0.6678664639072627,
+    0.6678664639072627
+   ],
+   "position": [
+    1.59,
+    -0.242,
+    -81.58
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 54,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.752393313644747,
+    0.752393313644747,
+    0.752393313644747
+   ],
+   "position": [
+    8.44,
+    -0.372,
+    -71.84
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 55,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8116139096027877,
+    0.8116139096027877,
+    0.8116139096027877
+   ],
+   "position": [
+    -10.35,
+    -0.486,
+    -89.76
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 56,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7477433195366434,
+    0.7477433195366434,
+    0.7477433195366434
+   ],
+   "position": [
+    4.64,
+    -0.531,
+    -73.27
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 57,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.38272452999577145,
+    0.38272452999577145,
+    0.38272452999577145
+   ],
+   "position": [
+    -14.01,
+    0.081,
+    -64.66
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 58,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.812575228170727,
+    0.812575228170727,
+    0.812575228170727
+   ],
+   "position": [
+    6.79,
+    -0.576,
+    -69.37
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 59,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.41875208396749164,
+    0.41875208396749164,
+    0.41875208396749164
+   ],
+   "position": [
+    -11.29,
+    -0.001,
+    -63.04
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 60,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7288683317263049,
+    0.7288683317263049,
+    0.7288683317263049
+   ],
+   "position": [
+    -13.39,
+    -0.187,
+    -83.88
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 61,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.690944956722422,
+    0.690944956722422,
+    0.690944956722422
+   ],
+   "position": [
+    -9.54,
+    -0.298,
+    -63.93
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 62,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8155900443461904,
+    0.8155900443461904,
+    0.8155900443461904
+   ],
+   "position": [
+    -10.62,
+    -0.545,
+    -71.63
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 63,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5739551243322041,
+    0.5739551243322041,
+    0.5739551243322041
+   ],
+   "position": [
+    -0.2,
+    -0.159,
+    -81.18
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 64,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.36191562710130576,
+    0.36191562710130576,
+    0.36191562710130576
+   ],
+   "position": [
+    -1.25,
+    -0.158,
+    -69.51
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 65,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5841154194829659,
+    0.5841154194829659,
+    0.5841154194829659
+   ],
+   "position": [
+    1.19,
+    -0.136,
+    -64.19
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 66,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7103152849157295,
+    0.7103152849157295,
+    0.7103152849157295
+   ],
+   "position": [
+    -10.84,
+    -0.432,
+    -92.7
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 67,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.37177797441287785,
+    0.37177797441287785,
+    0.37177797441287785
+   ],
+   "position": [
+    11.24,
+    0.123,
+    -68.7
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 68,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4101310934319794,
+    0.4101310934319794,
+    0.4101310934319794
+   ],
+   "position": [
+    -11.17,
+    0.004,
+    -63.88
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 69,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7104913241447752,
+    0.7104913241447752,
+    0.7104913241447752
+   ],
+   "position": [
+    3.27,
+    -0.261,
+    -80.36
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 70,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8166216459476396,
+    0.8166216459476396,
+    0.8166216459476396
+   ],
+   "position": [
+    -7.75,
+    -0.282,
+    -79.69
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 71,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7533817146182664,
+    0.7533817146182664,
+    0.7533817146182664
+   ],
+   "position": [
+    -2.68,
+    -0.331,
+    -79.25
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 72,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8821967398203598,
+    0.8821967398203598,
+    0.8821967398203598
+   ],
+   "position": [
+    -8.65,
+    -0.622,
+    -70.99
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 73,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5023288172296123,
+    0.5023288172296123,
+    0.5023288172296123
+   ],
+   "position": [
+    -5.23,
+    0.007,
+    -62.64
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 74,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.558896940448941,
+    0.558896940448941,
+    0.558896940448941
+   ],
+   "position": [
+    7.53,
+    -0.055,
+    -69.38
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 75,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.46787401701281695,
+    0.46787401701281695,
+    0.46787401701281695
+   ],
+   "position": [
+    -14.07,
+    -0.252,
+    -88.68
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 76,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7166046785744589,
+    0.7166046785744589,
+    0.7166046785744589
+   ],
+   "position": [
+    -7.88,
+    -0.541,
+    -75.15
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 77,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4353324507998887,
+    0.4353324507998887,
+    0.4353324507998887
+   ],
+   "position": [
+    -8.15,
+    -0.154,
+    -71.34
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 78,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4151838597091311,
+    0.4151838597091311,
+    0.4151838597091311
+   ],
+   "position": [
+    2.96,
+    0.134,
+    -70.04
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 79,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6539048077573758,
+    0.6539048077573758,
+    0.6539048077573758
+   ],
+   "position": [
+    14.12,
+    -0.305,
+    -63.72
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 80,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8020698438927019,
+    0.8020698438927019,
+    0.8020698438927019
+   ],
+   "position": [
+    2.69,
+    -0.64,
+    -62.04
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 81,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7010683781220337,
+    0.7010683781220337,
+    0.7010683781220337
+   ],
+   "position": [
+    4.49,
+    -0.346,
+    -88.8
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 82,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7502328949792061,
+    0.7502328949792061,
+    0.7502328949792061
+   ],
+   "position": [
+    -12.85,
+    -0.287,
+    -77.16
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 83,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6773769321407761,
+    0.6773769321407761,
+    0.6773769321407761
+   ],
+   "position": [
+    5.45,
+    -0.387,
+    -62.73
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 84,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8484082536800863,
+    0.8484082536800863,
+    0.8484082536800863
+   ],
+   "position": [
+    -10.45,
+    -0.575,
+    -65.11
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 85,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6865811446818089,
+    0.6865811446818089,
+    0.6865811446818089
+   ],
+   "position": [
+    11.07,
+    -0.205,
+    -85.22
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 86,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.673064070412073,
+    0.673064070412073,
+    0.673064070412073
+   ],
+   "position": [
+    8.92,
+    -0.402,
+    -70.8
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 87,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4814761445199638,
+    0.4814761445199638,
+    0.4814761445199638
+   ],
+   "position": [
+    2.82,
+    -0.131,
+    -86.84
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 88,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.45037037169152927,
+    0.45037037169152927,
+    0.45037037169152927
+   ],
+   "position": [
+    -12.84,
+    -0.111,
+    -77.67
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 89,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.866989022963366,
+    0.866989022963366,
+    0.866989022963366
+   ],
+   "position": [
+    -13.37,
+    -0.387,
+    -66.1
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 90,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7440496947568969,
+    0.7440496947568969,
+    0.7440496947568969
+   ],
+   "position": [
+    -14.2,
+    -0.311,
+    -68.4
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 91,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.45748839659168905,
+    0.45748839659168905,
+    0.45748839659168905
+   ],
+   "position": [
+    -5.33,
+    0.014,
+    -82.17
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 92,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.44474264595832347,
+    0.44474264595832347,
+    0.44474264595832347
+   ],
+   "position": [
+    -8.35,
+    0.052,
+    -64.45
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 93,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6325952605926782,
+    0.6325952605926782,
+    0.6325952605926782
+   ],
+   "position": [
+    4.65,
+    -0.423,
+    -76.42
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 94,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.36487004480050855,
+    0.36487004480050855,
+    0.36487004480050855
+   ],
+   "position": [
+    -6.87,
+    0.115,
+    -94.16
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 95,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7714991658109884,
+    0.7714991658109884,
+    0.7714991658109884
+   ],
+   "position": [
+    -3.43,
+    -0.331,
+    -88.48
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 96,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.63981732673971,
+    0.63981732673971,
+    0.63981732673971
+   ],
+   "position": [
+    5.68,
+    -0.255,
+    -77.86
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 97,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6623116552522749,
+    0.6623116552522749,
+    0.6623116552522749
+   ],
+   "position": [
+    -9.31,
+    -0.224,
+    -88.68
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 98,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6164509616645446,
+    0.6164509616645446,
+    0.6164509616645446
+   ],
+   "position": [
+    9.08,
+    -0.165,
+    -65.13
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 99,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5914189566614015,
+    0.5914189566614015,
+    0.5914189566614015
+   ],
+   "position": [
+    -11.82,
+    -0.156,
+    -81.4
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 100,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.3867371041289785,
+    0.3867371041289785,
+    0.3867371041289785
+   ],
+   "position": [
+    14.99,
+    0.097,
+    -71.56
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 101,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7638497672586229,
+    0.7638497672586229,
+    0.7638497672586229
+   ],
+   "position": [
+    8.85,
+    -0.465,
+    -92.02
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 102,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5538419426532911,
+    0.5538419426532911,
+    0.5538419426532911
+   ],
+   "position": [
+    10.92,
+    -0.264,
+    -88.95
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 103,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.43752456458637384,
+    0.43752456458637384,
+    0.43752456458637384
+   ],
+   "position": [
+    10.29,
+    -0.252,
+    -83.96
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 104,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8466975901868483,
+    0.8466975901868483,
+    0.8466975901868483
+   ],
+   "position": [
+    10.1,
+    -0.571,
+    -88.18
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 105,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8463713648401225,
+    0.8463713648401225,
+    0.8463713648401225
+   ],
+   "position": [
+    11.35,
+    -0.307,
+    -70.78
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 106,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8429957025395924,
+    0.8429957025395924,
+    0.8429957025395924
+   ],
+   "position": [
+    13.91,
+    -0.327,
+    -85.36
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 107,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8174380087398373,
+    0.8174380087398373,
+    0.8174380087398373
+   ],
+   "position": [
+    -4.62,
+    -0.356,
+    -89.11
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 108,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8448030615601974,
+    0.8448030615601974,
+    0.8448030615601974
+   ],
+   "position": [
+    0.9,
+    -0.506,
+    -63.97
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 109,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6161143363431876,
+    0.6161143363431876,
+    0.6161143363431876
+   ],
+   "position": [
+    5.58,
+    -0.365,
+    -76.37
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 110,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.49981853078995947,
+    0.49981853078995947,
+    0.49981853078995947
+   ],
+   "position": [
+    12.12,
+    -0.073,
+    -86.39
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 111,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7970099167081035,
+    0.7970099167081035,
+    0.7970099167081035
+   ],
+   "position": [
+    0.67,
+    -0.346,
+    -88.24
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 112,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.715709166055974,
+    0.715709166055974,
+    0.715709166055974
+   ],
+   "position": [
+    -7.48,
+    -0.453,
+    -65.13
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 113,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4988277629557767,
+    0.4988277629557767,
+    0.4988277629557767
+   ],
+   "position": [
+    10.36,
+    -0.312,
+    -60.18
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 114,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5179513919045304,
+    0.5179513919045304,
+    0.5179513919045304
+   ],
+   "position": [
+    1.34,
+    -0.206,
+    -68.65
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 115,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.3567164913234584,
+    0.3567164913234584,
+    0.3567164913234584
+   ],
+   "position": [
+    -7.99,
+    0.052,
+    -62.48
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 116,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5780559866128769,
+    0.5780559866128769,
+    0.5780559866128769
+   ],
+   "position": [
+    -1.5,
+    -0.05,
+    -72.07
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 117,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.3708355829474312,
+    0.3708355829474312,
+    0.3708355829474312
+   ],
+   "position": [
+    -6.11,
+    -0.14,
+    -82.07
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 118,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4451898207687865,
+    0.4451898207687865,
+    0.4451898207687865
+   ],
+   "position": [
+    -12.36,
+    -0.127,
+    -75.18
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 119,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8796155963817733,
+    0.8796155963817733,
+    0.8796155963817733
+   ],
+   "position": [
+    3.66,
+    -0.387,
+    -60.64
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 120,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.75068690527847,
+    0.75068690527847,
+    0.75068690527847
+   ],
+   "position": [
+    -1.28,
+    -0.347,
+    -92.12
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 121,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.84126239756108,
+    0.84126239756108,
+    0.84126239756108
+   ],
+   "position": [
+    9.15,
+    -0.333,
+    -70.89
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 122,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7969773830242015,
+    0.7969773830242015,
+    0.7969773830242015
+   ],
+   "position": [
+    14.16,
+    -0.264,
+    -68.06
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 123,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.35894958449739794,
+    0.35894958449739794,
+    0.35894958449739794
+   ],
+   "position": [
+    2.03,
+    0.17,
+    -79.18
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 124,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5870437820508624,
+    0.5870437820508624,
+    0.5870437820508624
+   ],
+   "position": [
+    -13.98,
+    -0.329,
+    -73.36
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 125,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6896408077628661,
+    0.6896408077628661,
+    0.6896408077628661
+   ],
+   "position": [
+    12.69,
+    -0.505,
+    -63.38
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 126,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8255856127868226,
+    0.8255856127868226,
+    0.8255856127868226
+   ],
+   "position": [
+    -3.45,
+    -0.461,
+    -78.53
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 127,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5538287941798844,
+    0.5538287941798844,
+    0.5538287941798844
+   ],
+   "position": [
+    12.58,
+    -0.022,
+    -63.55
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 128,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6358797377543131,
+    0.6358797377543131,
+    0.6358797377543131
+   ],
+   "position": [
+    5.61,
+    -0.281,
+    -84.88
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 129,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4512671755174473,
+    0.4512671755174473,
+    0.4512671755174473
+   ],
+   "position": [
+    -6.91,
+    0.093,
+    -85.54
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 130,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6207726680090083,
+    0.6207726680090083,
+    0.6207726680090083
+   ],
+   "position": [
+    0.71,
+    -0.435,
+    -89.39
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 131,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.8060212412018182,
+    0.8060212412018182,
+    0.8060212412018182
+   ],
+   "position": [
+    9.06,
+    -0.623,
+    -85.59
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 132,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7834078746239513,
+    0.7834078746239513,
+    0.7834078746239513
+   ],
+   "position": [
+    13.66,
+    -0.313,
+    -88.89
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 133,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.891574101812021,
+    0.891574101812021,
+    0.891574101812021
+   ],
+   "position": [
+    -4.46,
+    -0.682,
+    -94.74
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 134,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6216948140012171,
+    0.6216948140012171,
+    0.6216948140012171
+   ],
+   "position": [
+    1.67,
+    -0.439,
+    -62.34
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 135,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.7799461885834067,
+    0.7799461885834067,
+    0.7799461885834067
+   ],
+   "position": [
+    -12.28,
+    -0.371,
+    -60.47
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 136,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.5506184580444993,
+    0.5506184580444993,
+    0.5506184580444993
+   ],
+   "position": [
+    -10.63,
+    -0.021,
+    -84.53
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 137,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.871245135282208,
+    0.871245135282208,
+    0.871245135282208
+   ],
+   "position": [
+    -9.41,
+    -0.422,
+    -78.98
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 138,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6483027381220288,
+    0.6483027381220288,
+    0.6483027381220288
+   ],
+   "position": [
+    -8.44,
+    -0.398,
+    -92.06
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 139,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.6301957269438293,
+    0.6301957269438293,
+    0.6301957269438293
+   ],
+   "position": [
+    -4.5,
+    -0.314,
+    -78.21
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 140,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.540621129277965,
+    0.540621129277965,
+    0.540621129277965
+   ],
+   "position": [
+    7.91,
+    -0.236,
+    -89.81
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 141,
+   "name": "boulder",
+   "shape": "sphere",
+   "size": [
+    0.4024991796355198,
+    0.4024991796355198,
+    0.4024991796355198
+   ],
+   "position": [
+    -6.31,
+    -0.074,
+    -78.37
+   ],
+   "material": {
+    "albedo": [
+     0.45,
+     0.44,
+     0.42
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.8,
+    "restitution": 0.0
+   }
+  },
+  {
+   "id": 142,
+   "name": "twist0",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    1.6,
+    0.1,
+    -108.0
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 35
+   }
+  },
+  {
+   "id": 143,
+   "name": "twist1",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    -1.6,
+    0.1,
+    -112.2
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": -35
+   }
+  },
+  {
+   "id": 144,
+   "name": "twist2",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    1.6,
+    0.1,
+    -116.4
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 35
+   }
+  },
+  {
+   "id": 145,
+   "name": "twist3",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    -1.6,
+    0.1,
+    -120.6
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": -35
+   }
+  },
+  {
+   "id": 146,
+   "name": "twist4",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    1.6,
+    0.1,
+    -124.8
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 35
+   }
+  },
+  {
+   "id": 147,
+   "name": "twist5",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    -1.6,
+    0.1,
+    -129.0
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": -35
+   }
+  },
+  {
+   "id": 148,
+   "name": "twist6",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    1.6,
+    0.1,
+    -133.2
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": 35
+   }
+  },
+  {
+   "id": 149,
+   "name": "twist7",
+   "shape": "box",
+   "size": [
+    3.0,
+    0.45,
+    7.0
+   ],
+   "position": [
+    -1.6,
+    0.1,
+    -137.4
+   ],
+   "material": {
+    "albedo": [
+     0.42,
+     0.33,
+     0.22
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.9,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     1,
+     0
+    ],
+    "angleDeg": -35
+   }
+  },
+  {
+   "id": 150,
+   "name": "log_12cm",
+   "shape": "capsule",
+   "size": [
+    0.125,
+    7.0,
+    0.125
+   ],
+   "position": [
+    0,
+    0.125,
+    -150
+   ],
+   "material": {
+    "albedo": [
+     0.36,
+     0.24,
+     0.13
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.7,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 151,
+   "name": "log_15cm",
+   "shape": "capsule",
+   "size": [
+    0.15,
+    7.0,
+    0.15
+   ],
+   "position": [
+    0,
+    0.15,
+    -155
+   ],
+   "material": {
+    "albedo": [
+     0.36,
+     0.24,
+     0.13
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.7,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 152,
+   "name": "log_17cm",
+   "shape": "capsule",
+   "size": [
+    0.175,
+    7.0,
+    0.175
+   ],
+   "position": [
+    0,
+    0.175,
+    -160
+   ],
+   "material": {
+    "albedo": [
+     0.36,
+     0.24,
+     0.13
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.7,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 153,
+   "name": "log_20cm",
+   "shape": "capsule",
+   "size": [
+    0.2,
+    7.0,
+    0.2
+   ],
+   "position": [
+    0,
+    0.2,
+    -165
+   ],
+   "material": {
+    "albedo": [
+     0.36,
+     0.24,
+     0.13
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.7,
+    "restitution": 0.0
+   },
+   "orientation": {
+    "axis": [
+     0,
+     0,
+     1
+    ],
+    "angleDeg": 90
+   }
+  },
+  {
+   "id": 154,
+   "name": "mud_flat",
+   "shape": "box",
+   "size": [
+    14,
+    0.02,
+    40
+   ],
+   "position": [
+    0,
+    0.01,
+    -195
+   ],
+   "material": {
+    "albedo": [
+     0.22,
+     0.17,
+     0.12
+    ],
+    "roughness": 0.9,
+    "metallic": 0.0
+   },
+   "physics": {
+    "motion": "static",
+    "friction": 0.2,
+    "restitution": 0.0
+   }
+  }
+ ]
+}

@@ -7256,3 +7256,1901 @@ so this city is 95 big blocks at 29.6% cover where the lattice metro is many mor
 towers, fewer mid-rise. A coarser parcel grain (`citysim.parcel`, piedmont's numbers) was tried and
 made it worse on both counts — 824 buildings and 26.3% cover — and was dropped.
 
+
+---
+
+## ADR-0091 — One agent that decides for itself: a decision service above the goal table
+
+**Status:** Sketch (2026-09-21) — nothing is built. **Trigger:** Glenn: "What if we could make an
+agent and have jev run just that agent and the agent has some autonomy that way in the procgen
+world?" and, in the same breath, "the simulation should be 1:1 with a real day."
+
+**Context.** Agents already have a brain: `agents.lua` (ADR-0064) declares an archetype's goal
+table — states carrying action/target/activity/dwell, plus transitions keyed on events — and C++
+runs every transition in the tick with no scripting in the loop. Three roles (Commuter, Shopkeeper,
+Stroller), tiered D/V/K by distance, ~2,259 agents in metro v2 at about half a millisecond a tick.
+The behaviour is good and cheap, and it is also completely predetermined: a Commuter's day is the
+same day every day, because the transition table says so.
+
+Jev (TypeSafe's "System One" model, early access September 2026) is a different shape of thing from
+an LLM. It emits no text. You send a state and a set of questions — *choice* (pick one of N, with a
+probability per option), *score* (rate on ordered levels), *noul* (probability a statement is true)
+— and it answers all of them in one round trip, 70-500 ms, API-only, at $0.042/MTok in. Its
+schema guarantee is worth being precise about: the answer is always a **valid** member of the menu
+you supplied. It is not a promise the answer is **right**.
+
+Two facts decide the design. A 60 Hz tick is 16.7 ms, so a 70 ms call is four ticks at best: this
+can never sit in the tick. And at 1:1 time — one real second is one sim second, a day is a day —
+a goal lasts minutes, so a transition happens rarely: a Commuter's whole day is perhaps twenty to
+sixty of them. The expensive thing is rare, and the rare thing is exactly where the interesting
+choice lives.
+
+**Decision (proposed).** A decision *service*, consulted at transitions, for one flagged agent:
+
+1. **One agent, not the crowd.** A flag on a single agent (or a `Resident` archetype of size one).
+   Every other agent keeps the scripted table untouched, so the tick cost and the tier budgets do
+   not move at all.
+2. **The decision point is the transition, not the tick.** The engine asks only when a state's dwell
+   expires or an event fires. At 1:1 that is minutes apart; nothing is asked per frame, ever.
+3. **The engine builds the menu.** Options are the transitions legal *right now* — this bus exists,
+   that shop is open, a taxi is hailable — so an out-of-range answer is not possible even in
+   principle. This is the one place the model's schema guarantee earns its keep, and it caps the
+   menu far below Jev's 255.
+4. **Asynchronous, with the scripted table as the fallback.** Fire the request, let the agent
+   continue its current goal, apply the answer when it lands; on timeout or error take the
+   transition the table would have taken. The agent must never stand still waiting on a network,
+   and the game must be fully playable with the service switched off.
+5. **A sidecar process over a local socket.** The engine writes `{state, menu}` and reads back an
+   index. No HTTP, TLS or API key inside the engine; the backend behind the socket is swappable —
+   a stub decider first, Jev second, a local policy third.
+6. **Log every `(state, menu, choice, latency)`.** Two payoffs: a recorded session replays offline
+   with no service at all (determinism preserved for tests), and the log is training data.
+
+**Consequences.** One agent deciding forty times a day costs a few hundred tokens a call: pennies a
+month, and invisible latency because a goal outlives the round trip by two orders of magnitude. The
+60 Hz budget, the tier radii and the draw-call ceiling (ADR — citysim scale) are all untouched,
+because no model output ever moves a body; it only picks which scripted goal runs next.
+
+The endgame is the log, not the API. A few thousand recorded decisions distil into a small local
+policy that answers in microseconds, at which point autonomy stops being one networked agent and
+becomes something affordable on hundreds. Jev is then a teacher, not a dependency.
+
+**The 1:1 clock is part of this decision and cuts both ways.** It makes goal-level reasoning cheap
+and makes an agent's day legible — leave at eight, eat at one, home by seven, and a player can
+actually witness it. It also means nobody can watch a full day: the sim day now costs a real day.
+Levels currently ship a compressed day (`dayNight.dayMinutes`, and metro_v2_test's 30-minute day),
+so authoring must stay at 1:1 while tests and inspection keep a debug time scale. Any behaviour
+tuned only under compressed time is tuned against a world that no longer exists.
+
+**Rejected.** *Per-tick inference* — four ticks of latency and thousands of calls a second, for a
+decision that changes every few minutes. *A local LLM via Ollama* — measured 18-33 s for a
+single-step call on this box, two orders of magnitude too slow, and unreliable past one step.
+*More hand-written transitions* — cheap and predictable, but it is the thing that already makes
+every Commuter's day identical; more rules make a denser puppet, not an autonomous one.
+
+**Open.** What the agent perceives (the state summary is the real design work, not the model);
+whether wants are modelled explicitly (energy, money, hunger as *score* questions) or left implicit;
+whether possession (`city_possess`) should suspend the service or feed it the player's actions as
+context; and what a believable day looks like well enough to tell whether any of this worked.
+
+**Amendment (2026-09-21) — phase 1 is built, and it found that every drawn agent is two
+objects.** Status moves from Sketch to **Provisional**: the director path exists
+(`tools/citywalk.py`, the `possess` / `walk_to` / `release` verbs, and a new `agent?` verb);
+the decision service above it does not.
+
+Building it turned up the fact anyone working here needs first. A near-tier agent is a planner
+*ghost* (the `CitySim::Agent`) AND a physical *body* — a character capsule for a walker
+(`CityWalkerSystem`), a rigid car for a driver. The body's position is fed back as the ghost's
+ADR-0062 tether anchor every frame with a 5 m lead, and if the ghost leads by more than that the
+stepper skips `advance()` entirely. The symptom is an agent standing still with a perfectly valid
+route: `speed=0`, `state=Waiting`, `moving=1`, for ever. **A director that moves the plan without
+moving the body has not moved the agent.**
+
+`walk_to` did exactly that, through four layers that are each individually reasonable:
+`nearestNode` snapping the destination to a node with no path from here at all (metro 394 -> 86 are
+32 m apart and route for neither a pedestrian nor a car); `startTrip`'s no-path branch PARKING the
+agent — route cleared, teleported to `idlePose`, the caller's goal left in `tripGoal` — while its
+comment claimed the agent keeps its current plan; the goal layer then re-planning from
+`a.restNode` rather than from where the agent stands, which PLACES the ghost there (measured: 27 m
+in one run, 290 m in another); and the leash holding the displaced ghost for the rest of the day.
+
+So: **`CitySim::sendAgentTo` validates the route before it mutates anything**, routes from the node
+AHEAD on the leg the agent stands on and prepends that leg (the idiom a bus already uses to pull
+away from where it actually stopped), and tries the nearest few nodes to the destination until one
+routes. A refusal now really does leave the agent its day. An off-graph destination still lands the
+agent at the nearest routable node, which can be ~25 m short; the director is told, and closing
+that gap is the body's job, not the planner's.
+
+**`agent?` is the perception channel's first half.** It reports the possessed agent's own mind —
+activity, state, tier, moving/indoors, route leg, `tripGoal`, home/work, the transit fields — plus
+the four numbers that diagnose a stalled agent in one poll: `stepped` (did `advance()` run last
+tick), `gap`/`minGap`, and `tethered`/`anchorDist`/`lead`. `stepped` is the discriminator that
+settled this: it splits "the stepper never reached this agent" from "it ran and clamped the motion
+to zero", which no amount of reading the code did.
+
+Two defects found on the way, both older than possession and neither fixed here. **The leash has
+no timeout**: a body jammed against a guardrail with its ghost 5.1 m out is a permanent deadlock,
+and walkers queue behind it (Glenn, watching: "I see three agents walking against a fence"). Same
+agent at the same coordinates in two runs forty minutes apart, so it is a trap location rather than
+an unlucky frame. **And the nav graph may have disconnected components** — 394 and 86 again. If an
+agent's home and work fall in different ones it silently never travels, and nothing reports it. A
+census is cheap and nobody has run it.
+
+This also settles one of the Open questions above: possession must be able to **suspend the goal
+layer**, not race it. An errand completes, the agent goes to rest, and seconds later the schedule
+has it walking a 27-leg trip of its own — a director issuing one command per decision spends the
+whole session fighting the table it is supposed to be replacing.
+
+## ADR-0092 — The city is designed as data first: a brief, a plan, a score, then the build
+
+**Status:** Provisional (2026-09-22) — the planner and its evaluator exist (`city_plan`); nothing
+builds from a plan yet. **Trigger:** Glenn: "we should make the city blocks rectilinear ... the core
+of the city should be gridlike and maybe in the outskirts the roads can become more wedge like and
+curvy. Blocks should contain either multiple smaller buildings or one massive block sized building +
+plaza. I don't think we should take this concept into the code. It's like we need some way to design
+the city we want and build a road graph and block layout and evaluate it as data before it gets
+built by the city generator", and then "Can you build maps before trying to construct anything so we
+can see potential city layouts?"
+
+**Context.** Nothing in the pipeline ever *decides* what the city is. `lanes_tool from-level`
+replays metro_v2's lattice recipe and keeps whatever survives conversion (182 of 419 segments);
+blocks are the holes the built pavement happens to leave; the lot pass parcels whatever shape it is
+handed. Every recent city complaint is the same complaint in a different place — blocks that hold
+one dinky lot, a downtown grain deeper than the block it sits in, curving streets arriving as 40-80
+stubs the frontage walk rejects, and a freeway ring that 21 of 1657 drivers used because the jobs
+are inside the ring and the only way in is three interchanges. Each was answered inside the
+generator, which is how we got rules like "a block the parcel walk cannot fill becomes a landmark
+site": a layout failure caught at meshing time and patched where it was noticed, not where it was
+caused. And the feedback loop costs a full build — terrain, roads, lots, meshes, a bundle — to see
+a layout at all.
+
+**Decision.** A design stage above the generator, in three artefacts:
+
+* **The brief** (`assets/city_plans/*.json`, ~30 numbers) — map size, the core grid's block size and
+  angle, how blocks grow to midtown's rim, how much the grid warps, the outskirts' ring spacing,
+  spokes, curvature and wedge streets, the freeway's radius, radials and wobble, road widths and the
+  sidewalk. It says what *kind* of city, not where anything is.
+* **The plan** (`engine::plan::CityPlan`) — the street graph (local/collector/arterial, planarized:
+  real crossings, T-junctions, no stubs), the freeway graph and its interchanges, and every block as
+  a face plus the polygon actually buildable inside it (inset by each bounding street's own
+  half-width and sidewalk), carrying a **district** and a **use**. The use — parcel into lots, one
+  landmark on the whole block, a park, or right-of-way the freeway needs — is decided here, as data
+  that can be read, diffed, hand-edited and re-scored.
+* **The score** (`evaluatePlan`) — computed with **the engine's own** parcel walk (`subdivideBlock`
+  at the district's grain) and **the engine's own** router (`buildNavGraph`/`findRoute` over the
+  merged street and freeway graphs, with the same junction delay the sim charges), so a plan that
+  scores well builds the way it scored. Rectangularity as buildable area over its oriented box,
+  the narrow side, predicted lots and buildings, street-network connectivity, and the share of
+  sampled outskirts→downtown commutes that choose the freeway.
+
+Two consequences are the point of the whole thing. **Layout failures are caught as layout**: a block
+that would parcel into two lots is given to one landmark in the plan, where that is a design choice,
+instead of being discovered by the lot pass and patched there. And **a layout costs a second, not a
+build**: six candidate cities, each with a map and a scorecard, come out of one `city_plan generate`
+run in about seven seconds, which is what makes "look at maps before constructing anything"
+possible at all.
+
+**Why C++ in the repo, not a Python prototype.** The evaluator's numbers are only worth having
+because they come from the same parcel walk and router the build uses. A prototype would score
+against re-implementations of both — the two-paths problem the city already has, invited into the
+one place whose whole job is to be believed.
+
+**Consequences.** The generator does not consume plans yet: this ADR buys the design stage and the
+maps, and the build side (lanes builder takes the plan's graph, the lot pass takes the plan's blocks
+and their uses) is the next step, after which the importer, the pavement-hole blocks and the
+whole-block fallback are all candidates for retirement. A plan is deterministic from its brief —
+pinned by `tests/test_city_plan.cpp`, which also holds the grid core to rectangles, the streets to
+one connected network, every block to a use it can hold, and the freeway to a share of commutes
+worth building it for. What a plan still says nothing about: terrain (it plans on the flat, so a
+hill can still make a planned street unbuildable), water, districts' building styles, or transit.
+
+## ADR-0093 — One grow: every host calls engine::growCity, and owns only its caching
+
+**Status:** Accepted (2026-09-22). **Trigger:** Glenn: "I would like the offline path tracer to work.
+But for building the city should be one path right?", following 2026-09-21: "I don't know why the
+editor should end up building a procedurally generated city different than any other path. There
+should only be one path."
+
+**Context.** ADR-0084 milestone B made the lot pass's *parameters* one derivation
+(`lotGrowSetupForLevel`). What stayed duplicated was the **call around them** — which blocks, which
+streets a door faces, a built city's margin and paving datum, whether geometry is wanted at all —
+written out three times:
+
+* `LevelLoader::growCityLots` — the game's;
+* `roads::lanes::growLotsForLevel` — the `lots` bundle producer's, commented "the loader's rules,
+  one for one", which passed **no** street graph and never set `sidewalkWidth`;
+* `src/level_scene.cpp` — the offline tracer's, which re-derived the hub list and the coreness
+  centre by hand and loaded the style and archetype books itself.
+
+Each copy was faithful on the day it was written. Two had already drifted. The tracer's copy
+overwrote the hub list unconditionally, so a level that **authors** its districts (ADR-0090 —
+metro_lanes does) grew a different city offline than in the game. The producer's copy grew doors
+that face whichever way a block's plan ran, so a lane-built city's buildings depended on **whether
+its lots came out of the bundle or were grown in place** — the cache deciding what the city looks
+like, which is the worst version of this bug because it is invisible until someone clears a cache.
+
+**Decision.** `engine::growCity(CityGrowInputs)` (`src/engine/city_grow.h`) is the grow. A host fills
+one of two sides — `nets` (the lattice: blocks are the road graph's faces) or `holes`/`blocks` plus
+the `streets` and paved band (a builder that paved a whole city) — and gets a `NetLotResult` back.
+`cityBlocksFromHoles` is the one spelling of the hole→block inset, which three call sites had each
+written with its own constants. The loader, the producer and the tracer now call it, and what stays
+host-specific is **caching**: the loader and the producer read and write bundles; the tracer grows
+in place.
+
+**Consequences.** The producer bakes with the streets and the paved band it never had
+(`kLotsBuildTag` → `2026-09-22.1`; lab-level lots bundles rebuild once). The offline tracer honours
+authored districts, the enterable spawn, `planOnly` and the LOD1 twin, none of which its copy knew
+about — and it lost ~60 lines that existed only to say again what the loader says. A warm load no
+longer parses the style book just to throw it away; the watch list comes from
+`cityGrowScriptFiles`, which resolves the books without running them. The gate is that the block
+and skyline censuses are identical across the change with caches off (RT_NOCACHE=1), on the lattice
+city and the lane-built one.
+
+**What is still not one path.** The tracer parses the level itself (terrain, entities, camera,
+lights) rather than running `LevelLoader` into a headless World — it *renders* a city it no longer
+designs, but it still assembles the scene twice. Retiring that is a bigger job than this one and
+wants its own decision. The Makefile build of `raytracer` is a second, hand-listed build of the same
+binary and has not compiled since ADR-0089 renamed `road_net.cpp` two days ago; CMake's `raytracer`
+target (which links `engine_core`) is the live one.
+
+## ADR-0094 — GPU memory: one allocator, one upload queue, deferred destruction (Vulkan)
+
+**Context.** Measured on metro_planned (`mem?`, 2026-09-24): the viewer held 6.5 GB of mesh data in
+**25,394 separate `vkAllocateMemory` calls** — one per vertex buffer and one per index buffer — and
+each upload made its own staging buffer, submitted a one-time command buffer and waited the queue
+idle. Near 9.85 GB on the 10 GB card uploads began to fail (419 in one run) although the data was
+6.6 GB: per-allocation overhead, not data. Every `removeMesh`/`removeTexture` called
+`vkDeviceWaitIdle`, so each evicted CDLOD tile stalled the whole GPU. This blocked finer terrain
+(the "roads under the terrain" fix) and is the wrong foundation for streaming a large world.
+
+**Decision.** In the Vulkan backend:
+- **One allocator.** Meshes and textures are suballocated with AMD's Vulkan Memory Allocator
+  (vendored single header, `third_party/VulkanMemoryAllocator`, v3.3.0, MIT; implementation in
+  `vma_impl.cpp`). `VK_EXT_memory_budget` is enabled when the driver has it, so heap usage and
+  budget are the driver's own figures — the input the residency budget will need (ADR-0095).
+  Render targets, UBOs and readback buffers keep their own allocations (a few dozen, recreated
+  with the swapchain).
+- **One upload queue.** Data for device-local memory is copied into a persistent, mapped 64 MB
+  staging ring and its copy (or image transition + copy + mip blits) recorded into one command
+  buffer. The batch is submitted at the start of each frame, when the ring fills, and at shutdown,
+  closed by one full barrier and waited on its fence; a payload larger than the ring gets a one-off
+  staging buffer freed with its batch. An upload is usable by the next frame, whatever records it.
+- **Deferred destruction.** A removed mesh or texture is retired with the frame counter and
+  destroyed once every frame that could reference it has completed (`MAX_FRAMES_IN_FLIGHT` later),
+  never with `vkDeviceWaitIdle`.
+
+**Consequences.** metro_planned, same build otherwise: device allocations 25,394 → **28 blocks**;
+peak GPU use (with ~1.6 GB of desktop) **9.6 → 8.1 GB**; upload submits ~25,000 → **109 batches**;
+load **225 → 180 s** (entities + spawn 61.7 → 23.9 s); zero upload failures; the frames match the
+old ones but for clouds and moving shadows. `mem?` now prints the heaps (blocks, allocations, usage
+against budget) and the upload totals. The Metal backend is unchanged (Metal heaps are its own
+question). Still open, and next: nothing is ever *evicted* for memory — everything a level loads
+stays resident (ADR-0095's residency service), and a vertex is still 56 bytes for every mesh.
+
+## ADR-0095 — Design for a 100 km world: memory bounded by the camera, terrain as a baked pyramid
+
+**Context.** A 6 km city fills a 10 GB card, and not with terrain: buildings (4.9 GB) and road decks
+(1.4 GB) are loaded whole and kept, and the CDLOD terrain's finest cell is tied to a stock level
+count, so it coarsened to 11.7 m when the world grew and buried streets beside graded lots. Glenn
+asked for the world to be designed for 100 km (2026-09-24).
+
+**Decision** (`docs/world-streaming-plan.md`):
+- **GPU and RAM are bounded by what is near the camera, never by world size.** Disk and bake time may
+  grow with the world.
+- **Terrain is a baked pyramid of height tiles** (129² shared-border `uint16` samples, quantized per
+  tile, per-tile min/max/error, sparse: a child exists only where the parent errs), stored
+  cell-addressed in the bundle (ADR-0084), drawn as one shared grid mesh lifted in the vertex shader,
+  selected by screen-space error, with the physics heightfield and lot draping read from the same
+  tiles. The runtime formula stays for the editor's live preview and unbaked levels.
+- **One residency service** decides what is on the GPU under the driver's budget; terrain tiles,
+  building clusters, road cells, props and interiors are its clients, each with a LOD chain whose
+  coarsest level stays resident.
+- **Double in the simulation, camera-relative float on the GPU** (a render origin snapped to 1 km).
+- **Regions of 8 km** bake and load independently, each in its own bundle.
+- Supersedes the ~16 km size assumption of ADR-0034; its reverse-Z, partitioning and HLOD stand.
+
+**Consequences.** Terrain memory falls from ~1 MB of vertices per tile to ~33 KB of heights, which pays
+for 0.5–1 m cells where there are streets. The order is: residency service with terrain as its first
+client, buildings second, then vertex layouts, road deck tolerance meshing, camera-relative
+rendering, regions, and a 100 km test world. Each step carries before/after `mem?`, load and frame
+times, and a level-test byte budget.
+
+## ADR-0096 — Two vertex layouts: a 32-byte standard vertex, and the full one where the data needs it
+
+**Context.** Every mesh paid 56 bytes a vertex (float3 position, normal, tangent and colour, float2
+UV) whatever it held. On metro_planned that was ~1.7 GB of the GPU's mesh data. ADR-0095 §5 planned
+smaller layouts per kind of mesh. Two things decided how: terrain's CDLOD tiles use the tangent slot
+for their morph-target *position* (terrain.vert), and a few meshes carry tints above 1.
+
+**Decision.**
+- **The standard vertex is 32 bytes** (`GpuVertexPacked`): float3 position (streets kilometres from
+  the origin need it until camera-relative rendering lands), normal and tangent as octahedral snorm16
+  pairs (~0.003° error), **float2 UV** (world-planar and station UVs run to thousands, so half floats
+  would smear them), and an RGBA8 tint.
+- **The full 56-byte vertex stays for what does not fit**, chosen per mesh at upload
+  (`vertexFitFor`): a mesh that says its tangent is data (`RenderMesh::tangentIsData`, set by the
+  CDLOD tile generators), or one with a tint outside [0, 1]. The mesh declares the first. It is not
+  guessed from tangent length, because the generators emit raw edge vectors 3–5 m long that
+  `mesh.vert` normalises anyway.
+- **One shader, twin pipelines.** `mesh.vert` reads normal, tangent and colour as `vec4` and decodes
+  when its `kPackedVertex` specialisation constant is on. Every pipeline that reads mesh vertices
+  (opaque, culled, wire, transparent, overlay, shadow) has a packed twin with the same state, and a
+  draw binds the twin its mesh needs. Terrain has only the full pipeline, and `drawTerrain` refuses
+  (and warns about) a packed mesh rather than drawing it wrong.
+- `RT_VERTEX_FULL=1` keeps every mesh full, for A/B frames. `mem?` reports meshes and bytes per
+  layout, and what the standard vertex saved.
+- **Vulkan only for now.** The layout is private to each backend, so Metal and WebGPU keep their
+  float vertices and lose nothing. A Metal port needs a Mac to verify it.
+
+**Consequences.** metro_planned at the spawn point: 5,660 standard meshes, 37 full for tangent data
+(terrain), 17 full for a tint above 1 (all tiny); **641 MB saved**; mesh data 1,078 MB (together with
+the kerb pass below). ring: 191 → 118 MB. The frames match the full layout to within 1/255 on ring,
+and on cdlod to within the run-to-run noise of wind and water. Packing on the render thread doubled a detail cell's commit (11 → 24 ms): the
+octahedral encode costs more than a float copy. So the conversion moved off it.
+`Renderer::prepareMesh(RenderMesh&&)` packs on any thread with no device calls; `uploadPrepared`
+only copies into the upload queue. The streamed building cells prepare their chunks on the
+residency worker (`AssetManager::prepareMesh` / `acquirePrepared`). A detail cell now commits in
+**1.7 ms (slowest 5.4; was 24 / 55)**, a facade cell in 0.18 ms. Backends without a layout of their
+own inherit a default that carries the RenderMesh through.
+
+**The kerb pass (ADR-0095 §5, same session).** A deck or layer slab emitted a side quad for every
+boundary edge. Most of them could not be seen: asphalt edges under a sidewalk, shoulder edges against
+the lane they continue, and 4 m densified outline segments on straight kerbs. `slab()` now drops a
+side where the surface beyond it stands at or above its top (`hidden`: asphalt, sidewalk, shoulder or
+median within +0.5 m), and merges consecutive collinear sides (top within 1 cm, bottom no shallower)
+into one quad. It also fixed a latent bug: layer boundaries were unoriented `(min, max)` pairs, so
+about half of all sidewalk kerb faces pointed inward. They are now wound as the triangles are, and
+the triangles are made counter-clockwise. metro_planned concrete side triangles went from 1.86 M to
+0.23 M (deck 689 k → 4.5 k, sidewalk 906 k → 198 k, shoulder 267 k → 28 k). What remains is the
+parapet walls (457 k) and girders (183 k).
+
+## ADR-0097 — Instanced drawing on Vulkan, and a test forest that measures it
+
+**Context.** Metal batched instances; Vulkan drew one `vkCmdDrawIndexed` per transform, with the model
+matrix in a push constant, so every tree, grass patch and lamp in an `InstanceGroup` cost a draw call.
+Draw calls were already the city's measured ceiling (citysim scale). Forests and street trees (the
+flora plan) cannot be built on that.
+
+**Decision.**
+- **Every mesh draw reads its model matrix per instance** from a per-frame, host-visible instance
+  buffer (binding 1, instance rate, locations 5–8 in `mesh.vert`, 1–4 in `mesh_shadow.vert`).
+  `drawMesh` is a one-instance draw, and `drawMeshInstanced` is one draw for the whole visible set.
+  One path, not an instanced twin of every pipeline. Terrain keeps its own input (its nodes are
+  world-space) but still writes an identity row, which the shadow pass reads.
+- The buffer is rewritten each frame after that slot's fence wait, and regrows by doubling.
+- `RT_NO_INSTANCING=1` restores one draw per instance, for A/B.
+- **Vulkan honours `setPresentSync(false)`**, and `RT_VSYNC=0` turns sync off at start (MAILBOX,
+  else IMMEDIATE). Under FIFO every timing was a multiple of the refresh interval: both builds read
+  exactly 50.0 ms on the test forest.
+- **`assets/levels/instancing_forest.json`**: 800 m of terrain, ~7,400 scatter-grade trees (three
+  species × four variants) and ~18,600 grass patches. Many *light* instances, so draw calls are what
+  it measures. `forest.json` is the opposite (a few 100k-triangle trees), and GPU-bound.
+
+**Consequences.** Frame times with vsync off and `RT_DUMP_STATS=1`:
+
+| Scene | Draws | Frame time |
+|---|---|---|
+| instancing_forest | 9,750 → 178 | 11.0 → 2.95 ms |
+| metro_planned downtown | 10,185 → 4,441 | 26.0 → 19.8 ms |
+
+Frames match. The remaining single draws on metro are unique meshes (building chunks, road cells),
+which need merging or indirect draws, not instancing. Next in the flora plan: a baked tree catalog
+with polygon-capped LODs.
+
+**Grass tiles are built off the render thread (2026-09-24).** `tools/walk_probe.py` walks the camera
+along a path at a set speed and lists the frames that hitch. On river_valley at 5 m/s:
+- **Before:** p99 34.9 ms and max 101 ms, with 455 frames over twice the 4.4 ms median. Every one
+  was `update`: GrassSystem building a tile on the render thread. A near tile is about 2,800 clumps,
+  each with six ground evaluations (height plus slope) and a density rule, 10–30 ms per tile. The
+  2 ms budget was checked only *between* tiles.
+- **After:** p99 7.1 ms, max 9.4 ms, one hitch (a render encode).
+
+What changed:
+- Tiles build on the job system (up to four at once), nearest first. The render thread commits
+  them under a 1 ms budget.
+- A tile changing ring keeps its old clumps until the new ones arrive.
+- Tiles are built one tile beyond the radius, so they are ready before they are due.
+- A tile samples the ground once on a 1 m grid and interpolates height and slope.
+  `GrassField::density` now takes (x, z, y, slopeCos) and must be pure: it runs on workers.
+
+**The far field is grass cards (2026-09-24).** Grass used to end at 60 m, so the distance had no grass
+in it. A second GrassSystem layer now covers the distance:
+- **What it is:** 32 m tiles of crossed cards (`MeshBuilder::crossCards`, three quads about 1.3 m
+  across), each carrying a baked blade texture (`fieldBlades` / `fieldBladeTone` via
+  `grassCardTexture`). The texture is coloured root to tip like the clumps.
+- **Where it sits:** the cards grow in over [fadeStart − 6, fadeEnd − 4] as the clumps shrink away,
+  and fade out over the last 40 m before `cardRadius` (150 m). `RenderMaterial::fadeInStart` and
+  `fadeInEnd` travel in `features[2].yz`.
+- **Mip coverage:** alpha-tested grass scales its cut-out alpha by 1 + 0.3·mip level (Golus), so thin
+  blades keep their coverage down the mips instead of averaging away.
+- **Normals and shadows:** normals point up, so the cards light like the clumps and the ground. Like
+  all `FLAG_GRASS` draws, they cast no shadow.
+- **Cost:** the same walk went from p50 4.4 to 4.6 ms, with instances up from 13 k to 19.6 k and
+  still one hitch.
+- **Beyond `cardRadius`:** the terrain colour carries the field. Matching it to the cards is the
+  realism pass. Set `"cards": false` to turn the layer off.
+
+## ADR-0098 — The procedural vocabulary grows; content is recipes over it
+
+**Context.** The flora work (ADR-0097's grass, the stylized trees, the rock library, the terrain
+layers) first shipped as capable generators. Each one privately carried its own random stream, its
+own icosphere, tube and emit helpers, its own tileable noise and cellular cracks, and its own disk
+cache. The engine already had a vocabulary for exactly this: `texture_field.h` (ADR-0042/0043,
+fields and bakes, exposed to Lua) and `MeshBuilder` plus the Lua `mesh` library. The new work went
+around them, so it added features without extending the engine. Glenn, 2026-09-24: "We should always
+look to expand the procedural capabilities of the engine and to use what is there as a language for
+building things and only do one offs if absolutely necessary."
+
+**Decision.** New content is a RECIPE over the engine's procedural vocabulary. When a recipe needs a
+missing word, the word is added to the vocabulary, in C++ and in Lua, not privately to the recipe.
+- **texture_field** gained:
+  - tileable fields: `fieldTileNoise` / `TileFbm` / `Cells` / `CellEdges` / `CellId` / `Bands`
+    (`fieldNoise` and `fieldFbm` do not tile);
+  - shaping: `Smoothstep`, `Invert`, `Min` / `Max`, `MixBy`, `Pow`, `Warp`;
+  - colour fields and `bakeFieldRGBA`;
+  - `bakeCached`, one content-keyed disk cache for any bake.
+
+  The terrain layers are now four recipes over these.
+- **MeshBuilder's shape kit** (`mesh_shapes.cpp`): `icosphere`, `displaceNoise`, `cutByPlane`,
+  `facet`, `leanNormals`, `deform`, `colorBy`, `tube`, `vertex` / `triFacing`. Also `ProcRng`
+  (`procgen/proc_rng.h`), the generators' one shared random stream. Stylized trees, rocks and grass
+  are now recipes over the kit.
+- **Lua** reaches all of it:
+  - `texture.tile_fbm`, `texture.cells`, … and `field:warp`, …;
+  - `mesh.icosphere` / `displace` / `cut` / `facet` / `lean_normals` / `color_by` / `tube`;
+  - `stylized.tree` / `rock` / `grass`.
+
+  A script composes with the same words the C++ recipes use; tests build a tileable stone texture
+  and a moss-topped stone in Lua.
+- **Shader work** follows the same rule, as MATERIAL FEATURES that any surface can switch on
+  (RenderMaterial fields, each off at 0; Vulkan, Metal owed). They are carried in the 64 bytes of
+  push constant the model matrix left for the instance buffer (ADR-0097):
+  - `triplanarScale`: albedo and normal maps sampled in world space on three axes, with no UVs
+    and no stretching. Feature albedo maps are sRGB.
+  - `variation`: brightness, hue and the texture offset, hashed from each instance's origin.
+  - `topAmount` / `topThreshold` / `topColor` / `topNoiseScale`: a layer on faces that look up
+    (moss, snow, dust), mottled by noise, settling first into the albedo map's low spots
+    (its alpha as a height).
+
+  The first user is the rock library: stone textures are recipes (`procgen/material_recipes.h`:
+  granite, sandstone, basalt), the mesh carries only light (a facet shade and a dark foot), and
+  the moss is the material's top layer.
+
+**Consequences.** Looks are unchanged except that variants come from the shared random stream
+(different, but equivalent, trees and rocks). A one-off is acceptable only when no general word
+fits, and its reason is written down. Palm fronds and pine tiers are still custom topology
+(`vertex` / `triFacing` recipes). A ribbon-along-a-curve word would absorb them, and will be added
+when the leaf-card work needs it.
+
+## ADR-0099 — Rivers and lakes are the land's own drainage, carved in; water is one polygon mesh
+
+**Context.** Water was a flat ocean plane. Glenn wants rivers that form the way real ones do (rain,
+downhill flow, erosion, cascading from the mountains, lakes, reaching the sea) and that divide a
+city so it needs bridges. ADR-0027 already planned "a river = a water recipe (+ carve)"; ADR-0033
+lists rivers as a future reader of `Skeleton`.
+
+**Decision.**
+- **Hydrology on the terrain** (`procgen/hydrology.h`):
+  - priority-flood depression filling (Barnes et al. 2014), which gives lakes at their spill
+    height and every cell's receiver;
+  - D8 flow accumulation (O'Callaghan & Mark 1984);
+  - rivers where the upstream area passes a threshold, traced from source to confluence, lake,
+    sea or edge, Chaikin-smoothed. Width and depth come from √area, and the water level only falls
+    downstream and never stands above the ground at the centre line. Where the ground rises, the
+    channel cuts through.
+
+  The network is built once per terrain block in `readTerrainParams` (`"rivers"`, memoised) and
+  shared through `TerrainParams::hydro`.
+- **The carve lives inside `terrainHeight`**, after the base relief and before earthworks and
+  flattening. It cuts a rounded channel plus banks at `bankSlope`, faded at 30 m, and only ever
+  lowers the ground. CDLOD, colliders, placement and the baked pyramid all see it. Channels need
+  a mesh fine enough to show them (the baked CDLOD's 1 m cells).
+- **The water surface is one POLYGON MESH, not a ribbon per river.** The first surfaces were
+  ribbons, and they folded and overlapped wherever rivers widen, bend hard, join, or meet the sea.
+  A 40 m river flared into an estuary on a tight bend fanned into crossed sheets. The decided form:
+  - buffer each river's corridor to its width, union it with the lakes and the sea's edge
+    (Clipper2, as the road builder does), and triangulate (CDT);
+  - each vertex sits at the water level (along the river, flat on a lake, sea level at the
+    coast), and carries the flow direction and speed of the nearest river segment;
+  - shading uses flow maps (Vlachos, "Water Flow in Portal 2", 2010): two phase-offset layers
+    advected along the flow, crossfaded.
+
+  Mouths and confluences are then just merged polygons. **Built** (`Hydrology::waterMesh`):
+  - Corridors are a quad per segment plus a 12-gon per node, on a path resampled to width/3.
+  - Lake cells are dilated one cell, unioned, and Chaikin-rounded three times, so no staircase.
+  - River centre points and lake cell centres are the CDT's interior points. u is 0 on the
+    outline and 0.5 at those points (the distance from the bank).
+  - Lake cells take the lake's level. Elsewhere a vertex takes the nearest segment's level,
+    flow and speed (a 64 m segment grid finds it). A river's level never falls below that of
+    the lake it enters.
+  - **The sea is the ocean mesh's, cell for cell.** The ocean fills cells where the NATURAL
+    ground (`WaterMeshParams::extent`, the terrain without the carve) is below sea level.
+    `waterMeshCells` hands those same squares to `waterMesh`, which subtracts them. The two
+    surfaces meet edge to edge and never overlap. Before, a channel cut below sea level near
+    the mouth let the ocean's 10 m cells show as a staircase under a doubled, blended river.
+    The mouth fade no longer touches alpha, only foam.
+
+  river_valley: 9.8 k vertices, 13 k triangles for every river and lake. `RT_WATER_OBJ=<path>`
+  dumps it. A steep reach (a 7 m lake draining 6 m in 40 m into a lagoon) now reads as a sloped
+  whitewater chute: that is where the owed waterfalls go.
+
+  The ribbon word stays in the shape kit
+  (paths and fronds read it), now with a smoothed tangent and a half-width capped by the bend
+  radius.
+- `Surface::River` shades moving water with a flow map in world xz:
+  - two phases of noise, half a cycle apart, advected along the vertex flow at 0.25 + 3·speed m/s
+    and crossfaded;
+  - ripple normals from the same two phases;
+  - foam at the banks (from u) and white water only where speed > 0.35.
+
+- **The channel is a trench (2026-09-24, Glenn: "floating above the surface… not cut into the
+  ground like a trench").** There were two causes:
+  - **The level was checked only at the centreline.** Along a slope the downhill bank sat below
+    the water, and the surface hung in the air. Each node's level is now the LOWEST natural ground
+    across the corridor (centre, and ±½ and ±1 of the half-width + 3 m), less an *incision* of
+    1 + 0.05·width m, capped at 3.5.
+  - **The banks started flush with the water.** The carve now climbs a steep inner bank
+    (`bankSteep` 1.4, about 55°) up the incision height, then the outer `bankSlope`. Cut-only as
+    before, so the meadow is trimmed into a trench. The ground-cover map reads the steep bank as
+    earth and rock: a cut bank.
+
+  `HydroParams::incisionMin/Max/K`, `bankSteep` (level JSON `rivers.*`). The baked ground's key takes
+  a hydrology code tag only when the level has rivers, so other levels keep their caches.
+
+- **Water reads as water (2026-09-25).** Glenn: "you can still see the bottom… foam around the
+  edges… sparkle when the sun hits… reflection". All of it is shading, no ray tracing:
+  - **Depth opacity.** `waterMesh` bakes each vertex's depth ÷ 8 m into colour b, from the drawn
+    ground; the sea already had its depth in u. Opacity is Beer-Lambert,
+    a_w = 1 − e^(−k·depth), with k 1.1 for still water and 0.5 for a running river. Lakes and the
+    sea hide their beds past about 2 m; river shallows show stones.
+  - **One composite for both kinds of water** (`mesh.frag`, surfaces 12 and 20):
+    F·sky + (1 − F)·a_w·body over the bed, with alpha 1 − (1 − F)(1 − a_w). Foam is opaque and
+    matte.
+  - **Sparkle:** a jittered normal per ~30 cm cell, re-rolled about 8 times a second, with a
+    power-900 highlight in a small disc per cell. It is a glitter path under a low sun, and points,
+    not squares, up close.
+  - **Stylized shore foam** laps in and out where still water meets the bank.
+  - **Reflections of the world.** A water pipeline (the transparent one, but writing depth and the
+    normal G-buffer) draws water before other transparents, so SSR sees the surface. SSR gains a
+    *mirror mode* for flat, near-perfect mirrors (roughness < 0.08, normal y > 0.9): 48 steps
+    growing ×1.19 from 0.5 m, reaching about 2 km, so still lakes reflect the far bank and the
+    mountains.
+  - **Nothing grows in the water:** `Hydrology::isWet` (a lake cell, or within a river's width,
+    binned) zeroes grass density and skips tree and rock placements there.
+
+  Cost: a 5 m/s walk around the big lake, water in view throughout, runs a 4.3 ms median.
+
+**Consequences.** The drainage costs 0.15 s on a 376² grid (3 km at 8 m). `river_valley.json` is the
+test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
+- waterfalls where the level drops sharply;
+- the ground-cover map's banks (wet sand, gravel, reeds) and riparian trees;
+- the city: planned around rivers, arterials crossing on bridges;
+- widths tuned for the map's scale;
+- Metal.
+
+## ADR-0100 — Occlusion culling against a recent frame's depth, on the CPU
+
+**Context.** Glenn: "we may want to do occlusion for grass and trees to reduce objects drawn in the
+frame", with the full city in mind. The engine culls on the CPU (per entity AABB, per instance group,
+per instance) and submits one draw queue that the shadow maps and the main pass share. There were no
+compute pipelines and no depth readback.
+
+**Decision.**
+- **The depth, reduced on the GPU.** After the scene pass, a compute shader
+  (`occlusion_reduce.comp`, the renderer's first) reduces the depth buffer to 16 px tiles. Each tile
+  keeps its FARTHEST depth: reverse-Z, so the minimum.
+- **Read back, not waited for.** The result goes into a host-visible buffer per frame in flight.
+  When that frame's fence has passed (the start of a later `drawFrame`), it becomes
+  `Renderer::occlusionDepth()`, together with that frame's clip transform, eye and forward. It is
+  two to three frames old when read, so nothing ever waits on the GPU for it.
+- **The test** (`engine/occlusion.h`):
+  - A world box is projected with *that* frame's transform. It is hidden when its nearest depth is
+    farther than every tile it covers.
+  - The box is grown first by the camera's movement since that frame (slack), so parallax cannot
+    uncover it.
+  - Anything in doubt is visible: a box crossing the near plane, one covering more than 48×48
+    tiles, or any snapshot taken more than 0.75 m or 2.5° away from the current view.
+    `occlusionUsable()` decides whether the snapshot still stands.
+- **Hidden still casts shadows.** A hidden entity or group is submitted with the new
+  `FLAG_SHADOW_ONLY`, which the main pass skips and the shadow pass draws. A tree behind a ridge
+  still shadows the ridge. Hidden grass is dropped outright, since grass casts no shadow.
+- **The switches:** `RT_NO_OCCLUSION=1` turns it off, and `RT_OCC_STATS=1` reports what it culled.
+  Metal has no readback, so it culls by frustum only.
+
+**Consequences.** Measured with `tools/walk_probe.py`:
+- **river_valley, walking at 5 m/s:** about 215 of 800 instance groups are hidden per frame (grass
+  tiles and trees behind the hills). The median frame goes from 4.6 to 4.1 ms. Without the
+  shadow-only pass it was 3.5 ms, but shadows would pop.
+- **metro_planned, walking from the centre:** about 10,000 of 10,500 entities are hidden per frame,
+  and main-pass draw calls fall from 9,850 to 560. The CPU render phase goes from 7.2 to 6.4 ms at
+  the median. The GPU saving is not measured here (the capture's `gpu_ms` is 0).
+- **Screenshots match** with occlusion on and off, from the air and at street level.
+- **What the city's frame is actually made of:** the *fixed* step (city sim and physics) is 11 ms
+  at the median, with spikes of 50–300 ms. That, not drawing, is the next target.
+
+## ADR-0101 — The city's hitches were the simulation: wander routing, collider tiles, `each<>`
+
+**Context.** ADR-0100's walk found that metro_planned's frame was mostly the *fixed* step: 9.5 ms a
+step at 1.6 steps a frame, with spikes of 50–1,000 ms. Glenn: "the frame rate seems a bit hitchy, so
+I'm worried what that will be like with the full on city."
+
+**How it was found.** `RT_DUMP_STATS=1` now names every single fixed step over 16 ms (`SPIKE fixed
+… <system>`). For citysim it splits the step into its phases and adds the step's route searches:
+count, time, nodes expanded, and the callers' addresses. `engine::routeStats()` keeps per-thread
+running totals of `findRoute`. The viewer is not position-independent, so `nm -C -n` names the
+addresses.
+
+**What it was.**
+1. **Wander trips scanned the whole graph.** Every big spike was one agent's `startWanderTrip`
+   running 1,500–5,000 A* searches (up to 1 s) before a single `startTrip`. The scan rejects routes
+   that U-turn back along the arrival link:
+   - at a dead end every route does, so it searched every node only to take its fallback;
+   - on a scrap of network most goals are unreachable, and a failed search is the costliest there
+     is (it exhausts everything reachable first).
+
+   The fixes:
+   - a forced U-turn (the only way out is back) takes the first valid goal at once: the same trip;
+   - after the first failed search, one `reachableFrom` flood marks what can be reached, and
+     unreachable goals are skipped without searching;
+   - the searches price the U-turn link at 50× (as `startTrip` already did leaving a parking bay),
+     so a route goes round the block when it can, and the first reachable goal nearly always
+     serves;
+   - `startTrip` honours that pricing (`wanderPriced_`), so the trip it builds does not U-turn
+     either.
+
+   **A cap on the scan was tried and rejected.** `city_drawn_traffic_rolls_on_its_wheels` caught
+   it: capped scans fell back to U-turn goals, and cars flipped lanes (305 backward steps and
+   2.8 m jumps, against 2–4 and 0.33 m).
+2. **Collider tiles were built on the main thread.** `TerrainLodSystem` built a terrain tile's
+   collision mesh in the fixed step (about 55 ms, mostly Jolt building its bounding-volume tree).
+   `PhysicsWorld::prepareMeshShape` now builds the shape on a worker (three at once), and
+   `addPreparedMesh` adds the body on the simulation thread. The tile under the player's feet is
+   still built on the spot when missing.
+3. **`World::each` walked the first type's pool.** `each<Transform, ControlledBy>` walked every
+   Transform in the city (tens of thousands) to find the one player: about 0.2 ms in each of eight
+   systems, every step. It now drives from the smallest requested pool, walking a copy when that
+   pool is not the first type's.
+4. `findRoute` also reuses per-thread scratch buffers (generation-stamped). That changed little,
+   because the search itself (about 100 ns per expanded node) is the cost, not setup.
+
+**Consequences.** metro_planned, a 5 m/s street walk (`tools/walk_probe.py`; `summary.txt` now
+saved beside the capture):
+
+| | Before | After |
+|---|---|---|
+| Frame p50 / p95 / p99 | 19.1 / 29.5 / 34.5 ms | 13.1 / 17.6 / 19.5 ms |
+| Worst frame in the walk | about 1,000 ms | 27 ms (a 90° snap turn, when occlusion stands down) |
+| Fixed step | 9.5 ms × 1.6 a frame | 6.0 ms × 1.0 a frame |
+
+The cheaper step also stops a second step being needed each frame, so the saving compounds.
+
+**Left:**
+- Rush-hour steps still reach 15–24 ms when 50–110 departures route in one step (single valid
+  searches). Spreading departures across steps, or caching commute routes (home and work do not
+  move), is the next lever.
+- `block_grading_leaves_no_pits_between_roads` fails (worstRiser 0.86) as it did before this work.
+
+## ADR-0102 — Realism is calibrated against photographs, not tuned by eye
+
+**Context.** Glenn: "The colors for everything are too bright and don't look realistic… closer to
+realism for the grass, water, and terrain." The guide is his four reference photos: Alaska, the
+Colorado aspens, Maroon Bells, Lauterbrunnen.
+
+**Decision: measure, then set.** Sample the same kinds of region in a reference photo and in our
+render (sunlit meadow, conifer slope, rock, snow, lake water, distant mountains, sky zenith), and
+compare mean display colour, especially the ratios red/green and blue/green. Colour is set as
+linear albedo in the level wherever the vocabulary exposes it (`groundCover` colours and the
+`grass` block), not in code. river_valley is the first level done:
+- **Atmosphere:** `environment.fog` density 0.00035 gives aerial perspective. On Vulkan the fog
+  mixes toward the sky behind, so distant ridges fade blue-grey, as every reference does.
+  Volumetric clouds are added. Exposure is 0.7.
+- **Palette** (linear albedo):
+  - grass tips (0.10, 0.14, 0.03) and roots (0.018, 0.032, 0.008): yellow-green, red/green about
+    0.8 as measured;
+  - terrain grass (0.055, 0.085, 0.018), the blades' average, so the card-to-terrain hand-off
+    does not show;
+  - upland (0.10, 0.10, 0.04);
+  - rock (0.15, 0.14, 0.12), a warm grey (real rock is about 0.2, not charcoal);
+  - dirt (0.12, 0.085, 0.05);
+  - water (0.01, 0.06, 0.055), teal as in the glacial lakes;
+  - snowline at 140 m.
+- **Snow is a fifth terrain layer.** The layered terrain carried only three weights plus rock as
+  the remainder, so snow was being drawn as rock. The snow weight now rides in the vertex's `u`
+  (`terrainSnowWeight`; the layers sample by world position, not UV). The shader blends in a
+  procedural powder that settles into the rock's hollows first. The cover rule sheds snow off
+  faces past about 50°, so ledges hold it and cliffs stay bare.
+- **Water:** foam only where the river really runs fast, in sparse patches. Bank lace is thinner,
+  and ripples are a metre-scale swell instead of grain.
+
+**Found on the way (the reasons earlier tuning "did nothing"):**
+- `environment.skyColor` is read only by the offline path tracer, and `sky.model: "scattering"`
+  is Metal-only. The Vulkan sky's colours come from the day/night palette
+  (`day_night_cycle.cpp`).
+- With day/night on, `lighting.sun.intensity` and `ambientMultiplier` are *scales* on the cycle's
+  noon values.
+- Adding a volumetric deck turns weather to AUTO, and the auto state for river_valley's day is
+  overcast (soft shadows, dimmed sun). A remembered weather in `settings.json` beats the level's
+  `dayNight.weather` by design. Screenshots pin it with `--cmd "weather fair now"`.
+
+**Consequences.** Sunlit meadow: red/green 0.62 → 0.83 (the references measure 0.67–0.91). Distant
+ridges now haze toward the sky. The peaks carry snow caps with rock between them, and the rivers
+are clear teal.
+
+**Left:**
+- Meadow blue/green is still 0.51 against 0.33: sky light plus haze, a sky-palette question.
+- Rock is one tone at distance: no strata, no dark forest bands.
+- Slope-rock patches on the meadows read like flat decals.
+- The other levels are not yet calibrated.
+
+## ADR-0103 — Roads up mountains: a grade-limited router, and the builder does the rest
+
+**Context.** Glenn: "If there are more roads I'd be curious how they're built especially around and
+up and down mountains since I've never seen this engine do that." He hadn't, because it never had:
+metro_planned's outer loop stops 250 m short of the mountain front by design, and every street sits
+on the city's rolling relief.
+
+**Decision.**
+- **The router** (`procgen/city/terrain_route.h`, `routeOnTerrain`) follows Galin et al. 2010:
+  - A* on an 8 m grid, in 32 directions (every coprime step up to three cells), so a route can
+    take a gentle diagonal across a slope.
+  - The state is (cell, incoming direction), so turning is priced exactly. A turn sharper than 60°
+    per move is forbidden, so a hairpin is three or more moves.
+  - Cost per move: length × (1 + 2·grade + 400·(grade − maxGrade)²), plus 6·cell·turn².
+  - Grade is checked at each move's midpoint too, so a move cannot hop a ridge. Heights are cached
+    on the half-cell lattice, which every node and midpoint lies on.
+  - Grade above the design limit is *earthwork*: the builder cuts and fills, and the router prices
+    it rather than forbidding it. `hardGrade` rules out only the absurd (0.45 for these roads). On
+    metro's 60–100% mountain front a 12% ceiling found no route at all: a hairpin on a face that
+    steep needs a platform cut.
+  - The route may not crowd itself. Two stretches more than 80 m apart along it must stay 20 m
+    apart in plan. Each conflict blocks a disc, and the search runs again (up to six rounds).
+    Without this, a switchback leg ran under its neighbour's pavement and the builder bridged the
+    road over itself.
+  - A cone with a needle summit has no answer (near a point, every move climbs too fast), which is
+    correct.
+- **In the plan:** `brief.world.mountainRoads` lists `{from, to, class, maxGrade, hardGrade}`.
+  `from` snaps to the nearest street end within 400 m, so the road joins the network. The route
+  runs over the scene's own ground (`sceneGround`) and stays inside the city's ground grid, and it
+  becomes one scene edge.
+- **A `rural` road class:** two 3.5 m lanes, 1 m shoulders, no sidewalk (so no kerbside lamps). It
+  drives as a collector (`road_twin` classOf).
+- **The builder needed no change.** Its vertical profile, cut and fill, retaining walls and decks
+  on piers over hollows are what a mountain road is. The outer loop is elevated its whole length,
+  so the roads pass under it.
+- `city_plan heights BRIEF [HALF STEP]` prints a brief's ground in plan coordinates, for placing
+  roads.
+
+**Consequences.**
+- `metro_mountain` (brief `assets/city_plans/metro_mountain.json`, level
+  `assets/levels/metro_mountain.json`) is metro_planned plus two mountain roads:
+  - from the mountain city to a lookout: 2,989 m, climbing 286 m, with a stack of switchbacks near
+    the top;
+  - from the sw town to a second lookout: 1,497 m, climbing 96 m.
+- Each routes in 1–2 s (0.8–1 M states).
+- Rebuilding the city takes about 20 minutes (6,068 lanes).
+- **Viaducts.** Long stretches of both roads stand on piers. The builder raises the road onto a
+  deck wherever its smoothed profile is more than `rules.bridgeH` (4 m) above the ground, and this
+  range's ground is jagged (±80 m bumps at about 100 m scale), so the profile bridges dip after dip.
+  A router penalty on the change of grade between moves (`bendWeight`) was tried. It switched
+  corridors instead of smoothing one, and pushed the average grade to 11.6% (over the class's
+  10%), so it ships off (weight 0). The real levers are two:
+  - a per-class bridge height, so a country road builds embankments up to about 8 m, as real ones
+    do (`bridgeH` is read per vertex in terrain conforming, which does not know the road's class);
+  - eroded mountains (smooth ridges and valleys), part of the owed mountain pass.
+- **A gotcha on the way:** a lanes level names its graph twice, in `entities[].road.graph` (what
+  the city bundle builds) and in `citysim.graph` (the traffic). Changing only the second silently
+  reused metro_planned's city.
+- **Next:**
+  - villages and lookouts at the ends, not dead ends;
+  - tunnels where the earthwork is absurd;
+  - rivers inside the city with bridges (the hydrology is there; the planner does not avoid water
+    yet).
+
+## ADR-0104 — Rivers through cities: the world's hydrology, bridges, and blocks that stand back
+
+**Context.** Glenn: "Please keep going with rivers and bridges." Rivers existed as terrain (ADR-0099)
+but no city had one. The planner knew nothing about water, so a river would have run under blocks
+and through junctions.
+
+**Decision: the river is the world's.** A brief's `world.base` takes the same `rivers` block a level
+terrain does. So the planner (`worldHydrology`), the lanes ground grid (its `base` is evaluated
+with the engine's `terrainHeight`, carve included), and the level (`city_plan level-world` prints
+the block) all compute one network. It is memoised per terrain block. The world's sea level is
+copied in, so rivers end at the sea.
+
+- **The city's hills stand back from the water** (`terrain_recipe`). The brief's relief is added
+  on top of the carved base, so it would have put ±20 m bumps in the channel. It fades out over the
+  last 100 m to a bank, and a hollow (negative relief) fades from 300 m, so there is no land below
+  the water beside it.
+- **Streets meet the river in `planToLanesScene`.** Every non-freeway edge is sampled every 2 m. A
+  sample is wet within the street's half-width (lanes, shoulders and sidewalks, from its class) plus
+  2 m of a bank (`Hydrology::distanceToRiver`, now indexed, with the water level). Each wet run is
+  judged:
+  - **Inside a street and at most 180 m long: a bridge.** A floor at the water level + 6 m, held
+    flat across the run + 14 m. The builder raises a deck and sets piers under it, unchanged.
+  - **Reaching a street's end, at a junction in the water:** the straightest pair of streets wet
+    at that node (more than about 130° apart), both dry at their far ends, with less than 180 m of
+    water between them, is one bridge, a floor on each. Every other street wet at that node is cut.
+    Without the pairing, 96 of 101 crossings were cut, because junctions sit in the river.
+  - **Anything else (along the river, or wet end to end): cut** back to the banks, keeping dry
+    pieces of 25 m or more.
+- **Blocks stand back from the water.** `blocksFromHoles` takes an optional water set
+  (`Hydrology::corridorRings`: the water mesh's own outline, grown 6 m past each bank). A block the
+  river runs through becomes two, and wet strips are dropped. The loader computes it once per level
+  (`levelWaterKeepOut`, at the terrain pre-pass) for both of its block sites and the grow inputs.
+  The lots producer computes the same for the bake.
+- `city_plan rivers BRIEF [STEP]` lists a brief's rivers in plan coordinates.
+- **Streets a ramp anchors to are never cut or renamed.** Ramps name their street by id; on metro,
+  cutting `s805` broke the bake. Their wet runs are bridged instead.
+- **Quays.** Where a river runs through the city (within 35 m of its blocks), `Hydrology::quayMesh`
+  builds a two-sided stone wall along the water's outline, from 1.2 m under the water to a 0.6 m
+  parapet above the bank behind it. It has a new `StoneKind::Masonry` recipe: dressed blocks in
+  running bond from `fieldBrick`, recessed joints, a tone per block and weathering streaks,
+  triplanar at 2.4 m. The river levels give their banks a 2.5 m minimum incision and a 4:1 inner
+  bank (`incisionMin`, `bankSteep`), so the wall has a bank to hold.
+
+**Consequences.**
+- `river_town` (brief `assets/city_plans/river_town.json`, level `assets/levels/river_town.json`):
+  a 1.6 km town on metro's world with hydrology on. One river (12–40 m wide, falling from about
+  +10 m to the sea at −32 m) crosses the town.
+  - 13 bridges, 34 streets cut, 144 blocks.
+  - Buses drive over the bridges.
+  - The full bake takes 54 s.
+- Pinned by `lanes_blocks_stand_back_from_a_river_through_them`.
+
+**Next:**
+- quay walls instead of grassy slopes on urban banks;
+- riverside streets planned along the water, not cut;
+- bridges that meet the river square (the plan's grid crosses it at about 40°, so some decks are
+  100 m long);
+- metro itself, and bridges' parapets and lighting.
+
+## ADR-0105 — Terrain first: an island world planned on the map before anything is built
+
+**Context.** Glenn, after the river-through-metro attempts: "we're trying to shoehorn a city design
+into a river valley … build the terrain first and then build the city around it … We should look at
+a map construction before we build anything in 3d." Then: "an island with a mountain range in the
+middle … two cities on either side of the mountains … small towns scattered throughout … connected
+by a large ring freeway … a peninsula … cliffs where you can drive up a windy mountain road." The
+size is 20 km.
+
+**Decision: the world is planned in stages, each judged on a 2D map.**
+1. **The terrain** (`TerrainParams::Island`, `islandLand`). The island's outline is an ellipse
+   broken by warped noise (bays, inlets), plus a peninsula lobe carrying its own shelf and a sector
+   of cliff coast. The ordinary relief layers (fbm, a range spine along the long axis with passes,
+   ridged mountains) rise only on land, and the shelf falls to −45 m beyond the coast. The
+   refactor is behaviour-preserving: `terrainBaseHeight` wraps the old body (`reliefHeight`).
+2. **Erosion shapes it** (1.5 M droplets on a 1,024² grid, about 10 s on the CPU). With
+   `erodeLandOnly`, the sea floor stays raw; droplets settling in the sea left speckled shoals.
+   **Rivers now run on the eroded ground whenever a terrain erodes** (`erodedForTerrain`, memoised
+   per block, with its rivers left out so it cannot recurse). Before this, a level's rivers ignored
+   its own valleys.
+3. **Buildable land:** above the beach, under 9%, and dry. A chamfer distance transform measures how
+   deep each cell is into flat ground.
+4. **Sites:**
+   - a city on each side of the range: the deepest flat ground, preferring lowlands, with a radius
+     of 1.6 × the depth, up to 2 km;
+   - towns on other deep ground at least 2.2 km clear of every other site;
+   - the mountain town on the highest decent flat.
+5. **Roads, routed over the ground** (`routeOnTerrain`):
+   - the ring freeway through every site but the mountain town, in order round the island (5%
+     design grade, 30% ceiling, turns under 25°, never over the sea);
+   - the pass between the two cities through the SADDLE, the lowest point along the middle of the
+     range's spine (7%);
+   - the winding road from the ring up to the mountain town (8%).
+6. **The map:**
+   - hypsometric tint, hillshade from the northwest, 100 m contours;
+   - buildable land warmed toward straw;
+   - rivers at their width;
+   - roads cased by kind, sites as footprint circles, a 5 km scale bar;
+   - plus a JSON report: land area, peak, rivers, sites, and each road's length, climb and
+     steepest grade.
+
+`city_plan island SEED OUT_DIR --variants N` writes `island_<seed>.png` and `.json` (with the terrain
+block a level will use). Each variant takes about 10 s.
+
+**Consequences.**
+- Variants 1–4 each have:
+  - 105–120 km² of land and a 745–865 m peak;
+  - 14–18 rivers;
+  - two cities and 5–7 towns;
+  - a 36–38 km ring freeway;
+  - passes over saddles of 126–203 m.
+- Before erosion, the pass wandered 10–21 km across ridge after ridge. Erosion's valleys are what
+  let it climb to the saddle.
+- Also landed (vocabulary kept from the river-city work, ADR-0104):
+  - authored river courses (`HydroParams::courses`, `rivers.auto`);
+  - the planner's river step (arterials bridge, a collector is promoted into any gap over
+    `maxBridgeGap`, other streets stop at riverside streets);
+  - bridges only where a street crosses at 40° or more;
+  - the scene pass judging wetness by the carriageway.
+- **Next:**
+  - Glenn picks a variant;
+  - then each site's city is planned INSIDE its buildable land (downtown grid, organic outskirts,
+    bridges where it spans a river);
+  - a ring road round each city, and local and intercity bus routes;
+  - then the 3D build.
+
+## ADR-0106 — Cities shaped by their land: grown limits, a depth-field layout, the freeway behind them
+
+**Context.** Glenn chose island 8 (ADR-0105). The first attempt planned each site with the usual
+circle-and-ring brief, trimmed afterwards to the land (`world.land`: streets stop at the sea and on
+steep ground, the ring opens into a C against the coast). Glenn: "The city also needs to fit the
+terrain. Part of the city is in the water and another part looks embedded into the mountain." Then:
+"We probably don't need ring freeways if the city can't support it. We should have freeways that
+connect between cities … build a shape that better fits the contours and build a city within that
+shape instead of floodfilling a circle each time?"
+
+**Decision: the land draws the city's outline, and the city is laid out inside it.**
+1. **The limits grow** (`plan/land_shape.h`, `growLandShape`). Growth runs outward from the site,
+   cheapest ground first (Dijkstra), over buildable land: dry, under 15%, and a river counts as
+   land because the river step bridges it. It stops at a target area.
+   - Each step costs its length × (1 + 25·slope + 0.02·metres above the heart).
+   - Each step is cheaper near the sea (up to 60%, fading over 400 m), so a city runs down to its
+     shore instead of along the plain behind it.
+   - The outline is an iso-cost contour, smoothed by blur-and-threshold. Holes under 4 ha are filled.
+   - The results: city 0 is a strip between the foothills and the sea, city 1 a strip along the
+     east coast, and town 3 is bounded by its river.
+2. **A depth field lays it out.** Depth is the signed chamfer distance to the limits, lightly
+   blurred:
+   - the downtown grid fills the deepest 35% of the area, framed round the deepest point;
+   - midtown's boulevard is the depth contour there;
+   - the outskirts' collectors are evenly spaced depth contours down to 45 m from the edge;
+   - spokes (every 480 m along the rim) and wedge locals run down the depth gradient, square to the
+     contours, and are skipped where they converge;
+   - districts come from depth (core 12%, midtown 35%).
+   - Marching-squares contours and gradient descent are vocabulary (`contour`, `descendDepth`,
+     `depthHolding`). Everything downstream (river step, planarizer, blocks, lots) is unchanged.
+3. **No ring freeway on a shaped city.** The island's freeway serves it
+   (`routeFreewayRoundCities`):
+   - every city's limits, grown 40 m, are a no-go mask;
+   - each city's waypoint moves just outside its inland edge (the limits point nearest the range's
+     axis);
+   - the legs are routed again, so the freeway runs along the foot of the hills behind the towns;
+   - the pass and the mountain roads stop at the limits they reach, and the mountain road climbs
+     from the freeway's new line.
+4. **Island site briefs** (`islandSiteBrief`) set up each site:
+   - the island's terrain block as `world.base`;
+   - `world.land` with `shape` set;
+   - an area from the site's flat ground (π(1.15R)² for a city, πR² for a town);
+   - a grid squared to the nearest coast;
+   - no ring.
+   - `city_plan island-cities SEED OUT` plans every site and writes the island map with the plans
+     (limits, streets by class, freeways), a close-up per site, and each brief.
+5. **Kept, for circle briefs with `world.land`:** the land cut, and the ring opening into a C
+   (`CityPlan::ringArc`, blended between the coast and slope rules, hooks trimmed). Briefs without
+   `world.land` plan exactly as before: metro_planned's and metro_mountain's scene edges are
+   identical.
+6. The lanes terrain recipe now reads an eroded base (`erodedForTerrain`), so a city stands on the
+   ground the level renders.
+
+7. **Water is an edge inside the city** (`LandShapeParams::water`). Glenn: "the city blocks don't
+   follow the contours of the river … we should have bridges across the river … what I've observed
+   in actual cities."
+   - A river or lake stays in the footprint (the limits span it), but the depth field measures from
+     its banks too, so the ring streets and blocks run along both banks. The contour 45 m from the
+     water is the riverside street, which is why the river step's own riverside streets are off for a
+     shaped city.
+   - **Bridges are placed on purpose.** Every arterial that comes down to the water crosses it, no
+     two within 250 m. Any stretch of river in the city longer than 600 m without a bridge gets one
+     (300 m from where the river enters). Each bridge runs square across, from past the riverside
+     street on one bank to past it on the other. The river step keeps these as bridges. The land
+     cut lets the city's own water through, because what crosses it is the river step's call.
+   - Island 8: 11 bridges in city 0, 3 in city 1.
+9. **Every island road is finished for its kind** (`terrain_route.h`). Glenn: "a winding mountain
+   road that isn't connected to anything on either side. And also there is a really tight hairpin.
+   We should smooth out spikes like that."
+   - **Tightened** (`tightenRoute`, string-pulling): wherever the straight line between two of a
+     road's points is drivable, the detour between them goes. Drivable means within the road's
+     grade end to end, the ground within the cut-and-fill limit of that line, no longer than the
+     longest straight, and not blocked. A switchback stays, because its straight line is too steep.
+   - **Rounded** (`roundRoute`): corners are averaged out to a radius per kind — 150 m for a freeway,
+     30 m for the pass, 15 m for a mountain road.
+   - **The pass is ONE road over the saddle.** Forced through the saddle point as two legs, it met
+     itself in a spike (up a spur and back).
+   - **Connected:** the pass ends on the freeway at each side, not at a city's edge beside it, and
+     `linkCityToFreeway` adds link roads from each city's arterials (4 for a city, 2 for a town).
+11. **Interchanges** (`islandInterchanges`) use the one diamond generator (`lanes/interchange.h`):
+    - **Every road that meets the freeway crosses it** square. On the far side it carries on into
+      the nearest city arterial if one is within 500 m; otherwise it runs only the ~90 m the far
+      ramps need to land.
+    - **The freeway is ONE route** round the island, opened at the point farthest from any
+      crossing. As separate legs, every city's waypoint was a seam, right where its links reach the
+      freeway, and a diamond cannot span a seam: that cost 8 of 23.
+    - **The pass and the mountain road get their diamonds first**, being the only way on from the
+      hills. The city links follow, kept a spacing (900 m) clear of them. A link left without a
+      diamond is dropped. Island 8: 13 diamonds, 52 ramps.
+12. **The map is SVG** (`writeIslandSvg`). Glenn: "We should favor that over raster for maps."
+    - In metres, north up, one file to zoom into instead of a close-up per site.
+    - Everything planned is vector, at its real width: streets, freeway (44 m), ramps, pass,
+      links, rivers, city limits, labels. So are the terrain's contours (every 20 m, 100 m
+      heavier) and the coastline, both from `isoLines`, the marching squares now shared with the
+      city depth field.
+    - The shaded relief is one embedded image at the terrain's own 20 m resolution; vectorizing it
+      would add nothing.
+    - Each layer is a `<g id>`, to toggle in Inkscape or a browser.
+    - The raster map is kept as a quick look; per-site PNG close-ups need `--png`, and `--view X Z
+      HALF NAME` renders one.
+13. **Edge streets are smoothed** so they drive as curves:
+   - contour streets get a 90 m moving average (`smoothPolyline`);
+   - the limits are smoothed at 60 m;
+   - the depth field gets two box blurs.
+
+**Consequences.**
+- Island 8: city 0 has 638 blocks, 150 km of streets and 3 bridges; city 1 has 342 blocks; six towns
+  have 35–137 blocks each. The freeway round the cities is 34.6 km with no unrouted legs. The run
+  takes about 20 s.
+- **Not yet built:**
+  - no interchange or link road where a city's arterial meets the freeway;
+  - the city ring C is not built in 3D (`plan_scene` builds only a closed ring);
+  - bus routes;
+  - the island's ragged, erosion-toothed coast (a terrain artifact) makes the limits jagged in
+    places.
+
+## ADR-0107 — Place names and road signs, planned as data and drawn from one face layout
+
+**Context.** Glenn, on the island's freeway: "freeway signs. Like how far each town is. This way we
+can name the towns and show which direction they are. Also! We need signs for which side of the
+freeway we should enter to go in the right direction." Then: "These signs would be built and cached
+offline? … They don't have to be Hawaiian."
+
+**Decision.**
+1. **Places are named from data** (`world/place_names.h`, `assets/data/places.json`), split the same
+   way as street names: the file holds the words, the C++ the algorithm.
+   - A name is a root run into an ending (Ash + ford → Ashford), and the site can shape it: "Port …"
+     or "… Bay" on the coast, "…ford" or "… Falls" on a river, "… Ridge" in the mountains.
+   - Names are deterministic per world seed and unique. Island 8 gets Saltwood and Weyby (the
+     cities), Coldwell, Brookcliff, Carrcombe Harbor, Dunwyn, Port Penwood and Ivycombe (the towns),
+     and Marlwick (the mountain town).
+2. **Interchanges are recorded, and exits numbered.** Each `IslandInterchange` holds its crossing
+   road, the place it serves, its station, and its four ramps: gores, terminals, and which
+   carriageway. Exit numbers are the km along the Inner Loop from the route's start, with A/B when
+   two fall in one km.
+3. **The sign plan is data** (`world/road_signs.h`, `planIslandSigns`): position, the facing of the
+   traffic that reads it, mount, and legend. It is computed offline with the plan.
+   - **On the freeway, per exit and direction:** advance signs 2 km and 1 km out, never reaching
+     back past the interchange before; the exit direction sign overhead where the exit lane opens;
+     the gore sign.
+   - **After each on-ramp:** a route marker, and a distance sign giving the next three places by road
+     distance.
+   - **On the road at each interchange:** an entrance sign before each on-ramp (route, direction,
+     destination, turn arrow), and DO NOT ENTER plus WRONG WAY at every off-ramp's end.
+   - **Elsewhere:** town/city limit signs with a population estimated from the planned buildings,
+     and trailblazers on the pass and the mountain road.
+   - **Directions on a ring:** it has no north or south, so it runs as the **Inner Loop**
+     (clockwise) and **Outer Loop**, each signed with the next city that way. Where both ways reach
+     the same city (two cities on a ring do), each ramp names its first place instead.
+   - **Exits into one city are told apart by the street they land on** ("Summit Ave / Saltwood"),
+     from the city's own street names.
+4. **One face layout, two renderers** (`layoutSign` → `SignFace`, in metres, measured with the sign
+   font's own metrics). The SVG sign sheet (`signs.svg`) draws it now, lettered as the font's glyph
+   outlines (`Font::svgPath`), so it looks the same in any viewer. Inkscape ignored an embedded
+   @font-face and set wider text over panels sized for Overpass. The texture baker will draw the
+   same layout into atlas pages cached with the level.
+5. **Handedness:** plan coordinates mirror the world, so traffic keeps right in the plan and left in
+   the world. Every left/right a driver sees (turn arrows, the exit tab's side) is mirrored from the
+   plan's geometry.
+6. **Tests run from the repo** (`WORKING_DIRECTORY` on `unit_tests`, `level_tests`, `lanes_tests`).
+   The two street-sign tests failed under ctest only because it ran them from the build folder,
+   where `assets/` was not found.
+
+**Consequences.**
+- Island 8 has 221 signs: 23 advance, 26 each of exit, gore, route, distance, entrance, do-not-enter
+  and wrong-way, 12 limit, 4 trailblazer.
+- **Not yet:**
+  - the 3D build of signs (gantries, posts, the atlas bake and its cache);
+  - warning signs (curve chevrons, advisory speeds);
+  - lane-use signs over multi-lane approaches.
+
+## ADR-0108 — Lane arrows are paint, from the junction's legs
+
+**Context.** Glenn: "we need lane signs like arrows for where to turn. I see the arrows blink on
+occasionally but they should be a part of the road to define if you have a protected turn, etc."
+What blinked were the city sim's debug intent arrows (`city:dbgarrow`), rebuilt every frame while a
+car moves with debug widgets on. The city sim app's own painted arrows (`buildRoadMarkings`) are
+guessed from junction angles and flat at one height. The lanes builder painted lane lines,
+crosswalks and stop bars, but no arrows. And street junctions carry no lane connectors; only authored
+ramps do.
+
+**Decision: the lanes builder paints them** (`deck_mesh.cpp`, beside each approach's crosswalk and
+stop bar).
+- **The junction's legs** are the street edges that leave its box at the approach's level: a road
+  through it gives two, one ending in it gives one, and a viaduct overhead or a road beneath is
+  excluded. Each leg's angle from the approach's heading makes it a left, a straight or a right
+  (within 35° is straight; past 150° is the way it came).
+- **The moves go to the lanes by position** (`assignLaneMoves`, pure and tested). The leftmost lane
+  turns left and goes straight, the rightmost turns right and goes straight, and the middle lanes go
+  straight. A turn pocket (`kind: turn`) turns only. The stem of a T gets left and right.
+- **Placement:** arrows are painted where there is a lane choice (two or more approaching lanes),
+  7 m before the stop line and again at 30 m where the block is long enough (≥ 110 m) that they don't
+  meet the next junction's arrows. They are draped on the deck (+0.025 m) like the stop bar.
+- **The glyphs are built in plan coordinates**, pointing at the real legs, so the world's mirror
+  flips them with the roads.
+
+**Consequences.**
+- On grid_city, the arterial × arterial junction's approaches read left+straight / straight+right,
+  the T with the boulevard reads the same, and one-lane locals get none.
+- Levels built from lanes scenes pick the arrows up when their scene is next built.
+- **Not yet:**
+  - protected turns: traffic signals have no turn-arrow phase (the next step of this work: a
+    protected-left phase, arrow signal heads, the sim obeying them, and the paint to match);
+  - the city sim app's own arrows are unchanged: they are still angle-guessed and flat.
+
+## ADR-0109 — Protected left turns: a lead arrow phase, cars that read their own movement
+
+**Context.** Glenn wanted lane arrows "to define if you have a protected turn". The signals phased
+whole approaches: a green let an approach go every way, and opposing approaches shared it. A left
+turn was always permissive: it held at the line while oncoming traffic was moving (the turn-yield
+rule), with no phase of its own.
+
+**Decision.**
+- **A lead left arrow** (`SignalController`). Where a group's green is shared by OPPOSING approaches
+  and an approach has a lane to turn from (two or more), the group's slot opens with an arrow:
+  7 s green, then 2.5 s yellow. During it, those approaches' left turns go, protected, while their
+  straight and right movements and every other approach are red. Then comes the shared green, where
+  a left is permissive again, then yellow and all-red as before.
+  - Opposing left turns pass each other (traffic keeps right in the sim's frame), so both arrows run
+    at once.
+  - One-lane approaches, and approaches with nobody opposite (whose green is already protected), get
+    no arrow.
+- **Signals answer per movement:**
+  - `stateFor(link, Move)` gives the state for a turn; `stateForLink` means straight on, which is
+    what pedestrians walk with.
+  - `protectedLeft(link)` says whether the arrow is green now; `hasLeftArrow(link)` whether the head
+    carries one.
+  - `moveOf` classifies a bend the sim's way: under cos 0.85 is a turn, and counter-clockwise is the
+    left that crosses oncoming traffic.
+- **Cars read their own movement** (`CitySim::moveFor` and `signalFor`, from the route). This applies
+  at the signal brake, the stop-line clamp, the gridlock clock, and the cross-traffic check on
+  another car. A left on its green arrow skips the oncoming-traffic yield; everything it would cross
+  is red.
+- **The head shows the arrow:** a fourth lamp beside the head, on the side the left turn goes (the
+  nav frame's left of travel, mapped straight into the world, so no handedness to reason about). It
+  is lit green, then amber, through the lead arrow, while the straight-on lamps show red.
+
+**Consequences.**
+- Arterial junctions' cycles grow by 9.5 s for each group that has an arrow.
+- The lanes builder's painted arrows (ADR-0108) mark the lanes a protected left is taken from.
+- Unit tests: during the arrow nothing crossing it is green, the shared green after it is permissive,
+  and one-lane streets have no arrow. All 1,415 other unit cases are unchanged; the two known failures
+  are the old ones.
+- **Not yet:**
+  - an arrow-shaped lens (the lamp is the ordinary round lens, beside the head);
+  - protected-only lefts (no permissive phase) for triple-lane arterials;
+  - right-turn arrows.
+
+## ADR-0110 — Road signs in 3D: one face layout rasterized into cached atlas pages, on posts and gantries
+
+**Context.** ADR-0107 planned the island's signs and drew their faces on an SVG sheet. Glenn asked
+whether they would be "built and cached offline". The street-name blades were lettered at load
+time.
+
+**Decision** (`world/road_sign_build.h`).
+- **One layout, rasterized.** `rasterizeSignFace` draws the same `SignFace` the SVG sheet draws:
+  - rounded panel, border ring, exit tab, text via the sign font, route shield, arrows, disc;
+  - everything is 3×3 supersampled at 64 px/m.
+- **Cached by content.** `bakeRoadSignAtlas` shelf-packs the faces onto 2048² pages, keyed by an FNV
+  hash of every face's content, the resolution and a layout version. The key is written to
+  `cache/road_signs/roadsigns_<key>_<n>.png` plus a slot table. A level with the same signs reads the
+  pages back instead of lettering them. Bump the layout version when `layoutSign` changes.
+- **Structures** (`buildRoadSignMeshes`), grouped in 400 m cells so draw distance culls them:
+  - **Roadside** signs stand on one post, or two under a panel wider than 1.6 m. A guide sign's
+    bottom is 2.1 m up; DO NOT ENTER and WRONG WAY stand at 1.5 m.
+  - **Overhead** signs hang 5.6 m over the road from a gantry: two uprights either side of the
+    carriageway and a double truss.
+  - Each panel has a steel backing plate behind it and its tab.
+- **Reading direction:** a face's u runs along `cross(forward, up)`, the reader's right in the world,
+  so lettering never comes out mirrored whatever the plan's handedness.
+- **Faces are alpha-cut** (`FLAG_ALPHA_TEST`): the rounded corners, and the air beside an exit tab.
+  Without it the tab's row rendered as a black band across the panel's width.
+- **Level entity** `shape:"road_signs"` takes `signs` inline or a `file` (the `signs.json` that
+  `city_plan island-cities` now writes), with `carriageHalf` and `drawDistance`.
+- **Test level:** `assets/levels/sign_yard.json` has one sign of each kind in a row on flat ground.
+
+**Consequences.**
+- The sign yard bakes 10 faces onto one page in 0.3 s the first time, then loads them from cache.
+- Tested: the cache round-trips (same key, slots and pages), and a panel's texture runs to its
+  reader's right with its face toward them.
+- **Not yet:**
+  - signs in a real level: the island's 3D build, and signs for a lanes scene's own freeway;
+  - retroreflection at night;
+  - the street-name blades moving to the same cache.
+
+## ADR-0111 — Island transit on the map; every place keeps a way onto the freeway
+
+**Context.** Glenn asked for "bus routes in local regions. Maybe a bus to go between towns?", and to
+plan it on the map before 3D. Building it exposed that one town, Ivycombe, had no interchange at all.
+Its only link's diamond had been refused, so the link was dropped, and the town was cut off from the
+island.
+
+**Decision.**
+1. **Local lines** come from the city sim's own `BusNetwork`, run on each place's street graph: four
+   loops of 14 stops in a city, one of 8 in a town. Routes are derived, not authored, as in the sim.
+2. **Intercity lines** (`planIntercityBuses`) run between places' centres over the island's roads.
+   A centre is the street node nearest the middle of the place's core blocks.
+   - **X1 Island Ring** calls at every place round the freeway, into each on its link road and
+     streets and back out.
+   - **X2 Over the Pass** runs city to city by Route 2, with a stop at the summit.
+   - **X3 Mountain Shuttle** climbs Route 3 from the place whose interchange is nearest its foot.
+   - Street legs are routed on the place's nav graph (`findRouteBetween`).
+3. **Interchanges are searched for, per place.**
+   - The pass and the mountain road get theirs first.
+   - Then each place's candidate links are tried one at a time, shortest first, until the place has
+     its share (a city three, a town one). Roads already served are passed in as obstacles.
+     Submitting all candidates at once made them block one another's ramps: 10 of 44 were built,
+     with 13 refused as "over a street".
+   - Last, any place still without an interchange is retried with the spacing relaxed to 400 m.
+     A cut-off town is worse than two close interchanges.
+   - `linkCityToFreeway` now proposes more candidates (6 for a city, 4 for a town) than will be kept.
+4. **Two bugs found on the way:**
+   - An interchange's crossing point was taken as the road point whose freeway STATION matched. A
+     point high up the mountain road projected onto the same station a kilometre away, which put the
+     shuttle's interchange on the mountain. It is now the road point nearest the freeway point at
+     that station.
+   - Keep-outs were grouped per STREET. The pass crosses the freeway twice, and its two diamonds were
+     averaged into one in the middle of the island whose reach blocked 20 km of freeway. That is what
+     had refused Ivycombe. They are now per diamond.
+- **The map** has a bus layer: local loops as thin lines, intercity lines bold and dashed, stops as
+  dots, each with its name and stop names on hover.
+
+**Consequences.**
+- Island 8: 12 diamonds, and every place has at least one. X1 calls at all 8 places, X2 runs
+  Saltwood–Dunwyn, X3 runs Coldwell–Marlwick, plus 14 local lines.
+- **Not yet:** the sim running these intercity lines (it has one regional route type, for towns
+  joined by freeway), timetables, and stop shelters on the island.
+
+## ADR-0112 — The island in 3D: one lanes scene, a window to iterate on, and a lanes builder that scales
+
+**Context.** The level loader wires one lanes city's terrain, lots, deck, nav and road graph (ordinal
+0 only), so the island is ONE lanes scene, as metro_planned's city, towns and loop are. The first
+full build of that scene was 3,866 edges and 14,592 lanes. It took 40 minutes, then over an hour of
+validation, and found real road faults. Glenn: "I wonder if we should start breaking roads up and tile
+large builds? … multi process building" and "if we could break this up maybe we could save on
+iteration time."
+
+**Decision.**
+1. **The scene** (`world/island_scene.h`, `islandLanesScene`; `city_plan island-cities SEED OUT
+   --level NAME [--template L] [--window X Z HALF]`). It writes the lanes scene, the level (terrain,
+   sea, entities, hubs, spawn, from a template's sim, lighting and vehicle blocks) and the sign plan.
+   - Every place's streets, from `planToLanesScene`, ids prefixed per place.
+   - The freeway as two carriageways offset 12 m from its route, each split into two chains at the
+     point farthest from any gore. It runs at grade, with FLOORS only where a road passes under it
+     (8.2 m) and at short river crossings.
+   - Ramps as `diamondRamps` wrote them, re-anchored to the chain holding their gore and emitted last
+     (an edge may only name edges before it).
+   - The pass and mountain road in a new "mountain" class (the rural section at 15%), links as
+     collectors.
+   - One terrain grid over the island at 20 m, with no relief of its own.
+   - **A window** keeps only a square: place edges reaching into it, island roads and freeway clipped
+     to it, ramps whose roads survive. The Saltwood window (4.4 km) builds in 80 s. It is the first
+     step toward building the island in tiles.
+2. **The lanes builder scales.** Each fix finds the same answers faster:
+   - **Crossing meets cached** (`crossingMeets`). Where roads meet does not change while their heights
+     are solved, so they are found once and every agree round re-levels only those. The profiles
+     stage went from 23 min to 6 on the whole island.
+   - **The cover pass uses prepared footprints** (`PreparedSet`): 9.5 min to 1 s in the window.
+   - **The surface-step audit uses the lane grid and prepared footprints.** It had scanned all 14,600
+     lanes for each of about 700,000 open deck edges, and taken most of an hour.
+   - **`DeckHeight::nearestLane` has a near-lane index**: lanes in 64 m cells, grown by the 60 m
+     search reach, tested in lane order. There are also `edgeFlags` overloads, and the audit reads a
+     sample's layer height once, not once per candidate.
+   - `LANELAB_DUMP_EDGE=<id>` prints an edge's solved profile against its ground; terrain timings are
+     split into sample, conform and deck check.
+3. **Road faults the first build found, and their fixes:**
+   - **Mountain roads were unbuildable** (the pass 35.8% and the mountain road 23.6% over 50 m). They
+     now route and grade on the island's height blurred over about 60 m (`IslandWorld::smoothAt`,
+     cut and fill as the builder will make it) at a 12–15% hard limit. The "mountain" class lets the
+     builder hold them: at rural 10% the pass rode a 2.5 km viaduct 45 m up.
+   - **River floors only on crossings.** A wet run over 200 m is a road beside the river; flooring
+     it at its highest water put the pass 110 m up.
+   - **Crossing roads end at the first street they meet** (a T), not at a junction further in; the
+     line between crossed streets and read as over- and underpasses.
+   - **Diamonds are sized against the deck as built** (the builder's own profile for the route, lifted
+     over each underpass). They had assumed ground + clearance everywhere.
+   - **A street ending on a street is a junction**, always levelled, never read as a grade separation
+     (`CrossingMeet::tee`); the clearance lift counts ends only where a freeway or ramp is involved.
+   - **A river bridge placed at an arterial's end CONTINUES the arterial** from that end. A separate
+     bridge beside it crossed the riverside street 5 m away, and the pair read as an overpass: a 10 m
+     junction mismatch.
+   - **Shaped plans collapse short junction CHAINS**, not only single 15 m samples, and a merged node
+     keeps the position of its widest road's node (an average put a kink in the arterial). Only
+     shaped plans for now; circle plans are unchanged.
+   - **A river's edge is set back 35 m in the depth field** (`LandShapeParams::waterSetback`), so the
+     riverside street stands about 80 m from the water, with a park strip between, and a bridge has
+     the approach its climb needs.
+
+**Consequences.**
+- The Saltwood window's validation went, over these fixes:
+
+  | Check | Before | After |
+  |---|---|---|
+  | Junction mismatch | 10.3 m | 31 cm |
+  | Deck cracks | 157 | 12 |
+  | Non-manifold edges | 26 | 0 |
+  | Surface steps | 143 | 1 |
+  | Lane adjacency | failing | passes |
+  | Under-covered lanes | 178 | 134 |
+  | Crossings short of clearance | 45 | 19 (three sharp-angle junctions) |
+
+- The window level loads in about 6.5 min (terrain pyramid 345 MB in 31.8 s, 199 signs on 2 atlas
+  pages) and runs at 45–74 FPS.
+- **Not yet:**
+  - **the window's edge** is a terrain cliff where its grid meets the level's ground: the seam
+    problem tiling must solve properly;
+  - the remaining under-covered lanes and sharp-angle junctions;
+  - the full island's build time after these fixes;
+  - tiling the meshing stages and streaming road and terrain tiles.
+
+## ADR-0113 — The editor and the viewer share the island: a ground key of what shapes it, a land-only blend baked to a grid, signs that survive a save
+
+**Context.** The editor re-baked Saltwood's 345 MB ground pyramid even though the viewer had just cached it. This happened because `bakedGroundKey` hashed the whole level (`root.dump()`). The editor hands the loader its own re-serialised copy of the same level, so the key differed and the cache missed. A lighting tweak rebuilt the ground the same way. Separately, a cached load of Saltwood still took about 65 s, and half of that was `erodedBase` sampling the analytic land-only blend per vertex.
+
+**Decision.**
+- The key hashes only what shapes the ground: the `terrain` block, the hydro tag, the lanes bundle key and every flatten polygon. The editor and the viewer now share the pyramid for the same level. A level that really does grade differently (other flattens) still gets its own bake.
+- When `erodeLandOnly` is on, `bakeErodedTerrain` bakes the blended height `a + (eroded - a)·w` onto the erosion grid, in parallel. `erodedBase` reads it bilinearly and samples analytically only outside the square.
+- `kBakedGroundCodeTag` is now `2026-09-25.1`, so each level rebakes once.
+- The same session's editor save dropped Saltwood's `road_signs` entity: the loader spawned the sign meshes with no `SourceSpec`, and `LevelWriter` saves only those. `road_signs` now gets a document entity, as `script` has, and the writer emits its keys flat (`{shape:"road_signs", file}`). The test `editor_save_keeps_the_road_signs_entity` loads and saves through the real paths.
+
+**Consequences.** Saltwood's cached load drops from 64.7 s to 32.7 s, and opening a level in the editor after the viewer no longer regenerates the ground.
+
+## ADR-0114 — Glenn's first drive of the island: freeway crossings, a pass that holds together, water that sits right
+
+**Context.** Glenn drove Saltwood (2026-09-25) and reported four problems:
+- the pass "literally crosses through two multilane freeways and onramps";
+- it is "broken when we get into the mountains";
+- lakes show "strange polygon spikes" from underneath;
+- "some of the rivers don't meet the ocean nicely and just stop near the edge".
+
+**Decision.**
+- **Freeway crossings are structure** (`Rules::freewaySeparates`, scene rule `freeway_separates`; on for the island scene, off by default). Where a freeway's centreline crosses a road that is not a ramp, the crossing is never levelled (`CrossingMeet::sep`, `mustSeparate`). The clearance lift then acts at any height difference. The road the scene floored over the crossing goes up, and otherwise the freeway does. The pass had risen to the freeway's height inside its own diamond, d0_0, and met both carriageways as a level junction. Authored scenes (freeway_cross, ring_city) cross streets at grade, so the rule is opt-in.
+- **The clearance lift clears the lower road's highest point under the deck**, sampled across the upper road's width, not the crossing centreline. The pass climbs 12% under the freeway, a metre across one carriageway: 8 new pairs were 0.5–0.9 m short. The diamond sizing (`island_world.cpp` tents) and the scene's freeway floors use the same rule: the highest ground within ±25 m along the road underneath.
+- **The window clip reaches 120 m past the window**, inside the 150 m of ground the window's grid adds. Saltwood's pass runs along the east edge, stepping 66 m out and back, and the clip cut it into three pieces with 100 m and 290 m gaps.
+- **Water vertices take their level from the nearest water.** A lake cell within three cells is searched; a lake beside the vertex wins, and otherwise the nearer of lake and river. With nothing near, every river segment is searched. The old fallback was the SEA's level: rounded lake outlines strayed past their cells, and those vertices dropped up to 513 m into the ground (5766 triangles spanned more than 4 m).
+- **Sea mouths carry their channel across the shelf.** A river into the sea continues along its last heading at sea level (`River::shelf`) until the floor is deeper than the channel, at most 600 m. The ocean covers that channel: its extent reads the carved ground there (`Hydrology::onShelf`). Rivers used to end at the first sea cell, on flats centimetres deep, so the river's water stopped in a rounded tip on a pale sand flat. `kHydroCarveCodeTag` is now `2026-09-25.shelf`.
+
+**Consequences.**
+- Saltwood window:
+  - the pass is one 4.4 km road under both carriageways;
+  - every freeway crossing clears its structure: 11 of 64 grade-separated pairs short, all city streets, where it was 19 of 48.
+- Link12's diamond (d0_3) is skewed, and its ramps are now further short: the on-ramp needs 169 m and has 70 m. It needs a rework.
+- The pass still bridges up to 25 m over gullies its smoothed route crossed.
+- Rivers falling off mountain lakes (river 8: 160 m in 200 m) remain tilted sheets until waterfalls are built.
+- Test: `island_water_surface_has_no_spikes` (no triangle spans 40 m; the steep count is reported).
+
+## ADR-0115 — Driving the pass: what a car hits, where it drives, and what stalls it
+
+**Context.** Glenn reported hitching while driving in the mountains, AI cars "don't drive in the middle of the lane", and "you drove into the lake". A camera walk (`walk_probe.py`) skips physics, the vehicle and the sim's reaction to a player, so `walk_probe.py --drive` now possesses a car at the first waypoint and `drive_to`s the last. On Saltwood's pass the car stopped dead three times before it reached the end.
+
+**What it hit, and the fixes.**
+- **A guide sign's posts in the pass's lane**, under the freeway. The sign plan places a sign from the road it serves and knew nothing of the roads beside it. `clearSignsOfPavement` (island_scene.h) tests every sign's posts, or a gantry's uprights, against every scene edge's pavement (lanes + shoulder + 0.5 m). A blocked sign takes the smallest clear move: along its road, backing up first, up to 60 m, and up to 6 m to either side. Otherwise it is dropped. Saltwood: 10 moved, 7 dropped.
+- **A freeway pier on the pass's edge line.** Piers were tested at their centre ±1.5 m against lane footprints, which do not include shoulders. They now test their 2.6 m square plus 1.5 m of clearance.
+- **Where AI cars drive.** The nav graph was built from the lot twin, whose street widths carry the lot clearance: shoulder plus the 1.5 m spine tolerance. The sim spreads a direction's lanes across half the link width, so a car on the pass drove 3.0 m off the centreline, where the lane centre is 1.75 m: on the shoulder, into the pier. Local streets were 0.75 m out, and arterials' outer lanes 1.25 m out. The SIM's graph now comes from `roadTwin(..., forNav=true)`: every edge at its travel lanes' width. The LOT pass keeps the old graph at the clearance widths (`CityProducts::lotNav`, bundle section `roads/lotnav`): it keeps buildings width/2 + clearance off each street, and a first cut that fed it the travel widths moved every lanes level's buildings in (metro 6965 → 7029 lots). `kLanesBuildTag` is now `2026-09-26.2` and `kLotsBuildTag` `2026-09-26.1`.
+- **The lake.** Lake 2 filled the lowest point of the range's spine, which the saddle search picked, so the pass ran along the lake bed 3.5 m under water. `IslandWorld::water` (the sea, or within 12 m of a lake, `Hydrology::inLake`) now blocks every island route, and the saddle is the lowest DRY point.
+
+**What stalled it.**
+- **357 ms and 116 ms fixed steps: one agent routing the whole graph.** `startWanderTrip` scans goals until a route does not reverse the agent's arrival. At a spot whose only other exit is a dead-end stub, every route reversed: 2313 A* searches in one call. After 16 reversing routes it now floods what lies ahead (any exit but the arrival, never back through the start) and searches only that, with the U-turn priced out (1e6). It gives up to the fallback after 64. A non-reversing goal is still found whenever one exists, which was what the rejected scan cap lost. A per-step departure budget (`kDeparturesPerStep` = 200; past it a departure reports Blocked and retries next tick) guards the other burst.
+- **60 ms fixed steps at the spawn: a full body pool.** Saltwood's load filled Jolt's 10240 bodies. The terrain collider under the spawn failed to add, and was rebuilt on the main thread every step, for eight steps. `MAX_BODIES` is now 65536; a full pool drops any body silently. `RT_COLLIDER_TRACE=1` logs each on-the-spot collider build.
+- Result: the pass drive went from p99 15.7 ms, max 361 ms, to p99 15.0 ms, max 25.7 ms, over 92k frames.
+
+**And the shelf channel (ADR-0114) is kept out of the plan.** Stored in `River::nodes`, it re-cut Saltwood's coastal blocks, and the city came back with 75 deck cracks instead of 19. It is now `River::shelf`: only the carve and the ocean's extent read it, and `isWet`, `distanceToRiver`, `corridorRings` and the water surface see the river as before.
+
+**Still open.** The pass is 2.7 km of bridge in its 4.2 km through the window: its 12% design grade bridges gullies the 60 m-blurred route smoothed over (Glenn: "some of that road should hug the ground"). There are no guardrails, and the rush-hour routing step is still 14–19 ms.
+
+## ADR-0116 — A mountain road cuts as well as fills
+
+**Context.** The through profile is the grade-limited envelope from ABOVE (`gradeLimit`: the max of two slope-limited sweeps). It fills and never cuts. On a mountainside, every rise steeper than the design grade lifts the deck, which then comes down only at the design grade. Saltwood's pass stood 5–25 m over the ground, with 2.7 km of its 4.2 km on piers (Glenn: "some of that road should hug the ground").
+
+**Decision.**
+- A class option `balance` (0 by default: every city's roads unchanged) blends the profile toward the envelope from BELOW (`-gradeLimit(-z)`, which never fills).
+- Both envelopes keep the design grade, so any blend does.
+- Floors (bridge holds, underpasses) are cleared again after the blend. Each is a design-grade cone, so the max keeps the grade too.
+- The island scene's "mountain" class sets 0.5.
+
+**Consequences.**
+- Saltwood's pass: bridge 2.7 → 1.5 km (pass8, 4.2 km).
+- The deck stays within ±11 m of the ground, and the cuts are carved by the terrain conform ("no terrain above any deck" holds).
+- The window's other invariants are unchanged.
+- Test: `lanes_a_balanced_profile_cuts_as_well_as_fills` (the tallest fill 20.8 → 12.0 m on a bumpy 10% climb; the grade is kept, the hold cleared).
+- Still open: fills over the 4 m bridge threshold are still piers. A mountain road on an 8 m embankment is normal, so a class fill allowance is the next step if the viaducts still read wrong.
+
+## ADR-0117 — Guardrails where there is somewhere to fall
+
+**Context.** Glenn: "the mountain road needs railguards at some places". Barriers were built only along freeway and ramp outlines (`parapetRuns`), since a street's edges are the lot pass's business, so the pass had none, on its bridges or above its drops.
+
+**Decision.**
+- Any class whose table AUTHORS a barrier joins the barrier outline.
+- `BarrierSpec::minDrop` (`min_drop`) builds a barrier only where the ground 5 m out falls at least that far below the deck.
+- The island's mountain class carries a guardrail when elevated (its bridges), and at grade where the drop is ≥ 2 m. It has none against streets, at seams or in a median.
+- A mouth stays open: "another road's pavement" is now any lane that is not freeway or ramp and not this road's own, so the pass's ends and the ramp terminals on it carry on.
+- The pass's bridges also get the box girder freeways have.
+- `kLanesBuildTag` is now `2026-09-26.3`. A cached bundle baked by older code under the same tag showed no rails at all: a deck-mesh code change needs the tag.
+
+**Consequences.** Saltwood's barrier outline grew from 24.3 to 34.6 km (both sides of the pass) and every lanes invariant is unchanged. Whether rails read right on the drops still needs looking at in the viewer.
+
+## ADR-0118 — The snowline wanders
+
+**Context.** Glenn: "the mountain snow line is very regular which makes it look odd". The ground cover put snow at the snow height ±15 m of 55 m noise. On island 8 (snow at 470 m) that is a contour line.
+
+**Decision.** The line is moved by three terms, all in proportion to the snow height S:
+- **Lobes:** fbm at ~800 m and ~170 m, ±0.14 S and ±0.06 S.
+- **Aspect:** lower by up to 0.13 S on faces tilted toward +z, away from the island's sun at (+x, −z), and higher on sunny faces, scaled by how much the face tilts.
+- **Tongues:** noise stretched along the fall line (~250 m long, ~22 m across) that drops the line by up to 0.09 S down gullies.
+
+The cover map takes the normal's horizontal part (`GroundCover::at(..., normalX, normalZ)`, `terrainColor`, `terrainSnowWeight`). The mesher and the flora placement pass it; a caller without it gets only the lobes. `kBakedGroundCodeTag` is now `2026-09-26.1`.
+
+## ADR-0119 — Lookouts on the mountain roads
+
+**Context.** Glenn: the mountain road should "be widened at other parts -- maybe a lookout over the city and mountain lakes".
+
+**Decision.**
+- `islandLanesScene` scores the pass and the mountain road every 20 m, skipping 300 m at each end and bends over 15° across 80 m.
+- The score is the drop on either side: the ground 80–400 m out below the road, where the first 15 m is not a cut bank rising above it. It is weighted by how squarely that side faces a town or a lake (200 m–6 km away).
+- Up to two lookouts a road, 1.2 km apart, with at least a 40 m drop.
+- Each becomes a lay-by: a 70 m `layby` pocket lane (20 m tapers in and out) on the valley side. The builder's forward lanes lie right of the path, so a view to the right is a forward pocket.
+- The pocket only widens the pavement (the sim routes on the road graph), and its outline carries the guardrail (ADR-0117) because the drop is what it is.
+
+**Consequences.** Saltwood's window has one lookout, on the pass at (-1407, 119), 345 m up, looking down the valley to Saltwood, the river and the sea. No invariant changed. Owed: a "Scenic lookout" sign, and a lookout on roads other than the pass and the mountain road.
+
+## ADR-0120 — Rock and snow at mountain scale
+
+**Context.** Glenn now wants the island "bordering on realism", with "better procedural texturing/materials for the rock surfaces and snow", and said "the mountains look lowpoly". The terrain layers sample a 4 m rock texture, which averages to one grey past a few hundred metres, and the ground is lit smooth with no relief. A distant mountain was its mesh triangles and one tone.
+
+**Decision (Vulkan `mesh.frag`, terrain layers only; no Metal counterpart exists).**
+- **Rock colour** (`rockStructure`): broad warm/cool patches of stone (~90 m), and dark water stains streaking straight down steep faces. Bedding bands (~7 m) show on cliffs only, in patches, faded once a pixel covers too much of a band. A first cut that banded every rock slope read as a contour map and aliased into scanlines.
+- **Relief:** rock gets a per-pixel crag normal from three octaves (~80, 22 and 6 m), each projected on the plane the face mostly lies in (triplanar weights) and faded by pixel footprint. Snow gets a soft wind ripple.
+- **Snow:** a faint cool tint on steep or hollow snow, and roughness 0.62, smoother than stone.
+- `terrainLayers` reports its rock and snow shares (`gTerrainRock`, `gTerrainSnow`) for the relief.
+
+**Consequences.** The rock faces break up in tone and small relief, and together with ADR-0118 the snow reads as snow lying on a mountain, not a cap. The big peaks still read as pyramids at a distance: that is the height field. The next step is geometry — ridged detail or erosion channels baked into the terrain's height — not shading.
+
+## ADR-0121 — River width by reach (written, not yet on)
+
+`HydroParams::widthVariation` (terrain `rivers.widthVariation`, 0 = off) widens a river where it runs flat (to ~1 + 0.7 v) and narrows it where it falls (to ~1 − 0.35 v). The gradient is read over ±60 m of its own levels, with a slow swell of pools along the course and a 40 m smoothing, for Glenn's "the rivers are too narrow and could be wider at parts".
+
+It is OFF for the island. At 0.6, with gentler banks (bankSteep 1.2, bankSlope 0.25), Saltwood's plan re-cut: interchange d0_0's ramps fell 200 m short, a link hit 14.5%, 94 more lanes lost deck cover, and pavement steps went from 8 to 36. The city and the interchanges have to follow river edges that move before the rivers can widen. That is the next step.
+
+## ADR-0122 — GPU erosion on Vulkan (the Linux twin of the Metal bake)
+
+**Context.** Glenn wants the terrain weathered much more finely and realistically, baked offline on the GPU (the compute-shader erosion threads he pointed at: Mei et al. 2007, Beyer's thesis, Sebastian Lague). The droplet sim (Beyer / Lague) had a Metal port (P0.5: fixed-point atomics, bit-deterministic, 2048² / 3M droplets in 1.08 s). On Linux, `erodeGpu` was a stub and the island eroded on the CPU at 1024². This is the first step: the GPU plumbing the finer, multi-process bake builds on.
+
+**Decision.**
+- `erosion_gpu_vk.cpp` implements the same seam (`erodeGpuAvailable` / `erodeGpu`). It has its own headless instance, device and compute queue; device-local buffers with a staging copy; and every dispatch in one command buffer with compute barriers between them, so dispatch order is data order.
+- `shaders/vulkan/erosion.comp` holds the Metal kernels in GLSL, one source compiled per kernel (`-DKERNEL_*`). It uses `roundEven` for the fixed point, so ± pairs still cancel.
+- Its cache tag is `vk-erosion-v1`: deterministic run to run, not bit-identical to Metal.
+- **Opt-in per terrain** (`"erodeGpu": true`, `ErosionParams::vulkan`). The GPU and CPU sims agree statistically, not bit for bit, and every Linux level so far was planned on CPU erosion, some of them by other sessions. Switching the default would quietly move their ground under their road plans. Metal keeps its automatic behaviour.
+
+**Consequences.**
+- On the RTX 3080: 1024² with 500k droplets in 59 ms, against 1137 ms on the CPU (19×).
+- Two runs are bit-identical, and the GPU and CPU agree statistically (the existing `test_erosion_gpu` cases, now run on Linux).
+- Next: the Mei et al. water-and-sediment ("pipe") model and thermal weathering as further kernels in the same context; a coarse-to-fine bake to ~2.5 m cells; and snow depth and material maps as outputs.
+
+## ADR-0123 — Water and sediment: the pipe model (Mei et al. 2007), first cut
+
+**Context.** Droplets (Beyer / Lague) carve drainage but hold no water: no lakes, pools or floodplains, and a river is as wide as the brush. Glenn wants rivers wider in places and terrain weathered more realistically. The thread he pointed at pairs the droplets with Mei, Decaudin & Hu, "Fast Hydraulic Erosion Simulation and Visualization on GPU" (PG 2007).
+
+**Decision.** `shaders/vulkan/erosion_water.comp` holds four kernels per step, run in the ADR-0122 context after the droplets and before thermal. Each kernel writes only its own cell (no atomics, deterministic):
+1. **FLUX:** each of four pipes accelerates with the water-surface drop to its neighbour, and all four are scaled down together so a cell never sends more water than it holds.
+2. **TRANSPORT:** sediment rides the same pipes at the cell's concentration, so mass is conserved exactly. A semi-Lagrangian fetch (the paper's) duplicated sediment where the flow converged and grew 500 m spikes.
+3. **WATER:** depth from net flow, velocity from the flow through the cell (CFL-capped), rain on land, the sea held at its level (a sink for water and sediment), evaporation. It records the slope and the neighbours' bed range.
+4. **ERODE:** capacity is Kc × tilt × speed × depth (up to a metre, so a film of rain on a hillside barely cuts); below it the bed is picked up, above it sediment settles. **Clamped to the neighbours' range**, so no cut goes below the lowest neighbour and no fill above the highest.
+
+Units are metres and seconds on the real cell size. Chunked submits (500 steps). `ErosionParams::waterSteps` (0 = off) and its constants. `tools/rt_erode` bakes a level's terrain with any settings and `tools/erosion_preview.py` renders it.
+
+**Consequences.**
+- river_valley, 1025² at 2.9 m, 20,000 steps: 5.5 s.
+- Braided channels, ponds, a lake with a branching delta, and valley floors widened into plains appear.
+- **Too much deposition:** valley floors fill flat, burying their relief.
+- Test: `erosion_gpu_water_collects_in_the_valley_and_stays_bounded`.
+- **Not used by any level yet.** Next: tune cut against fill; give the bed a hardness and the loose sediment its own layer, so channels stay incised; scale the droplet lifetime with resolution (at 3 m cells 32 steps only pits the surface); coarse-to-fine; a snow pass; and the maps (wetness, sediment) into the ground cover.
+
+## ADR-0124 — Erosion bake, second cut: a loose-sediment layer, breaching, eight pipes, coarse to fine
+
+**Context.** The first cut of the water model (ADR-0123) filled valleys flat, and the droplets pitted the ground at fine resolution.
+
+**What the next river_valley runs showed, and the fixes.**
+- **A loose-sediment layer** (after Šťava et al. 2008's layered materials). A `soil` buffer holds how much of the bed is deposited material. Water cuts it at the full rate and bedrock at `waterRockHardness` (0.15) of it, and deposits join it, so a river re-cuts its own floodplain instead of burying it.
+- **Breaching** (`breachDepth`; after Lindsay 2016, simplified). The noise relief is full of closed hollows, and the water filled every one flat with sediment. A priority flood from the map edge and the sea cuts every hollow shallower than `breachDepth` open along a 0.2% channel; deeper ones stay closed as lakes. It runs on the CPU between the droplets and the water. river_valley: 22–60k hollows opened, a connected drainage net, one real lake with a delta.
+- **Eight pipes.** With four, every rill and ridge lined up with the grid's axes: short horizontal and vertical dashes over the whole terrain. The diagonals (√2 longer, conducting less) make the flow close to isotropic. Flux is two vec4 a cell, and transport and the relief clamp use all eight neighbours.
+- **Coarse to fine** (`rt_erode --coarse-res`). The droplets' constants are tuned in grid units for ~10–20 m cells: at 2.9 m, a million of them pitted everything, cutting up to 130 m. They now run at the coarse resolution, their height change is added to the fine grid bilinearly, and breaching plus water run fine. `--lifetime-m` sets a droplet's life in metres.
+- **Remaining:**
+  - some residual axis streaks, probably from the upsampled coarse droplets;
+  - on a one-cell V bottom the central-difference slope sees only the down-valley fall, so the flow splits round a bar (the water test measures a band). Measuring the slope along the flow is the refinement.
+
+river_valley, 1025² at 2.9 m, coarse 257² droplets + 20k water steps: 8.8 s.
+
+## ADR-0125 — Mountains grown from uplift (stream power), not drawn with noise
+
+**Context.** Glenn asked what terrain erosion should start from. The noise relief's mountain layer (ridged noise and its own distortion) is where both the pyramid peaks and the combed striping come from, and no later erosion undid them: erosion sharpens what it is given. The literature's answer is to give erosion only the large structure and grow the rest.
+
+**Decision.**
+- **`stream_power.{h,cpp}`:** uplift against river incision, dh/dt = U − K·A^m·S (n = 1), solved as Braun & Willett 2013 (FastScape) and used for terrain by Cordonnier et al. 2016. Each iteration: uplift; a priority flood from the sea and edges that fills hollows with a tiny rise; receivers on the steepest of 8 neighbours; drainage area down the tree; an implicit sweep up it (stable at any time step); hillslope diffusion. An optional erodibility map multiplies K. The result is rescaled onto the level's land height range: the physics decides the shape, the level decides how high. It runs on the CPU (sequential down the tree): 1024², 250 iterations in 53 s.
+- **`rt_erode --stream-power N --sp-blur M`:**
+  - The **uplift** is the level's own terrain blurred over M metres (where the ranges are, none of the noise) over a base lift of all land, broken by two scales of noise. A smooth, symmetric uplift grew spurs as straight as a fishbone.
+  - The **start** is low and rough, since a smooth start drains straight downhill.
+  - **Erodibility** varies in patches (soft and hard rock).
+  - The fine grid is the grown one, upsampled **cubic** with a few metres of multi-scale roughness. Bilinear left every slope a plane, and rain on planes cut parallel one-cell rills along the grid.
+- **In the water model:**
+  - no cutting by water shallower than 5 cm (full strength at 60 cm), so only gathered water incises;
+  - **soil creep** (each step the bed moves 1e-4 toward its neighbours' mean) damps cell-scale rills;
+  - the sea floor builds to no closer than 1 m under the surface. Sediment arriving along the whole coast had grown a berm round the island.
+
+**Consequences.**
+- Island 8, 20 km, bakes in 3 min 45 s: stream power at 1024² (19.5 m), then breaching and 20,000 water steps at 4097² (4.9 m).
+- It reads like a real island range: a winding divide, irregular spurs and valleys to the sea, hills in the lowlands, a branching river net with floodplains and cut banks.
+- Test: `stream_power_grows_a_drained_relief_from_uplift`.
+- **Not in any level yet.** The ground is new, so every island city, road and interchange must be replanned on it. Hillslopes may now be too smooth (the threshold stops sheet-flow gullies), to judge in 3D.
+- Next: the pipeline into the engine (`erodedForTerrain` behind a terrain block, cached), a terrain-only island level to fly over, then snow and the material maps.
+
+## ADR-0126 — The weathered ground in the engine, keeping the level's shape
+
+**Context.** ADR-0125's pipeline lived in `tools/rt_erode`. Glenn, looking at the result: "I feel like we lose some of the shape?" Stream power grows a narrow divide over wide, low, hilly foothills. That is real, but it is not the island the level drew, whose broad mountain mass and flat coastal plains (where the cities stand) were gone.
+
+**Decision.**
+- **`procgen/terrain_weather.{h,cpp}`:** `weatherTerrain` runs grow → keep the shape → cubic plus roughness onto the fine grid → breach, water and thermal. `weatheredTerrainCached` bakes it once into `cache/terrain/weather_<hash>.bin`, keyed on the terrain block and `kWeatherCodeTag`. `erodedForTerrain` returns it when a terrain has a `"weather"` block (with `"erode": true`), so the loader, hydrology and planner all see the same ground. `rt_erode --stream-power` now calls the engine function: one implementation.
+- **Keeping the shape:** final = low(original) + (grown − low(grown)), split at `shapeScale` (1.5 km). The original's broad masses and plateaus stay; the physics supplies the ridges, spurs and valleys.
+- **The grown structure fades out on low ground:** none below `plainHeight` (15 m) above the sea, all of it `reliefRamp` (120 m) higher. Coastal plains stay flat, as real alluvium and as the ground the cities need.
+
+**Consequences.** Island 8 keeps its outline, its elongated mass and its plains, and its mountains become a branching range. No level uses a `weather` block yet. Next: a terrain-only island level to fly over, then snow and the material maps.
+
+## ADR-0127 — Separate summits, and refining the grown ground level by level
+
+**Context.** Glenn, on the ADR-0126 ground: "The heights of those mountains look fairly regular though. I like the ridges though." Then: "It's still flat and the mountains seem to have no detail. The beach is weird looking… a ton of long stretch marks." Three findings:
+- The kept envelope of the level's range is one broad ridge of one height. Massif noise only rippled that wall: the crest's spread moved from 161 m to 181 m.
+- The beach marks: blurred over 1.5 km, the shore sank under the sea. The land-stays-land clamp then pinned a flat strip at sea + 0.5 m, and the water pass combed it into grid-straight channels.
+- Rock detail added before the water pass (70 m of ridged noise) did not survive. With 6 k steps, 20 k steps, and 7× harder rock the result was identical, so the water's erosion was not the cause. The depression breach was: noise detail is full of closed hollows, and the breach fills or cuts every one.
+
+Glenn then pointed at Josh's Channel, "Better Mountain Generators That Aren't Perlin Noise or Erosion": a DLA ridge tree refined by upscaling and blurring at each level, and IQ's derivative-damped fBm.
+
+**Decision.**
+- **Peaks** (`"peaks": {height, spacing, uplift}`): one candidate summit per jittered `spacing` cell, kept where the range is high. Each is a pointed cone of its own reach. Heights are skewed low: a few big summits over many lesser ones. The cones lift the grow's uplift, so rivers radiate from the summits, and they lift the kept envelope. The grown relief is fuller under them. Island 8's crest spread went from 157 m to 237 m, and its high point from 970 m to 1296 m.
+- **The plains keep the original itself,** not its low-pass. That removed the flat strip and the beach marks.
+- **Refine** (`"refine": {detail, roughness, wavelength, slopeDamp, incise, iterations}`) replaces "cubic, then noise, then breach and water". Level 0 is the grown grid; each later level doubles it (1024 → 2048 → 4096 here). Per level:
+  1. **Upscale:** bilinear, then a binomial blur, so the ground is smooth at every scale (the video's point).
+  2. **Detail** at 8 cells' wavelength, with amplitude proportional to cell^0.8: half ridged, half plain gradient noise, domain-warped. It is damped by 1/(1 + k|∇h|²) (IQ) and faded by height above the plains.
+  3. **Drain:** a few stream-power steps with no uplift and no rescale, so the new detail becomes gullies and spurs that drain instead of pits.
+  4. **Blur again:** the drained channels follow the grid's 8 directions, and the blur softens them.
+
+  The grown grid is the ridge tree (DLA's role); each level branches it further. `streamPowerErode` gains `areaOut` (drainage area), which is kept for the material maps.
+- The island's `weather.water` is off (0 steps, no breach, no thermal); `weatherTerrain` skips the GPU stage when there is nothing to run. `rt_erode` reads the level's `weather` block.
+
+**Consequences.** Branching gullies at 150, 80 and 40 m, crisp ridges, and summits of unlike height. Glenn: "I like that craggliness!" The bake takes about 3 minutes (grow 52 s, refine about 2 min on the CPU). The level's river hydrology runs on this ground. Still owed: material maps (drainage, scree, sediment, snow) into the ground cover, rock and snow shading, rocks and forests, and the city clearing them.
+
+## ADR-0128 — The ground's maps drive its cover; SSAO fades with distance
+
+**Context.** On the ADR-0127 ground the cover was height bands plus slope, so the whole range read as bare dark rock. Everything distant was also striped with soft vertical columns.
+
+**Decision.**
+- **`procgen/terrain_maps.{h,cpp}`:** from the weathered grid, `computeTerrainMaps` derives:
+  - **wet:** log drainage area, from one routing pass of the stream-power solver with K = 0;
+  - **scree:** moderate slopes within ~35 m of ground steeper than 40°;
+  - **soil:** gentle and concave ground holds it; steep and convex ground sheds it;
+  - **convex:** curvature at ~15 m.
+
+  They are stored at half resolution in 8 bits and cached as `cache/terrain/maps_<hash>.bin`. `weatheredMapsFor(terrainBlock)` hands them to `GroundCoverParams::maps` (`readTerrainParams`, only for an eroded terrain with a `weather` block).
+- **`GroundCover::at` with maps:**
+  - rock where soil cannot stay (the slope threshold shifts with soil; up high, thin soil is enough to bare it);
+  - dirt from scree below cliffs and washed gravel down the steeper channels;
+  - meadow in the hollows;
+  - the snowline drops in gullies and hollows and rises on ridges and spurs.
+
+  Without maps the cover is unchanged.
+- **Retuning the cover's palette no longer rebakes the ground:** `groundCover`, `cdlod` and `material` are left out of the weather cache key.
+- **The stripes were SSAO.** Past a few hundred metres the ~1 m kernel is under a pixel. The depth test then reads its own precision, and the interleaved-gradient rotation printed columns that were multiplied into the haze. Occlusion now fades out between 120 and 350 m. Stripe energy in a hazy test crop fell from 1.41 to 0.46. The cloud march's sun jitter also moved from IGN to a hash; that same IGN structure had been the first suspect.
+
+**Consequences.** Alpine meadows between rock ribs, scree fans, snow in couloirs. Distant ground reads clean through the haze. Dirt stands in for scree (one texture serves both); a grey gravel layer is left for later.
+
+## ADR-0129 — Real trees and island-scale forests: models near, impostors far, crossfaded
+
+**Context.** Glenn: "some more realistic trees over the landscape. Forests with many trees as well", and that it must walk in real time. The existing trees are stylized (`stylized_tree`), or the old L-system trees he called "terrible". The scatter plants tens of thousands of instanced models with per-trunk colliders and cannot reach forest scale.
+
+**Decision.**
+- **`procgen/real_tree.{h,cpp}`:** six species built the way production foliage is: a bark skeleton of tapered tubes (`MeshBuilder::tube`) and foliage as alpha-cut cards carrying a painted spray.
+  - **Spruce and fir:** whorls every half metre, with drooping, upturned branches; a flat and a hanging spray card per step.
+  - **Pine, oak, beech and birch:** shell crowns. Points on an ellipsoid shell, limbs staggered up a continuing stem, twigs attached along the limbs that end inside their leaf clusters.
+  - **Crown-bent normals:** each card's normal points out from the crown's axis. Cards darken toward the crown's inside.
+  - **Foliage textures:** needle sprays, pine tufts, lobed, oval and deltoid leaves. Painted at 2× by a small canvas rasteriser, with colour dilated under the cut.
+  - **`renderImpostor`:** rasterises a tree on the CPU into side and top pictures.
+- **`procgen/forest.{h,cpp}` and the terrain's `"forest"` block:**
+  - **Density:** stands and clearings, soil and scree from the ADR-0128 maps, the shore, a wandering treeline, slope, and the cover's rock, sand and snow. It is sampled on a jittered grid, with the no-ground part tested first, so 743 k trees place in 2.5 s.
+  - **Species:** by altitude band, with a patchy field per species so stands form. Trees are stunted toward the treeline.
+  - **Keep-out:** roads, decks, the drawn road, flatten footprints and water.
+- **LOD:**
+  - Near: instanced per 512 m cell and variant.
+  - Far: every tree becomes two crossed side cards and a top card on one atlas, merged per 256 m cell (one draw per cell).
+  - **`RenderMaterial::FLAG_LOD_BAND`** (bit 19, features[3]) crossfades the two by a 4×4 Bayer screen-door over [near − fade, near].
+- **The alpha-cut shadow caster:** `mesh_shadow_alpha.{vert,frag}` and a pipeline with the material set. `FLAG_ALPHA_TEST` draws cut their shadow by the albedo alpha, so crowns cast dappled shade, not the rectangles of their cards. `allocMaterialSet` is factored out of the main pass.
+- **The forest floor:** `GroundCoverParams::forest` lays litter (the dirt layer) under the canopy (`forestCanopy`), and the grass field thins with it.
+- **The ground:** the refine's drain is masked by height (0.08 on the plains up to 1 in the mountains), which ends the slot canyons it sawed into the foothills. The maps' cache key folds the weather code tag.
+- **Tools:** `tools/rt_trees OUT` for the gallery.
+
+**Consequences.** Island 8 carries 430 k trees at coverage 0.48. A 1.6 km walk through the forest ran p50 15.7 ms and p99 19.1 ms with no hitches (VSync off, RTX 3080). The impostor vertices take 157 MB. Owed:
+- leaf translucency;
+- trunk colliders (streamed near the player; per-tree bodies do not scale);
+- more species (willow and alder by the water, maple, aspen, shrubs);
+- reeds and tall grass;
+- hiking trails;
+- city planning with the forest;
+- exposing the tree generator to Lua (the procedural-language rule).
+
+## ADR-0130 — More species, an understory, grass layers (tall grass, reeds), leaf translucency
+
+**Context.** Glenn: "a variety of tree types, grass, reeds, tall grass and plant them where appropriate. Also rocks and clearings." Also: "Do the trees have normals? Could we get light cast?"
+
+**Decision.**
+- **Five more species** in `real_tree`: maple (palmate), aspen (pale bark, small round leaves), willow (drooping sprays, long narrow leaves), alder (dark, toothed) and shrub (many stems from the ground, a low crown).
+- **`ForestSpecies::wet`:** an affinity for the maps' drainage. Willow and alder stand along the streams.
+- **`understory`:** species placed in a second pass (`understorySpacing`, `understoryDensity`) under thin canopy, thickest at half-covered edges. Understory is drawn near only, with no impostors.
+- **`GrassSystem` drives every `GrassField`:** a tile key's layer is field × 2 + (1 for its cards). The level's `"grassLayers"` adds fields, each with a `"where"`:
+  - `tall`: drifts on open ground, thickest at forest edges (the canopy's c·(1 − c));
+  - `reeds`: the hydrology's shore band (`shoreBand`) and wet flat hollows from the maps.
+
+  Mesh keys carry the layer's tag.
+- **Leaf transmission:** alpha-cut cards in a LOD band get grass's backlit term, gated by the shadow map. A crown against the sun glows at its sunlit rim.
+
+**Consequences.** 1.07 M plants on island 8, placed in 3.7 s. The same 1.6 km walk ran p50 14.0 ms and p99 19.8 ms with no hitches. The forest interior reads darker than a real wood; ambient under a canopy is owed. A few trees stand in the lake margin: the placement uses the hydrology's wet test, and the drawn water extends past it.
+
+## ADR-0131 — Rocks placed by the ground's maps; pebbly shores; more clearings
+
+**Context.** Glenn: "still would like to see scattered rocks and some clearings. Would help improve frame rate", and "where the rivers and lakes meet the ground. We should have some transition ... pebbly/dirt-like". A map-aware rock scatter through `loadVegetation` (1.2 M candidates, dart-throwing on one thread) never finished loading.
+
+**Decision.**
+- **Rock layers** in the terrain's forest block (`"rocks": [{family, stone, size, variants, ground, spacing, density, draw}]`). They are placed by the forest's parallel jittered grid (`placeRocks`), rejected by the maps before any ground sample, and built from the rock library (`stylizedRock`, one stone texture set per stone). They are instanced per cell with a draw distance per layer, and bedded and tilted (more on slopes).
+- **The `ground` rules:**
+  - `scree`: `maps.scree`;
+  - `outcrop`: convex, thin-soiled, rock cover;
+  - `field`: open soil, no canopy;
+  - `forest`: under the canopy;
+  - `beach`: sand cover;
+  - `shore`: the hydrology's shore band, with its own exclusion that allows the water margin.
+
+  `loadVegetation` species take the same `"ground"` key (maps + canopy) for small scatters.
+- **`Hydrology::shore(x, z, y, &waterline)`:** a river's margin by the bank distance and the height over its level; a lake's by the height over its level. `terrainColor` turns the band into the dirt layer (its gravel), with sand only in the thin wet strip. The meadow grass thins on it; reeds keep it.
+- **Coverage:** forest coverage 0.48 → 0.42, for more clearings. The island level's ambient 0.5 → 0.75 (the forest interior was black).
+
+**Consequences.** 452 k rocks and 628 k trees and shrubs, placed in 5.4 s; the level loads in about 11 s cached. Boulder fields sit below the crags, outcrops on the ribs, erratics in the meadows, pebbles along the water. Impostor vertices fell to 77 MB.
+
+## ADR-0132 — The island's cities planned on the weathered ground; the freeway as one loop
+
+**Context.** Glenn: "Do city plans first and then trails would be a new addition", and later: "the free ways don't connect to each other as one giant loop". The island planner planned on the seed's generated ground, not the weathered one.
+
+**Decision.**
+- **`city_plan island-cities SEED OUT --terrain LEVEL.json`** plans on that level's terrain block: the weathered ground, its rivers, its forest and cover. The generated level (`--level`) takes the nature level's `grass`, `grassLayers` and `lighting`, and keeps its ground cover.
+- **Flat plains again.** The refine's detail is zero on the plains and rises to a quarter on the low hills. A quarter everywhere had rolled the plains past the planner's 9 % buildable limit, and it found no sites at all.
+- **The freeway closes its loop:**
+  - it routes on the smoothed ground (`smoothAt`, as the mountain roads do), bridging and cutting the foothill gullies;
+  - a place's waypoint that lands in water or a city margin searches rings for open ground;
+  - a leg that finds no way widens its search box (1.4 → 2.8 → 4.5 km). The north coast's leg needed about 4 km.
+  - An unrouted leg is logged with its ends.
+
+**Consequences.** Island 8 on the weathered ground: Saltwood and Weyby, six coastal towns, the pass, and a 37 km freeway in one loop with 10 diamonds. `island_8_nature` is its 3D level.
+
+## ADR-0133 — Flowers, and plants in clumps
+
+**Context.** Glenn: "a variety of flowers ... a field of them somewhere in a forest too. Flowers and tall reeds along the shore of lakes and rivers too. Not like all along the river but scattered in clumps."
+
+**Decision.**
+- **`GrassClumpParams::flowers`:** stems carrying a head, `petals` petals in `flowerColor` round a brown-gold centre, tilted up.
+- **`"flowerColors"`** gives each variant of a grass layer its colour, so one layer is a mixed meadow.
+- **New `where` rules:**
+  - `flowers`: open-meadow patches;
+  - `clearing`: open here, with canopy all round (sampled 70 m off in four directions) — the flower field in a forest clearing;
+  - `shore`: the water's band, a step back from the edge.
+- **Reeds and shore flowers grow in CLUMPS:** a noise cut hard (`clumpScale`, `clumpCut`), so stands alternate with open bank.
+
+**Consequences.** Flower layers draw no far cards (the card texture has no heads); they end at about 80 m.
+
+## ADR-0134 — Hiking trails as texture
+
+**Context.** Glenn: "Dirt paths for hiking trails", "Trails should hopefully just generate some texturing", and "If you can connect footpaths without a problem do that."
+
+**Decision.**
+- **`planTrails(IslandWorld&)`** (after the places' limits exist) routes footpaths on the ground: 12 m cells, gentle preferred, steep allowed at a price so switchbacks form, never over water, one Chaikin pass. They connect:
+  - each place's TRAILHEAD (the edge of its limits facing the island's middle, 60 m out) to its two nearest destinations within 7 km: summits (the highest point in 1.6 km, above 350 m, 1.5 km apart) and lakes;
+  - neighbouring places by a coast path (legs under 9 km).
+- **`city_plan --level`** writes them into the terrain block as `"trails"`. The ground cover (`GroundCoverParams::trails`, a `TrailNetwork` segment index) lays bare earth about 1.5 m wide with a ragged edge. Trees stay 2.5 m off and rocks 1.5 m; the meadow grass thins on it. No ground is moved.
+- **The weather and maps caches ignore `trails`.**
+
+**Consequences.** Island 8: 22 trails, 118 km. The map draws them as a layer.
+
+## ADR-0135 — City feedback: sealed ground, the pass's ends, deck-to-street heights, the far city at night, whole clouds, a flashlight
+
+**Context.** Glenn, walking `island_8_nature`: "There's flowers everywhere!! In the city, it should be confined into the green spaces"; the 2-lane mountain road "crosses over itself and becomes a hot mess"; "in saltwood the mountain road in the air and doesn't connect to anything"; "cars get off the freeway and then sink into the ground and they appear"; "From a distance at night... LOD buildings are just white"; "there's still an issue with the clouds. I can see a break"; "We should give the player a flashlight as a 4th tool."
+
+**Decision.**
+- **Sealed ground:** every grass and flower layer skips the drawn roads (`DrawnRoad`, which includes sidewalks, freeways and ramps) and non-park building pads. Parks and green lots keep theirs.
+- **The pass:** `cutLoops` removes polyline self-crossings (in `finishRoad` and on the pass). The pass is still cut where it meets the freeway, but `joinPassToTowns` runs each cut end on into the nearest town's arterial. It used to stop on the freeway, and under a viaduct no interchange fit, so it ended in the air.
+- **Deck-to-street nav links:** a link with one absolute (deck) end and one ground-relative end was absolute as a whole, so cars lerped toward y = 0 and sank. `CityRenderSystem` gives the relative end the drawn ground's height.
+- **The far city at night:** the HLOD proxies' `NightGlow` was 1.0 (its own comment said 0.4) and drew as white slabs. It is now warm, at 0.16, with a night albedo of 0.08.
+- **Clouds:** the empty-ray early-out probed only 3 points, so small clouds fell between them and were cleared for some pixels, cutting clouds along hard lines. It now probes 8 jittered points.
+- **`FlashlightSystem`:** tool slot 4 toggles a warm spot from the camera, staged into `vehicleSpots` in `render()` (VehicleSystem rebuilds that list in its fixed step). On foot only.
+- **The island level** caps ambient traffic at 4000.
+
+**Consequences.** Regenerating `island_8_nature` changes its lanes scene (the pass), so its road bundle rebuilds on the next load (about 28 minutes, once).
+
+## ADR-0136 — One road-height convention: both forms resolved once, at load
+
+**Context.** A review of ADR-0135 found two readings of a nav link's height in use. An absolute (deck) link stored the carriageway's world Y, and the sim compared it against street cars' height above the ground. On a deck-to-street link that made a car at the ramp foot see street traffic tens of metres away, and the ramp-foot gate never met the street's. The ADR-0135 fix only patched the one end it could see.
+
+**Decision.** Every `NavLink` carries both forms at both ends:
+- `elevA/B`, the absolute Y on an absolute link, draws the car (`deckY`);
+- `aboveA/B`, the height above the ground, is what every same-level test compares (`Agent::elevation`, including on arrival).
+
+`buildNavGraph` fills `above` for relative ends (layer lift included). `kLayerClearance` moved to `nav_graph.h` for this. `CityRenderSystem`, which owns the ground, resolves the absolute ends at load. It also turns a mixed link's relative end absolute, so both of that link's ends are drawn in one form. The per-end deck flags stay as they are, and `elevAbsolute` still means "a deck".
+
+The same review corrected ADR-0135's flashlight: it now lives in its own per-frame `SceneLighting::toolSpots`, rebuilt in `render()`. Staging it in `vehicleSpots` stacked beams on frames with no fixed step.
+
+**Drawn deck under deck cars (Glenn, in game: "they do sink into the onramp a little bit").** A nav link knows only its two ends, and the straight line between them cuts under a ramp's vertical curves. `RoadDeckField::heightNear(x, z, margin, refY, window)` answers with the drawn surface closest to a height (pads, spines, bank included). `CityRenderSystem::deckSurfaceNear` asks it with the car's lerped deck Y and a 2 m window, well under a grade separation, so it never finds the street below or the freeway above. Deck cars and `deckYAt` sit on it, and deck cars take their pitch from it a wheelbase fore and aft. `heightAt` and `heightNear` share one enumeration of the surfaces (`surfacesAt`). The sim's own heights are unchanged.
+
+`heightNear` does not take the surface nearest `refY`. On island 8, ramp link 19802 runs 54 m in a straight line from 23.4 to 28.9 m, while the drawn ramp crests up to 1.46 m above that line. The ramp also overlaps the freeway it runs beside, and the freeway was the nearer height. The rule is: of the surfaces within 3 m of `refY` (never a stacked level), a junction pad, else the road the point is most inside (largest half-width minus distance). A 5-minute audit near the ramp (`ground? x z r` with `RT_GROUND_DUMP`, 109 ramp and freeway car samples) put the worst car at −1.33 m before and −0.07 m after, with none now past 0.1 m.
+
+**Consequences.** Headless sims (tests, citywalk) get exact heights for relative links. Their absolute links read 0 above ground until something with the ground resolves them, which is the old behaviour for decks.
+
+## ADR-0137 — Cars rest on their four wheels; the wheel lab
+
+**Context.** After ADR-0136, cars were placed by one surface sample at their centre. Cars on raised roads got pitch only; street cars got a four-point tilt. Glenn asked for the rule to be "make sure the 4 wheels are on the ground", and for a scene that tests it in isolation.
+
+**The scene.** `assets/levels/wheel_lab.json` is the lanes `ring_city` graph: a two-carriageway freeway loop, 8 ramps, arterial and local streets, two hills and a valley. It has 13 wandering drivers, one per fleet slot. `citysim.ambientBus` is a test-only switch that puts the bus in the ambient rotation, since a wandering driver never parks. The clock is held at noon and every car runs the full sim. The probe is `ground? 0 0 700` with `RT_GROUND_DUMP`, which now records each tyre's contact point against the surface under it (`carSurfaceAt`).
+
+**Decision.**
+- **Placement.** `agentPose` takes the fleet recipe's wheel set (`drawSlotFor`, `carWheels_`) and queries the surface under each contact patch. It fits a least-squares plane for pitch and roll, and after the tilt smoothing sets the height so the lowest tyre touches. None sinks; on a crest one tyre floats by the plane's residual.
+- **Picking the road** (`RoadDeckField::heightOn`). Prefer spines of the car's own nav class, then the one it is most inside, then a junction pad only within 1.5 m of that road. A deck car also keeps its 3 m window around its link's height; a street car goes by class alone.
+- **What this replaces.** The old centre rule's `groundAt` ("the lower layer wins") cannot separate a street from the overpass in a lanes scene, because both are layer 1. It drew street cars 8.6 m up on the freeway. A terrain-height reference failed in the valley, because the drawn road runs 3 m under the sampled terrain.
+- **A/B.** `RT_FOUR_WHEELS=0` restores the old placement.
+
+**Measured** (wheel lab, 1170 car samples each, the same traffic and measurement):
+
+| tyre gap to the road | old | four-wheel |
+|---|---|---|
+| worst 1% sunk | -0.118 m | -0.003 m |
+| worst 1% floating | +0.227 m | +0.051 m |
+| worst tyre | +8.65 m | +0.18 m |
+| cars more than 5 cm off | 3.8% | 1.1% |
+
+**Consequences.** Every drawn (K-tier) car costs about four surface queries per frame (not yet timed on the island). Physics cars (`physicalCars`) are unchanged; a hand-off between tiers now meets the same surface.
+
+## ADR-0138 — Fleet glass: opaque and reflective at large, clear near the player
+
+**Context.** Agent cars had "opaque windows" (Glenn). The fleet recipe merged dark-tinted glass into each slot's single opaque shell, to avoid a transparent pass for hundreds of instanced cars. Only the bus had clear glass and a cabin. The player's car, from the same `mesh.car` generator at LOD high, has both, so the two looked like different vehicles.
+
+**Decision.**
+- **Recipe.** Every fleet slot publishes its glass as a part. An ordinary car also publishes its cabin as a separate part and a driver seat. The bus (`see_into`) keeps its saloon in the shell, as before.
+- **Opaque glass.** The city draws each slot's glass as an opaque instanced group with a glass material: near-mirror smooth (roughness 0.03, metallic 0.15), sky-leaning over the mesh's own tint. It reads as glass and costs one opaque draw per slot, with no transparency.
+- **Near swap.** The 12 moving cars nearest the player (entering at 50 m, leaving at 58 m) draw the clear glass, their cabin and their driver instead, from the same body instance, so nothing pops. Buses (and later taxis and convertibles) are always see-through.
+
+**Consequences.** One more instanced group per slot, plus the cabin and clear groups, which are only filled for up to 12 cars. `fleet_bus_is_a_bus_you_can_see_into` now asserts the new contract.
+
+## ADR-0139 — The polymesh kit: hard-surface modelling in the engine
+
+**Context.** Glenn asked for more realistic vehicles, built by the engine and not imported. His question: "how can we better generate car meshes that aren't just cubes on wheels? Are there meshing techniques or operations ... some kind of geometry node set". `mesh.car` sweeps one profile scaled along the car; each new shape needed C++. Glenn also asked whether the tools are general purpose, for example the objects in a café. They are.
+
+**Decision.** `procgen/polymesh.{h,cpp}` is an editable polygon mesh (faces with a group, a material and a colour; edges with a crease sharpness) plus the operations a box-modeller uses:
+- `roundedPolygon` and `loft`: a body from different rounded cross-sections. Every corner emits `segs + 1` points, so sections correspond and a recipe can index faces by corner.
+- `extrude`: region extrude, with side walls.
+- `inset`: per face.
+- `creaseBorder` / `creaseFaces`.
+- `mirrorX`: with a welded seam.
+- `subdivide`: Catmull-Clark with sharp, semi-sharp and corner creases. The level is the LOD.
+- selection helpers, `isClosed` and `signedVolume`.
+- `toParts`: one RenderMesh per material, in the engine's winding, with angle-limited smoothing, box UVs and tangents.
+
+Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the poly object:
+- editing: `select` (group, mat, box, normal, `where`), `extrude`, `inset`, `assign`, `crease_*`, `mirror_x`, `subdivide`;
+- shaping and copying: `map`, `copy`, `append`, `translate`, `scale`;
+- queries and output: `closed`, `volume`, `bounds`, `to_parts`.
+
+`assets/scripts/vehicle_kit.lua` is the first recipe library: a body is one loft of ten-corner sections shaped by profile curves, with glass and lamps set in behind trim reveals. `assets/levels/fleet_gallery.json` shows the bodies.
+
+**Consequences.**
+- The kit is general hard-surface modelling; nothing in it is car-specific.
+- Tests cover closure and volume through every op, crease behaviour and engine winding.
+- Blender-built kitbash assets stay an option for later (Glenn), not this path.
+
+## ADR-0140 — Fleet v2: faceted kit bodies in traffic, placement by surface, interiors
+
+**Context.** ADR-0139's kit produced subdivided bodies. Glenn preferred the bus's low-poly look ("maybe we should stick with the faceted look"), wanted the new bodies in traffic, the lamps visible ("either build the lights into the chassis or nudge the lights ... something with a shape grammar to define where parts go?") and interiors.
+
+**Decision.**
+- **Faceted by default.** Bodies build at cage level and flat-shade, at 1.4k–3.7k triangles each. Arch stations sit every 15° round each semicircle, so the arches read as curves. Subdivision stays available per spec (`P.level`).
+- **Traffic.** `vehicles.lua` `kit_car` builds the 12 car and truck slots from `vehicle_kit.lua`. The mesh.car bus keeps slot 13, and the old fleet is kept as `vehicle.classic`. Semis wait for articulated trailers.
+- **Placement grammar.**
+  - `poly:raycast` finds a surface and its normal on the finished body.
+  - `kit.attach` casts a part onto it, orients the part to the normal and sinks it a set depth.
+  - Lamp lenses and their city markers are placed this way (a guess from the profile curves buried them).
+- **Interiors (`kit.interior`).**
+  - A liner: the cabin's own sheet metal, copied 4 cm inward and flipped (`poly:extract`).
+  - A floor, bucket seats and an optional bench, from real hip-point proportions (upright in trucks).
+  - A dashboard with an instrument hood, a steering wheel on a column, and a console.
+  - The driver's seat point comes from the seats. The near swap now shows kit cars' cabins. The open convertible is see-into like the bus.
+- **Quality gates.**
+  - `test_vehicle_kit`: every body is closed, within budget and sliver-free.
+  - The fleet contract tests: four lamp markers on the body, round wheels, see-into only for the bus and the convertible.
+  - The wheel-lab tyre probe with the new fleet: 98.7% of cars within 5 cm.
+
+## ADR-0141 — Player driving: a chase camera that holds at speed, real drivetrains, an off-roader
+
+**Context.** Glenn: "the car once it hits a certain acceleration on the freeway begins to lag behind", and he wanted "offroad vehicles -- 2 wheel drive, 4 wheel drive". A background agent measured the causes.
+- **The chase spring.** It trailed by speed × 0.12 s, and its teleport test compared the raw feed with that trail, so past ~165 km/h it snapped 3–4 times a second.
+- **The gearbox and drag.** Jolt's default gearbox cut the drive for ~1.3 s per upshift, a 3.5 s stall at 105–115 km/h. Linear body damping stood in for aero drag.
+- **The drivetrain.** Every car was AWD, with differentials paired in wheel declaration order.
+
+**Decision.**
+- **Camera.**
+  - A teleport is the raw feed jumping between calls.
+  - Velocity feed-forward (the goal leads by the low-passed velocity × (smoothTime − dt/2)) removes the steady trail.
+  - The chase rig is evaluated in `CameraSystem::render()`, after the frame's fixed steps.
+  - Measured at 180 km/h: no snaps, mean trail under 1.5 cm (it was ~6 m), at 30/60/144 fps.
+- **Drivetrain.**
+  - One differential per driven axle, and a front/rear split (`frontDriveShare`).
+  - With one driven axle the centre coupling runs open. Jolt's default 1.4 between-differentials limited slip otherwise hands all torque to the slower axle, and a "2WD" car drove as a 4x4.
+  - `setVehicleFrontDriveShare` switches at runtime.
+  - Measured on 18° at friction 0.35, from rest: RWD +0.6 m, FWD −7.9 m, 4WD +30.6 m.
+- **Aero and gearbox.**
+  - `dragArea` (quadratic; 2.0 m² for a sedan, ~205 km/h top) replaces the linear damping.
+  - Quick configurable shifts: 50–110 km/h went from 5.1 s to 3.2 s.
+  - The player's `from_class` cars get both.
+- **Spec fields.** `drive` ("fwd" | "rwd" | "awd" | "4wd", part-time), `front_share`, `axle_lsd`, `center_lsd`, `drag_area`, the shift timings, `gear_ratios`, and `suspension` { min, max, freq, damp, rest_drop }.
+- **The off-roader** (`vehicle.offroad`, #41). A kit body (lifted, 0.96 m tyres, roof rack, skid plate) on long soft travel (0.40 m at 1.3 Hz), near-locking differentials, sticky tyres and low gears. It is part-time 4WD: Z / D-pad down engages it. The wheel lab parks one beside a street sedan.
+
+- **Between the axles, Jolt's limited slip hurts a climb.** It sends ALL torque to the slower axle past its ratio, which flips the drive back and forth. Measured on 30° dirt: a 1.10 centre stalls (−0.8 m), 1.4 reaches +14 m, and an open centre (a fixed 50/50 split) reaches +28 m.
+  - The off-roader runs it open (`center_lsd = 1e30`, a fixed 50/50 split) with near-locking axles (1.15), plus the traction split below.
+  - Street AWD cars keep Jolt's 1.4, which their kerb and roll tuning assumes (the driving-lab and slanted-kerb gates caught the change).
+- **The off-road course** (`tools/offroad_course.py` → `assets/levels/offroad_course.json`) has:
+  - hill ladders on grip (15–35°) and mud (10–30°);
+  - ledges from 0.2 to 0.5 m;
+  - a rock garden, an axle twister, logs and a mud flat;
+  - the off-roader and a street sedan at the start.
+- **What it measures** (`offroader_climbs_what_the_course_asks_in_four_wheel_drive`): the off-roader in 4WD climbs 30° dirt and 20° mud, and neither in 2WD. It crawls every ledge up to 0.5 m, because the cylinder wheel cast rides an edge.
+
+- **The car picker** (Glenn: "cycle through all of them ... it should tell me if the car is 2WD or 4WD").
+  - `vehicle.drivable` in vehicles.lua is the catalogue: 13 cars. Every kit body is drivable with a fitting drivetrain (sedan, hatchback and taxi FWD; convertible, step van and box truck RWD; SUV AWD; jeep, pickup and off-roader part-time 4WD), plus the classic sedan, pickup and van.
+  - `-` / `=` pick (first shipped on `,` / `.`, the sim slower/faster keys: picking ran the world at 8x; the boot log now warns of any key clash), N drops the pick in front of the player, Z switches a part-time 4x4. A panel names the pick and its drivetrain, and flashes the mode on a switch.
+  - `car_picker_catalogue_builds_and_says_the_true_drivetrain` checks that every entry builds and that its label matches its physics.
+
+- **Stuck on rocks in 4WD** (Glenn's first drive: "if I go over slabs and rocks even with 4WD I get stuck. I thought the idea was that I didn't"). Two causes, both needed:
+  - The course: 53 of the 90 boulders stood over 0.8 m (up to 1.35), walls no truck climbs. They now stand 0.15–0.55 m, up to a wheel's radius.
+  - The collision: the chassis was the whole-vehicle box, carved 0.22 m, so its floor rode 14 cm under the drawn belly and its square bumper edge sat a full overhang ahead of the tyres. `VehicleConfig::approachDegrees` / `departureDegrees` now cut the nose and tail as a convex hull, and the kit drivables put the collision floor at the body's ground clearance (`floor_clearance`, never under 0.22). The off-roader is cut at 42° / 36°, the jeep 38° / 32°, the pickup 28° / 24°; street cars keep the box.
+  - A/B over four lanes of the course (`offroader_drives_the_course_ledges_rocks_and_twister_in_four_wheel_drive`, the real `vehicle.offroad` spec on the level's geometry): the old underside got through 0 lanes, the new one 4.
+- **Run-ups test momentum, not traction.** From 12 m back even 2WD crested 30° of mud. Each hill now has a stop line at its foot, and each mud hill a mud apron (a 2WD truck's rear tyres gripped the dirt until it was most of the way up). From the line: 4WD climbs every mud rung to 30°, 2WD stalls from 25°; 35° dirt is past the limit and decided at the crest.
+- **A hanging axle starved the grounded one** (Glenn: "two wheels down (front) and they're not moving in 4wd mode ... if I try to reverse they don't spin"). With a plain fixed split, the pair in the air spins up, the engine hits its limiter and cuts its torque, and the grounded pair sits at 0 rad/s (reproduced: rear axle over a hole).
+  - A near-locked Jolt centre (1.1) drives the grounded pair, but it is all-or-nothing between the axles and lost the 30° dirt climb (+4.5 of 6 m).
+  - `VehicleConfig::tractionSplit` (spec `traction_split`) instead keeps the fixed split and, each step in 4WD, hands an axle with no tyre on the ground its torque to the axle that has one, as a transfer case would. Grounded pair driven (106 / 58 rad/s); the endless-slope climbs all improved (30° dirt +19 m, 25° dirt +42 m against +32 in 2WD). The off-roader, jeep and pickup have it.
+  - `offroader_with_an_axle_hanging_still_drives_the_wheels_on_the_ground` asserts the spin, not an escape: in that rig the tail drops below the hole's lip and wedges against its wall, a winch job (T recovers).
+- **High-centred on a log** (Glenn, read live over the control channel: parked at z −160.26 across the 0.56 m log). The logs ran to 0.66 m against a 0.42 m belly. The body rested on the log, the rear tyres hung, and the fronts touched with no load: they spun both ways and the truck moved 0.00 m (reproduced at his spot). A tyre pushes only as hard as it is pressed down, so no drivetrain helps there. The logs are now 0.25–0.40 m, and the lane test runs through them (full throttle, and a crawl).
+- **Every car can roll** (Glenn: "how come I can't flip my car? ... if I go off a ramp with half my wheels on it I should be able to flip my vehicle", then "rolling over should be allowed for active drivers, everyone. That's what would happen in reality"). ADR-0087's 65° roll cone held every car at exactly 65° off a one-side kicker at any speed, and stopped shot cars going over. `VehicleConfig::maxPitchRollDegrees` now defaults to 180 (off); a recipe can still set `max_roll_deg`, and the ADR-0087 handling tests keep their own 65.
+  - Off a 25° kicker under one track: the off-roader reaches 97° at 40 km/h, 108° at 60, its roof at 80; the sedan goes onto its side (91°) (`cars_can_roll_over_off_a_half_ramp`).
+  - The cone is not what kept cars upright in ordinary driving. Without it, full lock held from 40 to 120 km/h leans the drivable cars 2–3° (the off-roader 5–7°), and nothing goes over on the slanted kerb at 65 or a 29 km/h sideways kerb trip (`drivable_cars_probe_cornering_roll_prints`). Through the real keys, the sedan turning at 70–94 km/h leans 2.3°. T rights a rolled car.
+- **Brakes and turning, measured** (Glenn: "the brakes are really soft and the turn radius feels really wide"; `drivable_cars_probe_brakes_and_turning_prints`, the real specs through the keyboard steering assist):
+  - 100–0 km/h on Space took 48–54 m (a real car ~36–40). Equal torque on all four locked the lightly loaded rears at once. `VehicleConfig::brakeFrontBias` (0.68) now gives the front two-thirds: 45–51 m.
+  - S is reverse throttle, not a brake. On AWD cars it stops as well as Space; on the 2WD kit cars it takes 79–101 m.
+  - The rest of the gap is tyre grip. The longitudinal curve is Jolt's default (1.2 peak) while the lateral runs at `lateralGrip` 2.0, so a car corners at ~1.3 g and brakes at ~0.85 g. Matching them stops in 35–43 m, but makes the course's mud (μ 0.35) grippy enough for 2WD: left for Glenn to choose.
+  - An ABS lengthened stops (77–192 m): Jolt's locked tyre keeps 83% of its peak, so easing the brake gives away more than it saves. Removed.
+  - The turn radius is not wide: 5 m at walking pace (a real sedan ~5.5), 15–18 m at 50 km/h and 38–42 m at 80, about 1.3 g, tighter than a real car's ~0.9 g.
+- **Probes that drive:** `hold <Key> <seconds>` holds a key through the real input path, and `vehicle?` reports the player's car (km/h, rpm, gear, 2wd/4wd, position, sim speed).
+
+**Consequences.** `test_city_phys_tier` (`maxPossessed >= 6`) fails on the island-nature base too, so it predates this work.
+
+## ADR-0142 — Sim speed: shown on screen, set from the debug menu
+
+**Context.** Glenn: "if I use . or , it goes really slowly", then "we need some onscreen UI popup for gamespeed slow/fast... so that I know what's going on. I wonder if that should be something living in the debug menu itself and not on the keyboard." The speed was `,` (half) and `.` (double) on the keyboard, shown only in the log. The car picker had already shipped on the same keys and run the world at 8x (ADR-0141). DevControlSystem also re-applied its own copy of the speed every frame, overwriting the control channel's `sim speed`.
+
+**Decision.**
+- **Shown.** Whenever the world is not at real time, DevControlSystem draws it: a large notice at centre screen for 2.5 s of real time after any change ("SIM SLOW 1/2x", "SIM FAST 2x", "PAUSED"), then a small badge top right for as long as it lasts. Blue is slow, red fast, amber paused.
+- **Set from the debug menu.** The overlay (`` ` ``) has a Sim speed row at the top: 1/4x, 1/2x, 1x, 2x, 4x, and Pause/Resume.
+- **Off the keyboard.** `sim_slower` / `sim_faster` are unbound by default; `bind.sim_slower` / `bind.sim_faster` in settings bring them back. `0` (real time) and Enter (pause) stay.
+- **The clock is the one record of the speed.** The menu, the keys and the control channel all set `SimClock`; DevControlSystem reads it back instead of keeping its own copy.
+
+**Consequences.** `,` and `.` are free. A slow or fast world can no longer pass unnoticed.
+
+## ADR-0143 — Island load: from 10.5 minutes to under a minute, and the population cached
+
+**Context.** Glenn: "is it going to take me 28 min to load that city?", "it's taking a while to load", and "could we assign the job and home for each agent offline and save/load that information? That seems to be persistent gameplay data." Measured on island_8_nature with the city bundle warm: the level loaded in 103 s, and the first frame came at 634 s. The 28 minutes were a cold cache (the city build 793 s and lots 124 s, both cached after the first load).
+
+**Decision.** Profile by stack sampling (eu-stack / gdb on the main thread), then take the largest cost, and check each step gives the same answers:
+- **"There and back?" is a component test.** `CitySim::assignPlaces` and `CitySim::build` ran two A* searches per candidate home/work pair (up to 24 candidates for each of 28,000 agents). Each failed search on an island of separate street networks floods everything reachable. `engine::stronglyConnected` (iterative Tarjan, findRoute's link rules) answers every pair from one linear pass; the errand stop (work → shop → home, with home ↔ work) closes a cycle, so it is a component test too. Place nodes are looked up once. Verified: 33,012 random pairs agree with findRoute; the island's startup report is identical. Playable 634 s → 117 s.
+- **Pads clipped to the blocks they touch.** `clipPadsToBlocks` cut all 12,856 lot pads against the union of every inset block (built block by block, quadratically): about half of the level load. The inset blocks are now kept as pieces with bounds (disjoint and hole-free, so Clipper's NonZero clip treats the list as their union), and each pad is cut against the pieces its bounds touch. A test compares it with the old algorithm: 245 pads each way, the same heights and areas. Level 103 → 40 s; playable → 61 s.
+- **The population cache.** What `assignPlaces` decides for every agent (home, job, errand stop, doors, role, archetype, hours, commute, starting pose) and its commute statistics, written to `cache/population/<key>.pop`. The key is an FNV hash of everything `assignPlaces` reads: the nav graph (nodes, links with width, class, walkability), every place (with its hours), each agent's state before assignment (uid, brain, archetype, mode, speed, jittered hours, bus and taxi), the bus network, the shares, and a format number. Venues and relationships are cheap derivations, recomputed on every load. `RT_NOCACHE` turns it off, and `RT_POPULATION_VERIFY=1` decides anyway and compares. `assignPlaces` 5.5 s → 0.14 s; island playable in 53 s.
+- **It is a cache, not a bake stage.** A bundle producer runs over the level's input files, but the population needs the nav graph, the places and the fleet, which exist only after the level has loaded. Like the terrain pyramid and the sign atlas, it is built on the first load after a change and read after that; the first load pays about 5 s once.
+
+**Verified.** `population_read_from_the_cache_is_the_population_decided`: 500 agents, 0 fields differ, identical statistics, identical positions after 30 simulated seconds; a changed shop's hours misses; VERIFY finds 0 differences. On island_8_nature: VERIFY reports 0 of 28,000 records differ.
+
+**Consequences.** A save game (persistent people who can change job or home in play) layers over this baseline. It needs stable agent identity across regeneration, which a hash-keyed cache does not give. What remains of the ~53 s: forest rock placement (~7 s), blocks from road holes (~7 s), physics mesh shapes (~6 s), the rest of the city sim start (~7 s), drawn roads (~4 s); each is deterministic and cacheable the same way.

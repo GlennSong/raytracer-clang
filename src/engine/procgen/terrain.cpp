@@ -1,4 +1,6 @@
 #include "terrain.h"
+#include "ground_cover.h"
+#include "hydrology.h"
 #include "../mesh_builder.h"
 #include "lsystem.h"
 #include "skeleton.h"
@@ -7,6 +9,7 @@
 #include "../../curve.h"
 
 #include <algorithm>
+#include <thread>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -212,12 +215,58 @@ void bakeErodedTerrain(TerrainParams& params, const Noise& noise, double worldSi
     const double half = worldSize * 0.5;
     const double margin = std::max(1.0, worldSize * 0.06);   // feather band width
     HeightField analyticCopy = analytic;                     // both closures share `base`
+    const double sea = params.erodeLandOnly && params.seaLevel > -1e29 ? params.seaLevel : -1e30;
+    if (sea > -1e29) {
+        // LAND ONLY, BAKED: the blend below needs the analytic relief at every sample (to know how near the
+        // sea it is), and evaluating that noise stack per sample cost far more than the eroded grid it
+        // blends -- a 1 m ground pyramid of the island spent minutes in it. So the blend is evaluated ONCE
+        // per eroded-grid node and the result sampled bilinearly, like the eroded grid itself (same
+        // resolution: nothing finer than the grid is lost). Beyond the square it is still the analytic relief.
+        const int n = std::max(2, res) + 1;
+        const double step = worldSize / (n - 1);
+        auto grid = std::make_shared<std::vector<float>>(static_cast<std::size_t>(n) * n);
+        std::vector<std::thread> workers;
+        const unsigned nt = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+        for (unsigned t = 0; t < nt; ++t)
+            workers.emplace_back([&, t] {
+                for (int j = static_cast<int>(t); j < n; j += static_cast<int>(nt))
+                    for (int i = 0; i < n; ++i) {
+                        const double x = -half + i * step, z = -half + j * step;
+                        const double a = analyticCopy(x, z);
+                        double w = 1.0;
+                        if (a < sea + 2.0) w *= clamp01((a - (sea - 4.0)) / 6.0);
+                        (*grid)[static_cast<std::size_t>(j) * n + i] = static_cast<float>(a + (eroded(x, z) - a) * w);
+                    }
+            });
+        for (auto& th : workers) th.join();
+        params.erodedBase = std::make_shared<const std::function<double(double, double)>>(
+            [grid, n, step, analyticCopy, half, margin](double x, double z) {
+                const double wx = clamp01((half - std::fabs(x)) / margin);
+                const double wz = clamp01((half - std::fabs(z)) / margin);
+                const double w = wx < wz ? wx : wz;
+                if (w <= 0.0) return analyticCopy(x, z);
+                const double fx = std::clamp((x + half) / step, 0.0, n - 1.001), fz = std::clamp((z + half) / step, 0.0, n - 1.001);
+                const int i = static_cast<int>(fx), j = static_cast<int>(fz);
+                const double u = fx - i, v = fz - j;
+                auto H = [&](int a, int b) { return static_cast<double>((*grid)[static_cast<std::size_t>(b) * n + a]); };
+                const double baked = (H(i, j) * (1 - u) + H(i + 1, j) * u) * (1 - v) + (H(i, j + 1) * (1 - u) + H(i + 1, j + 1) * u) * v;
+                if (w >= 1.0) return baked;
+                const double a = analyticCopy(x, z);   // the feather band at the square's edge only
+                return a + (baked - a) * w;
+            });
+        return;
+    }
     params.erodedBase = std::make_shared<const std::function<double(double, double)>>(
-        [eroded, analyticCopy, half, margin](double x, double z) {
+        [eroded, analyticCopy, half, margin, sea](double x, double z) {
             double wx = clamp01((half - std::fabs(x)) / margin);
             double wz = clamp01((half - std::fabs(z)) / margin);
             double w = wx < wz ? wx : wz;                    // 0 at/outside edge, 1 inside
             if (w <= 0.0) return analyticCopy(x, z);
+            if (sea > -1e29) {   // land only: the raw relief below the sea, blended over the beach
+                const double a = analyticCopy(x, z);
+                if (a < sea + 2.0) w *= clamp01((a - (sea - 4.0)) / 6.0);
+                return a + (eroded(x, z) - a) * w;
+            }
             double a = analyticCopy(x, z);
             if (w >= 1.0) return eroded(x, z);
             return a + (eroded(x, z) - a) * w;
@@ -526,8 +575,31 @@ Vec3 terrainColor(double height, double normalUp, double noiseValue) {
                             noiseValue * 0.0, -1e30);
 }
 
+double terrainSnowWeight(double worldX, double worldZ, double height, double normalUp,
+                         const TerrainParams& params, double normalX, double normalZ) {
+    if (!params.cover || !params.coverWeights) return 0.0;
+    return params.cover->at(worldX, worldZ, height, normalUp, normalX, normalZ).snow;
+}
+
 Vec3 terrainColor(double worldX, double worldZ, double height, double normalUp,
-                  const Noise& noise, const TerrainParams& params) {
+                  const Noise& noise, const TerrainParams& params, double normalX, double normalZ) {
+    if (params.cover) {   // the ground-cover map: its colour, or its weights for the layered surface
+        const Cover c = params.cover->at(worldX, worldZ, height, normalUp, normalX, normalZ);
+        if (params.coverWeights && params.hydro) {
+            // THE SHORE (ADR-0131): pebbly earth along rivers and lakes, gravel (the sand layer) at the line
+            double line = 0.0;
+            const double band = params.hydro->shore(worldX, worldZ, height, &line);
+            if (band > 0.0) {
+                // mostly the pebbly earth (the dirt layer's gravel); sand only in the thin wet strip
+                double sd = std::max(c.sand, 0.6 * line), dt = std::max(c.dirt, band * (1.0 - 0.6 * line));
+                const double fixed = c.rock + c.snow;
+                const double tot = sd + dt + fixed;
+                if (tot > 1.0) { const double k = std::max(0.0, 1.0 - fixed) / std::max(1e-9, sd + dt); sd *= k; dt *= k; }
+                return Vec3(std::max(0.0, 1.0 - sd - dt - fixed), dt, sd);
+            }
+        }
+        return params.coverWeights ? Vec3(c.grass, c.dirt, c.sand) : c.colour;
+    }
     // Rich entry (the mesh bakers): sample noise at DIFFERENT frequencies per band
     // so the terrain textures like a layered field — big colour regions, a ragged
     // snowline, mottled stone, fine grain — instead of one frequency modulating
@@ -647,8 +719,37 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     return terrainHeight(params, noise, worldX, worldZ, 0.0);
 }
 
-double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
-                         double worldX, double worldZ) {
+double islandLand(const TerrainParams& params, const Noise& noise, double worldX, double worldZ) {
+    const TerrainParams::Island& I = params.island;
+    const double dx = worldX - I.cx, dz = worldZ - I.cz;
+    const double a = I.angleDeg * 3.14159265358979 / 180.0, ca = std::cos(a), sa = std::sin(a);
+    const double u = dx * ca + dz * sa, v = -dx * sa + dz * ca;   // along / across the island's axis
+    const double d = std::sqrt((u / (I.radius * I.aspect)) * (u / (I.radius * I.aspect)) + (v / I.radius) * (v / I.radius));
+    // the coast's bays and inlets: warped noise at a few kilometres, and a finer wobble
+    const double n = noise.warpedFbm2(worldX * I.coastScale + 17.3, worldZ * I.coastScale - 9.1, 0.6, 4);
+    double land = (1.0 - d) + I.coastNoise * n;
+    if (I.penDeg > -1e8) {   // the peninsula: a lobe from the coast out along penDeg
+        const double pa = I.penDeg * 3.14159265358979 / 180.0, pc = std::cos(pa), ps = std::sin(pa);
+        const double along = dx * pc + dz * ps, lat = -dx * ps + dz * pc;
+        // where the main outline's coast is along that bearing (the ellipse radius in that direction)
+        const double eu = pc * ca + ps * sa, ev = -pc * sa + ps * ca;
+        const double rCoast = 1.0 / std::sqrt((eu / (I.radius * I.aspect)) * (eu / (I.radius * I.aspect)) + (ev / I.radius) * (ev / I.radius));
+        const double t = (along - rCoast * 0.75) / I.penLength;   // 0 inland of the coast .. 1 at its tip
+        // the lobe carries its own shelf: its land field is the lobe's height where it stands, and
+        // falls to the open sea's (-0.12) away from it -- a Gaussian never reaches zero, and a lobe of
+        // "barely land" to either side read as a sand bar across the whole sea
+        const double taper = 1.0 - smoothstep(0.55, 1.1, t);
+        const double w = I.penWidth * (0.55 + 0.45 * taper);
+        const double e = taper * smoothstep(-0.3, 0.05, t) * std::exp(-(lat / w) * (lat / w));
+        const double lobe = (0.26 + 0.1 * noise.noise2(along * 0.0015, 3.3)) * e - 0.12 * (1.0 - e);
+        land = std::max(land, lobe);
+    }
+    return land;
+}
+
+namespace {
+// the ordinary relief layers: fbm, tilt, mountains, the range, the ridge network
+double reliefHeight(const TerrainParams& params, const Noise& noise, double worldX, double worldZ) {
     double nx = worldX * params.noiseScale;
     double nz = worldZ * params.noiseScale;
     double h = params.warp > 0.0
@@ -736,6 +837,33 @@ double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
 
     return h;
 }
+}  // namespace
+
+double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
+                         double worldX, double worldZ) {
+    if (params.island.on) {
+        // the relief of an island: the ordinary layers below, rising only on land
+        const double relief = reliefHeight(params, noise, worldX, worldZ);
+        const TerrainParams::Island& I = params.island;
+        const double land = islandLand(params, noise, worldX, worldZ);
+        if (land <= 0.0)   // the sea: a shelf falling away from the coast
+            return -I.shelfDepth * smoothstep(0.0, 0.12, -land) - 0.6 + 0.6 * noise.noise2(worldX * 0.01, worldZ * 0.01);
+        double h = I.plainHeight * smoothstep(0.0, 0.16, land) + relief * smoothstep(0.02, 0.32, land);
+        if (I.cliffHeight > 0.0) {   // the cliff coast: a plateau right to the edge, then the drop
+            double ang = std::atan2(worldZ - I.cz, worldX - I.cx) * 180.0 / 3.14159265358979;
+            double from = I.cliffFromDeg, to = I.cliffToDeg;
+            if (to < from) to += 360.0;
+            if (ang < from) ang += 360.0;
+            const double into = std::min(ang - from, to - ang);   // degrees inside the sector (negative: outside)
+            if (into > -8.0) {
+                const double sector = smoothstep(-8.0, 6.0, into);
+                h += I.cliffHeight * sector * smoothstep(0.0, 0.006, land) * (0.85 + 0.15 * noise.noise2(worldX * 0.004, worldZ * 0.004));
+            }
+        }
+        return h;
+    }
+    return reliefHeight(params, noise, worldX, worldZ);
+}
 
 double terrainHeight(const TerrainParams& params, const Noise& noise,
                      double worldX, double worldZ, double flattenDilate) {
@@ -743,6 +871,8 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
     // placement all get natural drainage), else the raw analytic relief.
     double h = params.erodedBase ? (*params.erodedBase)(worldX, worldZ)
                                  : terrainBaseHeight(params, noise, worldX, worldZ);
+    // The rivers' channels (procgen/hydrology.h): cut, never raised.
+    if (params.hydro) h = params.hydro->carve(worldX, worldZ, h);
     // The earthwork field (procgen/earthwork.h): the ground reshaped to carry
     // the road network, ADDED to the relief so its detail survives. The stamps
     // below then have centimetres to absorb, not metres.
@@ -759,6 +889,21 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
             h = applyFlatten(params.flatten, worldX, worldZ, h, flattenDilate);
     }
     return h;
+}
+
+double terrainGridSurfaceHeight(const TerrainParams& params, const Noise& noise, double x, double z,
+                                double origin, double step) {
+    const double gx = (x - origin) / step, gz = (z - origin) / step;
+    const double i = std::floor(gx), j = std::floor(gz);
+    const double fx = gx - i, fz = gz - j;
+    const double x0 = origin + i * step, z0 = origin + j * step;
+    const double ha = terrainHeight(params, noise, x0, z0), hd = terrainHeight(params, noise, x0 + step, z0 + step);
+    if (fx >= fz) {   // triangle a, b, d
+        const double hb = terrainHeight(params, noise, x0 + step, z0);
+        return ha + (hb - ha) * fx + (hd - hb) * fz;
+    }
+    const double hc = terrainHeight(params, noise, x0, z0 + step);   // triangle a, d, c
+    return ha + (hc - ha) * fz + (hd - hc) * fx;
 }
 
 RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
@@ -791,7 +936,7 @@ RenderMesh generateTerrain(const TerrainParams& params, const Noise& noise) {
     // noise term varies it). The shader multiplies these with the material.
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise, params);
+                               v.normal.y, noise, params, v.normal.x, v.normal.z);
     }
     return mesh;
 }
@@ -831,7 +976,7 @@ RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
     MeshBuilder::generatePlanarUVs(mesh, /*axis=*/1, /*scale=*/1.0f / (outerHalf * 2.0f));
     for (Vertex& v : mesh.vertices) {
         v.color = terrainColor(v.position.x, v.position.z, v.position.y,
-                               v.normal.y, noise, params);
+                               v.normal.y, noise, params, v.normal.x, v.normal.z);
     }
     return mesh;
 }
@@ -899,7 +1044,7 @@ std::vector<TerrainChunk> generateTerrainChunks(const TerrainParams& params,
                     // World-continuous UVs (tile across the whole world).
                     v.u = static_cast<float>(x / chunkSize);
                     v.v = static_cast<float>(z / chunkSize);
-                    v.color = terrainColor(x, z, y, v.normal.y, noise, params);
+                    v.color = terrainColor(x, z, y, v.normal.y, noise, params, v.normal.x, v.normal.z);
                     mesh.vertices.push_back(v);
                 }
             }

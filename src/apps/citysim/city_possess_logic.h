@@ -29,10 +29,17 @@ struct PossessCmd {
         WalkTo,      // "walkto x z"
         Stop,        // "stop" — hold the brakes / stand still
         Release,     // "release" — detach brain + camera
+        Direct,      // "direct on|off" — hold the goal layer off this agent
+        Board,       // "board [x z]" — get into the nearest free car
+        Alight,      // "alight" — get out again, on the kerb
+        Ride,        // "ride x z" — take the bus there
+        Enter,       // "enter" — go inside the place you are standing at
+        Exit,        // "exit" — come back out
         Invalid,     // unparseable: status carries the reason
     };
     Kind kind = Kind::None;
     bool hasPos = false;   // Car/Walker: optional spawn point supplied
+    bool on = false;       // Direct: on|off
     Real x = 0, z = 0;
     std::string error;     // Invalid: what was wrong (surfaced in status)
 };
@@ -61,6 +68,33 @@ inline PossessCmd parsePossessCmd(const std::string& line) {
         }
         return cmd;
     }
+    if (word == "direct") {
+        std::string sw;
+        if (!(in >> sw) || (sw != "on" && sw != "off")) {
+            cmd.kind = PossessCmd::Kind::Invalid;
+            cmd.error = "direct needs on|off";
+            return cmd;
+        }
+        cmd.kind = PossessCmd::Kind::Direct;
+        cmd.on = sw == "on";
+        return cmd;
+    }
+    if (word == "board") {
+        cmd.kind = PossessCmd::Kind::Board;
+        twoNumbers(/*required=*/false);   // optional: which car, by where it is
+        return cmd;
+    }
+    if (word == "alight") { cmd.kind = PossessCmd::Kind::Alight; return cmd; }
+    if (word == "ride") {
+        cmd.kind = PossessCmd::Kind::Ride;
+        if (!twoNumbers(/*required=*/true)) {
+            cmd.kind = PossessCmd::Kind::Invalid;
+            cmd.error = "ride needs <x> <z>";
+        }
+        return cmd;
+    }
+    if (word == "enter") { cmd.kind = PossessCmd::Kind::Enter; return cmd; }
+    if (word == "exit") { cmd.kind = PossessCmd::Kind::Exit; return cmd; }
     if (word == "stop") { cmd.kind = PossessCmd::Kind::Stop; return cmd; }
     if (word == "release") { cmd.kind = PossessCmd::Kind::Release; return cmd; }
     cmd.kind = PossessCmd::Kind::Invalid;

@@ -103,3 +103,61 @@ being used. One row per capability; the "used by" column is the audit trail.
 | Interior mapping `RenderMaterial::FLAG_INTERIOR_MAP` + `bakeRoomAtlas` | `renderer/renderer.h`; `shaders/vulkan/mesh.frag`; `engine/level_loader.cpp` | lit panes (`PartId::GlassLit`) in every facade tier | a virtual room behind a flat pane with parallax, from a baked 2×2 room atlas in the albedo slot; the faked tier of the windows plan; Metal owed |
 | Clear lobby glass `PartId::GlassClear` | `procgen/city/shape_grammar.cpp` (`appendGlassParts`, the ground-storey loop) | enterable buildings' ground storeys at Full detail | the real tier: outer and inner panes transparent, the lobby visible from the street |
 | Static instancing `InstanceGroup` | `engine/components.h:152` | vegetation, lamps, signals | candidate for repeated typical floors and beacon shells; instances are static, no per-instance culling |
+
+## Procedural vocabulary: textures, shapes, materials (ADR-0098, 2026-09-24)
+
+Opened late. The flora work first shipped private copies of noise, cells, RNGs and icospheres, because
+this ledger and ADR-0042/0043 were not checked first. Glenn's rule since: content is recipes over this
+vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one recipe.
+
+| Capability | Where | Used by | Why / why not |
+|---|---|---|---|
+| 2D fields + combinators + bakes (gray / colour / normal / RGBA) | `procgen/texture_field.h` (ADR-0042/0043) | terrain layers, stone textures, Lua `texture.*` | the texture language. `fieldNoise` / `fieldFbm` do NOT tile; use `fieldTile*` |
+| Tileable fields: tile noise / fbm, cells, cell edges, cell id, bands, warp | `procgen/texture_field.h` | `ground_layers.cpp`, `material_recipes.cpp` | added 2026-09-24 from the terrain layers' private code |
+| Blades: `fieldBlades` (mask) / `fieldBladeTone` (per-blade tone) | `procgen/texture_field.h` | `grassCardTexture` | tapered, curving, tile across u; reeds and fur are the other readers |
+| Colour fields + `bakeFieldRGBA` (sRGB rgb, height in alpha) | `procgen/texture_field.h` | terrain layers, stones | feature albedo maps are sRGB (the shader decodes) |
+| Bake cache `bakeCached(key, bake)` → `cache/fields/` | `procgen/texture_field.h` | every recipe bake | the recipe string carries the version; replaced `cache/terrain_layers` |
+| Material recipes: stone (granite, sandstone, basalt) | `procgen/material_recipes.h` | rock library | add new material texture sets here |
+| Shape kit: icosphere, displaceNoise, cutByPlane, facet, leanNormals, deform, colorBy, tube, crossCards, vertex / triFacing | `mesh_builder.h` / `mesh_shapes.cpp` | stylized trees, rocks, grass; Lua `mesh.*` | organic/mineral forms; `leanNormals` is the "one soft volume" trick |
+| Seeded stream `ProcRng` | `procgen/proc_rng.h` | flora generators | do not add another private `Rng` (city/district.cpp's predates it) |
+| Winding `MeshBuilder::emitTri` / `triFacing` | `mesh_builder.h` | everything | front face = `dot(cross(c-a, b-a), n) >= 0` |
+| Material features: triplanar, per-instance variation, top layer | `RenderMaterial` fields + `mesh.frag` (ADR-0098) | rocks | off at 0; Vulkan only (Metal owed) |
+| Terrain layers (height-blended, cover weights in vertex colour) | `Surface::TerrainLayers`, `procgen/ground_layers.h` | levels with `groundCover` | Metal owed |
+| Ground cover (weights + biome) | `procgen/ground_cover.h` | terrain colour, grass density, species `biome` / `cover` | the one answer to "what is the ground here" |
+| Stylized recipes: trees (11 shapes), rocks (4 families × 4 stones), grass clumps + far-field cards | `procgen/stylized_tree.h`, `stylized_rock.h`, `grass.h`; Lua `stylized.*` | vegetation species `stylized` / `stylized_rock`, `GrassSystem` | recipes over the kit; custom topology left: pine tiers, palm fronds (a ribbon word would absorb them) |
+| Legacy flora: parametric L-system trees, turtle trees, SDF rocks | `procgen/tree.h`, `lsystem.h`, `rock.h`; `flora.lua` | older levels | kept; the stylized recipes are the BotW direction |
+| Instanced drawing | Vulkan `drawMeshInstanced` (ADR-0097) | `InstanceGroup` (vegetation, grass, city groups) | one draw per visible set; `RT_NO_INSTANCING=1` for A/B |
+| Water polygon (rivers + lakes, one mesh) | `Hydrology::waterMesh` (ADR-0099) on lanes `geom2d` union + CDT | `level_loader` hydro water | clipped by `waterMeshCells` so it meets the ocean edge to edge; `Surface::River` flow-map shading |
+| Grade-limited terrain routing (mountain roads, switchbacks) | `procgen/city/terrain_route.h` `routeOnTerrain` (ADR-0103) | `plan_scene` `world.mountainRoads` | Galin 2010 A*, 32 directions, turn-priced states, earthwork-priced grade, self-spacing; trails and rail are the other readers |
+| Brief ground as numbers | `city_plan heights BRIEF [HALF STEP]` | placing mountain roads | plan coordinates |
+| Rivers in a city plan: bridges, cut-backs, block keep-out | `plan_scene` (world hydrology), `blocksFromHoles(..., water)`, `levelWaterKeepOut` (ADR-0104) | river_town | a bridge is a floor at water + 6 m; `Hydrology::corridorRings`, `distanceToRiver` (indexed, with level) |
+| An island world on the map: terrain, sites, ring freeway, pass, mountain road | `islandTerrainBlock`, `planIsland`, `writeIslandMap` (ADR-0105) | `city_plan island SEED OUT --variants N` | erosion on land only; rivers on the eroded ground |
+| A city shaped by its land: limits grown over buildable ground, laid out by depth | `plan/land_shape.h` (`growLandShape`, `contour`, `descendDepth`), `world.land.shape` in a brief (ADR-0106) | `city_plan island-cities 8 OUT` | coast pull; no ring on a shaped city; `world.land` alone trims a circle plan and opens its ring into a C (`ringArc`) |
+| Tighten + round a routed road (no spikes, no needless detours, corners to a radius) | `tightenRoute`, `roundRoute`, `measureRoute` in `terrain_route.h` (ADR-0106) | island roads (`finishRoad`) | string-pulling keeps switchbacks: their straight is too steep |
+| Island interchanges: diamonds where roads cross the freeway | `islandInterchanges` → `lanes::diamondRamps` (ADR-0106) | `city_plan island-cities` | freeway as one route (seam away from crossings); pass/mountain first; unserved links dropped |
+| A world map as layered SVG (vector roads/rivers/contours over an embedded relief image) | `writeIslandSvg`, `plan::isoLines` (ADR-0106) | `city_plan island-cities` → `island_<seed>.svg` | metres, north up; inkscape `--export-area` is in document px (0.1 px/m here) |
+| Place names from data (site-shaped: Port …, …ford, … Ridge) | `world/place_names.h`, `assets/data/places.json` (ADR-0107) | `city_plan island-cities` | deterministic per seed; routes/loop names in the same file |
+| Road sign plan + faces (exit, advance, gore, distance, route, entrance, do-not-enter, wrong-way, limit, trailblazer) | `world/road_signs.h` (`planIslandSigns`, `layoutSign`, `writeSignSheetSvg`) (ADR-0107) | `city_plan island-cities` → `signs.svg` | ring directions Inner/Outer Loop; plan L/R mirrored to world |
+| Text as vector outlines | `Font::svgPath` (text/font.h) | sign sheet | viewer-independent lettering |
+| Lane arrows painted per lane at junction approaches | `deck_mesh.cpp` paintSide, `assignLaneMoves` (ADR-0108) | any lanes scene (grid_city) | legs from edges leaving the box; pockets turn only; ≥2 lanes |
+| Road signs built in 3D (posts, gantries, faces from cached atlas pages) | `world/road_sign_build.h`, level `shape:"road_signs"` (ADR-0110) | `assets/levels/sign_yard.json` | cache/road_signs keyed by face content; faces alpha-cut |
+| Protected left turns (lead arrow phase) | `SignalController::stateFor/protectedLeft`, `CitySim::moveFor/signalFor` (ADR-0109) | any signalised arterial junction | ≥2-lane approaches opposed in a shared green |
+| The island as a lanes scene + level (and a window of it) | `world/island_scene.h`, `city_plan island-cities --level NAME [--window X Z HALF]` (ADR-0112) | `assets/levels/island_8_saltwood.json` | freeway floors at underpasses only; mountain class 15% |
+| Dump an edge's solved profile | `LANELAB_DUMP_EDGE=<id> lanes_tool build …` (ADR-0112) | any lanes scene | deck z vs ground every 50 m |
+| A baked ground shared by editor and viewer | `bakedGroundKey` hashes the terrain block + flattens only; land-only erosion blend baked to a grid (ADR-0113) | `island_8_saltwood` | cached load 32.7 s; first open after a code-tag bump rebakes |
+| A weathered island ground: grown by stream power, placed summits, refined level by level | `procgen/terrain_weather.{h,cpp}` `weatherTerrain` (ADR-0125/0126/0127); terrain `"weather"` block | `island_8_weathered`; `rt_erode LEVEL OUT --res 4096 --coarse-res 1024 --stream-power 250` | about 3 min bake, cached in `cache/terrain/weather_<hash>.bin`; `tools/erosion_preview.py` for pictures |
+| Island-scale forests: real trees near, impostor cards far, crossfaded | `procgen/real_tree.h`, `procgen/forest.h`, `loadForest` (ADR-0129); terrain `"forest"` block; `FLAG_LOD_BAND`; alpha-cut shadows | `island_8_weathered`; `rt_trees OUT` gallery | 430 k trees, placement ~2 s; walk p50 15.7 ms on the 3080 |
+| Ground maps drive the cover (wet, scree, soil, convexity) | `procgen/terrain_maps.h` (ADR-0128) | `island_8_weathered` | cached `cache/terrain/maps_<hash>.bin` |
+| Freeway crossings always grade-separated | scene rule `freeway_separates` (`Rules::freewaySeparates`, ADR-0114) | `island_8_saltwood` | off by default; the island scene sets it |
+| River mouths across the shelf; water levels from the nearest water | `River::shelf`, `Hydrology::onShelf`, `waterMesh` level choice (ADR-0114) | `island_8_saltwood`, `island_water_surface_has_no_spikes` | `RT_WATER_MOUTHS=1` / `RT_WATER_AT=x,z` print the ends and nearby water |
+| Drive a road, not a camera path | `tools/walk_probe.py LEVEL OUT --drive --path x,z:x,z [--min-ms 25]` (ADR-0115) | `island_8_saltwood` pass | possess car + drive_to; RT_DUMP_STATS names spike systems, RT_COLLIDER_TRACE the sync collider builds |
+| Where traffic sits vs the drawn road | `ground? x z` (drawn ground, decks, nearest nav link, cars within 15 m); `ground? x z r` with `RT_GROUND_DUMP=file` writes nav links, deck spines and every car within r (drawn bottom vs decks) as JSON (ADR-0136) | island_8_nature ramp at (-1140, -4095) | the car audit found the ramp sink; poll `ground?` for the reply |
+| How cars sit on the road, per tyre | `assets/levels/wheel_lab.json` (every fleet body wandering a freeway loop, ramps, streets, hills, a valley) + `ground? 0 0 700` dumps; `RT_FOUR_WHEELS=0` for the old placement (ADR-0137) | wheel_lab | about 4 min for 90 dumps; tyres within 5 cm on 98.9% of cars |
+| Signs and piers clear of other roads | `clearSignsOfPavement`, pier clearance square in lanes.cpp (ADR-0115) | `road_signs_never_stand_on_another_roads_pavement` | |
+| AI cars in the painted lane centre | `roadTwin(..., forNav=true)` feeds navRoadGraph (ADR-0115) | lanes levels | lot twin keeps its clearance band |
+| Mountain roads that cut as well as fill | class option `balance` (0..1) in lanes classes (ADR-0116) | island "mountain" class 0.5 | `lanes_a_balanced_profile_cuts_as_well_as_fills` |
+| Guardrails where the ground drops | class barrier `min_drop` (ADR-0117) | island "mountain" class | `parapetRuns` joins authored classes |
+| Lookout lay-bys | `islandLanesScene` lookouts -> `layby` pockets (ADR-0119) | Saltwood pass (-1407, 119) | |
+| Wandering snowline; rock structure + crag normals | `GroundCover::at(..., normalX, normalZ)` (ADR-0118); `rockStructure` + crag relief in mesh.frag (ADR-0120) | island 8 | Vulkan only |
+| The island freeway routed round its cities | `routeFreewayRoundCities`, `islandSiteBrief` (ADR-0106) | `city_plan island-cities` | city limits + 40 m are no-go; waypoint on each inland edge |
+| Residency (stream by camera distance) | `engine/residency.h` (ADR-0095) | building cells | terrain tiles, road cells, forests are the planned clients |

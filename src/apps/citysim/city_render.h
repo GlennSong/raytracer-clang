@@ -10,6 +10,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace citysim {
@@ -33,6 +34,8 @@ struct CityRenderParams {
     int pedestrians = 40;   // -1 = by density (pedsPerKm over the sidewalks)
     Real carsPerLaneKm = 10.0;
     Real pedsPerKm = 6.0;
+    Real longCommuteShare = 0.0;   // CitySimConfig::longCommuteShare
+    Real busCommuteShare = 0.0;    // CitySimConfig::busCommuteShare
     // Ceiling on each density-derived count (CitySimConfig::maxAmbient). The
     // bridge used to clamp at a literal 400, which halved metro v2: its own
     // network asks for 769 cars and 788 walkers.
@@ -96,6 +99,7 @@ struct CityRenderParams {
     bool adaptiveRate = true;
     bool debugWidgets = false;             // draw each agent's footprint + trajectory
     bool wander = false;                   // perpetual random trips (the agent lab)
+    bool ambientBus = false;               // ambient rotation includes the bus body (wheel_lab)
     // Scripted goal tables (ADR-0064): the SOURCE of an agents.lua-style script
     // whose archetype tables replace the sim's built-ins at build. Loaded from
     // the level's citysim block; used only in scripting builds; "" = built-ins.
@@ -106,6 +110,7 @@ struct CityRenderParams {
     // builds. Absent or empty means this level draws NO cars — vehicles are
     // optional content, and there is no built-in substitute.
     std::string vehicleScript;
+    std::string fleet;   // a named fleet of that script (selectFleet); "" = its default
     // Three-tier traffic (P4): opt this level into the V/K bubble — far agents
     // become persistent coarse-tick "virtual" travellers (no render, no proxy,
     // no sensing) promoted back to full kinematic agents near the player. Off
@@ -428,6 +433,18 @@ private:
     // lands on the deck the mesher actually built rather than on the raw
     // terrain beside it (#25). Falls back to the ground for an unknown link.
     Real deckYAt(int link, Real station, engine::Vec2 p) const;
+    // A deck car's height: the drawn deck it is on (RoadDeckField::heightNear, within 3 m of its link's
+    // lerped height `refY`, so never the street under it or the freeway over it), else `refY` itself.
+    // The lerp between nav ends cuts under a ramp's vertical curves; the drawn profile does not (#35).
+    Real deckSurfaceNear(Real x, Real z, Real refY) const;
+    // The fleet slot agent `ai` is DRAWN with (the ambient rotation, the bus override): the one mesh,
+    // lamps and wheel set that car wears. -1 when there is no drawable slot.
+    int drawSlotFor(int ai) const;
+    // The drawn road surface under (px, pz) for car `a`, `along` metres ahead of its centre: on a deck, the
+    // deck it is on (deckSurfaceNear from its link's height); on the ground, the road or ground at ITS level
+    // (the terrain + its layer lift as the reference), so an overpass or a stacked junction pad above never
+    // answers for a street car (wheel_lab: groundAt's top-pad rule read the freeway 8 m up).
+    Real carSurfaceAt(const Agent& a, Real px, Real pz, Real along) const;
 
     CityRenderParams params_;
     engine::NavGraph nav_;
@@ -482,6 +499,14 @@ private:
     // points people are drawn on. The people themselves are instanced: one
     // driver group, three rider groups for a little variety of dress.
     std::vector<engine::Entity> carGlassGroups_;
+    // FLEET V2 GLASS. Per slot: the same glass OPAQUE with a reflective glass material (traffic at large),
+    // the cabin apart from the shell, and whether the slot is always seen into (the bus). An ordinary car
+    // near the player draws clear glass + cabin + driver instead of the opaque glass (the near swap).
+    std::vector<engine::Entity> carGlassOpaqueGroups_;
+    std::vector<engine::Entity> carInteriorGroups_;
+    std::vector<char> carSeeInto_;
+    // The agents drawn see-through this bake (nearest the player, with hysteresis).
+    std::unordered_set<int> nearSwap_;
     std::vector<std::vector<engine::Vec3>> carSeats_;
     std::vector<std::vector<engine::Vec3>> carDoors_;
     std::vector<engine::Vec3> carDriverSeat_;
@@ -517,6 +542,9 @@ private:
     std::vector<engine::Mat4> navNodeBake_;
     std::vector<engine::Mat4> blockBake_;    // cached block-outline transforms
     std::vector<engine::Mat4> lotBake_;      // cached lot-outline transforms
+    engine::AssetManager* assets_ = nullptr; // for bakes made after build() (bakePlanOutlines)
+    bool planBaked_ = false;                 // the plan outlines bake on first show
+    void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)

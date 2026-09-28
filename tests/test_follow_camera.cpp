@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "test_framework.h"
 
 #include "../src/engine/camera/follow_camera_controller.h"
@@ -205,4 +206,41 @@ TEST_CASE(follow_spring_steady_cruise_is_judder_free) {
     Real worst = 0;
     for (Real a : advances) worst = std::max(worst, std::fabs(a - mean));
     CHECK(worst < step * 0.35);   // vs 100% deviation unsprung
+}
+
+// FREEWAY SPEED (Glenn: "once it hits a certain acceleration on the freeway [the car] begins to lag behind").
+// The spring used to trail by speed x smoothTime and its teleport test compared the raw feed against that
+// trail, so past ~165 km/h it snapped 3-4 times a second and the car lurched toward the lens. At 50 m/s
+// (180 km/h), in physics-step quanta, at 30 / 60 / 144 fps: never a snap (no frame's advance jumps), and
+// once settled the rig stays within a metre of the car.
+TEST_CASE(follow_spring_holds_the_car_at_freeway_speed_without_snapping) {
+    for (const Real fps : {30.0, 60.0, 144.0}) {
+        FollowCameraController cam;
+        CameraInput none;
+        const Real dt = 1.0 / fps, v = 50.0, physStep = 1.0 / 60.0;
+        Real simT = 0.0, wall = 0.0, carX = 0.0;
+        cam.setTarget(Vec3(0, 0, 0), 90.0);
+        Real prev = 0.0, worstAdvance = 0.0, worstTrail = 0.0, sumTrail = 0.0;
+        int n = 0;
+        for (int i = 0; wall < 5.0; ++i) {
+            wall += dt;
+            while (simT + physStep <= wall) { simT += physStep; carX = v * simT; }   // the fixed-step feed
+            cam.setTarget(Vec3(carX, 0, 0), 90.0);
+            cam.update(none, dt);
+            const Real x = cam.followedPos().x;
+            if (wall > 1.0) {
+                worstAdvance = std::max(worstAdvance, x - prev);
+                worstTrail = std::max(worstTrail, std::fabs(carX - x));
+                sumTrail += carX - x;
+                ++n;
+            }
+            prev = x;
+        }
+        const Real meanTrail = sumTrail / std::max(1, n);
+        std::printf("    %.0f fps: worst frame advance %.3f m (cruise %.3f), mean trail %.3f m, worst %.3f m\n", fps,
+                    worstAdvance, v * dt, meanTrail, worstTrail);
+        CHECK(worstAdvance < v * dt * 2.5);                 // no cut: a snap would jump metres in one frame
+        CHECK(std::fabs(meanTrail) < 0.3);                   // no steady trail (it was ~6 m)
+        CHECK(worstTrail < v * physStep + 0.5);              // at worst the feed's own physics-step quantum
+    }
 }

@@ -433,10 +433,12 @@ TEST_CASE(drivable_spec_rests_the_wheels_where_they_are_drawn) {
 // THE CITY BUS (Glenn, 2026-09-18: "build an actual bus model with an interior
 // and exterior and have it look like a city bus", "we should see the npcs
 // sitting on the bus. There should be a driver"). The bus slot is the only one
-// meant to be seen into: it publishes CLEAR glass as its own part, a driver's
-// seat front-left, and a saloon's worth of passenger seats with a gap on the
-// kerb side where the middle door is. Every other slot keeps its glass merged
-// dark and publishes no seats, so ordinary traffic pays nothing for this.
+// ALWAYS seen into (`seeInto`): its saloon is in its shell, and it publishes a
+// driver's seat front-left and a saloon's worth of passenger seats with a gap on
+// the kerb side where the middle door is. Since fleet v2 every slot publishes its
+// GLASS as a part (drawn opaque and reflective, clear near the player) and an
+// ordinary car publishes its CABIN apart and a driver's seat, but no passenger
+// seats: nobody rides in ambient traffic.
 TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
     VehiclesVM a;
     CHECK(a.loaded);
@@ -445,12 +447,19 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         CarBodyRecipe body;
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
+        CHECK(!body.glass.vertices.empty());
         if (body.className != "bus") {
-            CHECK(body.glass.vertices.empty());
+            // an open car (the convertible) is seen into like the bus; every other car shows its cabin only
+            // near the player
+            CHECK(!body.seeInto || body.className == "convertible");
+            // fleet v2 kit bodies carry no cabin yet (the city keeps their glass opaque); mesh.car ones do
+            CHECK(body.hasDriverSeat);
             CHECK(body.seats.empty());
             continue;
         }
         ++buses;
+        CHECK(body.seeInto);
+        CHECK(body.interior.vertices.empty());   // the saloon rides in the shell
         const Real W = body.size.x, H = body.size.y, L = body.size.z;
         CHECK(!body.glass.vertices.empty());
         CHECK(body.hasDriverSeat);
@@ -477,4 +486,107 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         CHECK(widest > 1.1);                      // the middle door
     }
     CHECK(buses == 1);
+}
+
+// THE OFF-ROADER (#41): vehicle.offroad reads back as a part-time four-wheel-drive truck -- 2WD (rear) until
+// the driver engages 4WD, big wheels on long, soft travel resting where they are drawn, low gearing, near-
+// locking differentials, real drag -- and its lamps and driver's seat come from the kit body.
+TEST_CASE(offroad_spec_is_a_part_time_4x4_on_long_travel) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    VehicleSpec spec;
+    std::string err;
+    const bool ok = loadVehicleSpec(v.vm, "return vehicle.offroad(seed, {})", 3u, spec, &err);
+    if (!ok) std::printf("    spec error: %s\n", err.c_str());
+    CHECK(ok);
+    if (!ok) return;
+    const PhysicsWorld::VehicleConfig& c = spec.config;
+    CHECK(spec.partTime4wd);
+    CHECK_APPROX(c.frontDriveShare, 0.0, 1e-9);   // starts in 2WD (rear)
+    CHECK(c.wheels.size() == 4);
+    CHECK(c.dragArea > 0.0);
+    CHECK(c.gearRatios.size() == 5 && c.gearRatios[0] > 3.0);
+    CHECK(c.axleLimitedSlip < 1.4);     // near-locking per axle...
+    CHECK(c.centerLimitedSlip >= 1e29); // ...and open between them (a fixed 50/50 split in 4WD)
+    const Real H = c.chassisHalfExtent.y * 2.0;
+    for (const PhysicsWorld::VehicleWheel& w : c.wheels) {
+        CHECK(w.radius > 0.45);
+        CHECK(w.driven);
+        CHECK_APPROX(w.suspensionMax, 0.40, 1e-9);
+        CHECK_APPROX(w.suspensionFrequency, 1.3, 1e-9);
+        // attach = the drawn resting centre + the rig's rest drop
+        CHECK_APPROX(w.position.y, -H * 0.5 + w.radius + 0.30, 1e-6);
+    }
+    CHECK(spec.hasDriverSeat);
+    int heads = 0, tails = 0;
+    for (const auto& l : spec.lights) {
+        heads += l.name.rfind("headlight", 0) == 0;
+        tails += l.name.rfind("taillight", 0) == 0;
+    }
+    CHECK(heads == 2 && tails == 2);
+    CHECK(spec.parts.size() == 2);   // clear glass + the cabin
+}
+
+// THE CAR PICKER (Glenn: "cycle through all of them ... It should tell me if the car is 2WD or 4WD"): every
+// entry in vehicle.drivable builds, and the drive the picker SHOWS is the drive the car HAS -- fwd puts all
+// the torque on the front axle, rwd on the rear, awd splits it, 4wd is part-time (starts rear, switchable).
+TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::vector<DrivableEntry> cat;
+    std::string err;
+    CHECK(loadDrivableCatalogue(v.vm, cat, &err));
+    CHECK(cat.size() >= 10);
+    for (const DrivableEntry& e : cat) {
+        VehicleSpec spec;
+        const bool ok = loadVehicleSpec(v.vm, "return vehicle." + e.recipe + "(seed, {})", 5u, spec, &err);
+        if (!ok) std::printf("    %s: %s\n", e.recipe.c_str(), err.c_str());
+        CHECK(ok);
+        if (!ok) continue;
+        const Real share = spec.config.frontDriveShare;   // < 0: from the driven flags (all four: AWD)
+        bool matches = false;
+        if (e.drive == "fwd") matches = std::fabs(share - 1.0) < 1e-9 && !spec.partTime4wd;
+        else if (e.drive == "rwd") matches = std::fabs(share) < 1e-9 && !spec.partTime4wd;
+        else if (e.drive == "awd") matches = (share < 0 || std::fabs(share - 0.5) < 1e-9) && !spec.partTime4wd;
+        else if (e.drive == "4wd") matches = spec.partTime4wd && std::fabs(share) < 1e-9;
+        std::printf("    %-16s %-18s %-4s share %+.2f part-time %d  %s\n", e.recipe.c_str(), e.label.c_str(), e.drive.c_str(),
+                    share, spec.partTime4wd ? 1 : 0, matches ? "ok" : "MISMATCH");
+        CHECK(matches);
+        CHECK(spec.config.wheels.size() >= 4);
+        CHECK(spec.body != nullptr);
+    }
+    CHECK(driveLabel("4wd").find("4WD") != std::string::npos);
+    CHECK(driveLabel("fwd").find("2WD") != std::string::npos);
+}
+
+// THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). vehicle.fleet_mixed
+// is every kit car and truck, then every classic one, then ONE city bus; a level's `citysim.fleet` points
+// vehicle.fleet at it (selectFleet, after the script runs -- the first cut appended the switch to the script
+// text, after vehicles.lua's `return`, and every such level drew no cars), and the kit fleet stays the default.
+TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    CHECK(fleetSlotCount(v.vm) == 13);   // the default: the kit fleet
+    std::string err;
+    CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
+    CHECK(fleetSlotCount(v.vm) == 13);
+    CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
+    const int n = fleetSlotCount(v.vm);
+    std::printf("    fleet_mixed: %d slots\n", n);
+    CHECK(n == 25);
+    int buses = 0, kitSedans = 0, classicSedans = 0;
+    for (int s = 0; s < n; ++s) {
+        Vec3 size;
+        std::string cls, e;
+        CHECK(loadFleetCatalogueEntry(v.vm, s, size, cls, &e));
+        CHECK(size.x > 1.0 && size.z > 3.0);
+        if (cls == "bus") ++buses;
+        if (cls == "sedan") (s < 12 ? kitSedans : classicSedans) += 1;
+    }
+    CHECK(buses == 1);
+    CHECK(kitSedans == 3 && classicSedans == 3);
+    CarBodyRecipe kitBody, classicBody;
+    CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));        // a kit body
+    CHECK(loadFleetCarBody(v.vm, 12, classicBody, &err));   // a classic body
+    CHECK(!kitBody.mesh.vertices.empty() && !classicBody.mesh.vertices.empty());
 }

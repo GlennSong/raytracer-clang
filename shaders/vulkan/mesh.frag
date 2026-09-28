@@ -62,7 +62,7 @@ vec3 sampleEquirect(vec3 dir) {
 }
 
 layout(push_constant) uniform Push {
-    mat4  model;
+    vec4  features[4];     // the material features (ADR-0098); the model is per instance
     vec4  albedoMetallic;     // rgb albedo, a metallic
     vec4  emissionRough;      // rgb emission, a roughness
     uvec4 surfaceFlags;       // x surfaceId, y rawFlags, z textureFlags
@@ -82,6 +82,7 @@ layout(location = 1) in vec3 inWorldNormal;
 layout(location = 2) in vec2 inTexcoord;
 layout(location = 3) in vec3 inColor;
 layout(location = 4) in vec3 inWorldTangent;
+layout(location = 5) flat in vec3 inInstanceOrigin;   // per-instance variation (ADR-0098)
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
@@ -352,6 +353,114 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
     return c;
 }
 
+// TERRAIN LAYERS (Surface::TerrainLayers, id 19; procgen/ground_layers.h): the vertex colour
+// carries the ground-cover weights (r grass, g dirt, b sand, rock the rest) and the material's
+// four texture slots the layers (rgb gamma-encoded, a height). Each layer is sampled world-planar
+// (4 m a tile; rock triplanar, so cliffs don't stretch), broken up against tiling by a second,
+// rotated sample and a macro tint, then HEIGHT-BLENDED: a layer's height lifts its weight, and
+// only layers near the top survive -- so edges are crisp and natural (sand between pebbles,
+// rock through grass) rather than a smear. The ground lights smooth: no bump noise.
+const float kLayerTile = 4.0;   // kGroundLayerTileMetres
+// One layer, world-planar. `mixB` (the anti-tiling blend, computed once a pixel) mixes in a
+// second, rotated sample at another scale, so the tile never visibly repeats.
+vec4 layerPlanar(sampler2D t, vec2 p, float mixB) {
+    vec4 a = texture(t, p / kLayerTile);
+    if (mixB < 0.01) return a;
+    vec2 q = mat2(0.8, -0.6, 0.6, 0.8) * p / (kLayerTile * 2.37) + vec2(0.37, 0.61);
+    return mix(a, texture(t, q), mixB);
+}
+// Rock: triplanar where the ground is steep (cliffs don't stretch), planar where it is not.
+vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
+    if (abs(n.y) > 0.85) return layerPlanar(t, wp.xz, mixB);
+    vec3 w = pow(abs(n), vec3(4.0));
+    w /= (w.x + w.y + w.z);
+    return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
+}
+// The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120).
+float gTerrainRock = 0.0, gTerrainSnow = 0.0;
+// ROCK AT MOUNTAIN SCALE (ADR-0120, Glenn: "bordering on realism, so better procedural texturing/
+// materials for the rock surfaces and snow"). The 4 m rock texture averages to one grey past a few
+// hundred metres; what reads on a mountain is structure at 5-200 m: STRATA (bedding bands along the
+// height, bent by a slow warp), broad warm/cool PATCHES of different stone, and water STAINS -- dark
+// streaks running straight down steep faces. Linear colour in, linear out.
+vec3 rockStructure(vec3 c, vec3 wp, vec3 n) {
+    // bedding shows on CLIFFS only, in patches, and never finer than a few pixels: a first cut banded
+    // every rock slope like a contour map and aliased into scanlines at range
+    float steepB = smoothstep(0.45, 0.8, 1.0 - abs(n.y));
+    float pix = length(fwidth(wp));
+    float warp = fbm2(wp.x * 0.018 + 1.3, wp.z * 0.018 - 4.2) * 14.0 + fbm2(wp.x * 0.07, wp.z * 0.07) * 3.0;
+    float bed = 0.5 + 0.5 * sin((wp.y + warp) * 0.85);                     // ~7 m bands
+    float show = steepB * smoothstep(0.45, 0.7, vnoise2(wp.x * 0.02 + 9.1, wp.z * 0.02 - 2.3))
+               * clamp(1.0 - pix * 2.5 / 7.0, 0.0, 1.0);
+    c *= mix(1.0, mix(0.88, 1.04, smoothstep(0.2, 0.8, bed)), show);
+    float patchN = vnoise2(wp.x * 0.011 - 7.7, wp.z * 0.011 + 3.3);
+    c *= mix(vec3(1.08, 1.01, 0.93), vec3(0.90, 0.95, 1.03), patchN);      // warm / cool stone
+    float steep = smoothstep(0.35, 0.75, 1.0 - abs(n.y));
+    if (steep > 0.001) {
+        vec2 h = normalize(vec2(-n.z, n.x) + vec2(1e-5, 0.0));              // along the face, horizontally
+        float u = dot(wp.xz, h);
+        float streak = smoothstep(0.55, 0.85, vnoise2(u * 0.35 + 2.0, wp.y * 0.02 - 5.0));
+        c *= 1.0 - 0.35 * streak * steep;                                    // stains run down, not across
+    }
+    return c;
+}
+vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
+    // weights: grass, dirt, sand in the vertex colour, SNOW in the vertex u, rock the remainder
+    float wg = cover.r, wd = cover.g, ws = cover.b;
+    wsn = clamp(wsn, 0.0, 1.0);
+    float wr = max(0.0, 1.0 - wg - wd - ws - wsn);
+    float mixB = 0.6 * smoothstep(0.35, 0.65, fbm2(wp.x * 0.045, wp.z * 0.045));
+    // only the layers present here are sampled
+    const vec4 none = vec4(0.0);
+    vec4 g = wg > 0.001 ? layerPlanar(albedoMap, wp.xz, mixB) : none;
+    vec4 d = wd > 0.001 ? layerPlanar(metallicRoughnessMap, wp.xz, mixB) : none;
+    vec4 s = ws > 0.001 ? layerPlanar(normalMap, wp.xz, mixB) : none;
+    vec4 r = wr > 0.001 ? layerRock(aoMap, wp, n, mixB) : none;
+    // height blend: weight plus height (a layer at weight 0 cannot appear), keep the top band
+    const float depth = 0.18;
+    float bg = wg > 0.001 ? wg + g.a * 0.5 : -1.0;
+    float bd = wd > 0.001 ? wd + d.a * 0.5 : -1.0;
+    float bs = ws > 0.001 ? ws + s.a * 0.5 : -1.0;
+    float br = wr > 0.001 ? wr + r.a * 0.5 : -1.0;
+    // snow has no texture: settled powder, a soft mottle, lying LOW (it fills the hollows of the
+    // rock's height, so its edge follows the stone instead of a contour line)
+    float snowMottle = fbm2(wp.x * 0.11 + 5.3, wp.z * 0.11 - 2.2);
+    float bn = wsn > 0.001 ? wsn + (1.0 - r.a) * 0.35 + 0.1 * snowMottle : -1.0;
+    vec3 snow = vec3(0.80, 0.84, 0.90) * (0.92 + 0.1 * snowMottle);
+    float top = max(max(max(bg, bd), max(bs, br)), bn) - depth;
+    float kg = max(bg - top, 0.0), kd = max(bd - top, 0.0), ks = max(bs - top, 0.0), kr = max(br - top, 0.0),
+          kn = max(bn - top, 0.0);
+    float sum = max(kg + kd + ks + kr + kn, 1e-5);
+    vec3 rock = kr > 0.0 ? rockStructure(pow(r.rgb, vec3(2.2)), wp, n) : vec3(0.0);
+    // snow: brighter on the flats, a faint cold blue where it sits steep or in a hollow of the rock
+    snow *= mix(vec3(0.93, 0.96, 1.02), vec3(1.0), smoothstep(0.75, 0.95, n.y));
+    vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
+              rock * kr + snow * kn) / sum;
+    gTerrainRock = kr / sum; gTerrainSnow = kn / sum;
+    // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
+    c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
+    return c;
+}
+
+// ---- MATERIAL FEATURES (ADR-0098): generic, any surface, each off at 0 --------------------
+// pc.features[0] = (triplanarScale, variation, topAmount, topThreshold)
+// pc.features[1] = (topColor.rgb, topNoiseScale),  pc.features[2].x = normalStrength
+float featHash(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+vec4 triplanarSample(sampler2D t, vec3 p, vec3 w) {
+    return texture(t, p.zy) * w.x + texture(t, p.xz) * w.y + texture(t, p.xy) * w.z;
+}
+// Triplanar normal mapping, whiteout-style: each projection's tangent normal applied in its plane.
+vec3 triplanarNormal(sampler2D t, vec3 p, vec3 n, vec3 w, float strength) {
+    vec2 tx = (texture(t, p.zy).xy * 2.0 - 1.0) * strength;
+    vec2 ty = (texture(t, p.xz).xy * 2.0 - 1.0) * strength;
+    vec2 tz = (texture(t, p.xy).xy * 2.0 - 1.0) * strength;
+    return normalize(n + vec3(0.0, tx.y, tx.x) * w.x + vec3(ty.x, 0.0, ty.y) * w.y + vec3(tz.x, tz.y, 0.0) * w.z);
+}
+
 vec3 applySurface(uint id, vec3 base, vec3 worldPos, vec3 n, vec2 meshUV, float time) {
     vec2 uv = surfUV(worldPos, n);
     vec3 c;
@@ -409,13 +518,16 @@ void surfaceReliefRoad(vec3 worldPos, inout vec3 normal, inout float rough) {
 void surfaceReliefTerrain(vec3 worldPos, inout vec3 normal, inout float rough) {
     float wx = worldPos.x, wz = worldPos.z;
     float slope = clamp(1.0 - normal.y, 0.0, 1.0);
-    float amp = 0.28 + 0.65 * slope;                 // steeper => more relief
+    // Steeper => more relief. Gentle ground stays soft (the stylized look: the fine octave on
+    // flat grass read as white glitter), rock keeps its grain.
+    float amp = 0.14 + 0.8 * slope;
+    float fineW = 0.08 + 0.3 * slope;
     float g0 = vnoise2(wx * 1.7, wz * 1.7) + 0.5 * vnoise2(wx * 5.3, wz * 5.3)
-             + 0.3 * vnoise2(wx * 15.0, wz * 15.0);
+             + fineW * vnoise2(wx * 15.0, wz * 15.0);
     float gx = vnoise2(wx * 1.7 + 0.4, wz * 1.7) + 0.5 * vnoise2(wx * 5.3 + 1.7, wz * 5.3)
-             + 0.3 * vnoise2(wx * 15.0 + 2.3, wz * 15.0) - g0;
+             + fineW * vnoise2(wx * 15.0 + 2.3, wz * 15.0) - g0;
     float gz = vnoise2(wx * 1.7, wz * 1.7 + 0.4) + 0.5 * vnoise2(wx * 5.3, wz * 5.3 + 1.7)
-             + 0.3 * vnoise2(wx * 15.0, wz * 15.0 + 2.3) - g0;
+             + fineW * vnoise2(wx * 15.0, wz * 15.0 + 2.3) - g0;
     normal = normalize(normal + vec3(-gx, 0.0, -gz) * amp);
     float snowy = clamp((worldPos.y - 80.0) / 30.0, 0.0, 1.0) * (1.0 - slope);
     rough = clamp(mix(0.93, 0.72, snowy) + (vnoise2(wx * 11.0, wz * 11.0) - 0.5) * 0.14,
@@ -601,6 +713,22 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
 }
 
 void main() {
+    // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a
+    // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)
+    if ((pc.surfaceFlags.y & (1u << 19)) != 0u) {
+        const vec4 b = pc.features[3];
+        const float d = distance(inWorldPos, g.cameraPosition.xyz);
+        // a 4x4 Bayer threshold: the band reads as a fine screen-door, not noise
+        const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+        const ivec2 q = ivec2(gl_FragCoord.xy) & 3;
+        const float thr = (bayer[q.y * 4 + q.x] + 0.5) / 16.0;
+        // COMPLEMENTARY edges: a fade-OUT keeps the pixels under its threshold, a fade-IN those above
+        // (1 - thr), so a model fading out and its impostor fading in over the same band split every
+        // pixel between them. Both testing the same threshold kept the same pixels and dropped the rest:
+        // mid-band half the pixels showed neither -- a see-through ring of trees (review, #rendering).
+        if (b.y > b.x && smoothstep(b.x, b.y, d) <= 1.0 - thr) discard;
+        if (b.w > b.z && 1.0 - smoothstep(b.z, b.w, d) <= thr) discard;
+    }
     // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
     const bool emissiveTint = (pc.surfaceFlags.y & 32u) != 0u;
     vec3 albedo = pc.albedoMetallic.rgb * (emissiveTint ? vec3(1.0) : inColor);
@@ -609,6 +737,95 @@ void main() {
     vec3 emission = pc.emissionRough.rgb * (emissiveTint ? inColor : vec3(1.0));
     uint texFlags = pc.surfaceFlags.z;
     float ao = 1.0;
+    // TERRAIN LAYERS: the texture slots are the ground's layers, not the usual maps.
+    const bool layered = pc.surfaceFlags.x == 19u;
+    if (layered) {
+        albedo = terrainLayers(inColor, inTexcoord.x, inWorldPos, normalize(inWorldNormal));
+        roughness = 0.95;
+        texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
+    }
+    // WATER (Surface::River, id 20; ADR-0099): one polygon for rivers and lakes. Per vertex: the
+    // tangent is the flow direction, colour r the speed (0 still .. 1 rapids), g the fade (0 at a
+    // mouth, into the sea), u the distance from the bank (0 at the shore .. 0.5 open water).
+    // The detail is a FLOW MAP (Vlachos, Portal 2): world-space noise advected along the flow in
+    // two phases half a cycle apart, crossfaded so neither is seen stretching.
+    const bool river = pc.surfaceFlags.x == 20u;
+    // WATER, both kinds (rivers/lakes id 20, the sea id 12): depth drives how much of the bed shows,
+    // and the composite below adds the Fresnel sky reflection and the sun's sparkle.
+    const bool isWater = river || pc.surfaceFlags.x == 12u;
+    float waterDepth = 0.0, waterFoam = 0.0, waterAbsorb = 0.6;
+    if (pc.surfaceFlags.x == 12u) waterDepth = max(inTexcoord.x, 0.0);   // the sea's baked depth (m)
+    float riverSpeed = 0.0, riverFade = 1.0, flowBlend = 0.0;
+    vec2 flowA = vec2(0.0), flowB = vec2(0.0);
+    if (river) {
+        riverSpeed = clamp(inColor.r, 0.0, 1.0);
+        riverFade = clamp(inColor.g, 0.0, 1.0);
+        vec2 dir = inWorldTangent.xz;
+        dir = dot(dir, dir) > 1e-8 ? normalize(dir) : vec2(1.0, 0.0);
+        vec2 vel = dir * (0.25 + 3.0 * riverSpeed);          // m/s; still water still drifts
+        const float cycle = 2.0;                              // s per phase
+        float ph0 = fract(g.wind1.w / cycle), ph1 = fract(g.wind1.w / cycle + 0.5);
+        flowA = vel * cycle * ph0;                            // how far each phase has advected
+        flowB = vel * cycle * ph1 + vec2(17.3, 9.1);          // (offset: two different patterns)
+        flowBlend = abs(1.0 - 2.0 * ph0);                     // 1 = all B while A resets
+        vec2 xz = inWorldPos.xz;
+        float edge = clamp(inTexcoord.x, 0.0, 0.5);           // 0 at a bank, 0.5 open water
+        waterDepth = clamp(inColor.b, 0.0, 1.0) * 8.0;        // metres (baked / 8)
+        // still water (lakes) is murky and hides its bed within a couple of metres; a running river
+        // stays clear enough to show stones in its shallows
+        waterAbsorb = mix(1.1, 0.5, smoothstep(0.05, 0.3, riverSpeed));
+        vec3 deep = pc.albedoMetallic.rgb;
+        vec3 shallow = deep * 2.4 + vec3(0.02, 0.07, 0.06);
+        albedo = mix(shallow, deep, smoothstep(0.2, 2.5, waterDepth));
+        vec2 pa = (xz - flowA) * 0.12, pb = (xz - flowB) * 0.12;
+        float n1 = mix(fbm2(pa.x, pa.y), fbm2(pb.x, pb.y), flowBlend);
+        float n2 = mix(vnoise2(pa.x * 7.0, pa.y * 7.0), vnoise2(pb.x * 7.0, pb.y * 7.0), flowBlend);
+        // foam: a thin lace at the banks, and white water in PATCHES only where it really runs fast --
+        // most of a rapid's surface stays clear (the references' rivers are glassy teal with white
+        // breaking over the steps, not a white sheet)
+        float foam = (1.0 - smoothstep(0.0, 0.035, edge)) * (0.15 + 0.5 * n2) * (0.3 + 0.7 * riverSpeed) +
+                     smoothstep(0.55, 1.0, riverSpeed) * smoothstep(0.72, 0.92, n1 + 0.35 * n2) * 0.85;
+        // stylized SHORE FOAM where still water meets the land: a band that laps in and out
+        float lap = 0.28 + 0.14 * sin(g.wind1.w * 1.3 + n1 * 6.2831853);
+        float shoreFoam = (1.0 - smoothstep(0.03, lap, waterDepth)) * smoothstep(0.35, 0.65, n2 + 0.25) *
+                          (1.0 - smoothstep(0.1, 0.4, riverSpeed)) *
+                          (1.0 - smoothstep(0.02, 0.12, edge));   // at the bank, not over a whole shallow pond
+        foam = clamp(max(foam, shoreFoam * 0.9), 0.0, 1.0) * riverFade;
+        albedo = mix(albedo, vec3(0.82, 0.88, 0.9), foam);
+        roughness = mix(0.05, 0.45, foam);
+        waterFoam = foam;
+        texFlags = 0u;
+    }
+    // MATERIAL FEATURES (ADR-0098): triplanar maps, per-instance variation (the top layer is
+    // applied after the normal, below).
+    const vec4 feat0 = pc.features[0], feat1 = pc.features[1], feat2 = pc.features[2];
+    const float instA = featHash(inInstanceOrigin + vec3(0.17, 0.0, 0.0));
+    const float instB = featHash(inInstanceOrigin * 1.37 + vec3(5.3));
+    float featHeight = 0.5;             // the albedo map's alpha (a height) where it has one
+    vec3 featN = vec3(0.0);
+    bool featNormal = false;
+    if (!layered && feat0.x > 0.0) {
+        vec3 n0 = normalize(inWorldNormal);
+        vec3 w = pow(abs(n0), vec3(4.0));
+        w /= (w.x + w.y + w.z);
+        // each instance samples its own patch of the texture
+        vec3 shift = feat0.y > 0.0 ? vec3(instA, instB, fract(instA * 7.13)) * 37.0 : vec3(0.0);
+        vec3 p = (inWorldPos + shift) / feat0.x;
+        if ((texFlags & 1u) != 0u) {
+            vec4 a = triplanarSample(albedoMap, p, w);
+            albedo *= pow(a.rgb, vec3(2.2));   // feature albedo maps are sRGB
+            featHeight = a.a;
+        }
+        if ((texFlags & 4u) != 0u) {
+            featN = triplanarNormal(normalMap, p, n0, w, feat2.x > 0.0 ? feat2.x : 1.0);
+            featNormal = true;
+        }
+        texFlags &= ~5u;   // albedo and normal handled here, not by mesh UV below
+    }
+    if (feat0.y > 0.0) {   // variation: brightness and a warm/cool shift per instance
+        vec3 warmCool = mix(vec3(1.06, 1.0, 0.93), vec3(0.94, 1.0, 1.07), instB);
+        albedo *= (1.0 + feat0.y * (instA - 0.5) * 0.7) * mix(vec3(1.0), warmCool, min(feat0.y, 1.0));
+    }
 
     // FLAG_INTERIOR_MAP (bit 16): a virtual room behind the pane. The pane's UV
     // (0..1 across, 0..1 up) is the room's front face; the view ray in the
@@ -671,7 +888,13 @@ void main() {
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
-        if ((pc.surfaceFlags.y & 2u) != 0u && albedoTex.a < 0.5) discard;
+        float cut = albedoTex.a;
+        // grass cards: keep the cut-out's coverage down the mips (Golus) -- a thin blade's alpha
+        // averages toward nothing, and a far card would vanish
+        // (and tree cards, FLAG_LOD_BAND: a far crown's needles average away the same way)
+        if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19))) != 0u)
+            cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
+        if ((pc.surfaceFlags.y & 2u) != 0u && cut < 0.5) discard;
         if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;
     }
     if ((texFlags & 2u) != 0u) {
@@ -683,6 +906,48 @@ void main() {
     if ((texFlags & 16u) != 0u) emission *= texture(emissiveMap, inTexcoord).rgb;
 
     vec3 N = normalize(inWorldNormal);
+    if (featNormal) N = featN;
+    // CRAGS (ADR-0120): the mesh's triangles are the only relief a distant mountain had ("the mountains
+    // look lowpoly"). Rock gets a per-pixel normal from two octaves of noise (~22 m and ~6 m), projected
+    // on the plane the face mostly lies in, each octave faded out once a pixel covers too much of it
+    // (no shimmer at range); snow gets a soft wind ripple.
+    if (layered && gTerrainRock + gTerrainSnow > 0.01) {
+        vec3 wp = inWorldPos;
+        float pix = length(fwidth(wp));
+        vec3 aw = pow(abs(N), vec3(3.0)); aw /= (aw.x + aw.y + aw.z);
+        vec3 bump = vec3(0.0);
+        for (int o = 0; o < 3; ++o) {   // ~80 m breaks a peak's big flat facets; 22 m and 6 m are crags
+            float L = o == 0 ? 80.0 : (o == 1 ? 22.0 : 6.0), amp = o == 0 ? 0.7 : (o == 1 ? 0.55 : 0.35);
+            float fade = clamp(1.0 - pix * 6.0 / L, 0.0, 1.0);
+            if (fade <= 0.0) continue;
+            float f = 1.0 / L, e = 0.15 * L;
+            // gradients on the three planes (x: zy, y: xz, z: xy)
+            float a = fbm2(wp.z * f, wp.y * f), ax = fbm2((wp.z + e) * f, wp.y * f), ay = fbm2(wp.z * f, (wp.y + e) * f);
+            float b = fbm2(wp.x * f + 3.1, wp.z * f), bx = fbm2((wp.x + e) * f + 3.1, wp.z * f), bz = fbm2(wp.x * f + 3.1, (wp.z + e) * f);
+            float c0 = fbm2(wp.x * f - 5.2, wp.y * f), cx = fbm2((wp.x + e) * f - 5.2, wp.y * f), cy = fbm2(wp.x * f - 5.2, (wp.y + e) * f);
+            vec3 gX = vec3(0.0, ay - a, ax - a) / e, gY = vec3(bx - b, 0.0, bz - b) / e, gZ = vec3(cx - c0, cy - c0, 0.0) / e;
+            bump += (gX * aw.x + gY * aw.y + gZ * aw.z) * amp * L * fade;
+        }
+        vec3 rockN = normalize(N - (bump - N * dot(bump, N)) * 0.35);
+        // snow: a shallow ripple across the slope
+        float rip = fbm2(inWorldPos.x * 0.45 + 1.7, inWorldPos.z * 0.45 - 0.9);
+        float ripx = fbm2((inWorldPos.x + 0.3) * 0.45 + 1.7, inWorldPos.z * 0.45 - 0.9) - rip;
+        float ripz = fbm2(inWorldPos.x * 0.45 + 1.7, (inWorldPos.z + 0.3) * 0.45 - 0.9) - rip;
+        vec3 snowN = normalize(N - vec3(ripx, 0.0, ripz) * 0.35 * clamp(1.0 - pix * 4.0, 0.0, 1.0));
+        float tot = gTerrainRock + gTerrainSnow;
+        N = normalize(mix(N, normalize(rockN * gTerrainRock + snowN * gTerrainSnow), clamp(tot, 0.0, 1.0)));
+        roughness = mix(roughness, 0.62, gTerrainSnow);   // settled snow is smoother than stone
+    }
+    if (river) {   // ripples: the two flow phases' noise gradients in world xz, crossfaded
+        const float e = 0.04;
+        vec2 pa = (inWorldPos.xz - flowA) * 0.2, pb = (inWorldPos.xz - flowB) * 0.2;   // metre-scale swell, not grain
+        float a0 = fbm2(pa.x, pa.y), b0 = fbm2(pb.x, pb.y);
+        vec2 ga = vec2(fbm2(pa.x + e, pa.y) - a0, fbm2(pa.x, pa.y + e) - a0);
+        vec2 gb = vec2(fbm2(pb.x + e, pb.y) - b0, fbm2(pb.x, pb.y + e) - b0);
+        vec2 grad = mix(ga, gb, flowBlend) / e;
+        float amp = (0.035 + 0.25 * riverSpeed) * 0.1;
+        N = normalize(N - vec3(grad.x, 0.0, grad.y) * amp);
+    }
     // FLAG_FRONT_ONLY (128): the back of this surface does not exist.
     if ((pc.surfaceFlags.y & 128u) != 0u && dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) discard;
     // Normal map (bit 2): perturb N in tangent space. Gram-Schmidt the tangent
@@ -692,6 +957,20 @@ void main() {
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
         N = normalize(T * tsN.x + B * tsN.y + N * tsN.z);
+    }
+
+    // TOP LAYER (material feature): moss / snow / dust on faces that look up, broken by noise and
+    // settling first into the albedo map's low spots.
+    if (feat0.z > 0.0) {
+        float scale = max(feat1.w, 0.05);
+        float nz = fbm2(inWorldPos.x / scale + inWorldPos.y * 0.13, inWorldPos.z / scale - inWorldPos.y * 0.11);
+        float up = N.y + (nz - 0.5) * 0.55 + (0.5 - featHeight) * 0.4;
+        float t = clamp(smoothstep(feat0.w - 0.2, feat0.w + 0.2, up) * feat0.z, 0.0, 1.0);
+        // mottled, not a flat cap: a fine clumpy breakup, lighter tufts and darker hollows
+        float fine = vnoise2(inWorldPos.x * 9.0 + inWorldPos.y * 3.1, inWorldPos.z * 9.0 - inWorldPos.y * 2.7);
+        t *= smoothstep(0.15, 0.55, fine + t * 0.6);
+        albedo = mix(albedo, feat1.rgb * (0.65 + 0.35 * nz + 0.45 * fine), t);
+        roughness = mix(roughness, 1.0, t);
     }
 
     uint rawFlags = pc.surfaceFlags.y;
@@ -738,6 +1017,40 @@ void main() {
     vec3 ambientShadow = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * g.shadowTint.w);
 
     vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow);
+
+    // GRASS TRANSMISSION (FLAG_GRASS), the cheap stand-in for subsurface scattering: sunlight
+    // through thin blades. Strongest looking toward the sun (the backlit glow of a field at
+    // dawn and dusk), a little from any angle, more at the thin tips (inTexcoord.y runs 0 root
+    // .. 1 tip, procgen/grass.cpp), warmer than the blade, and only where the sun reaches.
+    if ((pc.surfaceFlags.y & (1u << 17)) != 0u) {
+        for (int i = 0; i < min(g.counts.x, 32); ++i) {
+            if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
+            vec3 L = normalize(g.lights[i].directionInner.xyz);
+            float toward = pow(max(dot(-V, L), 0.0), 5.0);
+            float tip = smoothstep(0.1, 1.0, inTexcoord.y);
+            // (halved, #51 -- Glenn: "the sunlight grass... it's really bright": against a low sun the field
+            // washed out pale; a meadow backlit reads as a warm rim on the blades, not a milky sheet)
+            vec3 transColor = albedo * vec3(1.7, 1.9, 0.8);
+            direct += transColor * g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w
+                    * (0.05 + 0.42 * toward) * tip * sunVis / PI;
+            break;
+        }
+    }
+
+    // LEAF TRANSMISSION (ADR-0129): tree foliage -- alpha-cut cards in a LOD band -- lets the sun through
+    // as grass does, so a crown seen against the sun glows at its sunlit rim instead of going black.
+    // The shadow map already keeps it to the leaves the sun reaches (the crown's outside).
+    if ((pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u)) {
+        for (int i = 0; i < min(g.counts.x, 32); ++i) {
+            if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
+            vec3 L = normalize(g.lights[i].directionInner.xyz);
+            float toward = pow(max(dot(-V, L), 0.0), 4.0);
+            vec3 transColor = albedo * vec3(1.7, 2.1, 0.9);
+            direct += transColor * g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w
+                    * (0.06 + 0.75 * toward) * sunVis / PI;
+            break;
+        }
+    }
 
     // Image-based lighting from the procedural sky (analytic approximation of
     // Metal's baked irradiance + GGX-prefiltered split-sum; Phase 4b adds the
@@ -796,6 +1109,36 @@ void main() {
         outColor = vec4(tint, 1.0);
     } else {
         vec3 color = direct + ambient + emission;
+        // WATER COMPOSITE. Over the bed the right result is
+        //   F * sky + (1 - F) * (a_w * body + (1 - a_w) * bed)
+        // with a_w the body's opacity from its depth (Beer-Lambert) and F the Fresnel reflectance:
+        // the blend's alpha is 1 - (1 - F)(1 - a_w) and the colour the first two terms over it.
+        // Foam is opaque and matte. The reflection is the sky itself, as the sky pass draws it.
+        float waterA = 1.0;
+        if (isWater) {
+            float aw = max(1.0 - exp(-waterAbsorb * waterDepth), 0.18);
+            aw = max(aw, waterFoam);
+            vec3 fs = f0 * brdf.x + brdf.y;
+            float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0) * (1.0 - waterFoam);
+            waterA = 1.0 - (1.0 - F) * (1.0 - aw);
+            color = (F * prefiltered + (1.0 - F) * aw * color) / max(waterA, 1e-4);
+            // SPARKLE: the sun caught by facets smaller than the ripple normal -- a jittered normal
+            // per ~30 cm cell, re-rolled a few times a second, with a very tight highlight.
+            for (int i = 0; i < min(g.counts.x, 32); ++i) {
+                if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
+                vec3 L = normalize(g.lights[i].directionInner.xyz);
+                vec2 cell = floor(inWorldPos.xz * 3.3);
+                float tick = floor(g.wind1.w * 8.0 + featHash(vec3(cell, 1.0)) * 8.0);
+                float h1 = featHash(vec3(cell, tick)), h2 = featHash(vec3(cell.yx, tick + 3.1));
+                vec3 Nj = normalize(N + vec3(h1 - 0.5, 0.0, h2 - 0.5) * 0.35);
+                // a point, not the cell: only a small disc about a random spot in it catches the sun
+                vec2 local = fract(inWorldPos.xz * 3.3) - vec2(featHash(vec3(cell, 7.0)), featHash(vec3(cell, 9.0)));
+                float dot2 = 1.0 - smoothstep(0.06, 0.14, length(local - round(local)));
+                float glint = pow(max(dot(reflect(-L, Nj), V), 0.0), 900.0) * dot2 * (1.0 - waterFoam);
+                color += g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w * glint * 4.0 * sunVis;
+                break;
+            }
+        }
         // Aerial-perspective fog. The fade target is the SKY the surface
         // occludes, not the authored fog colour — the P5 fog-restoration
         // semantics (metal 6d20e85): on Metal the metro runs the scattering
@@ -812,7 +1155,9 @@ void main() {
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).
         float opacity = uintBitsToFloat(pc.surfaceFlags.w) * mapAlpha;
-        if (opacity < 0.999) {
+        if (isWater) {
+            outColor = vec4(color, waterA);   // composited above
+        } else if (opacity < 0.999) {
             // GLASS (Glenn's walk, 2026-09-14: "the glass has no reflectivity"):
             // a plain alpha blend scales the reflection by the opacity, so an
             // 18 % pane showed 18 % of its sky. Real glass ADDS its Fresnel

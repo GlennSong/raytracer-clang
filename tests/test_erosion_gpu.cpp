@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "../src/engine/procgen/terrain_weather.h"
 
 #include "../src/engine/procgen/erosion.h"
 #include "../src/engine/procgen/erosion_gpu.h"
@@ -114,7 +115,14 @@ TEST_CASE(erosion_gpu_unavailable_returns_false_and_env_pins_cpu) {
         std::printf("    [skip] no Metal GPU erosion available\n");
         return;
     }
-    CHECK(std::strcmp(erosionBackendTag(), "gpu-erosion-v1") == 0);
+    ErosionParams asks = testParams();
+    asks.vulkan = true;   // a Vulkan build runs on the GPU only when the terrain asks (ADR-0122)
+    CHECK(std::strcmp(erosionBackendTag(&asks), "gpu-erosion-v1") == 0 ||   // Metal
+          std::strcmp(erosionBackendTag(&asks), "vk-erosion-v1") == 0);
+#if defined(RT_HAVE_VULKAN_EROSION)
+    const ErosionParams notAsked = testParams();   // every level baked before ADR-0122 keeps the CPU sim
+    CHECK(std::strcmp(erosionBackendTag(&notAsked), "cpu") == 0);
+#endif
 }
 
 TEST_CASE(erosion_gpu_two_runs_bit_identical) {
@@ -217,4 +225,122 @@ TEST_CASE(erosion_gpu_speedup_bench) {
     std::printf("    res 1024, 500k droplets: gpu %.0f ms, cpu %.0f ms — %.1fx\n",
                 gpuMs, cpuMs, cpuMs / gpuMs);
     CHECK(gpuMs < cpuMs);
+}
+
+// THE WATER MODEL (ADR-0123, Mei et al. 2007 pipe model): on a V valley tilted down its length, rain runs
+// off the slopes and collects along the floor; nothing blows up (every height finite, no spike above the
+// valley's rim nor pit below its lowest point -- the relief clamp), and two runs are bit-identical.
+TEST_CASE(erosion_gpu_water_collects_in_the_valley_and_stays_bounded) {
+    ScopedSourceDir cd;
+    if (!erodeGpuAvailable()) { std::printf("    [skip] no GPU erosion available\n"); return; }
+#if !defined(RT_HAVE_VULKAN_EROSION)
+    std::printf("    [skip] the water model is Vulkan only\n");
+    return;
+#else
+    auto valley = [] {
+        Heightmap hm;
+        hm.n = 129;
+        hm.worldSize = 512.0f;   // 4 m cells
+        hm.h.resize(static_cast<std::size_t>(hm.n) * hm.n);
+        for (int z = 0; z < hm.n; ++z)
+            for (int x = 0; x < hm.n; ++x)
+                hm.set(x, z, 0.35f * std::fabs(static_cast<float>(x - 64)) * 4.0f + 0.05f * static_cast<float>(hm.n - 1 - z) * 4.0f);
+        return hm;
+    };
+    ErosionParams p;
+    p.droplets = 0;
+    p.thermalIterations = 0;
+    p.vulkan = true;
+    p.waterSteps = 3000;
+    Heightmap a = valley(), b = valley();
+    const Heightmap before = valley();
+    setenv("RT_EROSION_DUMP", "/tmp", 1);   // the maps, to read the water depth back
+    CHECK(erodeGpu(a, p));
+    unsetenv("RT_EROSION_DUMP");
+    CHECK(erodeGpu(b, p));
+    CHECK(a.h == b.h);   // deterministic
+    float lo = 1e30f, hi = -1e30f, blo = 1e30f, bhi = -1e30f;
+    for (std::size_t i = 0; i < a.h.size(); ++i) {
+        CHECK(std::isfinite(a.h[i]));
+        lo = std::min(lo, a.h[i]); hi = std::max(hi, a.h[i]);
+        blo = std::min(blo, before.h[i]); bhi = std::max(bhi, before.h[i]);
+    }
+    CHECK(hi <= bhi + 1e-3f && lo >= blo - 1e-3f);   // no spike above the rim, no pit below the floor
+    // the water stands on the floor, not the slopes
+    std::FILE* f = std::fopen("/tmp/water.f32", "rb");
+    CHECK(f != nullptr);
+    if (!f) return;
+    std::vector<float> w(a.h.size());
+    CHECK(std::fread(w.data(), sizeof(float), w.size(), f) == w.size());
+    std::fclose(f);
+    // the floor is a BAND (|x - 64| <= 4): the flow may split round a bar on the V's one-cell bottom (the
+    // central-difference slope there sees only the valley's fall -- ADR-0124), and the water still stands
+    // at the bottom, not on the slopes
+    double floor = 0.0, slope = 0.0;
+    for (int z = 16; z < a.n - 16; ++z) {
+        for (int x = 60; x <= 68; ++x) floor += w[static_cast<std::size_t>(z) * a.n + x] / 9.0;
+        slope += w[static_cast<std::size_t>(z) * a.n + 32];
+    }
+    std::printf("    [water] mean depth at the bottom %.3f m, on the slope %.3f m; heights %.1f..%.1f (was %.1f..%.1f)\n",
+                floor / (a.n - 32), slope / (a.n - 32), lo, hi, blo, bhi);
+    CHECK(floor > 5.0 * slope);
+#endif
+}
+
+#include "../src/engine/procgen/stream_power.h"
+
+// MOUNTAINS FROM UPLIFT (ADR-0125): a disc of uplift on a flat, rough plain grows a drained relief -- every
+// height finite, the land mapped onto the target range, and hardly a pit left (the flood routes every cell
+// to the edge; the implicit sweep keeps each cell above its receiver).
+TEST_CASE(stream_power_grows_a_drained_relief_from_uplift) {
+    Heightmap hm;
+    hm.n = 129;
+    hm.worldSize = 5000.0f;
+    hm.h.resize(static_cast<std::size_t>(hm.n) * hm.n);
+    std::vector<float> up(hm.h.size());
+    for (int z = 0; z < hm.n; ++z)
+        for (int x = 0; x < hm.n; ++x) {
+            const float dx = static_cast<float>(x - 64), dz = static_cast<float>(z - 64);
+            const std::size_t i = static_cast<std::size_t>(z) * hm.n + x;
+            up[i] = std::max(0.0f, 1.0f - std::sqrt(dx * dx + dz * dz) / 60.0f);
+            hm.h[i] = 1.0f + 0.3f * static_cast<float>((x * 7919 + z * 104729) % 97) / 97.0f;   // rough start
+        }
+    StreamPowerParams p;
+    p.iterations = 120;
+    p.targetLo = 0.0; p.targetHi = 800.0;
+    CHECK(streamPowerErode(hm, up, p) == 120);
+    float lo = 1e30f, hi = -1e30f;
+    int pits = 0, land = 0;
+    for (int z = 1; z < hm.n - 1; ++z)
+        for (int x = 1; x < hm.n - 1; ++x) {
+            const float v = hm.get(x, z);
+            CHECK(std::isfinite(v));
+            lo = std::min(lo, v); hi = std::max(hi, v);
+            float low = 1e30f;
+            for (int k = -1; k <= 1; ++k) for (int j = -1; j <= 1; ++j) if (k || j) low = std::min(low, hm.get(x + j, z + k));
+            ++land;
+            if (low > v) ++pits;
+        }
+    std::printf("    [stream power] relief %.0f..%.0f m, %d pits of %d cells\n", lo, hi, pits, land);
+    CHECK(hi > 700.0f && lo < 100.0f);
+    CHECK(pits < land / 100);
+}
+
+// (review) The weathered ground's one content key: what only paints or stands on the ground leaves it alone;
+// what shapes the ground changes it.
+TEST_CASE(weathered_ground_key_folds_what_shapes_the_ground_and_nothing_else) {
+    nlohmann::json tb = {{"seed", 8}, {"size", 2000.0}, {"resolution", 64}, {"seaLevel", 0.0},
+                         {"weather", {{"res", 256}, {"grow", {{"res", 64}, {"iterations", 10}}}}}};
+    const std::string k0 = engine::weatheredGroundKey(tb);
+    nlohmann::json paint = tb;
+    paint["groundCover"] = {{"rockSlopeDeg", 50}};
+    paint["forest"] = {{"coverage", 0.3}};
+    paint["trails"] = nlohmann::json::array({nlohmann::json::array({{0, 0}, {10, 10}})});
+    CHECK(engine::weatheredGroundKey(paint) == k0);
+    nlohmann::json shape = tb;
+    shape["weather"]["roughness"] = 3.0;
+    CHECK(engine::weatheredGroundKey(shape) != k0);
+    nlohmann::json seed = tb;
+    seed["seed"] = 9;
+    CHECK(engine::weatheredGroundKey(seed) != k0);
 }

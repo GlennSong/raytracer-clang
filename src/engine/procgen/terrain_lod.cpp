@@ -224,6 +224,7 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
 
     LodNodeMesh out;
     RenderMesh& mesh = out.mesh;
+    mesh.tangentIsData = true;   // the morph target rides in the tangent slot
     mesh.vertices.reserve(static_cast<size_t>(n) * n);
 
     // First pass: positions/normals/colors + the raw height grid (for morph targets).
@@ -249,7 +250,8 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
             Vertex v(Vec3(x, y, z), terrainNormal(params, noise, x, z, eps));
             v.u = static_cast<float>(x / node.size);
             v.v = static_cast<float>(z / node.size);
-            v.color = terrainColor(x, z, y, v.normal.y, noise, params);
+            v.color = terrainColor(x, z, y, v.normal.y, noise, params, v.normal.x, v.normal.z);
+            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params, v.normal.x, v.normal.z));
             mesh.vertices.push_back(v);
         }
     }
@@ -301,6 +303,131 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
 
     out.boundsMin = Vec3(node.minX, minY, node.minZ);
     out.boundsMax = Vec3(node.minX + node.size, maxY, node.minZ + node.size);
+    return out;
+}
+
+pyramid::PyramidSpec bakedPyramidSpec(double authoredWorldHalf, double cell0, double tolerance) {
+    pyramid::PyramidSpec spec = pyramid::PyramidSpec::covering(-authoredWorldHalf, -authoredWorldHalf,
+                                                               authoredWorldHalf, authoredWorldHalf, cell0, tolerance);
+    spec.originX = spec.originZ = -0.5 * spec.extent();
+    return spec;
+}
+
+CdlodGeometry bakedCdlodGeometry(double authoredWorldHalf, double cell0) {
+    const pyramid::PyramidSpec spec = bakedPyramidSpec(authoredWorldHalf, cell0);
+    CdlodGeometry g;
+    g.worldHalf = spec.extent() * 0.5;
+    g.numLods = spec.levels;
+    g.gridRes = pyramid::kTileCells;
+    return g;
+}
+
+namespace {
+// Skirt vertices and triangles along the four edges of an n x n grid already in `mesh`:
+// each edge vertex gets a twin `depth` below it, and each edge segment a quad of both
+// windings (a skirt is seen from either side, and never lit from behind for long).
+void addSkirts(RenderMesh& mesh, int n, double depth) {
+    std::vector<uint32_t> ring;   // the edge loop, in order
+    for (int i = 0; i < n; ++i) ring.push_back(static_cast<uint32_t>(i));                          // south
+    for (int j = 1; j < n; ++j) ring.push_back(static_cast<uint32_t>(j * n + n - 1));              // east
+    for (int i = n - 2; i >= 0; --i) ring.push_back(static_cast<uint32_t>((n - 1) * n + i));       // north
+    for (int j = n - 2; j >= 1; --j) ring.push_back(static_cast<uint32_t>(j * n));                 // west
+    const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    for (uint32_t k : ring) {
+        Vertex v = mesh.vertices[k];
+        v.position.y -= depth;
+        v.tangent.y -= depth;   // it morphs with its edge
+        mesh.vertices.push_back(v);
+    }
+    const uint32_t m = static_cast<uint32_t>(ring.size());
+    for (uint32_t k = 0; k < m; ++k) {
+        const uint32_t a = ring[k], b = ring[(k + 1) % m], a2 = base + k, b2 = base + (k + 1) % m;
+        mesh.indices.insert(mesh.indices.end(), {a, b, b2, a, b2, a2, a, b2, b, a, a2, b2});
+    }
+}
+}  // namespace
+
+LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::HeightTile& t,
+                                  const TerrainParams& params, const Noise& noise, double normalEps) {
+    const int n = pyramid::kTileSamples, res = pyramid::kTileCells;
+    const double step = p.spec.cell(t.key.level);
+    const double x0 = p.spec.originX + static_cast<double>(t.key.tx) * res * step;
+    const double z0 = p.spec.originZ + static_cast<double>(t.key.tz) * res * step;
+    const double size = res * step;
+    const double eps = normalEps > 0.0 ? normalEps : step;
+    LodNodeMesh out;
+    RenderMesh& mesh = out.mesh;
+    mesh.tangentIsData = true;   // the morph target rides in the tangent slot
+    mesh.vertices.reserve(static_cast<std::size_t>(n) * n + 4 * n);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const double x = x0 + i * step, z = z0 + j * step, y = t.at(i, j);
+            // Normal of the DRAWN surface, one eps for every level: no shading seam where levels meet.
+            const double dx = p.height(x + eps, z) - p.height(x - eps, z);
+            const double dz = p.height(x, z + eps) - p.height(x, z - eps);
+            Vec3 nrm(-dx, 2.0 * eps, -dz);
+            nrm = nrm * (1.0 / nrm.length());
+            Vertex v(Vec3(x, y, z), nrm);
+            v.u = static_cast<float>(x / size);
+            v.v = static_cast<float>(z / size);
+            v.color = terrainColor(x, z, y, v.normal.y, noise, params, v.normal.x, v.normal.z);
+            if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params, v.normal.x, v.normal.z));
+            mesh.vertices.push_back(v);
+        }
+    // The CDLOD morph target, as generateLodNodeMesh: even vertices stay, odd ones collapse to
+    // the average of their even neighbours -- except where a flatten owns the ground.
+    const double flattenDilate = step * 1.45;
+    const FlattenGrid* fg = params.flattenIndex ? params.flattenIndex.get() : nullptr;
+    static const FlattenGrid kNoGrid;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const bool ei = i % 2 == 0, ej = j % 2 == 0;
+            double my;
+            if (ei && ej) my = t.at(i, j);
+            else if (!ei && ej) my = 0.5 * (t.at(i - 1, j) + t.at(i + 1, j));
+            else if (ei && !ej) my = 0.5 * (t.at(i, j - 1) + t.at(i, j + 1));
+            else my = 0.25 * (t.at(i - 1, j - 1) + t.at(i + 1, j - 1) + t.at(i - 1, j + 1) + t.at(i + 1, j + 1));
+            Vertex& v = mesh.vertices[static_cast<std::size_t>(j) * n + i];
+            if (my != t.at(i, j) && !params.flatten.empty() &&
+                flattenCovers(fg ? *fg : kNoGrid, params.flatten, v.position.x, v.position.z, flattenDilate))
+                my = t.at(i, j);
+            v.tangent = Vec3(v.position.x, my, v.position.z);
+        }
+    mesh.indices.reserve(static_cast<std::size_t>(res) * res * 6 + 12 * 4 * n);
+    for (int j = 0; j < res; ++j)
+        for (int i = 0; i < res; ++i) {
+            const uint32_t a = static_cast<uint32_t>(j * n + i), b = a + 1, c = a + static_cast<uint32_t>(n), d = c + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+        }
+    const double skirt = 1.0 + t.error;
+    addSkirts(mesh, n, skirt);
+    out.boundsMin = Vec3(x0, static_cast<double>(t.minH) - skirt, z0);
+    out.boundsMax = Vec3(x0 + size, static_cast<double>(t.maxH), z0 + size);
+    return out;
+}
+
+LodNodeMesh generateBakedPatch(const pyramid::Pyramid& p, const LodNode& node) {
+    const double cell = p.spec.cell0;
+    const int res = std::max(1, static_cast<int>(std::lround(node.size / cell)));
+    const int n = res + 1;
+    LodNodeMesh out;
+    RenderMesh& mesh = out.mesh;
+    mesh.vertices.reserve(static_cast<std::size_t>(n) * n);
+    double lo = 1e30, hi = -1e30;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const double x = node.minX + i * cell, z = node.minZ + j * cell, y = p.height(x, z);
+            lo = std::min(lo, y);
+            hi = std::max(hi, y);
+            mesh.vertices.push_back(Vertex(Vec3(x, y, z), Vec3(0, 1, 0)));
+        }
+    for (int j = 0; j < res; ++j)
+        for (int i = 0; i < res; ++i) {
+            const uint32_t a = static_cast<uint32_t>(j * n + i), b = a + 1, c = a + static_cast<uint32_t>(n), d = c + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+        }
+    out.boundsMin = Vec3(node.minX, lo, node.minZ);
+    out.boundsMax = Vec3(node.minX + node.size, hi, node.minZ + node.size);
     return out;
 }
 

@@ -121,6 +121,11 @@ local function from_class(class_name, seed, opts)
     anti_roll = opts.anti_roll,
     yaw_assist = opts.yaw_assist,
     grip = opts.grip,               -- the tyres' peak lateral grip (default 1.7)
+    -- real aero drag (a top speed near 205 km/h, not linear body damping) and quick shifts: Jolt's
+    -- default gearbox cut the drive for ~1.3 s per upshift -- a 3.5 s stall at 105-115 km/h on the freeway
+    drag_area = opts.drag_area or 2.0,
+    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
+    drive = opts.drive,             -- nil: the wheels' driven flags (all four: AWD)
     wheel = { radius = r, width = math.max(0.18, c.track * 0.13) },
     wheels = {
       { x =  halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
@@ -154,6 +159,131 @@ function vehicle.pickup(seed, opts)
 end
 vehicle.from_class = from_class
 
+-- DRIVABLE KIT BODIES (ADR-0141): any vehicle_kit.lua spec as a player car. `h` is the handling: drive
+-- ("fwd" | "rwd" | "awd" | "4wd" part-time), mass, drag, gears, suspension, grip, differentials.
+local KIT_TINT = { trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 }, grille = { 0.06, 0.06, 0.065 },
+                   chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 },
+                   chassis = { 0.07, 0.07, 0.08 }, box = { 0.90, 0.90, 0.88 }, bed = { 0.08, 0.08, 0.09 },
+                   interior = { 0.35, 0.26, 0.18 }, sign = { 1.0, 0.85, 0.2 } }
+local KIT_CABIN_TINT = { liner = { 0.45, 0.43, 0.40 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.18, 0.17, 0.16 },
+                         dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 } }
+local function kit_drivable(specName, opts, h)
+  opts = opts or {}
+  local kit = require "vehicle_kit"
+  local P = kit.SPECS[specName]()
+  if opts.color then P.color = opts.color end
+  local car = kit.build(P, 0)
+  local shell = {}
+  for name, part in pairs(car.parts) do
+    if name ~= "glass" then
+      local col = name == "body" and P.color or (KIT_TINT[name] or { 0.4, 0.4, 0.4 })
+      shell[#shell + 1] = mesh.bake_height_color(part, col, col)
+    end
+  end
+  local parts = {}
+  if car.parts.glass then
+    parts[#parts + 1] = { mesh = car.parts.glass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
+  end
+  local cabin = {}
+  for name, part in pairs(car.cabin or {}) do
+    local col = KIT_CABIN_TINT[name] or { 0.3, 0.3, 0.3 }
+    cabin[#cabin + 1] = mesh.bake_height_color(part, col, col)
+  end
+  if #cabin > 0 then
+    parts[#parts + 1] = { mesh = mesh.merge(cabin), albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.9 }
+  end
+  local lights = {}
+  for _, l in ipairs(car.lights) do lights[#lights + 1] = l end
+  lights[#lights + 1] = { name = "driver_seat", pos = car.driver_seat }
+  local wheels = {}
+  for _, w in ipairs(car.wheels) do
+    wheels[#wheels + 1] = { x = w.pos[1], y = w.pos[2], z = w.pos[3], steered = w.front, driven = true,
+                            hand_brake = not w.front }
+  end
+  local W, H, L = car.size[1], car.size[2], car.size[3]
+  local mass = opts.mass or h.mass or math.floor(L * W * H * 120)
+  return {
+    body = mesh.recompute_normals(mesh.merge(shell)),
+    albedo = { 1, 1, 1 }, metallic = h.metallic or 0.5, roughness = h.roughness or 0.4,
+    parts = parts,
+    lights = lights,
+    chassis = { half = { W * 0.5, H * 0.5, L * 0.5 } },
+    mass = mass,
+    com_offset = h.com_offset or -(0.23 + 0.22 * (H / 1.45)),
+    engine_torque = opts.engine_torque or math.floor(mass * (h.torque_per_kg or 0.46)),
+    max_rpm = h.max_rpm or 6000,
+    max_steer_deg = h.max_steer_deg or 30,
+    brake_torque = math.floor(mass * 1.15),
+    hand_brake_torque = math.floor(mass * 2.9),
+    grip = h.grip,
+    -- the collision's underside follows the drawn body: its floor at the body's ground clearance (never
+    -- under the street rig's 0.22 kerb lift), and an off-roader's nose and tail cut to its approach and
+    -- departure angles (physics_world.h) -- a square box caught rocks the tyres could climb
+    floor_clearance = math.max(0.22, P.clear or 0),
+    approach_deg = h.approach_deg, departure_deg = h.departure_deg,
+    max_roll_deg = h.max_roll_deg,
+    drive = h.drive,
+    axle_lsd = h.axle_lsd, center_lsd = h.center_lsd, traction_split = h.traction_split,
+    drag_area = h.drag_area or 2.0,
+    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
+    gear_ratios = h.gear_ratios,
+    suspension = h.suspension,
+    wheel = { radius = P.wheel_r, width = h.wheel_width or P.wheel_w },
+    wheels = wheels,
+  }
+end
+vehicle.kit_drivable = kit_drivable
+
+-- THE OFF-ROADER (#41): part-time four-wheel drive (2WD rear by default, Z / D-pad down engages 4WD), long
+-- soft travel, near-locking axles, a fixed 50/50 split in 4WD that hands a hanging axle's torque to the one on
+-- the ground (traction_split), sticky tyres, low gears.
+local OFFROAD = {
+  drive = "4wd", mass = 2300, torque_per_kg = 0.55, max_rpm = 5200, max_steer_deg = 32, com_offset = -0.62,
+  grip = 2.3, axle_lsd = 1.15, center_lsd = 1e30, traction_split = true, drag_area = 2.8, gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },
+  suspension = { min = 0.0, max = 0.40, freq = 1.3, damp = 0.5, rest_drop = 0.30 }, wheel_width = 0.32,
+  approach_deg = 42, departure_deg = 36,
+  metallic = 0.35, roughness = 0.5,
+}
+-- a light off-road rig for the jeep and pickup (part-time 4WD, more travel than the street)
+local function trail(approach, departure)
+  return { drive = "4wd", axle_lsd = 1.2, center_lsd = 1e30, traction_split = true, grip = 2.1, drag_area = 2.5,
+           suspension = { min = 0.0, max = 0.30, freq = 1.5, damp = 0.55, rest_drop = 0.23 },
+           approach_deg = approach, departure_deg = departure }
+end
+local KIT_HANDLING = {
+  sedan       = { drive = "fwd", drag_area = 2.0 },
+  taxi        = { drive = "fwd", drag_area = 2.0 },
+  hatchback   = { drive = "fwd", drag_area = 1.9 },
+  convertible = { drive = "rwd", drag_area = 1.8, max_steer_deg = 32 },
+  suv         = { drive = "awd", drag_area = 2.4 },
+  jeep        = trail(38, 32),
+  pickup      = trail(28, 24),
+  step_van    = { drive = "rwd", drag_area = 3.2, torque_per_kg = 0.40 },
+  small_truck = { drive = "rwd", drag_area = 3.4, torque_per_kg = 0.40 },
+  offroad     = OFFROAD,
+}
+for name, h in pairs(KIT_HANDLING) do
+  vehicle["kit_" .. name] = function(seed, opts) return kit_drivable(name, opts, h) end
+end
+function vehicle.offroad(seed, opts) return kit_drivable("offroad", opts, OFFROAD) end
+
+-- THE DRIVABLE CATALOGUE: what the player can drop (VehicleSystem: - and = pick, N drops). `drive` is the
+-- label the picker shows -- test_vehicle_body checks it matches the spec's drivetrain.
+vehicle.drivable = {
+  { recipe = "offroad",          label = "Off-roader",           drive = "4wd" },
+  { recipe = "kit_jeep",         label = "Jeep",                 drive = "4wd" },
+  { recipe = "kit_pickup",       label = "Pickup",               drive = "4wd" },
+  { recipe = "kit_suv",          label = "SUV",                  drive = "awd" },
+  { recipe = "kit_sedan",        label = "Sedan",                drive = "fwd" },
+  { recipe = "kit_hatchback",    label = "Hatchback",            drive = "fwd" },
+  { recipe = "kit_taxi",         label = "Taxi",                 drive = "fwd" },
+  { recipe = "kit_convertible",  label = "Convertible",          drive = "rwd" },
+  { recipe = "kit_step_van",     label = "Parcel van",           drive = "rwd" },
+  { recipe = "kit_small_truck",  label = "Box truck",            drive = "rwd" },
+  { recipe = "sedan",            label = "Sedan (classic)",      drive = "awd" },
+  { recipe = "pickup",           label = "Pickup (classic)",     drive = "awd" },
+  { recipe = "van",              label = "Van (classic)",        drive = "awd" },
+}
 
 -- ---------------------------------------------------------------------------
 -- The AI car FLEET as DATA (ADR-0065). The citysim instanced renderer draws
@@ -220,10 +350,12 @@ local function fleet_car(class_name, color)
     local d = classes.dims(c)
     local car = mesh.car(forms.car_params(c, d, { color = color, lod = FLEET_LOD }))
 
-    -- ONE opaque instanced mesh per slot: painted shell + lamp housings + the
-    -- DARK-TINTED glass merged in. Ambient traffic cannot afford a transparent
-    -- pass per car, and the tint (~0.16,0.20,0.24) reads as glass at traffic
-    -- distance — exactly the role the box fleet's dark glass slabs played.
+    -- The opaque shell: painted body + lamp housings. The GLASS and the
+    -- INTERIOR are their own parts for every slot (fleet v2, Glenn: "the opaque
+    -- with reflection and the swap to hero car for ones nearby the player"): the
+    -- city draws the glass OPAQUE with a reflective glass material for traffic
+    -- at large -- no transparent pass per car -- and, for the few cars nearest
+    -- the player, CLEAR with the interior and a driver behind it.
     local shell = { car.body }
     if car.lamp then shell[#shell + 1] = car.lamp end
     -- A BUS IS MEANT TO BE SEEN INTO (Glenn: "we should see the npcs sitting
@@ -231,11 +363,7 @@ local function fleet_car(class_name, color)
     -- shell and its glass stays a separate, CLEAR part; 24 buses can afford the
     -- transparent pass that hundreds of cars cannot.
     local seeInto = (c.form == "bus")
-    if seeInto then
-      if car.interior then shell[#shell + 1] = car.interior end
-    elseif car.glass then
-      shell[#shell + 1] = car.glass
-    end
+    if seeInto and car.interior then shell[#shell + 1] = car.interior end
 
     -- WHEELS. mesh.car deliberately emits no wheel part (real wheels are placed
     -- per-vehicle by the physics spec), so the fleet bakes its own — ROUND ones:
@@ -316,16 +444,94 @@ local function fleet_car(class_name, color)
         -- by construction rather than by a transcribed table.
         size = { d.width, d.height, d.length },
         class = class_name,
-        glass = seeInto and car.glass or nil,
+        glass = car.glass,
+        -- the saloon is in the shell of a see-into vehicle; the others carry it
+        -- apart, drawn only while they are near the player
+        interior = (not seeInto) and car.interior or nil,
+        see_into = seeInto,
         seats = seeInto and seats or nil,
         doors = seeInto and doors or nil,
-        driver_seat = seeInto and driver_seat or nil,
+        driver_seat = driver_seat,
     }
 end
 
--- A slot is a CLASS plus a PAINT. Adding a vehicle is a line here (and a package
--- in vehicle_classes.lua) — no C++ table to keep in step.
-local FLEET_SLOTS = {
+-- FLEET V2 (ADR-0139): a slot built by vehicle_kit.lua on the poly.* kit -- faceted, with a real gasket
+-- round each window, grille and lamp lenses. The same recipe fields as fleet_car: one opaque vertex-
+-- coloured body, the wheelset apart, the glass as its own part (drawn opaque and reflective), lamp
+-- markers and the driver's seat. No cabin yet: until it exists the city keeps these cars' glass opaque.
+local kit = require "vehicle_kit"
+local KIT_TINT = {
+  glass = { 0.16, 0.20, 0.24 }, trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 },
+  grille = { 0.06, 0.06, 0.065 }, chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 },
+  lamp_red = { 0.75, 0.06, 0.05 }, interior = { 0.35, 0.26, 0.18 }, bed = { 0.08, 0.08, 0.09 },
+  box = { 0.90, 0.90, 0.88 }, chassis = { 0.07, 0.07, 0.08 }, door = { 0.80, 0.81, 0.82 },
+  tank = { 0.78, 0.79, 0.80 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
+}
+local KIT_CABIN = {
+  liner = { 0.55, 0.53, 0.50 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.22, 0.20, 0.19 },
+  dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 },
+}
+local function kit_car(spec, color)
+  local P = kit.SPECS[spec]()
+  local car = kit.build(P, 0)
+  local shell = {}
+  for name, part in pairs(car.parts) do
+    if name ~= "glass" then
+      local col = name == "body" and color or (KIT_TINT[name] or { 0.5, 0.5, 0.5 })
+      shell[#shell + 1] = mesh.bake_height_color(part, col, col)
+    end
+  end
+  local glass = car.parts.glass and mesh.bake_height_color(car.parts.glass, KIT_TINT.glass, KIT_TINT.glass) or nil
+  local w = kit.wheel(P.wheel_r, P.wheel_w, 0)
+  local tyre = mesh.bake_height_color(w.tyre, { 0.05, 0.05, 0.055 }, { 0.05, 0.05, 0.055 })
+  local rim = mesh.bake_height_color(w.rim, { 0.72, 0.73, 0.75 }, { 0.72, 0.73, 0.75 })
+  local rimL = mesh.rotate_y(rim, math.pi)
+  local wheelParts, layout = {}, {}
+  for _, wh in ipairs(car.wheels) do
+    wheelParts[#wheelParts + 1] = mesh.translate(tyre, wh.pos)
+    wheelParts[#wheelParts + 1] = mesh.translate(wh.pos[1] > 0 and rim or rimL, wh.pos)
+    if wh.dual then
+      wheelParts[#wheelParts + 1] = mesh.translate(tyre, { wh.pos[1] - (wh.pos[1] > 0 and 1 or -1) * (wh.width + 0.03), wh.pos[2], wh.pos[3] })
+    end
+    layout[#layout + 1] = { pos = wh.pos, radius = wh.radius, width = wh.width,
+                            steered = wh.front, driven = true, hand_brake = not wh.front }
+  end
+  -- the cabin: a near car shows it through clear glass; an OPEN car (the convertible) always does, so
+  -- its cabin rides in the shell and it is a see-into vehicle like the bus
+  local cabinParts = {}
+  for name, part in pairs(car.cabin or {}) do
+    local col = KIT_CABIN[name] or { 0.3, 0.3, 0.3 }
+    cabinParts[#cabinParts + 1] = mesh.bake_height_color(part, col, col)
+  end
+  local open = P.open_top or false
+  local interior = nil
+  if #cabinParts > 0 then
+    if open then for _, cp in ipairs(cabinParts) do shell[#shell + 1] = cp end
+    else interior = mesh.merge(cabinParts) end
+  end
+  return {
+    interior = interior,
+    body = mesh.recompute_normals(mesh.merge(shell)),
+    wheels = mesh.merge(wheelParts),
+    wheel_layout = layout,
+    lights = car.lights,
+    size = car.size,
+    class = spec,
+    glass = glass,
+    see_into = open,
+    driver_seat = car.driver_seat,
+  }
+end
+-- the catalogue size without building the meshes' materials: the faceted build is cheap, so it is simply
+-- measured (a truck's box or a pickup's bed is part of its length)
+local function kit_size(spec)
+  local car = kit.build(kit.SPECS[spec](), 0)
+  return car.size
+end
+
+-- THE CLASSIC SET: today's mesh.car bodies, kept (Glenn: "it would be nice and funny if we kept some of
+-- the current designs as a 'classic' set"). vehicle.classic[i] has the same shape as vehicle.fleet[i].
+local CLASSIC_SLOTS = {
     { class = "sedan",     color = { 0.72, 0.10, 0.10 } },   -- sedan (red)
     { class = "sedan",     color = { 0.10, 0.18, 0.52 } },   -- sedan (blue)
     { class = "sedan",     color = { 0.90, 0.90, 0.90 } },   -- sedan (white)
@@ -341,6 +547,25 @@ local FLEET_SLOTS = {
     { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow)
 }
 
+-- THE FLEET (v2): kit bodies for the cars and trucks; the city BUS stays the mesh.car bus Glenn likes,
+-- in the 13th slot (the sim's built-in table types slot 13 as the bus). Semis wait for articulated
+-- trailers (a 22 m rigid body would swing its trailer through every kerb).
+local FLEET_SLOTS = {
+    { kit = "sedan",       color = { 0.62, 0.06, 0.07 } },   -- sedan (red)
+    { kit = "sedan",       color = { 0.10, 0.18, 0.52 } },   -- sedan (blue)
+    { kit = "sedan",       color = { 0.88, 0.88, 0.88 } },   -- sedan (white)
+    { kit = "hatchback",   color = { 0.85, 0.72, 0.10 } },   -- hatchback (yellow)
+    { kit = "hatchback",   color = { 0.10, 0.45, 0.30 } },   -- hatchback (green)
+    { kit = "suv",         color = { 0.09, 0.09, 0.11 } },   -- SUV (black)
+    { kit = "suv",         color = { 0.52, 0.53, 0.56 } },   -- SUV (silver)
+    { kit = "jeep",        color = { 0.24, 0.30, 0.18 } },   -- jeep (olive)
+    { kit = "convertible", color = { 0.80, 0.12, 0.10 } },   -- convertible (red)
+    { kit = "pickup",      color = { 0.14, 0.30, 0.20 } },   -- pickup (green)
+    { kit = "step_van",    color = { 0.36, 0.22, 0.10 } },   -- parcel step van (brown)
+    { kit = "small_truck", color = { 0.90, 0.90, 0.88 } },   -- small box truck (white cab)
+    { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow), mesh.car
+}
+
 -- The fleet is DESCRIPTION up front and GEOMETRY on demand.
 --
 -- Each slot carries its catalogue entry — class and size — as plain data, which
@@ -350,15 +575,39 @@ local FLEET_SLOTS = {
 -- wants correct car SIZES must not have to pay for twelve car MESHES to get
 -- them — building them eagerly here made every headless city build do exactly
 -- that.
-vehicle.fleet = {}
-for i, slot in ipairs(FLEET_SLOTS) do
-    local c = classes.apply(slot.class)
-    local d = classes.dims(c)
-    vehicle.fleet[i] = {
-        class = slot.class,
-        size = { d.width, d.height, d.length },
-        build = function() return fleet_car(slot.class, slot.color) end,
-    }
+local function catalogue(slots)
+    local out = {}
+    for i, slot in ipairs(slots) do
+        if slot.kit then
+            out[i] = {
+                class = slot.kit,
+                size = kit_size(slot.kit),
+                build = function() return kit_car(slot.kit, slot.color) end,
+            }
+        else
+            local c = classes.apply(slot.class)
+            local d = classes.dims(c)
+            out[i] = {
+                class = slot.class,
+                size = { d.width, d.height, d.length },
+                build = function() return fleet_car(slot.class, slot.color) end,
+            }
+        end
+    end
+    return out
 end
+-- THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"): the kit cars and
+-- trucks, then the classic ones, then the one city bus -- 25 slots, every body on the road at once.
+local MIXED_SLOTS = {}
+for _, s in ipairs(FLEET_SLOTS) do if s.class ~= "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+for _, s in ipairs(CLASSIC_SLOTS) do if s.class ~= "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+for _, s in ipairs(FLEET_SLOTS) do if s.class == "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+
+-- The named fleets. A level picks one with `citysim.fleet` (level_loader points vehicle.fleet at it);
+-- without one it gets the kit fleet.
+vehicle.fleet_kit = catalogue(FLEET_SLOTS)
+vehicle.classic = catalogue(CLASSIC_SLOTS)
+vehicle.fleet_mixed = catalogue(MIXED_SLOTS)
+vehicle.fleet = vehicle.fleet_kit
 
 return vehicle
