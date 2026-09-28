@@ -4288,7 +4288,17 @@ bool LevelLoader::load(const std::string& path,
                     qr.material = qmat;
                     qr.mesh = assets.acquireMesh(qm, "hydro:quays");
                     world.add<Renderable>(qe, qr);
-                    std::fprintf(stderr, "[hydrology] quays: %zu verts\n", qm.vertices.size());
+                    // and where to go and look: the quay point nearest the player's start
+                    Vec3 from(0, 0, 0);
+                    if (g_levelRoot.contains("player") && g_levelRoot["player"].contains("position")) {
+                        const auto& pp = g_levelRoot["player"]["position"];
+                        if (pp.is_array() && pp.size() >= 3) from = Vec3(pp[0].get<double>(), pp[1].get<double>(), pp[2].get<double>());
+                    }
+                    Vec3 near = qm.vertices.front().position;
+                    for (const Vertex& v : qm.vertices)
+                        if ((v.position - from).lengthSquared() < (near - from).lengthSquared()) near = v.position;
+                    std::fprintf(stderr, "[hydrology] quays: %zu verts; nearest the player's start at (%.0f, %.1f, %.0f)\n",
+                                 qm.vertices.size(), near.x, near.y, near.z);
                 }
             }
 #endif
