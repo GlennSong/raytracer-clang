@@ -9091,4 +9091,14 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
 - **Spec fields.** `drive` ("fwd" | "rwd" | "awd" | "4wd", part-time), `front_share`, `axle_lsd`, `center_lsd`, `drag_area`, the shift timings, `gear_ratios`, and `suspension` { min, max, freq, damp, rest_drop }.
 - **The off-roader** (`vehicle.offroad`, #41). A kit body (lifted, 0.96 m tyres, roof rack, skid plate) on long soft travel (0.40 m at 1.3 Hz), near-locking differentials, sticky tyres and low gears. It is part-time 4WD: Z / D-pad down engages it. The wheel lab parks one beside a street sedan.
 
+- **Between the axles, Jolt's limited slip hurts a climb.** It sends ALL torque to the slower axle past its ratio, which flips the drive back and forth. Measured on 30° dirt: a 1.10 centre stalls (−0.8 m), 1.4 reaches +14 m, and an open centre (a fixed 50/50 split) reaches +28 m.
+  - The off-roader runs it open (`center_lsd = 1e30`) with near-locking axles (1.15).
+  - Street AWD cars keep Jolt's 1.4, which their kerb and roll tuning assumes (the driving-lab and slanted-kerb gates caught the change).
+- **The off-road course** (`tools/offroad_course.py` → `assets/levels/offroad_course.json`) has:
+  - hill ladders on grip (15–35°) and mud (10–30°);
+  - ledges from 0.2 to 0.5 m;
+  - a rock garden, an axle twister, logs and a mud flat;
+  - the off-roader and a street sedan at the start.
+- **What it measures** (`offroader_climbs_what_the_course_asks_in_four_wheel_drive`): the off-roader in 4WD climbs 30° dirt and 20° mud, and neither in 2WD. It crawls every ledge up to 0.5 m, because the cylinder wheel cast rides an edge.
+
 **Consequences.** `test_city_phys_tier` (`maxPossessed >= 6`) fails on the island-nature base too, so it predates this work.

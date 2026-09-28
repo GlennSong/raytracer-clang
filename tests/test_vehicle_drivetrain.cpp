@@ -172,3 +172,125 @@ TEST_CASE(drivetrain_probe_hill_sweep_prints) {
         std::printf("    CdA %.2f: %.1f km/h at 45 s (+%.2f m/s over the last 10)\n", cda, v * 3.6, v - v30);
     }
 }
+
+namespace {
+// vehicles.lua vehicle.offroad, as its spec reads back (test_vehicle_body offroad_spec...): 2300 kg,
+// 1265 Nm to 5200 rpm through low gears, grip 2.3, near-locking diffs, 0.48 m wheels on 0.40 m of 1.3 Hz
+// travel resting 0.30 m below the attach points, CoG 0.62 m down.
+PhysicsWorld::VehicleConfig offroad(bool fourWheel) {
+    PhysicsWorld::VehicleConfig c;
+    const Real W = 2.10, H = 2.20, L = 4.75, r = 0.48;
+    c.chassisHalfExtent = Vec3(W * 0.5, H * 0.5, L * 0.5);
+    c.mass = 2300;
+    c.comOffsetY = -0.62;
+    c.engineTorque = std::floor(2300 * 0.55);
+    c.maxRPM = 5200;
+    c.maxSteerDegrees = 32;
+    c.brakeTorque = std::floor(2300 * 1.2);
+    c.handBrakeTorque = std::floor(2300 * 2.9);
+    c.lateralGrip = 2.3;
+    c.frontDriveShare = fourWheel ? 0.5 : 0.0;
+    c.axleLimitedSlip = 1.15;
+    c.centerLimitedSlip = 1e30;   // open between the axles: a fixed 50/50 split
+    c.dragArea = 2.8;
+    c.shiftTime = 0.2;
+    c.clutchReleaseTime = 0.15;
+    c.shiftLatency = 0.25;
+    c.gearRatios = {3.9, 2.4, 1.6, 1.15, 0.9};
+    const Real axleY = -H * 0.5 + r + 0.30;
+    auto wheel = [&](Real x, Real z, bool front) {
+        PhysicsWorld::VehicleWheel w;
+        w.position = Vec3(x, axleY, z);
+        w.radius = r;
+        w.width = 0.32;
+        w.suspensionMin = 0.0;
+        w.suspensionMax = 0.40;
+        w.suspensionFrequency = 1.3;
+        w.suspensionDamping = 0.5;
+        w.steered = front;
+        w.driven = true;
+        w.handBrake = !front;
+        return w;
+    };
+    c.wheels = { wheel(0.83, 1.60, true), wheel(-0.83, 1.60, true), wheel(0.83, -1.58, false), wheel(-0.83, -1.58, false) };
+    return c;
+}
+
+// A square step `h` high across the car's path 3 m ahead; true once the whole car is up on it within 20 s.
+bool clearsLedge(bool fourWheel, Real h) {
+    PhysicsWorld w;
+    w.initialize();
+    w.addBox(Vec3(200, 1, 200), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    w.addBox(Vec3(8, h, 20), Vec3(0, h * 0.5, 3.0 + 2.4 + 10.0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    w.optimizeBroadPhase();
+    const auto id = w.addVehicle(offroad(fourWheel), Vec3(0, 1.2, 0), Quat::identity());
+    for (int i = 0; i < 90; ++i) w.update(1.0 / 60.0);
+    for (int i = 0; i < 60 * 20; ++i) {
+        w.setVehicleInput(id, 0.7, 0, 0);   // a crawl, not a charge
+        w.update(1.0 / 60.0);
+        const Vec3 p = w.vehiclePosition(id);
+        if (p.z > 3.0 + 2.4 + 4.0 && p.y > h + 0.5) return true;   // the rear axle is past the lip, on top
+    }
+    return false;
+}
+}  // namespace
+
+// Glenn: "could that offroader climb over rocks, steep hills?" -- the off-roader's own numbers, 2WD against
+// 4WD, over the course's slopes and ledges (tools/offroad_course.py): a slope is CLIMBED when the truck
+// gains its ramp's 6 m from rest within 12 s.
+TEST_CASE(offroader_climbs_what_the_course_asks_in_four_wheel_drive) {
+    struct Hill { Real deg, mu; };
+    const Hill hills[] = { {15, 0.9}, {20, 0.9}, {25, 0.9}, {30, 0.9}, {35, 0.9},
+                           {10, 0.35}, {15, 0.35}, {20, 0.35}, {25, 0.35}, {30, 0.35} };
+    int climbed4 = 0, climbed2 = 0;
+    bool grip30in4 = false, mud20in4 = false, mud20in2 = false;
+    for (const Hill& hl : hills) {
+        Real gained[2];
+        for (int four = 0; four < 2; ++four) {
+            PhysicsWorld w;
+            w.initialize();
+            const auto id = onHill(w, offroad(four != 0), hl.deg, hl.mu);
+            gained[four] = climb(w, id, 12.0);
+        }
+        const bool c2 = gained[0] >= 6.0, c4 = gained[1] >= 6.0;
+        climbed2 += c2;
+        climbed4 += c4;
+        if (hl.mu > 0.5 && hl.deg == 30) grip30in4 = c4;
+        if (hl.mu < 0.5 && hl.deg == 20) { mud20in4 = c4; mud20in2 = c2; }
+        std::printf("    %2.0f deg at mu %.2f: 2WD %+6.1f m %s   4WD %+6.1f m %s\n", hl.deg, hl.mu, gained[0],
+                    c2 ? "CLIMBS" : "      ", gained[1], c4 ? "CLIMBS" : "");
+    }
+    std::printf("    ledges (crawl):");
+    bool ledge40 = false;
+    for (const Real h : {0.2, 0.3, 0.4, 0.5}) {
+        const bool l2 = clearsLedge(false, h), l4 = clearsLedge(true, h);
+        if (h == 0.4) ledge40 = l4;
+        std::printf("  %.1f m: 2WD %s 4WD %s;", h, l2 ? "yes" : "no", l4 ? "yes" : "no");
+    }
+    std::printf("\n");
+    CHECK(climbed4 > climbed2);   // 4WD climbs more of the course
+    CHECK(grip30in4);             // a 30 degree dirt hill
+    CHECK(mud20in4 && !mud20in2); // a 20 degree mud hill is a 4WD hill
+    CHECK(ledge40);               // a 0.4 m ledge (over 80% of the wheel's radius)
+}
+
+TEST_CASE(offroader_probe_differential_sweep_prints) {
+    const float big = 1e30f;
+    struct Setup { const char* name; Real share, axle, center; };
+    const Setup setups[] = { {"2WD open axle", 0.0, 1e30, 1e30}, {"2WD lsd 1.15", 0.0, 1.15, 1e30},
+                             {"4WD c1.10 a1.15", 0.5, 1.15, 1.10}, {"4WD c1.4 a1.4", 0.5, 1.4, 1.4},
+                             {"4WD c-open a1.15", 0.5, 1.15, big}, {"4WD c-open a-open", 0.5, 1e30, big} };
+    for (const Real deg : {15.0, 25.0, 30.0}) {
+        for (const Setup& s : setups) {
+            PhysicsWorld w;
+            w.initialize();
+            PhysicsWorld::VehicleConfig c = offroad(s.share > 0.25);
+            c.frontDriveShare = s.share;
+            c.axleLimitedSlip = s.axle;
+            c.centerLimitedSlip = s.center;
+            const auto id = onHill(w, c, deg, 0.9);
+            const Real g = climb(w, id, 12.0);
+            std::printf("    %2.0f deg mu 0.9  %-20s %+7.1f m\n", deg, s.name, g);
+        }
+    }
+}

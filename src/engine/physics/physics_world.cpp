@@ -822,7 +822,8 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     // the moment the rears slipped, and drove as a 4x4 (measured: RWD, FWD and 4WD climbed identically). A
     // one-axle split therefore runs it OPEN (FLT_MAX), as a part-time 4x4's transfer case in 2WD does.
     const bool oneAxle = share <= 0.001f || share >= 0.999f;
-    controller->mDifferentialLimitedSlipRatio = oneAxle ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
+    controller->mDifferentialLimitedSlipRatio =
+        oneAxle || cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
     // GEARBOX (VehicleConfig): quicker shifts, optional ratios
     controller->mTransmission.mSwitchTime = static_cast<float>(cfg.shiftTime);
     controller->mTransmission.mClutchReleaseTime = static_cast<float>(cfg.clutchReleaseTime);
@@ -863,7 +864,7 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.yawAssist = static_cast<float>(std::max(Real(0), cfg.yawAssist));
     v.diffFront = diffFront;
     v.frontShare = share;
-    v.centerLimitedSlip = static_cast<float>(cfg.centerLimitedSlip);
+    v.centerLimitedSlip = cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
     v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
     // The assist's yaw-rate cap: the grip on a 0.85 road (the city's), with
     // 10 % in hand so it only ever trims a slide, never a cornering car.

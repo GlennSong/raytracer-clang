@@ -506,7 +506,8 @@ TEST_CASE(offroad_spec_is_a_part_time_4x4_on_long_travel) {
     CHECK(c.wheels.size() == 4);
     CHECK(c.dragArea > 0.0);
     CHECK(c.gearRatios.size() == 5 && c.gearRatios[0] > 3.0);
-    CHECK(c.axleLimitedSlip < 1.4 && c.centerLimitedSlip < 1.4);
+    CHECK(c.axleLimitedSlip < 1.4);     // near-locking per axle...
+    CHECK(c.centerLimitedSlip >= 1e29); // ...and open between them (a fixed 50/50 split in 4WD)
     const Real H = c.chassisHalfExtent.y * 2.0;
     for (const PhysicsWorld::VehicleWheel& w : c.wheels) {
         CHECK(w.radius > 0.45);

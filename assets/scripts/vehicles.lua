@@ -216,7 +216,8 @@ function vehicle.offroad(seed, opts)
     hand_brake_torque = math.floor(mass * 2.9),
     grip = 2.3,
     drive = "4wd",
-    axle_lsd = 1.15, center_lsd = 1.10,
+    axle_lsd = 1.15,        -- near-locking per axle
+    center_lsd = 1e30,      -- open between the axles: a fixed 50/50 split in 4WD (ADR-0141)
     drag_area = 2.8,
     shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
     gear_ratios = { 3.9, 2.4, 1.6, 1.15, 0.9 },

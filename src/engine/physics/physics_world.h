@@ -260,7 +260,11 @@ public:
         // `frontDriveShare`: 0 rear-wheel drive, 1 front, 0.5 all/four-wheel drive; < 0 derives it from the
         // wheels' `driven` flags. A part-time 4x4 switches it at runtime (setVehicleFrontDriveShare).
         // Limited-slip ratios (Jolt's: the fastest wheel's speed over the slowest's; lower locks harder,
-        // >= 100 is open): per axle, and between the axles (the centre / transfer case).
+        // >= 1e29 is open): per axle, and between the axles. BETWEEN the axles Jolt's limited slip sends ALL
+        // torque to the slower axle past the ratio, so it flips the drive back and forth on a climb --
+        // measured on 30 deg dirt: centre 1.10 stuck (-0.8 m), 1.4 +14 m, open +28 m. An off-roader opens it
+        // (1e30: the torque split stays `frontDriveShare`, as a part-time transfer case in 4WD) with near-
+        // locking axles (1.15); street AWD cars keep Jolt's 1.4, which their kerb and roll tuning assumes.
         Real frontDriveShare = -1.0;
         Real axleLimitedSlip = 1.4;
         Real centerLimitedSlip = 1.4;
