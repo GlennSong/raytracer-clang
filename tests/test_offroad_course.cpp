@@ -203,8 +203,8 @@ TEST_CASE(offroader_with_an_axle_hanging_still_drives_the_wheels_on_the_ground) 
 
 
 // ROLLING IT (Glenn: "how come I can't flip my car? ... if I go off a ramp with half my wheels on it I should be
-// able to flip my vehicle"). The street cars keep ADR-0087's 65 degree roll cone (a kerb trip must not roof a
-// commuter); the part-time 4x4s drop it. A ramp under the LEFT tyres only, hit at speed: the max roll reached.
+// able to flip my vehicle", then "rolling over should be allowed for active drivers, everyone"). No car has a
+// roll cone now (ADR-0087's 65 degrees held every one there). A ramp under one track, hit at speed.
 namespace {
 Real maxRollOffHalfRamp(PhysicsWorld::VehicleConfig cfg, Real kmh) {
     PhysicsWorld w;
@@ -230,20 +230,72 @@ Real maxRollOffHalfRamp(PhysicsWorld::VehicleConfig cfg, Real kmh) {
 }
 }  // namespace
 
-TEST_CASE(offroader_can_roll_over_off_a_half_ramp_street_cars_cannot) {
+TEST_CASE(cars_can_roll_over_off_a_half_ramp) {
     VehiclesVM v;
     VehicleSpec off, sedan;
     std::string err;
     CHECK(loadVehicleSpec(v.vm, "return vehicle.offroad(seed, {})", 3u, off, &err));
     CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_sedan(seed, {})", 3u, sedan, &err));
-    CHECK(off.config.maxPitchRollDegrees >= 180.0);   // no cone on the 4x4
-    CHECK(sedan.config.maxPitchRollDegrees < 90.0);   // the street keeps it
-    bool rolled = false;
+    CHECK(off.config.maxPitchRollDegrees >= 180.0 && sedan.config.maxPitchRollDegrees >= 180.0);
+    bool offRolled = false, sedanRolled = false;
     for (const Real kmh : {40.0, 60.0, 80.0}) {
         const Real r4 = maxRollOffHalfRamp(off.config, kmh), rs = maxRollOffHalfRamp(sedan.config, kmh);
-        std::printf("    %2.0f km/h off a left-side kicker: off-roader max roll %5.1f deg, sedan %5.1f deg\n", kmh, r4, rs);
-        rolled = rolled || r4 > 100.0;
-        CHECK(rs < 90.0);
+        std::printf("    %2.0f km/h off a one-side kicker: off-roader max roll %5.1f deg, sedan %5.1f deg\n", kmh, r4, rs);
+        offRolled = offRolled || r4 > 85.0;       // off its wheels: on its side or further
+        sedanRolled = sedanRolled || rs > 85.0;
     }
-    CHECK(rolled);   // fast enough, it goes over
+    CHECK(offRolled);     // (the tall off-roader goes onto its roof at 80; the low sedan onto its side)
+    CHECK(sedanRolled);
+}
+
+// CORNERING WITHOUT THE CONE (Glenn: "The sedan was rolling a lot when I would turn ... turning doesn't feel
+// good"). Every drivable spec: full steering held from speed, and the two kerb trips the cone was added for.
+// Prints the lean (max roll) and whether it went over.
+namespace {
+struct RollProbe { Real maxRoll = 0.0; bool over = false; };
+RollProbe rollProbe(const PhysicsWorld::VehicleConfig& cfg, int kind, Real kmh) {
+    PhysicsWorld w;
+    w.initialize();
+    w.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    if (kind == 1) {   // the slanted kerb
+        const Quat k = Quat::fromAxisAngle(Vec3(0, 1, 0), 25.0 * 3.14159265358979 / 180.0);
+        w.addBox(Vec3(80, 0.075, 40), k.rotate(Vec3(0, 0, 40)) + Vec3(0, 0.075, 60), k, BodyMotion::Static, 0.0, 0.85);
+    } else if (kind == 2) {   // a kerb face across a sideways slide
+        w.addBox(Vec3(40, 0.075, 40), Vec3(46, 0.075, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    }
+    w.optimizeBroadPhase();
+    const auto id = w.addVehicle(cfg, Vec3(0, 1.2, 0), Quat::identity());
+    for (int i = 0; i < 90; ++i) w.update(1.0 / 60.0);
+    const Real v = kmh / 3.6;
+    w.setLinearVelocity(w.vehicleBody(id), kind == 2 ? Vec3(v, 0, 0) : Vec3(0, 0, v));
+    RollProbe r;
+    for (int i = 0; i < 60 * 5; ++i) {
+        if (kind == 0) w.setVehicleInput(id, 0.3, 1.0, 0);        // full lock, a little throttle
+        else if (kind == 1) w.setVehicleInput(id, 0.3, 0, 0);
+        else w.setVehicleInput(id, 0, 0, 0);
+        w.update(1.0 / 60.0);
+        const Vec3 up = w.vehicleOrientation(id).rotate(Vec3(0, 1, 0));
+        const Real tilt = std::acos(std::clamp(up.y, Real(-1), Real(1))) * 57.2958;
+        r.maxRoll = std::max(r.maxRoll, tilt);
+        if (tilt > 85.0) r.over = true;
+    }
+    return r;
+}
+}  // namespace
+
+TEST_CASE(drivable_cars_probe_cornering_roll_prints) {
+    VehiclesVM v;
+    for (const char* recipe : {"sedan", "kit_sedan", "kit_hatchback", "kit_suv", "kit_step_van", "offroad"}) {
+        VehicleSpec spec;
+        std::string err;
+        if (!loadVehicleSpec(v.vm, std::string("return vehicle.") + recipe + "(seed, {})", 3u, spec, &err)) continue;
+        std::printf("    %-14s turn:", recipe);
+        for (const Real kmh : {40.0, 60.0, 80.0, 100.0, 120.0}) {
+            const RollProbe r = rollProbe(spec.config, 0, kmh);
+            std::printf(" %3.0f:%4.1f%s", kmh, r.maxRoll, r.over ? "OVER" : "");
+        }
+        const RollProbe k1 = rollProbe(spec.config, 1, 65.0), k2 = rollProbe(spec.config, 2, 29.0);
+        std::printf("  | slanted kerb 65: %4.1f%s  side trip 29: %4.1f%s\n", k1.maxRoll, k1.over ? "OVER" : "",
+                    k2.maxRoll, k2.over ? "OVER" : "");
+    }
 }

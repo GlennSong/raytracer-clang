@@ -233,16 +233,18 @@ public:
         // grounded pair got nothing. (Jolt's centre limited slip, near-locked, drives the grounded pair too but
         // throws ALL torque between the axles on a climb and lost the 30 degree hill.)
         bool tractionSplit = false;
-        // ARCADE-FORGIVING (ADR-0059's "tuned by the caller"): the roll CONE
-        // keeps the body's up axis within this angle of world up — a kerb
-        // hop or a trip can put the car on two wheels but never on its roof
-        // (>= 180 turns it off). ANTI-ROLL BARS (N/m across each axle's
+        // The roll CONE keeps the body's up axis within this angle of world
+        // up (>= 180 turns it off). OFF by default: Glenn, 2026-09-27: "rolling
+        // over should be allowed for active drivers, everyone. That's what would
+        // happen in reality." (It was 65, ADR-0087, so a kerb trip could never
+        // roof a car; T rights one now.) A recipe may still set max_roll_deg.
+        // ANTI-ROLL BARS (N/m across each axle's
         // wheel pair) are available but OFF by default: measured on the
         // slanted kerb they hand a one-wheel hit to the other side and lift
         // the whole car (26 deg of roll and a 0.7 m hop at 36 km/h against
         // 4 deg and 0.25 m without), and the street rig's cornering roll is
         // a few degrees without them.
-        Real maxPitchRollDegrees = 65.0;
+        Real maxPitchRollDegrees = 180.0;
         Real antiRollStiffness = 0.0;
         // YAW ASSIST (the fishtail, measured in tests/test_vehicle_handling.cpp):
         // Jolt's tyre is a per-step impulse cap, so past a degree or two of

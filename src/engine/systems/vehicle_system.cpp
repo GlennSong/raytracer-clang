@@ -632,10 +632,14 @@ void VehicleSystem::update(FrameContext& ctx) {
         const Transform* t = iv.vehicle.valid() ? ctx.world.get<Transform>(iv.vehicle) : nullptr;
         if (!v || !t || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
         const auto tel = physicsSys.physicsWorld().vehicleTelemetry(v->vehicleId);
-        char b[200];
-        std::snprintf(b, sizeof(b), "kmh %.1f rpm %.0f gear %d drive %s pos %.2f %.2f %.2f", tel.speed * 3.6, tel.rpm,
-                      tel.gear, v->partTime4wd ? (v->fourWheel ? "4wd" : "2wd") : "fixed",
-                      t->position.x, t->position.y, t->position.z);
+        const Vec3 right = t->orientation.rotate(Vec3(1, 0, 0)), fwd = t->orientation.rotate(Vec3(0, 0, 1));
+        const Real roll = std::asin(std::clamp(right.y, Real(-1), Real(1))) * 57.2958;
+        const Real pitch = std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * 57.2958;
+        const Real yaw = std::atan2(fwd.x, fwd.z) * 57.2958;
+        char b[256];
+        std::snprintf(b, sizeof(b), "kmh %.1f rpm %.0f gear %d drive %s pos %.2f %.2f %.2f roll %.1f pitch %.1f yaw %.1f",
+                      tel.speed * 3.6, tel.rpm, tel.gear, v->partTime4wd ? (v->fourWheel ? "4wd" : "2wd") : "fixed",
+                      t->position.x, t->position.y, t->position.z, roll, pitch, yaw);
         telem = b;
     });
     ctx.settings.setString("vehicle.telemetry", telem);
