@@ -278,6 +278,21 @@ PartId stairFinishPartFor(const BuildingParams& params);
 // all): each storey's slab, inner walls and core, the top ceiling only when
 // the range reaches the top — a tall building streams a window of floors
 // around the player. No RNG — two calls are identical.
+// THE LOBBY'S DRESSING (M5; #60): a reception desk facing the entrance, with its counter top and a planter
+// at each end, as footprints -- a centre, the desk's width axis `u` (square to the way it faces) and its
+// facing axis `v` (toward the door), and a height band. Placed between the core and the door and slid
+// toward the door until the whole group clears the core (stair shafts included) by a walkway and stays
+// inside the plan; without the room for the planters, the desk alone; without room for that, nothing.
+struct LobbyPiece {
+    Vec2 c, u, v;
+    Real w = 0, d = 0, h0 = 0, h1 = 0;   // along u, along v, and the height band above the lobby floor
+    Vec3 colour;
+    bool collide = true;
+    Poly2 footprint() const;
+};
+struct CorePlan;
+std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdge, const CorePlan& core);
+
 BuildingMesh growInterior(const Poly2& plan, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut = nullptr,
                           int k0 = 0, int k1 = -1);

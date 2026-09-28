@@ -2915,6 +2915,83 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
     return il;
 }
 
+Poly2 LobbyPiece::footprint() const {
+    Poly2 cs = {c - u * (w * 0.5) - v * (d * 0.5), c + u * (w * 0.5) - v * (d * 0.5),
+                c + u * (w * 0.5) + v * (d * 0.5), c - u * (w * 0.5) + v * (d * 0.5)};
+    // INSIDE-OUT DESKS (Glenn, 2026-09-17): the ring's winding follows (u, v)'s handedness; force CCW so
+    // each side's (dy, -dx) normal points out.
+    Real area = 0;
+    for (std::size_t i = 0; i < 4; ++i) area += cs[i].x * cs[(i + 1) % 4].y - cs[(i + 1) % 4].x * cs[i].y;
+    if (area < 0) std::swap(cs[1], cs[3]);
+    return cs;
+}
+
+namespace {
+// Do two convex polygons overlap (separating axis)?
+bool convexOverlap(const Poly2& A, const Poly2& B) {
+    for (const Poly2* P : {&A, &B})
+        for (std::size_t i = 0; i < P->size(); ++i) {
+            const Vec2 e = (*P)[(i + 1) % P->size()] - (*P)[i];
+            const Vec2 ax(-e.y, e.x);
+            Real a0 = 1e300, a1 = -1e300, b0 = 1e300, b1 = -1e300;
+            for (const Vec2& q : A) { const Real t = dot(q, ax); a0 = std::min(a0, t); a1 = std::max(a1, t); }
+            for (const Vec2& q : B) { const Real t = dot(q, ax); b0 = std::min(b0, t); b1 = std::max(b1, t); }
+            if (a1 < b0 || b1 < a0) return false;
+        }
+    return true;
+}
+}  // namespace
+
+std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdge, const CorePlan& core) {
+    std::vector<LobbyPiece> out;
+    if (!core.valid || plan.size() < 3) return out;
+    const std::size_t e = entranceEdge % plan.size();
+    const Vec2 E = (plan[e] + plan[(e + 1) % plan.size()]) * 0.5;
+    const Vec2 C = core.frame.toWorld({core.length * 0.5, 0.0});
+    if ((E - C).length() <= 7.0) return out;
+    // FACING THE DOOR (#60, Glenn: "a flattened reception desk ... clips into the stairs"): the desk's width
+    // runs SQUARE to the way it faces. It ran along the core's own axis, and where the door lay along that
+    // axis the width and the facing were parallel and the desk collapsed to a line.
+    const Vec2 v = normalize(E - C);
+    const Vec2 u(v.y, -v.x);
+    // the core grown by a walkway: nothing of the lobby's dressing stands in front of a shaft door or a stair
+    Poly2 coreRect = core.rect();
+    {
+        Vec2 m(0, 0);
+        for (const Vec2& q : coreRect) m = m + q;
+        m = m * (1.0 / static_cast<Real>(coreRect.size()));
+        for (Vec2& q : coreRect) { const Vec2 d = q - m; const Real l = d.length(); if (l > 1e-9) q = q + d * (1.4 / l); }
+    }
+    const Vec3 wood(0.42, 0.30, 0.20), top(0.62, 0.60, 0.56), pot(0.30, 0.30, 0.32), leaf(0.20, 0.42, 0.22);
+    auto group = [&](const Vec2& centre, bool planters) {
+        std::vector<LobbyPiece> g;
+        g.push_back({centre, u, v, 3.4, 0.9, 0.0, 1.05, wood, true});     // the desk
+        g.push_back({centre, u, v, 3.6, 1.0, 1.05, 1.12, top, true});     // its counter top
+        if (planters)
+            for (Real sgn : {-1.0, 1.0}) {
+                const Vec2 pc = centre + u * (sgn * 2.6);
+                g.push_back({pc, u, v, 0.7, 0.7, 0.0, 0.62, pot, true});    // planter
+                g.push_back({pc, u, v, 0.55, 0.55, 0.62, 1.35, leaf, false});  // its plant
+            }
+        return g;
+    };
+    auto fits = [&](const std::vector<LobbyPiece>& g) {
+        for (const LobbyPiece& pc : g) {
+            const Poly2 fp = pc.footprint();
+            if (convexOverlap(fp, coreRect)) return false;
+            for (const Vec2& q : fp)
+                if (!pointInPolygon(plan, q)) return false;
+        }
+        return true;
+    };
+    for (const bool planters : {true, false})
+        for (Real t = 0.45; t <= 0.80 + 1e-9; t += 0.05) {
+            std::vector<LobbyPiece> g = group(C + (E - C) * t, planters);
+            if (fits(g)) return g;
+        }
+    return out;
+}
+
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
@@ -3305,60 +3382,23 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (int ki = kA; ki < kB; ++ki)
             emitCoreStorey(cm, colliderOut, core, storeys[static_cast<std::size_t>(ki)], baseY,
                            params, ki + 1 < nS, ki >= 1, false);
-        // LOBBY DRESSING (M5, owed): a reception desk facing the entrance,
-        // between the door and the bank, with a planter at each end — boxes
-        // with colliders, in the lobby's own storey only.
+        // LOBBY DRESSING (M5; #60): the desk, its top and two planters, placed by lobbyDressing.
         if (kA == 0) {
-            const std::size_t e = entranceEdge % plan.size();
-            const Vec2 E = (plan[e] + plan[(e + 1) % plan.size()]) * 0.5;
-            const Vec2 C = core.frame.toWorld({core.length * 0.5, 0.0});
-            const Real gap = (E - C).length();
-            if (gap > 7.0) {
-                const Vec2 centre = C + (E - C) * 0.45;
-                const Vec2 u = core.frame.u, v = normalize(E - C);   // v: toward the entrance
-                const Real yF = baseY + 0.07;                        // on the lobby overlay
-                auto box = [&](const Vec2& c, Real w, Real d, Real h0, Real h1, const Vec3& colr, bool collide) {
-                    Vec2 cs[4] = {c - u * (w * 0.5) - v * (d * 0.5), c + u * (w * 0.5) - v * (d * 0.5),
-                                  c + u * (w * 0.5) + v * (d * 0.5), c - u * (w * 0.5) + v * (d * 0.5)};
-                    // INSIDE-OUT DESKS (Glenn, 2026-09-17: "some of the table
-                    // furniture's normals are backwards"). This ring inherits
-                    // its winding from (u, v): u is the core's frame axis, v is
-                    // "toward the entrance" -- an arbitrary direction with no
-                    // fixed handedness. Where (u, v) comes out left-handed the
-                    // ring is CW, and the side normal below, (dy, -dx), is the
-                    // right-hand perpendicular: on a CW ring it points INWARD,
-                    // so the box lights as if seen from inside. SOME desks, not
-                    // all -- it depends which side of the core the door is on,
-                    // which is why it survived. The top is immune: its normal is
-                    // hardcoded up. Force CCW and (dy, -dx) is outward again.
-                    Real ringArea = 0;
-                    for (int i = 0; i < 4; ++i) {
-                        const Vec2& p0 = cs[i];
-                        const Vec2& p1 = cs[(i + 1) % 4];
-                        ringArea += p0.x * p1.y - p1.x * p0.y;
-                    }
-                    if (ringArea < 0) std::swap(cs[1], cs[3]);
-                    for (int i = 0; i < 4; ++i) {
-                        const Vec2 a = cs[i], b = cs[(i + 1) % 4];
-                        const Vec2 dd = b - a;
-                        const Vec2 n = normalize(Vec2(dd.y, -dd.x));
-                        const Vec3 A(a.x, yF + h0, a.y), B(b.x, yF + h0, b.y), Cc(b.x, yF + h1, b.y), D(a.x, yF + h1, a.y);
-                        emitQuad(cm.drywall, A, B, Cc, D, Vec3(n.x, 0, n.y), colr);
-                        if (collide && colliderOut) emitQuad(*colliderOut, A, B, Cc, D, Vec3(n.x, 0, n.y), colr);
-                    }
-                    const Vec3 T0(cs[0].x, yF + h1, cs[0].y), T1(cs[1].x, yF + h1, cs[1].y),
-                        T2(cs[2].x, yF + h1, cs[2].y), T3(cs[3].x, yF + h1, cs[3].y);
-                    emitQuad(cm.drywall, T0, T1, T2, T3, Vec3(0, 1, 0), colr);
-                    if (collide && colliderOut) emitQuad(*colliderOut, T0, T1, T2, T3, Vec3(0, 1, 0), colr);
-                };
-                const Vec3 wood(0.42, 0.30, 0.20), top(0.62, 0.60, 0.56), pot(0.30, 0.30, 0.32), leaf(0.20, 0.42, 0.22);
-                box(centre, 3.4, 0.9, 0.0, 1.05, wood, true);          // the desk
-                box(centre, 3.6, 1.0, 1.05, 1.12, top, true);          // its counter top
-                for (Real sgn : {-1.0, 1.0}) {
-                    const Vec2 pc = centre + u * (sgn * 2.6);
-                    box(pc, 0.7, 0.7, 0.0, 0.62, pot, true);           // planter
-                    box(pc, 0.55, 0.55, 0.62, 1.35, leaf, false);      // its plant
+            const Real yF = baseY + 0.07;   // on the lobby overlay
+            for (const LobbyPiece& pc : lobbyDressing(plan, entranceEdge, core)) {
+                Poly2 cs = pc.footprint();   // CCW, so (dy, -dx) is each side's outward normal
+                for (std::size_t i = 0; i < 4; ++i) {
+                    const Vec2 a = cs[i], b = cs[(i + 1) % 4];
+                    const Vec2 dd = b - a;
+                    const Vec2 n = normalize(Vec2(dd.y, -dd.x));
+                    const Vec3 A(a.x, yF + pc.h0, a.y), B(b.x, yF + pc.h0, b.y), Cc(b.x, yF + pc.h1, b.y), D(a.x, yF + pc.h1, a.y);
+                    emitQuad(cm.drywall, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
+                    if (pc.collide && colliderOut) emitQuad(*colliderOut, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
                 }
+                const Vec3 T0(cs[0].x, yF + pc.h1, cs[0].y), T1(cs[1].x, yF + pc.h1, cs[1].y),
+                    T2(cs[2].x, yF + pc.h1, cs[2].y), T3(cs[3].x, yF + pc.h1, cs[3].y);
+                emitQuad(cm.drywall, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
+                if (pc.collide && colliderOut) emitQuad(*colliderOut, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
             }
         }
         appendToPart(out, PartId::Interior, cm.drywall);
