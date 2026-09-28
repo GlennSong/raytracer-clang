@@ -1385,8 +1385,8 @@ int main(int argc, char** argv) {
         { std::lock_guard<std::mutex> l(bakeJob.m); v.baking = bakeJob.running; }
         v.root = QFileInfo(QString::fromStdString(cacheStatus.root)).absoluteFilePath();
         v.currentDir = QString::fromStdString(cacheStatus.currentDir); v.currentCreated = QString::fromStdString(cacheStatus.currentCreated); v.currentBytes = cacheStatus.currentBytes;
-        v.olderCount = static_cast<int>(cacheStatus.older.size()); v.olderBytes = cacheStatus.olderBytes;
-        if (!cacheStatus.older.empty()) { v.newestOlderDir = QString::fromStdString(cacheStatus.older.front().dir); v.newestOlderCreated = QString::fromStdString(cacheStatus.older.front().created); }
+        for (const auto& e : cacheStatus.older) v.older.push_back({QString::fromStdString(e.dir), QString::fromStdString(e.created), e.bytes});
+        v.olderBytes = cacheStatus.olderBytes;
         v.cacheBundles = static_cast<int>(cacheStatus.cacheBundles); v.cacheStale = static_cast<int>(cacheStatus.cacheStale);
         v.cacheBytes = cacheStatus.cacheBytes; v.cacheStaleBytes = cacheStatus.cacheStaleBytes;
         levelCachePanel->setView(v);
@@ -1396,8 +1396,7 @@ int main(int argc, char** argv) {
     levelCachePanel->onRefresh = [&]() { refreshLevelCache(); };
     levelCachePanel->onBuild = [&]() { startBake(savedBakeOptions()); };
     levelCachePanel->onRebuild = [&]() { BakeOptions o = savedBakeOptions(); o.force = true; startBake(o); };
-    levelCachePanel->onShowFolder = [&]() {
-        const QString dir = levelCachePanel->folderToShow();
+    levelCachePanel->onShowDir = [&](const QString& dir) {
         if (!dir.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(dir).absoluteFilePath()));
     };
     auto deleteBakes = [&](const std::vector<std::string>& dirs, uint64_t bytes, const QString& what) {
@@ -1413,6 +1412,11 @@ int main(int argc, char** argv) {
     levelCachePanel->onDeleteOlder = [&]() {
         std::vector<std::string> dirs; for (const auto& e : cacheStatus.older) dirs.push_back(e.dir);
         deleteBakes(dirs, cacheStatus.olderBytes, QString("%1 out-of-date bake%2 of this level").arg(dirs.size()).arg(dirs.size() == 1 ? "" : "s"));
+    };
+    levelCachePanel->onDeleteDirs = [&](const QStringList& picked) {
+        std::vector<std::string> dirs; uint64_t bytes = 0;
+        for (const auto& e : cacheStatus.older) if (picked.contains(QString::fromStdString(e.dir))) { dirs.push_back(e.dir); bytes += e.bytes; }
+        deleteBakes(dirs, bytes, QString("%1 selected out-of-date bake%2").arg(dirs.size()).arg(dirs.size() == 1 ? "" : "s"));
     };
     levelCachePanel->onDeleteAll = [&]() {
         std::vector<std::string> dirs; for (const auto& e : cacheStatus.older) dirs.push_back(e.dir);

@@ -12,9 +12,13 @@
 #include <QWidget>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 class QLabel;
 class QPushButton;
+class QTreeWidget;
+
+struct OlderBake { QString dir, created; uint64_t bytes = 0; };   // one out-of-date bundle of the level
 
 struct LevelCacheView {
     QString level;            // file name, for the heading
@@ -26,9 +30,8 @@ struct LevelCacheView {
     QString currentDir;       // where today's bake lives (or would)
     QString currentCreated;   // ISO-8601 UTC, from its manifest
     uint64_t currentBytes = 0;
-    int olderCount = 0;       // this level's out-of-date bundles
+    std::vector<OlderBake> older;   // this level's out-of-date bundles, newest first
     uint64_t olderBytes = 0;
-    QString newestOlderDir, newestOlderCreated;
     int cacheBundles = 0, cacheStale = 0;   // the whole root
     uint64_t cacheBytes = 0, cacheStaleBytes = 0;
 };
@@ -43,12 +46,19 @@ public:
     const LevelCacheView& view() const { return view_; }
     QString folderToShow() const;   // the current bake, else the newest older one, else the root
 
-    std::function<void()> onRefresh, onBuild, onRebuild, onDeleteOlder, onDeleteAll, onShowFolder, onPruneAll;
+    QStringList selectedOlder() const;   // the dirs of the rows picked in the older-bakes list
+
+    std::function<void()> onRefresh, onBuild, onRebuild, onDeleteOlder, onDeleteAll, onPruneAll;
+    std::function<void(const QString&)> onShowDir;             // Show in folder, or a double-clicked older bake
+    std::function<void(const QStringList&)> onDeleteDirs;      // Delete selected (older bakes)
 
     QLabel* heading = nullptr;
     QLabel* status = nullptr;       // "Current" / "Out of date" / "Not baked"
     QLabel* detail = nullptr;       // size, age, where
     QLabel* olderLine = nullptr;    // this level's out-of-date bakes
+    QTreeWidget* olderList = nullptr;   // one row each: baked, age, size, folder
+    QPushButton* showSelectedButton = nullptr;
+    QPushButton* deleteSelectedButton = nullptr;
     QLabel* cacheLine = nullptr;    // the whole cache
     QPushButton* refreshButton = nullptr;
     QPushButton* buildButton = nullptr;

@@ -3,7 +3,9 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QHeaderView>
 #include <QPushButton>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 QString humanBytes(uint64_t bytes) {
@@ -43,12 +45,23 @@ LevelCachePanel::LevelCachePanel(QWidget* parent) : QWidget(parent) {
     grid->addWidget(showButton, 1, 0); grid->addWidget(deleteAllButton, 1, 1);
     col->addLayout(grid);
     col->addWidget(olderLine);
-    deleteOlderButton = new QPushButton("Delete out-of-date bakes", this); deleteOlderButton->setToolTip("Delete this level's older bakes; keep the current one");
-    col->addWidget(deleteOlderButton);
+    olderList = new QTreeWidget(this);
+    olderList->setColumnCount(4);
+    olderList->setHeaderLabels({"Baked", "Age", "Size", "Folder"});
+    olderList->setRootIsDecorated(false);
+    olderList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    olderList->header()->setStretchLastSection(true);
+    olderList->setToolTip("Double-click a bake to open its folder");
+    col->addWidget(olderList, 1);
+    auto* olderButtons = new QHBoxLayout;
+    showSelectedButton = new QPushButton("Show selected", this);
+    deleteSelectedButton = new QPushButton("Delete selected", this);
+    deleteOlderButton = new QPushButton("Delete all out-of-date", this); deleteOlderButton->setToolTip("Delete this level's older bakes; keep the current one");
+    olderButtons->addWidget(showSelectedButton); olderButtons->addWidget(deleteSelectedButton); olderButtons->addWidget(deleteOlderButton);
+    col->addLayout(olderButtons);
     col->addWidget(cacheLine);
     pruneButton = new QPushButton("Prune stale bakes (all levels)", this); pruneButton->setToolTip("Delete every bake superseded by a newer bake of the same level (rt_bake --prune)");
     col->addWidget(pruneButton);
-    col->addStretch(1);
 
     auto call = [](const std::function<void()>& f) { if (f) f(); };
     QObject::connect(refreshButton, &QPushButton::clicked, [this, call]() { call(onRefresh); });
@@ -56,15 +69,29 @@ LevelCachePanel::LevelCachePanel(QWidget* parent) : QWidget(parent) {
     QObject::connect(rebuildButton, &QPushButton::clicked, [this, call]() { call(onRebuild); });
     QObject::connect(deleteOlderButton, &QPushButton::clicked, [this, call]() { call(onDeleteOlder); });
     QObject::connect(deleteAllButton, &QPushButton::clicked, [this, call]() { call(onDeleteAll); });
-    QObject::connect(showButton, &QPushButton::clicked, [this, call]() { call(onShowFolder); });
+    QObject::connect(showButton, &QPushButton::clicked, [this]() { if (onShowDir && !folderToShow().isEmpty()) onShowDir(folderToShow()); });
+    QObject::connect(showSelectedButton, &QPushButton::clicked, [this]() { if (onShowDir) for (const QString& d : selectedOlder()) onShowDir(d); });
+    QObject::connect(deleteSelectedButton, &QPushButton::clicked, [this]() { const QStringList d = selectedOlder(); if (onDeleteDirs && !d.isEmpty()) onDeleteDirs(d); });
+    QObject::connect(olderList, &QTreeWidget::itemDoubleClicked, [this](QTreeWidgetItem* it, int) { if (onShowDir && it) onShowDir(it->data(0, Qt::UserRole).toString()); });
+    QObject::connect(olderList, &QTreeWidget::itemSelectionChanged, [this]() {
+        const bool any = !selectedOlder().isEmpty();
+        showSelectedButton->setEnabled(any);
+        deleteSelectedButton->setEnabled(any && !view_.baking);
+    });
     QObject::connect(pruneButton, &QPushButton::clicked, [this, call]() { call(onPruneAll); });
     setView(LevelCacheView{});
 }
 
 QString LevelCachePanel::folderToShow() const {
     if (view_.current) return view_.currentDir;
-    if (view_.olderCount > 0) return view_.newestOlderDir;
+    if (!view_.older.empty()) return view_.older.front().dir;
     return view_.root;
+}
+
+QStringList LevelCachePanel::selectedOlder() const {
+    QStringList dirs;
+    for (QTreeWidgetItem* it : olderList->selectedItems()) dirs << it->data(0, Qt::UserRole).toString();
+    return dirs;
 }
 
 void LevelCachePanel::setView(const LevelCacheView& v, const QDateTime& now) {
@@ -80,16 +107,28 @@ void LevelCachePanel::setView(const LevelCacheView& v, const QDateTime& now) {
         const QString ago = bakedAgo(v.currentCreated, now);
         status->setText("<span style='color:#3a3'>● Current</span> — loads from the bake");
         detail->setText(QString("%1, baked %2\n%3").arg(humanBytes(v.currentBytes), ago.isEmpty() ? v.currentCreated : ago, v.currentDir));
-    } else if (v.olderCount > 0) {
-        const QString ago = bakedAgo(v.newestOlderCreated, now);
+    } else if (!v.older.empty()) {
+        const QString ago = bakedAgo(v.older.front().created, now);
         status->setText("<span style='color:#c80'>● Out of date</span> — the level, its inputs or the engine changed");
-        detail->setText(QString("Last baked %1; the next load rebuilds from source (or Build now).").arg(ago.isEmpty() ? v.newestOlderCreated : ago));
+        detail->setText(QString("Last baked %1; the next load rebuilds from source (or Build now).").arg(ago.isEmpty() ? v.older.front().created : ago));
     } else {
         status->setText("<span style='color:#888'>● Not baked</span> — loads from source");
         detail->setText(QString("Build writes it to %1").arg(v.root));
     }
-    olderLine->setVisible(v.olderCount > 0);
-    olderLine->setText(QString("%1 out-of-date bake%2 of this level: %3").arg(v.olderCount).arg(v.olderCount == 1 ? "" : "s").arg(humanBytes(v.olderBytes)));
+    const int n = static_cast<int>(v.older.size());
+    olderLine->setText(n == 0 ? QString("No out-of-date bakes of this level")
+                              : QString("%1 out-of-date bake%2 of this level: %3").arg(n).arg(n == 1 ? "" : "s").arg(humanBytes(v.olderBytes)));
+    olderList->clear();
+    for (const OlderBake& b : v.older) {
+        const QDateTime t = QDateTime::fromString(b.created, Qt::ISODate);
+        auto* it = new QTreeWidgetItem(olderList, {t.isValid() ? t.toLocalTime().toString("yyyy-MM-dd HH:mm") : b.created, bakedAgo(b.created, now), humanBytes(b.bytes), b.dir});
+        it->setData(0, Qt::UserRole, b.dir);
+        it->setTextAlignment(2, Qt::AlignRight | Qt::AlignVCenter);
+    }
+    for (int c = 0; c < 3; ++c) olderList->resizeColumnToContents(c);
+    olderList->setVisible(n > 0);
+    showSelectedButton->setVisible(n > 0); deleteSelectedButton->setVisible(n > 0);
+    showSelectedButton->setEnabled(false); deleteSelectedButton->setEnabled(false);
     cacheLine->setText(QString("Whole cache: %1 bake%2, %3; %4 stale (%5)")
                            .arg(v.cacheBundles).arg(v.cacheBundles == 1 ? "" : "s").arg(humanBytes(v.cacheBytes))
                            .arg(v.cacheStale).arg(humanBytes(v.cacheStaleBytes)));
@@ -98,9 +137,9 @@ void LevelCachePanel::setView(const LevelCacheView& v, const QDateTime& now) {
     buildButton->setEnabled(idle && v.applies && !v.current);
     rebuildButton->setEnabled(idle && v.applies && v.current);
     showButton->setEnabled(!folderToShow().isEmpty());
-    deleteAllButton->setEnabled(idle && (v.current || v.olderCount > 0));
-    deleteOlderButton->setVisible(v.olderCount > 0);
-    deleteOlderButton->setEnabled(idle && v.olderCount > 0);
+    deleteAllButton->setEnabled(idle && (v.current || !v.older.empty()));
+    deleteOlderButton->setVisible(n > 0);
+    deleteOlderButton->setEnabled(idle && n > 0);
     pruneButton->setEnabled(!v.baking && v.cacheStale > 0);
     refreshButton->setEnabled(!v.baking);
 }
