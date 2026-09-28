@@ -10,6 +10,8 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
 #endif
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <tinygltf/stb_image_write.h>   // the PNG writer the elevation maps use
                                         // (implementation lives in model_importer.cpp)
@@ -5252,6 +5254,20 @@ bool LevelLoader::load(const std::string& path,
             if (cfg.vehicleScript.empty())
                 LOG_WARN << "citysim: vehicles script '" << vehiclesFile
                          << "' not found — using built-in fleet meshes";
+            // `"fleet": "fleet_mixed"` picks one of the script's named fleets (vehicles.lua: fleet_kit,
+            // classic, fleet_mixed): everything downstream reads vehicle.fleet, so point it there.
+            const std::string fleetName = cs.value("fleet", std::string());
+            if (!cfg.vehicleScript.empty() && !fleetName.empty()) {
+                const bool ident = std::all_of(fleetName.begin(), fleetName.end(), [](char ch) {
+                    return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+                });
+                if (ident)
+                    cfg.vehicleScript += "\nif vehicle and vehicle[\"" + fleetName + "\"] then vehicle.fleet = vehicle[\"" +
+                                         fleetName + "\"] else print(\"citysim.fleet: no vehicle." + fleetName +
+                                         " -- keeping the default fleet\") end\n";
+                else
+                    LOG_WARN << "citysim: fleet '" << fleetName << "' is not a name — keeping the default fleet";
+            }
         }
         // Authored places (ADR-0066): a `"places"` array of labelled destinations
         // the citysim bridge snaps onto the sidewalk network and turns into a
