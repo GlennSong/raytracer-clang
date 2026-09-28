@@ -1387,3 +1387,29 @@ TEST_CASE(city_clock_follows_the_sky_in_lockstep) {
     for (int i = 0; i < 10; ++i) city.step(world, 0.1);
     CHECK_APPROX(city.sim().timeOfDay(), 1.0, 1e-6);   // 22 + 3 wraps
 }
+
+// #39 (Glenn: "there are still arrows on the street that flicker on and off based on how you orient the camera.
+// We should remove those arrows in favor of the new ones"). The bridge's stop bars and arrows are quads floating
+// just over the asphalt. A lattice road has no paint of its own and keeps them; over a road whose builder
+// painted its own markings into the surface (the lanes builder: LevelRoadGraph::paintedMarkings) they are gone.
+TEST_CASE(the_bridge_draws_no_floating_arrows_over_a_road_that_painted_its_own) {
+    {
+        World world;
+        world.add<RoadEntity>(world.create(), crossRoads());
+        CityRenderSystem city(cityParams());
+        CHECK(city.build(world, nullptr));
+        CHECK(city.drewRoadMarkings());   // the signalled junction's stop bars and arrows
+    }
+    {
+        World world;
+        const RoadEntity net = crossRoads();
+        world.add<RoadEntity>(world.create(), net);
+        engine::LevelRoadGraph lrg;
+        lrg.graph = engine::navRoadGraph(net, nullptr);
+        lrg.paintedMarkings = true;
+        world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
+        CityRenderSystem city(cityParams());
+        CHECK(city.build(world, nullptr));
+        CHECK(!city.drewRoadMarkings());
+    }
+}

@@ -583,6 +583,7 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
     if (have) return;
     engine::LevelRoadGraph lrg; lrg.graph = b.navGraph(in);
     if (lrg.graph.edges.empty()) return;
+    lrg.paintedMarkings = std::string(b.name()) == "lanes";   // its deck carries the stop bars, crosswalks and arrows
     LOG_INFO << "[roads] unified road graph from the " << b.name() << " builder's twin: "
              << lrg.graph.nodes.size() << " nodes, " << lrg.graph.edges.size() << " edges";
     world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));

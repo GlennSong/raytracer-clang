@@ -1158,7 +1158,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     // Stop bars + lane-turn arrows (R6c, plan 4e): one white PAINT mesh for
     // every signalled approach (buildRoadMarkings), one identity instance.
-    {
+    // NOT on a road whose builder painted its own (LevelRoadGraph::paintedMarkings, the lanes builder):
+    // these quads float just over the asphalt and flickered with the camera angle beside the real paint (#39).
+    bool builderPainted = false;
+    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { builderPainted = builderPainted || g.paintedMarkings; });
+    if (!builderPainted) {
         engine::RenderMesh paint = buildRoadMarkings();
         MeshHandle mh{};
         if (assets) mh = assets->acquireMesh(paint, "city:roadmarks");

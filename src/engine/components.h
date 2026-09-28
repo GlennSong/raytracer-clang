@@ -738,6 +738,10 @@ struct CitySimConfig {
 // (Supersedes the P8.4 ExtraNavGraph bolt-on, which only the sim could see.)
 struct LevelRoadGraph {
     RoadGraph graph;
+    // The builder painted stop bars, crosswalks and lane arrows INTO its road surface (the lanes builder,
+    // ADR-0108), so a consumer must not add floating marking quads of its own on top (#39: they z-fought
+    // the asphalt and flickered with the camera angle).
+    bool paintedMarkings = false;
 };
 
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the

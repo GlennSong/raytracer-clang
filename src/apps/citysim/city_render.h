@@ -477,6 +477,10 @@ private:
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
     engine::Entity roadMarkGroup_;     // stop bars + lane-turn arrows (R6c)
+public:
+    // Did this bridge draw its own stop bars and arrows? Not over a builder that painted them (#39).
+    bool drewRoadMarkings() const { return roadMarkGroup_.valid(); }
+private:
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
     // Car lamps (ADR-0065 follow-up): one emissive instance group per lamp kind.
     engine::Entity headlightGroup_{};  // white, forward
