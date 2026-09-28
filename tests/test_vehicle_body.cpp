@@ -558,3 +558,35 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
     CHECK(driveLabel("4wd").find("4WD") != std::string::npos);
     CHECK(driveLabel("fwd").find("2WD") != std::string::npos);
 }
+
+// THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). vehicle.fleet_mixed
+// is every kit car and truck, then every classic one, then ONE city bus; a level's `citysim.fleet` points
+// vehicle.fleet at it (selectFleet, after the script runs -- the first cut appended the switch to the script
+// text, after vehicles.lua's `return`, and every such level drew no cars), and the kit fleet stays the default.
+TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    CHECK(fleetSlotCount(v.vm) == 13);   // the default: the kit fleet
+    std::string err;
+    CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
+    CHECK(fleetSlotCount(v.vm) == 13);
+    CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
+    const int n = fleetSlotCount(v.vm);
+    std::printf("    fleet_mixed: %d slots\n", n);
+    CHECK(n == 25);
+    int buses = 0, kitSedans = 0, classicSedans = 0;
+    for (int s = 0; s < n; ++s) {
+        Vec3 size;
+        std::string cls, e;
+        CHECK(loadFleetCatalogueEntry(v.vm, s, size, cls, &e));
+        CHECK(size.x > 1.0 && size.z > 3.0);
+        if (cls == "bus") ++buses;
+        if (cls == "sedan") (s < 12 ? kitSedans : classicSedans) += 1;
+    }
+    CHECK(buses == 1);
+    CHECK(kitSedans == 3 && classicSedans == 3);
+    CarBodyRecipe kitBody, classicBody;
+    CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));        // a kit body
+    CHECK(loadFleetCarBody(v.vm, 12, classicBody, &err));   // a classic body
+    CHECK(!kitBody.mesh.vertices.empty() && !classicBody.mesh.vertices.empty());
+}

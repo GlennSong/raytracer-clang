@@ -110,6 +110,7 @@ struct CityRenderParams {
     // builds. Absent or empty means this level draws NO cars — vehicles are
     // optional content, and there is no built-in substitute.
     std::string vehicleScript;
+    std::string fleet;   // a named fleet of that script (selectFleet); "" = its default
     // Three-tier traffic (P4): opt this level into the V/K bubble — far agents
     // become persistent coarse-tick "virtual" travellers (no render, no proxy,
     // no sensing) promoted back to full kinematic agents near the player. Off

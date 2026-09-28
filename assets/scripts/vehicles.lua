@@ -596,7 +596,18 @@ local function catalogue(slots)
     end
     return out
 end
-vehicle.fleet = catalogue(FLEET_SLOTS)
+-- THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"): the kit cars and
+-- trucks, then the classic ones, then the one city bus -- 25 slots, every body on the road at once.
+local MIXED_SLOTS = {}
+for _, s in ipairs(FLEET_SLOTS) do if s.class ~= "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+for _, s in ipairs(CLASSIC_SLOTS) do if s.class ~= "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+for _, s in ipairs(FLEET_SLOTS) do if s.class == "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+
+-- The named fleets. A level picks one with `citysim.fleet` (level_loader points vehicle.fleet at it);
+-- without one it gets the kit fleet.
+vehicle.fleet_kit = catalogue(FLEET_SLOTS)
 vehicle.classic = catalogue(CLASSIC_SLOTS)
+vehicle.fleet_mixed = catalogue(MIXED_SLOTS)
+vehicle.fleet = vehicle.fleet_kit
 
 return vehicle

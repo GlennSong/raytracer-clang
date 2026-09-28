@@ -718,6 +718,9 @@ struct CitySimConfig {
     // builds each instanced fleet mesh from its `vehicle.fleet` recipes. Any
     // "" = this level draws no cars (vehicles are optional content).
     std::string vehicleScript;
+    // Which of the script's named fleets to draw (vehicles.lua: fleet_kit, classic, fleet_mixed); "" = its
+    // default `vehicle.fleet`. From the level's citysim.fleet.
+    std::string fleet;
     // Level-authored places (ADR-0066): labelled destinations (home/shop/office/
     // park/civic) the citysim bridge turns into a routable PlaceMap at build.
     // Empty for levels that don't author any (the generator emits them later).

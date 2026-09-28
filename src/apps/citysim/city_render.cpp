@@ -213,6 +213,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.ambientBus = c.ambientBus;
         params_.agentScript = c.agentScript;
         params_.vehicleScript = c.vehicleScript;
+        params_.fleet = c.fleet;
         debugWidgets_ = c.debugWidgets;
         showPlan_ = showPlan_ || c.showPlan;
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
@@ -459,9 +460,19 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         engine::openProcgenLibrary(fleetVM_);
         engine::openModuleLoader(fleetVM_, engine::makeModuleSource(""));
         std::string err;
-        if (!fleetVM_.doString(params_.vehicleScript, &err)) {
+        const bool scriptOk = fleetVM_.doString(params_.vehicleScript, &err);
+        if (!scriptOk) {
             LOG_WARN << "citysim vehicles script: " << err
                      << " — this level draws NO cars";
+        } else if (!params_.fleet.empty()) {
+            // the level's named fleet (citysim.fleet): pointed at AFTER the script has run
+            std::string ferr;
+            if (engine::selectFleet(fleetVM_, params_.fleet, &ferr))
+                LOG_INFO << "[citysim] fleet: vehicle." << params_.fleet;
+            else
+                LOG_WARN << "citysim fleet '" << params_.fleet << "': " << ferr << " — keeping the default fleet";
+        }
+        if (!scriptOk) {
         } else if (int slots = engine::fleetSlotCount(fleetVM_); slots > 0) {
             // THE ASSET decides how many cars the fleet has. This used to be a
             // C++ constant, so a thirteenth slot was never built and a shorter

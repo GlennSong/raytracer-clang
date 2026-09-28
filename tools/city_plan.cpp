@@ -338,6 +338,8 @@ int main(int argc, char** argv) {
             // only what is near the player, so a lower cap reads as busy where you stand
             if (natureLevel.contains("terrain")) level["citysim"]["maxAmbient"] = 4000;
             level["citysim"]["graph"] = scenePath;
+            // every body on the road: the kit fleet and the classic set together (vehicles.lua fleet_mixed)
+            level["citysim"]["fleet"] = "fleet_mixed";
             // the player in the first city's centre
             const engine::Vec2 spawn = w.centres.empty() ? engine::Vec2(0, 0) : w.centres[0];
             if (!level.contains("player")) level["player"] = nlohmann::json::object();

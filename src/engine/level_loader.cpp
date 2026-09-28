@@ -10,6 +10,8 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/script_modules.h"
 #endif
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <tinygltf/stb_image_write.h>   // the PNG writer the elevation maps use
                                         // (implementation lives in model_importer.cpp)
@@ -5252,6 +5254,10 @@ bool LevelLoader::load(const std::string& path,
             if (cfg.vehicleScript.empty())
                 LOG_WARN << "citysim: vehicles script '" << vehiclesFile
                          << "' not found — using built-in fleet meshes";
+            // `"fleet": "fleet_mixed"` picks one of the script's named fleets (vehicles.lua: fleet_kit, classic,
+            // fleet_mixed). The citysim bridge points vehicle.fleet at it after running the script
+            // (selectFleet); appending that line to the script text broke it -- vehicles.lua ends in `return`.
+            cfg.fleet = cs.value("fleet", std::string());
         }
         // Authored places (ADR-0066): a `"places"` array of labelled destinations
         // the citysim bridge snaps onto the sidewalk network and turns into a

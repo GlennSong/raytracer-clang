@@ -94,6 +94,11 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
 // "use the built-in fleet".
 int fleetSlotCount(ScriptVM& vm);
 
+// Point `vehicle.fleet` at one of the script's NAMED fleets (vehicles.lua: fleet_kit, classic, fleet_mixed),
+// after the script has run -- a level's citysim.fleet. False (err filled, fleet untouched) when there is no
+// such table.
+bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err = nullptr);
+
 // The CATALOGUE half of a slot — its class name and its size — without building
 // any geometry. A recipe may publish its body behind a `build()` function; this
 // never calls it, so reading what a car MEASURES costs nothing while reading
