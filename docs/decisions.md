@@ -9119,3 +9119,15 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
 - **Probes that drive:** `hold <Key> <seconds>` holds a key through the real input path, and `vehicle?` reports the player's car (km/h, rpm, gear, 2wd/4wd, position, sim speed).
 
 **Consequences.** `test_city_phys_tier` (`maxPossessed >= 6`) fails on the island-nature base too, so it predates this work.
+
+## ADR-0142 — Sim speed: shown on screen, set from the debug menu
+
+**Context.** Glenn: "if I use . or , it goes really slowly", then "we need some onscreen UI popup for gamespeed slow/fast... so that I know what's going on. I wonder if that should be something living in the debug menu itself and not on the keyboard." The speed was `,` (half) and `.` (double) on the keyboard, shown only in the log. The car picker had already shipped on the same keys and run the world at 8x (ADR-0141). DevControlSystem also re-applied its own copy of the speed every frame, overwriting the control channel's `sim speed`.
+
+**Decision.**
+- **Shown.** Whenever the world is not at real time, DevControlSystem draws it: a large notice at centre screen for 2.5 s of real time after any change ("SIM SLOW 1/2x", "SIM FAST 2x", "PAUSED"), then a small badge top right for as long as it lasts. Blue is slow, red fast, amber paused.
+- **Set from the debug menu.** The overlay (`` ` ``) has a Sim speed row at the top: 1/4x, 1/2x, 1x, 2x, 4x, and Pause/Resume.
+- **Off the keyboard.** `sim_slower` / `sim_faster` are unbound by default; `bind.sim_slower` / `bind.sim_faster` in settings bring them back. `0` (real time) and Enter (pause) stay.
+- **The clock is the one record of the speed.** The menu, the keys and the control channel all set `SimClock`; DevControlSystem reads it back instead of keeping its own copy.
+
+**Consequences.** `,` and `.` are free. A slow or fast world can no longer pass unnoticed.
