@@ -818,3 +818,23 @@ TEST_CASE(the_camera_knows_whose_water_it_is_under) {
     CHECK(in.kind == UnderwaterSystem::Water::Sea && std::fabs(in.level - 0.5) < 1e-9);
     CHECK(UnderwaterSystem::surfaceAt(world, 150, 50).kind == UnderwaterSystem::Water::None);
 }
+
+TEST_CASE(a_stream_and_a_broad_river_sound_different) {
+    // #87: "More of a river sound would be nice". Bubbles: a narrow stream is a dense, bright babble; a broad
+    // river is lower, with the body of the water roaring under it.
+    const uint32_t rate = 48000;
+    const auto stream = sfx::river(rate, 9, 0.1), broad = sfx::river(rate, 11, 0.9);
+    const Voiceprint vs = voiceprint(stream, rate), vb = voiceprint(broad, rate);
+    std::printf("    [river] stream bands %.2f %.2f %.2f %.2f | broad %.2f %.2f %.2f %.2f\n", vs.band[0], vs.band[1], vs.band[2], vs.band[3],
+                vb.band[0], vb.band[1], vb.band[2], vb.band[3]);
+    CHECK(vb.band[0] > vs.band[0] + 0.1);        // the broad river's roar
+    CHECK(vs.centroidish > vb.centroidish);      // the stream's brighter babble
+    auto seamIsClean = [](const std::vector<float>& f) {
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < f.size(); i++) maxStep = std::max(maxStep, std::fabs(f[i] - f[i - 1]));
+        return std::fabs(f.front() - f.back()) <= maxStep * 1.5f + 1e-4f;
+    };
+    CHECK(seamIsClean(stream) && seamIsClean(broad));
+    maybeDump("loop_river_stream", stream, rate);
+    maybeDump("loop_river_broad", broad, rate);
+}

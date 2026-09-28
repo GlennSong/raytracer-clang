@@ -58,7 +58,10 @@ std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate = 48
 // looping voice whose volume the caller drives:
 std::vector<float> grassRustle(uint32_t sampleRate = 48000, uint32_t seed = 1);   // walking through tall grass, ~2 s
 std::vector<float> surf(uint32_t sampleRate = 48000, uint32_t seed = 1);          // waves on a beach, two swells, ~11 s
-std::vector<float> river(uint32_t sampleRate = 48000, uint32_t seed = 1);         // running water, ~4 s
+// Running water, ~4 s. `size` 0..1: 0 a narrow, fast stream (a dense babble of small bright bubbles),
+// 1 a broad river (fewer, deeper bubbles over a low roar). Physically based: each bubble rings at its
+// Minnaert frequency (~3.3 m / radius) with the damping a real bubble has, rising in pitch as it closes.
+std::vector<float> river(uint32_t sampleRate = 48000, uint32_t seed = 1, double size = 0.5);
 
 // The firing rate the clip is baked at: pitch 1.0 sounds like this many
 // combustion events per second (~1700 rpm on a four-cylinder four-stroke, two

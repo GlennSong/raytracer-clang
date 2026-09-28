@@ -24,17 +24,19 @@ void WaterAmbienceSystem::onStart(FrameContext& ctx) {
     ready_ = ctx.audio.ready();
     if (!ready_) return;
     const uint32_t rate = ctx.audio.sampleRate();
-    const std::vector<float> s = sfx::surf(rate, 5), r = sfx::river(rate, 9);
+    const std::vector<float> s = sfx::surf(rate, 5), r = sfx::river(rate, 9, 0.1), big = sfx::river(rate, 11, 0.9);
     surfClip_ = ctx.audio.createClip(s.data(), s.size(), 1, rate);
     riverClip_ = ctx.audio.createClip(r.data(), r.size(), 1, rate);
+    bigRiverClip_ = ctx.audio.createClip(big.data(), big.size(), 1, rate);
 }
 
 void WaterAmbienceSystem::onStop(FrameContext& ctx) {
     if (surfVoice_.valid()) ctx.audio.stop(surfVoice_);
     if (riverVoice_.valid()) ctx.audio.stop(riverVoice_);
-    surfVoice_ = riverVoice_ = AudioVoiceHandle{};
-    haveSurf_ = haveRiver_ = false;
-    surfGain_ = riverGain_ = 0;
+    if (bigRiverVoice_.valid()) ctx.audio.stop(bigRiverVoice_);
+    surfVoice_ = riverVoice_ = bigRiverVoice_ = AudioVoiceHandle{};
+    haveSurf_ = haveRiver_ = haveBigRiver_ = false;
+    surfGain_ = riverGain_ = bigRiverGain_ = 0;
 }
 
 void WaterAmbienceSystem::update(FrameContext& ctx) {
@@ -83,7 +85,7 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
             surfTarget_ = inSea ? Vec3(sweepCentre_.x, sea, sweepCentre_.z) : best_;
             // high on a cliff the surf is far below: thin it with height above the water
             const double above = std::max(0.0, at.y - sea);
-            surfLevel_ = 0.85 * std::clamp(1.0 - above / 120.0, 0.15, 1.0);
+            surfLevel_ = std::clamp(1.0 - above / 120.0, 0.15, 1.0);   // #87: the surf a notch louder
         }
         drive(surfClip_, surfVoice_, surfAt_, haveSurf_, surfGain_, surfFound_, surfTarget_, kSurfRange, surfLevel_);
     }
@@ -111,7 +113,19 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
             const double step = std::max(0.0, d);
             target = gl > 1e-6 ? Vec3(at.x - gx / gl * step, level, at.z - gz / gl * step) : Vec3(at.x, level, at.z);
         }
-        drive(riverClip_, riverVoice_, riverAt_, haveRiver_, riverGain_, found, target, kRiverRange, 0.8);
+        // how big the nearest river is: a narrow stream babbles, a broad one roars (#87)
+        if (found && (riverSizeTimer_ -= dt) <= 0) {
+            riverSizeTimer_ = 0.5;
+            double best = 1e30, width = 20.0;
+            for (const River& r : hydro->rivers())
+                for (const RiverNode& n : r.nodes) {
+                    const double dx = n.p.x - at.x, dz = n.p.y - at.z, d2 = dx * dx + dz * dz;
+                    if (d2 < best) { best = d2; width = n.width; }
+                }
+            riverSize_ = std::clamp((width - 8.0) / 27.0, 0.0, 1.0);   // 8 m a stream .. 35 m a broad river
+        }
+        drive(riverClip_, riverVoice_, riverAt_, haveRiver_, riverGain_, found, target, kRiverRange, 0.9 * (1.0 - riverSize_));
+        drive(bigRiverClip_, bigRiverVoice_, bigRiverAt_, haveBigRiver_, bigRiverGain_, found, target, kRiverRange, 0.9 * riverSize_);
     }
     static const bool log = std::getenv("RT_WATER_LOG") != nullptr;   // RT_WATER_LOG=1: where each voice sits, twice a second
     static double since = 0;

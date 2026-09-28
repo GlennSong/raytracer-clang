@@ -314,38 +314,63 @@ std::vector<float> surf(uint32_t sampleRate, uint32_t seed) {
     return out;
 }
 
-std::vector<float> river(uint32_t sampleRate, uint32_t seed) {
-    // Running water: a mid-band wash that never stops, plus BUBBLES -- short rising sine chirps (the
-    // resonance of a closing air pocket), scattered through the loop. Bubbles near the end wrap round.
+std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
+    // #87 (Glenn: "It's like a low noise ... More of a river sound would be nice"). Water sounds like
+    // water because of BUBBLES: an air pocket closing under the surface rings at its Minnaert resonance,
+    // f = 3.26 / r (Hz, r in metres), damped fast (van den Doel: d = 0.043 f + 0.0014 f^1.5 per second)
+    // and rising a little in pitch as it rises. A stream is thousands of small ones a second; a big river
+    // fewer, larger, lower ones over the roar of the whole body of water moving. All wrapped round the
+    // loop, so it repeats seamlessly.
+    size = std::clamp(size, 0.0, 1.0);
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 4.0);
     std::mt19937 rng(seed * 22695477u + 1u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
     std::vector<double> white(count);
     for (double& w : white) w = uni(rng);
-    const std::vector<double> wash = circBand(white, rate, 250.0, 3000.0);
-    const std::vector<double> sparkle = circBand(white, rate, 3000.0, 9000.0);
+    // the bed: the water's body moving (low roar, stronger for a big river) and surface hiss
+    const std::vector<double> roar = circBand(white, rate, 60.0, 450.0);
+    const std::vector<double> hiss = circBand(white, rate, 2500.0, 9000.0);
     const std::vector<double> swell = circEnvelope(count, rng, 2, 7, 4);
     std::vector<double> acc(count, 0.0);
-    std::uniform_real_distribution<double> at(0.0, 1.0), hz(350.0, 1400.0), amp(0.2, 1.0), dur(0.008, 0.03);
-    const int bubbles = 160;
+    // bubbles: radius from a power law (many small, few large), the range shifting larger with `size`
+    const double rMin = 0.0012 + 0.0015 * size, rMax = 0.006 + 0.010 * size;   // metres
+    const int bubbles = static_cast<int>(4.0 * (1300.0 - 800.0 * size));        // per loop
     for (int b = 0; b < bubbles; ++b) {
-        const size_t start = static_cast<size_t>(at(rng) * count);
-        const double f0 = hz(rng), a = amp(rng), d = dur(rng);
-        const size_t len = static_cast<size_t>(d * rate * 4);
+        // inverse-CDF of p(r) ~ r^-2.5 between rMin and rMax
+        const double a = -1.5, u = u01(rng);
+        const double r = std::pow(std::pow(rMin, a) + u * (std::pow(rMax, a) - std::pow(rMin, a)), 1.0 / a);
+        const double f0 = 3.26 / r;
+        const double d = 0.043 * f0 + 0.0014 * std::pow(f0, 1.5);
+        const double amp = std::pow(r / rMax, 1.0) * (0.4 + 0.6 * u01(rng));
+        const double rise = 0.1 * d;   // pitch climb per second, ~ the damping (xi ~ 0.1)
+        const size_t start = static_cast<size_t>(u01(rng) * count);
+        const size_t len = static_cast<size_t>(std::min(0.08, 5.0 / d) * rate);
         double phase = 0;
         for (size_t k = 0; k < len; ++k) {
             const double t = static_cast<double>(k) / rate;
-            const double f = f0 * (1.0 + 2.5 * t / (d * 4));   // rising
-            phase += TWO_PI * f / rate;
-            acc[(start + k) % count] += a * std::sin(phase) * std::exp(-t / d);
+            phase += 6.283185307179586 * f0 * (1.0 + rise * t) / rate;
+            acc[(start + k) % count] += amp * std::sin(phase) * std::exp(-d * t);
         }
     }
+    // splashes: short broadband bursts where the water breaks over a stone (more in a fast stream)
+    const int splashes = static_cast<int>(4.0 * (18.0 - 12.0 * size));
+    for (int s2 = 0; s2 < splashes; ++s2) {
+        const size_t start = static_cast<size_t>(u01(rng) * count);
+        const double a = 0.2 + 0.4 * u01(rng);
+        const size_t len = static_cast<size_t>(0.04 * rate);
+        for (size_t k = 0; k < len; ++k)
+            acc[(start + k) % count] += a * hiss[(start + k) % count] * std::exp(-static_cast<double>(k) / (0.008 * rate));
+    }
+    double bubbleRms = 0;
+    for (double x : acc) bubbleRms += x * x;
+    bubbleRms = std::sqrt(bubbleRms / count);
+    const double norm = bubbleRms > 1e-9 ? 1.0 / bubbleRms : 1.0;
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
-        const double s = 1.0 + 0.15 * swell[i] / 2.0;
-        const double v = 0.8 * wash[i] * s + 0.25 * sparkle[i] + 0.9 * acc[i];
-        out[i] = static_cast<float>(std::tanh(0.45 * v));
+        const double sw = 1.0 + 0.15 * swell[i] / 2.0;
+        const double v = (0.25 + 0.75 * size) * roar[i] * sw + 0.12 * hiss[i] + 0.9 * acc[i] * norm;
+        out[i] = static_cast<float>(std::tanh(0.4 * v));
     }
     normalizeTo(out, 0.7f);
     return out;

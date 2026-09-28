@@ -29,11 +29,14 @@ public:
 
 private:
     bool ready_ = false;
-    AudioClipHandle surfClip_{}, riverClip_{};
-    AudioVoiceHandle surfVoice_{}, riverVoice_{};
-    Vec3 surfAt_{}, riverAt_{};
-    bool haveSurf_ = false, haveRiver_ = false;
-    double surfGain_ = 0, riverGain_ = 0;
+    AudioClipHandle surfClip_{}, riverClip_{}, bigRiverClip_{};
+    AudioVoiceHandle surfVoice_{}, riverVoice_{}, bigRiverVoice_{};
+    Vec3 surfAt_{}, riverAt_{}, bigRiverAt_{};
+    bool haveSurf_ = false, haveRiver_ = false, haveBigRiver_ = false;
+    double surfGain_ = 0, riverGain_ = 0, bigRiverGain_ = 0;
+    // #87: a narrow stream babbles, a broad river roars -- two loops crossfaded by the nearest river's width
+    double riverSize_ = 0.5;          // 0 stream .. 1 broad river
+    double riverSizeTimer_ = 0.0;
     bool surfFound_ = false;        // the last finished sweep's answer
     Vec3 surfTarget_{};
     double surfLevel_ = 0;
