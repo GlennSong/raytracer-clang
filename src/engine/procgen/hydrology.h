@@ -129,6 +129,8 @@ public:
     double shore(double x, double z, double y, double* waterline = nullptr) const;
     // Inside a lake, or within `margin` metres of one (its drainage cells).
     bool inLake(double x, double z, double margin = 0.0) const;
+    // The water level of the lake at (x, z) -- within `margin` metres of one -- or NaN when there is none.
+    double lakeLevelAt(double x, double z, double margin = 0.0) const;
     RenderMesh waterMesh(const std::vector<std::vector<Vec2>>& sea = {},
                          const std::function<double(double, double)>& ground = {}) const;   // sea: cells it stops at
 

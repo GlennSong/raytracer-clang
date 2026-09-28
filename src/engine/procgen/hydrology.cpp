@@ -333,6 +333,25 @@ bool Hydrology::inLake(double x, double z, double margin) const {
     return false;
 }
 
+double Hydrology::lakeLevelAt(double x, double z, double margin) const {
+    const int n = n_;
+    if (n <= 0 || lakeOfCell_.empty()) return std::numeric_limits<double>::quiet_NaN();
+    const int i0 = static_cast<int>(std::lround((x + p_.half) / p_.cell)), j0 = static_cast<int>(std::lround((z + p_.half) / p_.cell));
+    const int r = static_cast<int>(std::ceil(margin / p_.cell));
+    double level = std::numeric_limits<double>::quiet_NaN();
+    for (int j = j0 - r; j <= j0 + r; ++j)
+        for (int i = i0 - r; i <= i0 + r; ++i) {
+            if (i < 0 || j < 0 || i >= n || j >= n) continue;
+            const int lk = lakeOfCell_[static_cast<std::size_t>(j) * n + i];
+            if (lk < 0 || lk >= static_cast<int>(lakes_.size())) continue;
+            const double dx = -p_.half + i * p_.cell - x, dz = -p_.half + j * p_.cell - z;
+            if (dx * dx + dz * dz > (margin + 0.5 * p_.cell) * (margin + 0.5 * p_.cell)) continue;
+            const double lv = lakes_[static_cast<std::size_t>(lk)].level;
+            if (!std::isfinite(level) || lv > level) level = lv;
+        }
+    return level;
+}
+
 bool Hydrology::onShelf(double x, double z) const {
     const Vec2 q(x, z);
     for (const River& r : rivers_) {

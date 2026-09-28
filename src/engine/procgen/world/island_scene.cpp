@@ -130,6 +130,29 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
             }
             k = j + 1;
         }
+        // LAKES (#79, Glenn: "part of the freeway cuts below a lake ... It should be elevated over the lake"):
+        // the router keeps the ROUTE 12 m off a lake, but a carriageway stands a dozen metres to one side of
+        // it, and one crossed the lake's edge on its own profile, down in the basin with a retaining wall
+        // holding the water back beside it. Every run over (or within a few metres of) a lake is floored at
+        // the lake's level plus the bridge clearance -- all of it, however long: a road cannot run IN a lake.
+        k = 0;
+        while (k < dense.size()) {
+            const double lv0 = w.hydro->lakeLevelAt(dense[k].x, dense[k].y, 6.0);
+            if (!std::isfinite(lv0)) { ++k; continue; }
+            std::size_t j = k;
+            double top = lv0;
+            while (j + 1 < dense.size()) {
+                const double lv = w.hydro->lakeLevelAt(dense[j + 1].x, dense[j + 1].y, 6.0);
+                if (!std::isfinite(lv)) break;
+                top = std::max(top, lv);
+                ++j;
+            }
+            // one floor every <= 60 m along the run, each holding 40 m either side, so a long crossing is held
+            // all the way over
+            for (std::size_t q = k; q <= j; q += 8) floors.push_back({dense[q].x, dense[q].y, top + o.bridgeOverWater, 40.0});
+            floors.push_back({dense[j].x, dense[j].y, top + o.bridgeOverWater, 40.0});
+            k = j + 1;
+        }
         return floors;
     };
 
@@ -219,10 +242,22 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
             return z;
         };
         const char* names[2][2] = {{"fw0_a", "fw0_a2"}, {"fw0_b", "fw0_b2"}};
+        // ONE PROFILE OVER WATER FOR BOTH CARRIAGEWAYS: each side's water floors go to both sides, so the two
+        // directions of one freeway cannot part company over a river or a lake (#79: one crossed on piers at
+        // 34 m while the other ran 28 m below it, under the water)
+        json sharedWater = json::array();
+        for (int side = 0; side < 2; ++side)
+            for (const std::vector<Vec2>& P : chains[side])
+                for (const json& f : riverFloors(P)) sharedWater.push_back(f);
         for (int side = 0; side < 2; ++side)
             for (std::size_t c = 0; c < chains[side].size(); ++c) {
                 const std::vector<Vec2>& P = chains[side][c];
-                json floors = riverFloors(P);
+                json floors = json::array();
+                for (const json& f : sharedWater) {   // the other side's floors, where they reach this one
+                    Vec2 at;
+                    if (distToPolyline(Vec2(f[0].get<double>(), f[1].get<double>()), P, &at) > f[3].get<double>() + o.carriage) continue;
+                    floors.push_back({at.x, at.y, f[2], f[3]});
+                }
                 for (const Vec2& x : crossings) {
                     Vec2 f;
                     if (distToPolyline(x, P, &f) > o.carriage + 20.0) continue;
