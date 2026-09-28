@@ -591,7 +591,8 @@ RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
         const std::size_t n = pts.size();
         // which samples carry a wall: where the caller says, and beside a RIVER (not a lake shore)
         std::vector<char> on(n, 0);
-        std::vector<double> lvl(n, 0.0), top(n, 0.0);
+        std::vector<double> lvl(n, 0.0), top(n, 0.0), bank(n, 0.0);
+        std::vector<Vec2> outw(n, Vec2(0, 0));
         for (std::size_t i = 0; i < n; ++i) {
             double level = 0.0;
             const double d = distanceToRiver(pts[i].x, pts[i].y, 20.0, &level);
@@ -605,6 +606,8 @@ RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
             on[i] = 1;
             lvl[i] = level;
             top[i] = std::max(ground(q.x, q.y), level + 0.8) + parapet;
+            outw[i] = outward;
+            bank[i] = ground(q.x, q.y);
         }
         // strips over runs of wall samples
         double u = 0.0;
@@ -627,6 +630,54 @@ RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
             put(b, top[j], u + len, top[j] - lvl[j] + 1.2);
             put(a, top[i], u, top[i] - lvl[i] + 1.2);
             out.indices.insert(out.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+            // THICKNESS (#57, Glenn: "the wall has no thickness"): a coping on top, a back face down into the
+            // bank, and a cap where a run of wall ends -- each sample's back edge offset along its own outward
+            // direction, so neighbouring segments share it and corners stay closed.
+            constexpr double kThick = 0.45;
+            const Vec2 ab = a + outw[i] * kThick, bb = b + outw[j] * kThick;
+            auto quad = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, const Vec3& n, double w, double h) {
+                const uint32_t q0 = static_cast<uint32_t>(out.vertices.size());
+                const Vec3 tt = (p1 - p0).length() > 1e-9 ? (p1 - p0) * (1.0 / (p1 - p0).length()) : Vec3(1, 0, 0);
+                const Vec3 ps[4] = {p0, p1, p2, p3};
+                const double uv[4][2] = {{u, 0}, {u + w, 0}, {u + w, h}, {u, h}};
+                for (int c = 0; c < 4; ++c) {
+                    Vertex v(ps[c], n, tt, static_cast<float>(uv[c][0]), static_cast<float>(uv[c][1]));
+                    v.color = Vec3(1, 1, 1);
+                    out.vertices.push_back(v);
+                }
+                out.indices.insert(out.indices.end(), {q0, q0 + 1, q0 + 2, q0, q0 + 2, q0 + 3});
+            };
+            // coping: along the front top edge, then back across the wall -- a, b, bb, ab winds it facing up.
+            // Emitted as its two triangles: at a sharp inside bend the two samples' offsets cross and a triangle
+            // would face DOWN (a fold under 0.03 m^2); that one is left out rather than drawn inside out.
+            {
+                const Vec3 P[4] = {Vec3(a.x, top[i], a.y), Vec3(b.x, top[j], b.y), Vec3(bb.x, top[j], bb.y), Vec3(ab.x, top[i], ab.y)};
+                const double UV[4][2] = {{u, 0}, {u + len, 0}, {u + len, kThick}, {u, kThick}};
+                const Vec3 tt(t.x, 0.0, t.y);
+                const int tris[2][3] = {{0, 1, 2}, {0, 2, 3}};
+                for (const auto& tri : tris) {
+                    const Vec3 w = cross(P[tri[1]] - P[tri[0]], P[tri[2]] - P[tri[0]]);
+                    if (w.y <= 0.0) continue;   // folded: facing down
+                    const uint32_t q0 = static_cast<uint32_t>(out.vertices.size());
+                    for (int c : tri) {
+                        Vertex v(P[c], Vec3(0, 1, 0), tt, static_cast<float>(UV[c][0]), static_cast<float>(UV[c][1]));
+                        v.color = Vec3(1, 1, 1);
+                        out.vertices.push_back(v);
+                    }
+                    out.indices.insert(out.indices.end(), {q0, q0 + 1, q0 + 2});
+                }
+            }
+            // back face: facing the bank, from the top down to below the bank's ground
+            const Vec3 nb(t.y, 0.0, -t.x);
+            const double footI = std::min(bank[i], top[i]) - 0.3, footJ = std::min(bank[j], top[j]) - 0.3;
+            quad(Vec3(bb.x, footJ, bb.y), Vec3(ab.x, footI, ab.y), Vec3(ab.x, top[i], ab.y), Vec3(bb.x, top[j], bb.y),
+                 nb, len, top[i] - footI);
+            // an end cap where the run stops (the next sample carries no wall), and where it starts
+            auto cap = [&](const Vec2& f, const Vec2& k, double yb, double yt, const Vec3& n) {
+                quad(Vec3(f.x, yb, f.y), Vec3(k.x, yb, k.y), Vec3(k.x, yt, k.y), Vec3(f.x, yt, f.y), n, kThick, yt - yb);
+            };
+            if (!on[(j + 1) % n]) cap(b, bb, lvl[j] - 1.2, top[j], Vec3(t.x, 0.0, t.y));
+            if (!on[(i + n - 1) % n]) cap(ab, a, lvl[i] - 1.2, top[i], Vec3(-t.x, 0.0, -t.y));
             u += len;
         }
     }

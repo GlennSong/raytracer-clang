@@ -372,3 +372,40 @@ TEST_CASE(rock_seat_follows_the_slope_without_burying_or_floating) {
     }
 }
 
+
+// #57 (Glenn: "There's a wall along one of the rivers ... the wall has no thickness"). The quay is a wall with
+// a section now: the face toward the water, a coping on top, a back face into the bank, caps where a run ends.
+// Every triangle is wound to face along its own normal (drawn from the side it faces, culled from behind).
+TEST_CASE(quay_wall_has_a_top_and_a_back_and_faces_the_way_it_is_wound) {
+    auto ground = [](double x, double z) {
+        return -0.04 * x + 6.0 * std::sin(z * 0.004) + 4.0 * std::sin(x * 0.006 + z * 0.003);
+    };
+    engine::HydroParams hp;
+    hp.half = 600; hp.cell = 8; hp.seaLevel = 0; hp.riverArea = 60000;
+    auto hy = engine::Hydrology::build(ground, hp);
+    const engine::RenderMesh q = hy->quayMesh([](double, double) { return true; }, ground, 0.8);
+    CHECK(!q.indices.empty());
+    int up = 0, front = 0, back = 0, misWound = 0, tris = 0;
+    for (std::size_t i = 0; i + 2 < q.indices.size(); i += 3) {
+        const engine::Vertex& A = q.vertices[q.indices[i]];
+        const engine::Vertex& B = q.vertices[q.indices[i + 1]];
+        const engine::Vertex& C = q.vertices[q.indices[i + 2]];
+        const engine::Vec3 w = engine::cross(B.position - A.position, C.position - A.position);
+        if (w.length() < 1e-9) continue;
+        ++tris;
+        if (engine::dot(w, A.normal) <= 0) ++misWound;
+        if (A.normal.y > 0.9) ++up;
+        else if (std::fabs(A.normal.y) < 0.1) {
+            // toward the water or the bank: does a step along the normal bring the face nearer the river?
+            const engine::Vec3 c = (A.position + B.position + C.position) * (1.0 / 3.0);
+            const double here = hy->distanceToRiver(c.x, c.z, 60.0);
+            const double ahead = hy->distanceToRiver(c.x + A.normal.x * 0.3, c.z + A.normal.z * 0.3, 60.0);
+            ++(ahead < here ? front : back);
+        }
+    }
+    std::printf("    quay: %d triangles, %d coping, %d toward the water, %d toward the bank (end caps among them), %d mis-wound\n",
+                tris, up, front, back, misWound);
+    CHECK(misWound == 0);
+    CHECK(up > 0);              // a top
+    CHECK(front > 0 && back >= front * 3 / 4);   // a back face behind the front (caps land on either side)
+}
