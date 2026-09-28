@@ -54,7 +54,8 @@ double FootstepSystem::groundHeight(const TerrainLodConfig& cfg, double x, doubl
     return terrainHeight(cfg.params, *noise_, x, z);
 }
 
-sfx::Ground FootstepSystem::groundAt(World& world, uint8_t surface, double x, double y, double z) {
+sfx::Ground FootstepSystem::groundAt(World& world, uint8_t surface, double x, double y, double z, double* slopeCos) {
+    if (slopeCos) *slopeCos = 1.0;
     if (surface != static_cast<uint8_t>(ColliderSurface::Terrain))
         return groundForSurface(surface, false, 0, 0, 0, 0, 0);
     const TerrainLodConfig* cfg = nullptr;
@@ -65,6 +66,7 @@ sfx::Ground FootstepSystem::groundAt(World& world, uint8_t surface, double x, do
     const double hx0 = groundHeight(*cfg, x - e, z), hx1 = groundHeight(*cfg, x + e, z);
     const double hz0 = groundHeight(*cfg, x, z - e), hz1 = groundHeight(*cfg, x, z + e);
     const Vec3 n = normalize(Vec3(-(hx1 - hx0) / (2 * e), 1.0, -(hz1 - hz0) / (2 * e)));
+    if (slopeCos) *slopeCos = n.y;
     const Cover c = cfg->params.cover->at(x, z, y, n.y, n.x, n.z);
     return groundForSurface(surface, true, c.grass, c.dirt, c.sand, c.rock, c.snow);
 }
@@ -111,17 +113,23 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     haveLastFeet_ = true;
     const FootstepEvent ev = tracker_.update(onGround, horiz, v.y, dt, cc.halfHeight < 0.3);
 
-    // #64: tall grass brushing the legs, while walking through it
+    // #64: tall grass brushing the legs, while walking through it -- only where the ground under the foot
+    // IS grass (or earth), and asking the grass field with the real slope: it thins grass on steep ground,
+    // and asked as if flat it called a rock face a meadow (#85)
     double grassTarget = 0.0;
     if (onGround && horiz > 0.3) {
-        ctx.world.each<GrassField>([&](Entity, GrassField& g) {
-            if (grassTarget > 0 || !g.density || !g.ground) return;
-            const double gy = g.ground(feet.x, feet.z);
-            grassTarget = std::clamp(g.density(feet.x, feet.z, gy, 1.0), 0.0, 1.0) * std::clamp(horiz / 2.5, 0.0, 1.2);
-        });
-        // only on the ground itself: a road or a floor standing over the grass field is not grass
-        const uint8_t s = pw.bodySurface(pw.characterGroundBody(cc.characterId));
-        if (s != static_cast<uint8_t>(ColliderSurface::Terrain) && s != static_cast<uint8_t>(ColliderSurface::Grass)) grassTarget = 0;
+        if ((hereTimer_ -= dt) <= 0) {
+            hereTimer_ = 0.1;
+            groundHere_ = groundAt(ctx.world, pw.bodySurface(pw.characterGroundBody(cc.characterId)), feet.x, feet.y, feet.z, &slopeHere_);
+        }
+        if (groundHere_ == sfx::Ground::Grass || groundHere_ == sfx::Ground::Dirt)
+            ctx.world.each<GrassField>([&](Entity, GrassField& g) {
+                if (grassTarget > 0 || !g.density || !g.ground) return;
+                const double gy = g.ground(feet.x, feet.z);
+                grassTarget = std::clamp(g.density(feet.x, feet.z, gy, slopeHere_), 0.0, 1.0) * std::clamp(horiz / 2.5, 0.0, 1.2);
+            });
+    } else {
+        hereTimer_ = 0;
     }
     fadeRustle(grassTarget);
 

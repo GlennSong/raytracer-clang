@@ -6,6 +6,8 @@
 #include "../camera/follow_camera_controller.h"
 #include "../physics/physics_world.h"
 
+#include <cmath>
+
 namespace engine {
 
 class PhysicsSystem;
@@ -48,6 +50,19 @@ struct FallRespawnTracker {
         hasGrounded = false;
     }
 };
+
+// MOMENTUM IN THE AIR (#83, Glenn: "If I let go of space my momentum doesn't continue. I drop straight
+// down."). On the ground the keys ARE the horizontal velocity; in the air the body keeps what it left the
+// ground with, and the keys only nudge it -- at most `airAccel` m/s^2 toward what they ask, and nothing
+// at all when none is held. Pure, for tests.
+inline Vec3 airborneVelocity(const Vec3& carried, const Vec3& input, Real dt, Real airAccel = 4.0) {
+    const Real inLen = std::sqrt(input.x * input.x + input.z * input.z);
+    if (inLen < 1e-4) return Vec3(carried.x, 0, carried.z);
+    Vec3 dv(input.x - carried.x, 0, input.z - carried.z);
+    const Real dl = std::sqrt(dv.x * dv.x + dv.z * dv.z), cap = airAccel * dt;
+    if (dl > cap) dv = dv * (cap / dl);
+    return Vec3(carried.x + dv.x, 0, carried.z + dv.z);
+}
 
 // Drives the on-foot player character and its camera. The FLY controller is
 // the player's HEADING either way (CameraSystem feeds it mouse/stick look):
@@ -109,6 +124,7 @@ private:
     FallRespawnTracker fall;
     Vec3 lastBodyPos_{0, 0, 0};   // where physics left the player last step
     bool haveLastBodyPos_ = false;
+    Vec3 airVel_{0, 0, 0};        // horizontal velocity carried through the air (airborneVelocity)
 };
 
 }  // namespace engine

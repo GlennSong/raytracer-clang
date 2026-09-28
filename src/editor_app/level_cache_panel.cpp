@@ -1,5 +1,6 @@
 #include "level_cache_panel.h"
 
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -59,6 +60,12 @@ LevelCachePanel::LevelCachePanel(QWidget* parent) : QWidget(parent) {
     deleteOlderButton = new QPushButton("Delete all out-of-date", this); deleteOlderButton->setToolTip("Delete this level's older bakes; keep the current one");
     olderButtons->addWidget(showSelectedButton); olderButtons->addWidget(deleteSelectedButton); olderButtons->addWidget(deleteOlderButton);
     col->addLayout(olderButtons);
+    // ALL LEVELS, visibly apart from this one (#88: "I thought it meant the river town one was 51 GB")
+    auto* rule = new QFrame(this); rule->setFrameShape(QFrame::HLine); rule->setFrameShadow(QFrame::Sunken);
+    col->addSpacing(6);
+    col->addWidget(rule);
+    auto* allHeading = new QLabel("<b>All levels</b>", this);
+    col->addWidget(allHeading);
     col->addWidget(cacheLine);
     pruneButton = new QPushButton("Prune stale bakes (all levels)", this); pruneButton->setToolTip("Delete every bake superseded by a newer bake of the same level (rt_bake --prune)");
     col->addWidget(pruneButton);
@@ -96,7 +103,11 @@ QStringList LevelCachePanel::selectedOlder() const {
 
 void LevelCachePanel::setView(const LevelCacheView& v, const QDateTime& now) {
     view_ = v;
-    heading->setText(v.level.isEmpty() ? QString("<b>Level cache</b>") : QString("<b>%1</b>").arg(v.level.toHtmlEscaped()));
+    // the level's name and what ITS bakes weigh, together, so the all-levels total below can't be read as it
+    const uint64_t mine = (v.current ? v.currentBytes : 0) + v.olderBytes;
+    heading->setText(v.level.isEmpty() ? QString("<b>Level cache</b>")
+                                       : QString("<b>%1</b>%2").arg(v.level.toHtmlEscaped(),
+                                                                    mine > 0 ? QString(" &mdash; %1 baked").arg(humanBytes(mine)) : QString()));
     if (!v.error.isEmpty()) {
         status->setText("<span style='color:#c44'>Can't read the level</span>");
         detail->setText(v.error);
@@ -129,7 +140,7 @@ void LevelCachePanel::setView(const LevelCacheView& v, const QDateTime& now) {
     olderList->setVisible(n > 0);
     showSelectedButton->setVisible(n > 0); deleteSelectedButton->setVisible(n > 0);
     showSelectedButton->setEnabled(false); deleteSelectedButton->setEnabled(false);
-    cacheLine->setText(QString("Whole cache: %1 bake%2, %3; %4 stale (%5)")
+    cacheLine->setText(QString("%1 bake%2 across all levels, %3 in total; %4 stale (%5)")
                            .arg(v.cacheBundles).arg(v.cacheBundles == 1 ? "" : "s").arg(humanBytes(v.cacheBytes))
                            .arg(v.cacheStale).arg(humanBytes(v.cacheStaleBytes)));
 

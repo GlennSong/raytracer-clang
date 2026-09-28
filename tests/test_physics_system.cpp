@@ -224,3 +224,55 @@ TEST_CASE(the_character_stands_on_a_tagged_surface) {
     CHECK(pw.bodySurface(pw.characterGroundBody(id)) == 0);
     physics.shutdown();
 }
+
+#include "../src/engine/systems/player_system.h"
+
+// #83: "If I let go of space my momentum doesn't continue. I drop straight down." A running jump with the
+// keys let go at take-off carries on through the air; the old rule (keys = velocity, air included) stopped
+// dead. The real Jolt character, the real jump speed.
+TEST_CASE(a_running_jump_carries_its_momentum_through_the_air) {
+    auto jump = [](bool carry) {
+        World world;
+        addFloor(world);
+        Entity p = world.create();
+        Transform t; t.position = Vec3(0, 1.0, 0);
+        world.add<Transform>(p, t);
+        world.add<CharacterController>(p, CharacterController{});
+        PhysicsSystem physics;
+        physics.initialize();
+        physics.createBodies(world);
+        PhysicsWorld& pw = physics.physicsWorld();
+        const CharacterId id = world.get<CharacterController>(p)->characterId;
+        const Real dt = 1.0 / 60.0;
+        Vec3 air(0, 0, 0);
+        auto step = [&](Vec3 keys) {
+            Vec3 v = keys;
+            if (pw.characterGroundState(id) == GroundState::InAir) { air = carry ? airborneVelocity(air, keys, dt) : keys; v = air; }
+            else air = keys;
+            pw.moveCharacter(id, v, dt);
+            physics.step(world, dt);
+        };
+        for (int i = 0; i < 60; ++i) step(Vec3(0, 0, 0));        // settle
+        for (int i = 0; i < 60; ++i) step(Vec3(6, 0, 0));        // run
+        const Real x0 = pw.characterPosition(id).x;
+        pw.jumpCharacter(id, 4.3);
+        step(Vec3(6, 0, 0));                                     // the take-off tick: still running
+        int air_ticks = 0;
+        for (int i = 0; i < 120; ++i) {                          // keys let go the moment the feet leave
+            step(Vec3(0, 0, 0));
+            if (pw.characterGroundState(id) == GroundState::InAir) ++air_ticks;
+            else if (air_ticks > 5) break;
+        }
+        const Real d = pw.characterPosition(id).x - x0;
+        physics.shutdown();
+        return d;
+    };
+    const Real carried = jump(true), stopped = jump(false);
+    std::printf("    [jump] keys released at take-off: carried %.2f m, stopped dead %.2f m\n", carried, stopped);
+    CHECK(carried > stopped + 2.0);
+    // a standing jump lands where it left
+    CHECK(std::fabs(airborneVelocity(Vec3(0, 0, 0), Vec3(0, 0, 0), 1.0 / 60).x) < 1e-9);
+    // the keys still steer, a little: 4 m/s^2 at most
+    const Vec3 nudged = airborneVelocity(Vec3(6, 0, 0), Vec3(0, 0, 6), 1.0 / 60);
+    CHECK(nudged.x < 6.0 && nudged.x > 5.9 && nudged.z > 0.0 && nudged.z < 0.07);
+}

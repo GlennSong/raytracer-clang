@@ -41,40 +41,85 @@ struct BandPass {   // two one-poles: a gentle band, enough for noise colour
 };
 
 // The per-surface recipe. Times in seconds, levels relative; the builder below renders any of them.
+// HARD ground (asphalt, concrete, rock, wood, metal) is IMPACTS: a heel strike, then the toe ~0.09 s
+// later, each a sharp click plus a short RING at the pitch the shoe and the surface make together --
+// with next to no noise (#84: built from noise, every surface read as grass). SOFT ground (grass, dirt,
+// sand, snow) is one rolled contact carried by its TEXTURE: noise or grains.
 struct Recipe {
-    double length;          // clip length
+    double length = 0.25;
     // heel: a click of band-limited noise at contact
-    double clickLevel, clickLo, clickHi, clickDecay;
+    double clickLevel = 0, clickLo = 1000, clickHi = 6000, clickDecay = 0.003;
+    // ring: a damped sinusoid pair at the contact (the shoe and the surface ringing together)
+    double ringLevel = 0, ringHz = 1500, ringHz2 = 0, ringDecay = 0.006;
+    // toe: the same click + ring again, `toeDelay` later at `toeLevel` of the heel (0 = one contact)
+    double toeDelay = 0, toeLevel = 0;
     // body: a low sine thump (the weight arriving)
-    double thumpLevel, thumpHz, thumpDecay;
+    double thumpLevel = 0, thumpHz = 90, thumpDecay = 0.03;
     // texture: continuous noise through a band, shaped by attack/decay
-    double texLevel, texLo, texHi, texAttack, texDecay;
+    double texLevel = 0, texLo = 1500, texHi = 6000, texAttack = 0.002, texDecay = 0.04;
     // grains: discrete micro-impacts (gravel, snow crystals, grass stems) at `grainRate` per second
     // over `grainSpan`, each a tiny ringing click in the band
-    double grainLevel, grainRate, grainSpan, grainLo, grainHi;
+    double grainLevel = 0, grainRate = 0, grainSpan = 0, grainLo = 2000, grainHi = 8000;
 };
 
 Recipe recipeFor(Ground g) {
+    Recipe r;
     switch (g) {
-        //                      len   click lo    hi     dec    thump Hz   dec   tex  lo     hi     att    dec    grain rate  span  lo     hi
-        case Ground::Asphalt:  return {0.20, 0.70, 900, 6000, 0.006, 0.40, 95, 0.030, 0.40, 1800, 7000, 0.002, 0.045, 0.25, 900, 0.05, 2500, 8000};
-        case Ground::Concrete: return {0.18, 1.00, 1200, 9000, 0.007, 0.28, 110, 0.022, 0.20, 2500, 8000, 0.001, 0.020, 0.00, 0, 0, 0, 0};
-        case Ground::Grass:    return {0.30, 0.10, 400, 2500, 0.006, 0.30, 70, 0.045, 0.55, 1500, 6500, 0.012, 0.090, 0.35, 260, 0.16, 2000, 7000};
-        case Ground::Dirt:     return {0.22, 0.25, 250, 1800, 0.006, 0.80, 75, 0.050, 0.35, 300, 1800, 0.004, 0.060, 0.20, 180, 0.08, 400, 2500};
-        case Ground::Sand:     return {0.32, 0.05, 300, 2000, 0.008, 0.25, 60, 0.050, 0.75, 1200, 4500, 0.030, 0.110, 0.10, 400, 0.18, 1500, 5000};
-        case Ground::Rock:     return {0.26, 0.70, 1000, 7000, 0.003, 0.40, 120, 0.020, 0.10, 2000, 8000, 0.002, 0.030, 0.85, 700, 0.12, 1500, 9000};
-        case Ground::Snow:     return {0.36, 0.05, 500, 3000, 0.008, 0.35, 65, 0.060, 0.30, 800, 5000, 0.020, 0.120, 0.95, 1400, 0.24, 900, 6000};
-        case Ground::Wood:     return {0.24, 0.70, 500, 5000, 0.004, 0.70, 180, 0.060, 0.10, 400, 2500, 0.002, 0.040, 0.00, 0, 0, 0, 0};
-        case Ground::Metal:    return {0.40, 0.85, 1500, 9000, 0.003, 0.30, 240, 0.150, 0.20, 2500, 9000, 0.001, 0.200, 0.00, 0, 0, 0, 0};
-        default: break;
+        case Ground::Asphalt:   // a dull heel click with grit under it
+            r.length = 0.22; r.clickLevel = 0.8; r.clickLo = 1200; r.clickHi = 6000; r.clickDecay = 0.003;
+            r.ringLevel = 0.35; r.ringHz = 900; r.ringDecay = 0.005; r.toeDelay = 0.085; r.toeLevel = 0.55;
+            r.thumpLevel = 0.30; r.thumpHz = 85; r.thumpDecay = 0.02;
+            r.texLevel = 0.06; r.texLo = 2000; r.texHi = 7000; r.texDecay = 0.02;
+            r.grainLevel = 0.12; r.grainRate = 700; r.grainSpan = 0.03; r.grainLo = 3000; r.grainHi = 9000; break;
+        case Ground::Concrete:  // the clean, bright click-clack of a pavement
+            r.length = 0.20; r.clickLevel = 1.0; r.clickLo = 2000; r.clickHi = 10000; r.clickDecay = 0.0022;
+            r.ringLevel = 0.55; r.ringHz = 1700; r.ringHz2 = 3100; r.ringDecay = 0.006; r.toeDelay = 0.09; r.toeLevel = 0.6;
+            r.thumpLevel = 0.22; r.thumpHz = 100; r.thumpDecay = 0.015; r.texLevel = 0.02; break;
+        case Ground::Rock:      // a hard knock on stone, a little loose grit scattering
+            r.length = 0.24; r.clickLevel = 0.9; r.clickLo = 1500; r.clickHi = 8000; r.clickDecay = 0.0025;
+            r.ringLevel = 0.5; r.ringHz = 2300; r.ringHz2 = 3700; r.ringDecay = 0.004; r.toeDelay = 0.095; r.toeLevel = 0.5;
+            r.thumpLevel = 0.35; r.thumpHz = 120; r.thumpDecay = 0.02;
+            r.grainLevel = 0.22; r.grainRate = 300; r.grainSpan = 0.06; r.grainLo = 2500; r.grainHi = 9000; break;
+        case Ground::Wood:      // a hollow knock
+            r.length = 0.26; r.clickLevel = 0.6; r.clickLo = 800; r.clickHi = 5000; r.clickDecay = 0.003;
+            r.ringLevel = 0.8; r.ringHz = 420; r.ringHz2 = 1050; r.ringDecay = 0.022; r.toeDelay = 0.1; r.toeLevel = 0.6;
+            r.thumpLevel = 0.5; r.thumpHz = 150; r.thumpDecay = 0.04; break;
+        case Ground::Metal:     // a clang that rings on
+            r.length = 0.45; r.clickLevel = 0.8; r.clickLo = 2000; r.clickHi = 10000; r.clickDecay = 0.002;
+            r.ringLevel = 0.6; r.ringHz = 1250; r.ringHz2 = 2890; r.ringDecay = 0.12; r.toeDelay = 0.1; r.toeLevel = 0.5;
+            r.thumpLevel = 0.2; r.thumpHz = 240; r.thumpDecay = 0.1; break;
+        case Ground::Grass:     // a soft press and the swish of blades
+            r.length = 0.30; r.clickLevel = 0.10; r.clickLo = 400; r.clickHi = 2500; r.clickDecay = 0.006;
+            r.thumpLevel = 0.30; r.thumpHz = 70; r.thumpDecay = 0.045;
+            r.texLevel = 0.55; r.texLo = 1500; r.texHi = 6500; r.texAttack = 0.012; r.texDecay = 0.09;
+            r.grainLevel = 0.35; r.grainRate = 260; r.grainSpan = 0.16; r.grainLo = 2000; r.grainHi = 7000; break;
+        case Ground::Dirt:      // a dull thud and a crumble
+            r.length = 0.22; r.clickLevel = 0.25; r.clickLo = 250; r.clickHi = 1800; r.clickDecay = 0.006;
+            r.thumpLevel = 0.80; r.thumpHz = 75; r.thumpDecay = 0.05;
+            r.texLevel = 0.35; r.texLo = 300; r.texHi = 1800; r.texAttack = 0.004; r.texDecay = 0.06;
+            r.grainLevel = 0.20; r.grainRate = 180; r.grainSpan = 0.08; r.grainLo = 400; r.grainHi = 2500; break;
+        case Ground::Sand:      // a soft shush
+            r.length = 0.32; r.clickLevel = 0.05; r.clickLo = 300; r.clickHi = 2000; r.clickDecay = 0.008;
+            r.thumpLevel = 0.25; r.thumpHz = 60; r.thumpDecay = 0.05;
+            r.texLevel = 0.75; r.texLo = 1200; r.texHi = 4500; r.texAttack = 0.03; r.texDecay = 0.11;
+            r.grainLevel = 0.10; r.grainRate = 400; r.grainSpan = 0.18; r.grainLo = 1500; r.grainHi = 5000; break;
+        case Ground::Snow:      // the compressed crunch
+            r.length = 0.36; r.clickLevel = 0.05; r.clickLo = 500; r.clickHi = 3000; r.clickDecay = 0.008;
+            r.thumpLevel = 0.35; r.thumpHz = 65; r.thumpDecay = 0.06;
+            r.texLevel = 0.30; r.texLo = 800; r.texHi = 5000; r.texAttack = 0.02; r.texDecay = 0.12;
+            r.grainLevel = 0.95; r.grainRate = 1400; r.grainSpan = 0.24; r.grainLo = 900; r.grainHi = 6000; break;
+        default: return recipeFor(Ground::Concrete);
     }
-    return recipeFor(Ground::Concrete);
+    return r;
 }
 
 // Render a recipe. `scale`: overall stretch (landings last longer), `weight`: thump multiplier,
-// `thumpDrop`: thump pitch multiplier (a heavy fall is lower), `texBoost`: texture multiplier.
+// `thumpDrop`: thump pitch multiplier (a heavy fall is lower), `texBoost`: texture multiplier,
+// `toeDelayScale`: 1 = a walking step; small = heel and toe land together (a landing, flat-footed);
+// `scrape`: a burst of noise in the surface's own click band (a push-off drags the sole across it).
 std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, double scale, double weight,
-                          double thumpDrop, double texBoost, double clickBoost) {
+                          double thumpDrop, double texBoost, double clickBoost, double toeDelayScale = 1.0,
+                          double scrape = 0.0) {
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * r.length * scale);
     std::vector<float> out(count, 0.0f);
@@ -83,8 +128,12 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
     std::uniform_real_distribution<double> jit(0.88, 1.14);
     const double pj = jit(rng);   // each step a slightly different shoe, a slightly different spot
     BandPass click(r.clickLo * pj, r.clickHi * pj, rate);
+    BandPass scrapeBand(r.clickLo * pj, r.clickHi * pj, rate);
     BandPass tex(r.texLo * pj, r.texHi * pj, rate);
     const double thumpHz = r.thumpHz * pj * thumpDrop;
+    const double ringHz = r.ringHz * pj, ringHz2 = r.ringHz2 * pj;
+    const double toeAt = r.toeDelay * toeDelayScale * jit(rng);
+    const double toeGain = r.toeLevel * (0.85 + 0.3 * (jit(rng) - 0.88) / 0.26);
     // grains: onset times drawn up front (Poisson-ish), each a decaying burst of band noise
     std::vector<std::pair<size_t, double>> grains;
     if (r.grainLevel > 0 && r.grainRate > 0) {
@@ -103,15 +152,28 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
     for (const auto& [at, a] : grains)
         for (size_t i = at; i < count && i < at + static_cast<size_t>(rate * grainTau * 6); ++i)
             grainEnv[i] += a * std::exp(-(static_cast<double>(i - at) / rate) / grainTau);
+    // one contact (heel, or toe `delay` later at `gain`): click envelope + the surface's ring
+    auto contact = [&](double t, double delay, double gain, double noise) {
+        if (t < delay || gain <= 0) return 0.0;
+        const double u = t - delay;
+        double v = clickBoost * r.clickLevel * noise * std::exp(-u / r.clickDecay);
+        if (r.ringLevel > 0) {
+            double ring = std::sin(TWO_PI * ringHz * u);
+            if (ringHz2 > 0) ring = 0.65 * ring + 0.35 * std::sin(TWO_PI * ringHz2 * u);
+            v += r.ringLevel * ring * std::exp(-u / r.ringDecay);
+        }
+        return gain * v;
+    };
     for (size_t i = 0; i < count; ++i) {
         const double t = static_cast<double>(i) / rate;
-        const double n = uni(rng);
-        double v = 0.0;
-        v += clickBoost * r.clickLevel * click(n) * std::exp(-t / r.clickDecay);
+        const double cn = click(uni(rng));
+        double v = contact(t, 0.0, 1.0, cn);
+        if (r.toeDelay > 0) v += contact(t, toeAt, toeGain, cn);
         v += weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * t) * std::exp(-t / (r.thumpDecay * std::sqrt(scale)));
         const double att = std::min(1.0, t / std::max(1e-4, r.texAttack));
         v += texBoost * r.texLevel * 3.0 * tex(uni(rng)) * att * std::exp(-t / (r.texDecay * scale));
         v += r.grainLevel * 4.0 * grainBand(uni(rng)) * grainEnv[i];
+        if (scrape > 0) v += scrape * 2.5 * scrapeBand(uni(rng)) * std::min(1.0, t / 0.004) * std::exp(-t / 0.035);
         // fade the last 8 ms so no clip ends on a step
         const double tail = std::min(1.0, (static_cast<double>(count - i)) / (rate * 0.008));
         out[i] = static_cast<float>(std::tanh(1.4 * v) * tail);
@@ -183,16 +245,20 @@ std::vector<float> footstep(Ground ground, uint32_t sampleRate, uint32_t seed) {
 }
 
 std::vector<float> jumpPush(Ground ground, uint32_t sampleRate, uint32_t seed) {
-    // a scuff: the surface's texture pushed hard and short, the heel's click, little weight
-    return render(recipeFor(ground), sampleRate, seed + 7001u, 0.7, 0.25, 1.2, 1.6, 1.3);
+    // a scuff: the sole dragged across the surface in ITS band (bright on stone, dull on earth) with
+    // the surface's own texture pushed hard and short, only the toe's contact, little weight
+    Recipe r = recipeFor(ground);
+    r.toeDelay = 0;   // one contact: the ball of the foot
+    return render(r, sampleRate, seed + 7001u, 0.7, 0.25, 1.2, 1.6, 1.0, 1.0, 0.8);
 }
 
 std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate, uint32_t seed) {
     heavy = std::clamp(heavy, 0.0, 1.0);
     // a hop lands like a firm step; a drop off a wall is a deep body thud that rings longer, the
     // surface's texture (sand spraying, snow crushing, gravel scattering) louder with it
+    // both feet, flat: heel and toe land nearly together
     return render(recipeFor(ground), sampleRate, seed + 9001u, 1.0 + 1.2 * heavy, 1.4 + 2.2 * heavy,
-                  1.0 - 0.45 * heavy, 1.2 + 0.8 * heavy, 1.0 + 0.3 * heavy);
+                  1.0 - 0.45 * heavy, 1.2 + 0.8 * heavy, 1.0 + 0.3 * heavy, 0.25);
 }
 
 std::vector<float> grassRustle(uint32_t sampleRate, uint32_t seed) {

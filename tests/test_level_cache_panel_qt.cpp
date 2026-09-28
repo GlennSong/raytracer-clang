@@ -34,6 +34,9 @@ int runLevelCachePanelQtTests() {
     v.current = true; v.currentBytes = 8482560000ull; v.currentCreated = "2026-09-28T09:00:00Z";
     p.setView(v, now);   // current
     LC_REQUIRE(p.status->text().contains("Current") && p.detail->text().contains("7.9 GB") && p.detail->text().contains("3 h ago"));
+    // #88: the level's own total sits by its name; the all-levels line says it is every level's
+    LC_REQUIRE(p.heading->text().contains("island.json") && p.heading->text().contains("7.9 GB"));
+    LC_REQUIRE(p.cacheLine->text().contains("across all levels") && p.cacheLine->text().contains("in total"));
     LC_REQUIRE(!p.buildButton->isEnabled() && p.rebuildButton->isEnabled() && p.deleteAllButton->isEnabled() && p.deleteOlderButton->isHidden());
     LC_REQUIRE(p.folderToShow() == "/c/levels/aaaa");
     p.rebuildButton->click(); p.showButton->click(); LC_REQUIRE(rebuilds == 1 && shows == 1);

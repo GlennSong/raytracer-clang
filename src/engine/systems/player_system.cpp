@@ -144,6 +144,15 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                           (crouched ? kCrouchSpeedScale : Real(1));
             }
 
+            // In the air the keys only nudge what the body left the ground with (#83); on the
+            // ground they set it, and that is what a jump or a step off a ledge carries.
+            const GroundState before = physicsSys.physicsWorld().characterGroundState(cc.characterId);
+            if (before == GroundState::InAir) {
+                airVel_ = airborneVelocity(airVel_, desired, dt);
+                desired = airVel_;
+            } else {
+                airVel_ = Vec3(desired.x, 0, desired.z);
+            }
             physicsSys.physicsWorld().moveCharacter(cc.characterId, desired, dt);
             t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
 

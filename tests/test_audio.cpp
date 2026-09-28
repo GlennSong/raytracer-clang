@@ -761,3 +761,47 @@ TEST_CASE(open_sea_keeps_the_ocean_and_drops_the_ponds) {
     for (int i = 0; i < 16; ++i) for (int j = 0; j < 16; ++j) lake.push_back({2000 + i * 50.0, 2000 + j * 50.0, 2050 + i * 50.0, 2050 + j * 50.0});
     CHECK(openSeaCells(lake, 0, 0, 4000, 4000).size() == lake.size());   // 0.64 km^2 > the 0.5 km^2 bar
 }
+
+TEST_CASE(hard_ground_steps_are_a_heel_and_a_toe) {
+    // #84: "they all sound like I'm walking on grass". Hard ground is two impacts, heel then toe ~0.09 s later,
+    // with the energy in the hits; soft ground is one rolled contact carried by its texture.
+    const uint32_t rate = 48000;
+    auto analyse = [&](const std::vector<float>& f, std::vector<double>& onsets) {
+        // 1 ms envelope; an onset is a rise past 30% of the peak after a >25 ms dip below half of it
+        const std::size_t w = rate / 1000;
+        std::vector<double> env(f.size() / w);
+        for (std::size_t k = 0; k < env.size(); ++k) { double m = 0; for (std::size_t i = k * w; i < (k + 1) * w; ++i) m = std::max(m, double(std::fabs(f[i]))); env[k] = m; }
+        const double peak = *std::max_element(env.begin(), env.end());
+        bool armed = true; int quiet = 25;
+        for (std::size_t k = 0; k < env.size(); ++k) {
+            if (env[k] < 0.15 * peak) ++quiet; else if (env[k] < 0.5 * peak) {} else quiet = 0;
+            if (quiet >= 25) armed = true;
+            if (armed && env[k] > 0.3 * peak) { onsets.push_back(k / 1000.0); armed = false; quiet = 0; }
+        }
+        // share of the energy within 20 ms after an onset
+        double inHits = 0, total = 0;
+        for (std::size_t i = 0; i < f.size(); ++i) {
+            const double t = double(i) / rate, e = double(f[i]) * f[i];
+            total += e;
+            for (double o : onsets) if (t >= o && t < o + 0.02) { inHits += e; break; }
+        }
+        return total > 0 ? inHits / total : 0.0;
+    };
+    for (sfx::Ground g : {sfx::Ground::Asphalt, sfx::Ground::Concrete, sfx::Ground::Rock, sfx::Ground::Wood}) {
+        for (uint32_t seed : {1u, 2u, 3u}) {
+            std::vector<double> on;
+            const double hits = analyse(sfx::footstep(g, rate, seed), on);
+            if (seed == 1) std::printf("    [hard] %-8s onsets %zu (gap %.0f ms), %.0f%% of the energy in the hits\n", sfx::groundName(g), on.size(),
+                                       on.size() > 1 ? (on[1] - on[0]) * 1000 : 0.0, hits * 100);
+            CHECK(on.size() == 2);
+            if (on.size() == 2) CHECK(on[1] - on[0] > 0.06 && on[1] - on[0] < 0.15);
+            if (g != sfx::Ground::Wood) CHECK(hits > 0.6);   // wood's ring is the point of it
+        }
+    }
+    for (sfx::Ground g : {sfx::Ground::Grass, sfx::Ground::Sand, sfx::Ground::Snow}) {
+        std::vector<double> on;
+        const double hits = analyse(sfx::footstep(g, rate, 1), on);
+        std::printf("    [soft] %-8s onsets %zu, %.0f%% of the energy in the hits\n", sfx::groundName(g), on.size(), hits * 100);
+        CHECK(on.size() == 1);
+    }
+}
