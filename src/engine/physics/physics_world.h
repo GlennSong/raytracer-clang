@@ -254,11 +254,39 @@ public:
         // 28 m at 58 km/h, 1.7 gave 23, 2.0 gives ~20 (an arcade 1.3 g when
         // sliding). The yaw assist's cap follows it.
         Real lateralGrip = 2.0;
+        // DRIVETRAIN (#41; Glenn: "offroad vehicles -- 2 wheel drive, 4 wheel drive"). One differential PER
+        // AXLE (driven wheels grouped by position, left and right by x -- the old code paired them in
+        // declaration order), the engine's torque split between the front and rear axles by
+        // `frontDriveShare`: 0 rear-wheel drive, 1 front, 0.5 all/four-wheel drive; < 0 derives it from the
+        // wheels' `driven` flags. A part-time 4x4 switches it at runtime (setVehicleFrontDriveShare).
+        // Limited-slip ratios (Jolt's: the fastest wheel's speed over the slowest's; lower locks harder,
+        // >= 100 is open): per axle, and between the axles (the centre / transfer case).
+        Real frontDriveShare = -1.0;
+        Real axleLimitedSlip = 1.4;
+        Real centerLimitedSlip = 1.4;
+        // AERO DRAG: Cd x frontal area (m^2), a quadratic 0.5 rho CdA v^2 against the motion (a sedan
+        // ~0.65, a truck ~1.1). 0 keeps the old linear body damping -- which at motorway speed was ~4x a
+        // real car's drag and left no true top speed (the freeway-lag diagnosis measured it).
+        Real dragArea = 0.0;
+        // GEARBOX: Jolt's defaults cut the drive for 0.5 s per shift plus 0.3 s of clutch and 0.5 s of
+        // latency -- a stall every upshift. Quicker here; ratios empty = Jolt's five.
+        Real shiftTime = 0.5;
+        Real clutchReleaseTime = 0.3;
+        Real shiftLatency = 0.5;
+        std::vector<Real> gearRatios;
         std::vector<VehicleWheel> wheels;
     };
 
     using VehicleId = uint32_t;
     static constexpr VehicleId INVALID_VEHICLE = 0xFFFFFFFFu;
+
+    // Runtime drive split for vehicle `id` (the 2WD <-> 4WD switch): the engine torque share of its front
+    // axles, 0..1 (see VehicleConfig::frontDriveShare).
+    void setVehicleFrontDriveShare(VehicleId id, Real share);
+    Real vehicleFrontDriveShare(VehicleId id) const;
+    // Telemetry: forward speed (m/s), engine rpm, current gear (0 neutral, < 0 reverse).
+    struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; };
+    VehicleTelemetry vehicleTelemetry(VehicleId id) const;
 
     // Create a vehicle at the given pose; returns INVALID_VEHICLE on failure.
     VehicleId addVehicle(const VehicleConfig& config, const Vec3& position,
@@ -299,6 +327,7 @@ private:
     // The per-step stability torque of VehicleConfig::yawAssist, for the
     // vehicle in slot `index` (called from update, before the Jolt step).
     void applyYawAssist(std::size_t index);
+    void applyAeroDrag(std::size_t index);
 };
 
 
