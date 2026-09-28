@@ -37,14 +37,15 @@ struct VehiclesVM {
 
 // THE COURSE, DRIVEN (Glenn, after the first drive: "if I go over slabs and rocks even with 4WD I get stuck. I
 // thought the idea was that I didn't."). The REAL vehicle.offroad spec on the REAL course geometry
-// (assets/levels/offroad_course.json: ground, ledges, rock garden, twister), full throttle -- the key is
-// digital -- down each lane from before the ledges to past the twister. The first cut failed twice over:
+// (assets/levels/offroad_course.json: ground, ledges, rock garden, twister, logs), full throttle -- the key is
+// digital -- down each lane from before the ledges to past the logs. (The logs were added after Glenn parked
+// across a 0.56 m one: the body on it, the tyres unloaded, spinning in place both ways.) The first cut failed twice over:
 // boulders up to 1.35 m (walls), and a square collision box whose floor sat 14 cm under the drawn belly and a
 // full overhang ahead of the tyres, so the bumper caught what the wheels could climb.
 namespace {
 struct CourseRun { Real reachedZ; bool through; };
 CourseRun driveCourseLane(const VehicleSpec& spec, bool fourWheel, Real laneX, Real startZ = -30.0,
-                          Real goalZ = -142.0, Real seconds = 45.0) {
+                          Real goalZ = -170.0, Real seconds = 45.0, Real throttle = 1.0) {
     std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/levels/offroad_course.json");
     const nlohmann::json level = nlohmann::json::parse(f);
     PhysicsWorld w;
@@ -63,6 +64,8 @@ CourseRun driveCourseLane(const VehicleSpec& spec, bool fourWheel, Real laneX, R
             w.addBox(Vec3(e["size"][0], e["size"][1], e["size"][2]) * 0.5, pos, q, BodyMotion::Static, 0.0, mu);
         else if (shape == "sphere")
             w.addSphere(e["size"][0], pos, q, BodyMotion::Static, 0.0, mu);
+        else if (shape == "capsule")   // size = {r, length, r}; the length along the capsule's axis, caps included
+            w.addCapsule(Real(e["size"][1]) * 0.5 - Real(e["size"][0]), e["size"][0], pos, q, BodyMotion::Static, 0.0, mu);
     }
     w.optimizeBroadPhase();
     PhysicsWorld::VehicleConfig cfg = spec.config;
@@ -77,7 +80,7 @@ CourseRun driveCourseLane(const VehicleSpec& spec, bool fourWheel, Real laneX, R
         const Vec3 fwd = w.vehicleOrientation(id).rotate(Vec3(0, 0, 1));
         const Real want = std::clamp((p.x - laneX) * 0.4, Real(-0.5), Real(0.5));   // heading -z: +x error steers right
         const Real headingErr = fwd.x;   // facing -z, fwd.x > 0 means drifting toward +x
-        w.setVehicleInput(id, 1.0, std::clamp(want + headingErr * 1.5, Real(-1), Real(1)) * -1.0, 0);
+        w.setVehicleInput(id, throttle, std::clamp(want + headingErr * 1.5, Real(-1), Real(1)) * -1.0, 0);
         w.update(1.0 / 60.0);
         best = std::min(best, p.z);
         if (p.z < goalZ) return { p.z, true };
@@ -99,9 +102,14 @@ TEST_CASE(offroader_drives_the_course_ledges_rocks_and_twister_in_four_wheel_dri
     for (const Real x : {-12.0, -4.0, 4.0, 12.0}) {
         const CourseRun r4 = driveCourseLane(spec, true, x);
         std::printf("    lane x %+5.1f: 4WD %s (z %.1f)\n", x, r4.through ? "THROUGH" : "stuck", r4.reachedZ);
+        std::fflush(stdout);
         through4 += r4.through;
     }
     CHECK(through4 == 4);
+    // and a CRAWL over the logs (bellies catch at low speed, where no bounce carries them)
+    const CourseRun crawl = driveCourseLane(spec, true, 0.0, -144.0, -170.0, 40.0, 0.35);
+    std::printf("    logs at a crawl: %s (z %.1f)\n", crawl.through ? "OVER" : "stuck", crawl.reachedZ);
+    CHECK(crawl.through);
     // THE HILLS, over the top: up the ramp, across the 6 m top, down the far side -- the crests are where a
     // long belly high-centres, which an endless test slope never asks. FROM REST AT THE STOP LINE (the course's
     // start for a traction test): with a run-up, momentum carries even 2WD over 30 degrees of mud, which tests speed, not
@@ -192,3 +200,4 @@ TEST_CASE(offroader_with_an_axle_hanging_still_drives_the_wheels_on_the_ground) 
     const HoleRun fixedRun = driveOutOfHole(fixedSplit, 1.0, true);
     CHECK(groundedSpin(fixedRun) < 1.0);   // what Glenn saw: starved
 }
+

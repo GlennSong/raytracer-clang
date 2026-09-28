@@ -10,7 +10,7 @@ make an obstacle course for that vehicle to test 4wd?"). Writes assets/levels/of
   ledges      square steps 0.2 0.3 0.4 0.5 m high
   rock garden boulders standing 0.15-0.55 m (up to a wheel radius), seeded
   twister     humps set diagonally left/right: one wheel up while its opposite drops
-  logs        four logs across the track
+  logs        four logs across the track, 0.25-0.40 m thick (under the off-roader's belly)
   mud flat    40 m at friction 0.2
 
 Every obstacle is a static primitive with a collider (box / sphere / capsule). Deterministic.
@@ -89,9 +89,10 @@ for i in range(8):
     side = 1 if i % 2 == 0 else -1
     ent("box", [3.0, 0.45, 7.0], [side * 1.6, 0.1, -108 - i * 4.2], DIRT, 0.9, [0, 1, 0], side * 35, name=f"twist{i}")
 
-# LOGS z = -150 .. -165: capsules lying across the track
+# LOGS z = -150 .. -165: capsules lying across the track, 0.25-0.40 m thick -- under the off-roader's 0.42 m
+# belly. (The first cut ran to 0.66 m: Glenn stopped across the 0.56 m log, the body on it, the tyres unloaded.)
 for i in range(4):
-    r = 0.18 + 0.05 * i
+    r = 0.125 + 0.025 * i
     ent("capsule", [r, 7.0, r], [0, r, -150 - i * 5], WOOD, 0.7, [0, 0, 1], 90, name=f"log_{int(r * 100)}cm")
 
 # MUD FLAT z = -175 .. -215
