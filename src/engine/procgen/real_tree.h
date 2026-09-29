@@ -48,8 +48,14 @@ TextureData realFoliageTexture(RealSpecies species, int size, uint32_t seed);
 // the tree fills the height, centred), true looks straight down. Colour is LINEAR and multiplied by
 // `colourScale` (so 8 bits keep the dark greens: the impostor's vertex colour undoes it); alpha is
 // the silhouette; colour dilated under the cut.
+// `normalOut` (optional, same layout): the tree's own surface normal at each pixel (#93, Glenn: "The tree
+// cards aren't lit well. I can tell they're the cards"), in the CARD's tangent frame as the mesh shader reads
+// it (T = the card's u axis, B = N x T, N = the card's plane): the crown-bent leaf normals keep their
+// sideways and up components, so the card lights clump by clump like the model; the component along the
+// card's plane normal is folded to a symmetric 0.25..0.75 (a two-sided card is seen from both sides, and
+// its back must not light as its front). Encoded n * 0.5 + 0.5; uncovered texels (0.5, 0.5, 1).
 void renderImpostor(const RealTree& tree, const TextureData& foliage, bool top, int w, int h,
-                    double colourScale, uint8_t* rgbaOut, int strideBytes);
+                    double colourScale, uint8_t* rgbaOut, int strideBytes, uint8_t* normalOut = nullptr);
 
 }  // namespace engine
 

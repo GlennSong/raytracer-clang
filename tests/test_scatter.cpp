@@ -409,3 +409,36 @@ TEST_CASE(quay_wall_has_a_top_and_a_back_and_faces_the_way_it_is_wound) {
     CHECK(up > 0);              // a top
     CHECK(front > 0 && back >= front * 3 / 4);   // a back face behind the front (caps land on either side)
 }
+
+// #93 (Glenn: "The tree cards aren't lit well. I can tell they're the cards. ... Normal maps?"): the impostor's
+// normal picture carries the crown's shape in the card's frame -- its left half faces left, its right half
+// right, its top up -- so the far card lights like the tree, not like a sheet.
+TEST_CASE(impostor_normals_carry_the_crown_shape) {
+    const RealTree tree = realTree(RealSpecies::Oak, 7, 12.0);
+    const TextureData fol = realFoliageTexture(RealSpecies::Oak, 128, 7);
+    const int w = 96, h = 192;
+    std::vector<uint8_t> col(static_cast<std::size_t>(w) * h * 4), nrm(col.size());
+    renderImpostor(tree, fol, false, w, h, 3.0, col.data(), w * 4, nrm.data());
+    double leftX = 0, rightX = 0, topY = 0, lowY = 0;
+    int nl = 0, nr = 0, nt = 0, nb = 0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4;
+            if (col[i + 3] < 128) continue;   // the silhouette only
+            const double nx = nrm[i] / 255.0 * 2 - 1, ny = nrm[i + 1] / 255.0 * 2 - 1, nz = nrm[i + 2] / 255.0 * 2 - 1;
+            CHECK(nz > 0.15);                                  // never facing into the card
+            if (x < w / 2 - 8) { leftX += nx; ++nl; }
+            if (x > w / 2 + 8) { rightX += nx; ++nr; }
+            if (y < h / 5) { topY += ny; ++nt; }
+            if (y > h / 3 && y < h / 2) { lowY += ny; ++nb; }
+        }
+    CHECK(nl > 50 && nr > 50 && nt > 20 && nb > 20);
+    leftX /= std::max(1, nl); rightX /= std::max(1, nr); topY /= std::max(1, nt); lowY /= std::max(1, nb);
+    std::printf("    [impostor normals] left x %.2f, right x %.2f; crown top y %.2f, lower crown y %.2f\n", leftX, rightX, topY, lowY);
+    CHECK(leftX < -0.1 && rightX > 0.1);   // the crown's sides face outward
+    CHECK(topY > lowY);                    // its top faces up more than its underside
+    // no normal picture asked for: the colour is exactly as before
+    std::vector<uint8_t> col2(col.size());
+    renderImpostor(tree, fol, false, w, h, 3.0, col2.data(), w * 4);
+    CHECK(col2 == col);
+}

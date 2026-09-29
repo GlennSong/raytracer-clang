@@ -1888,12 +1888,18 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     const int cw = 128, sh = 256, th = 128, colourScale = 3;
     const int aw = cw * nVar, ah = sh + th;
     std::vector<uint8_t> atlas(static_cast<std::size_t>(aw) * ah * 4, 0);
+    std::vector<uint8_t> normalAtlas(static_cast<std::size_t>(aw) * ah * 4, 0);   // #93: the crowns' normals
+    for (std::size_t q = 0; q < normalAtlas.size(); q += 4) { normalAtlas[q] = 128; normalAtlas[q + 1] = 128; normalAtlas[q + 2] = 255; normalAtlas[q + 3] = 255; }
+    const char* normalsMode = std::getenv("RT_IMPOSTOR_NORMALS");   // 0: none (A/B), side: the side cards only
     for (int i = 0; i < nVar; ++i) {
         Var& var = vars[i];
         if (var.species < 0) continue;
         uint8_t* col = atlas.data() + static_cast<std::size_t>(i) * cw * 4;
-        renderImpostor(var.tree, folData[var.species], false, cw, sh, colourScale, col, aw * 4);
-        renderImpostor(var.tree, folData[var.species], true, cw, th, colourScale, col + static_cast<std::size_t>(sh) * aw * 4, aw * 4);
+        uint8_t* nrm = normalAtlas.data() + static_cast<std::size_t>(i) * cw * 4;
+        renderImpostor(var.tree, folData[var.species], false, cw, sh, colourScale, col, aw * 4, nrm);
+        const bool topNormals = !(normalsMode && std::string(normalsMode) == "side");
+        renderImpostor(var.tree, folData[var.species], true, cw, th, colourScale, col + static_cast<std::size_t>(sh) * aw * 4, aw * 4,
+                       topNormals ? nrm + static_cast<std::size_t>(sh) * aw * 4 : nullptr);
         ImpostorSlot& sl = var.slot;
         const double half = var.tree.crownRadius * 1.18 + 0.5;   // renderImpostor's framing
         sl.halfW = half;
@@ -1906,6 +1912,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         sl.tv0 = (sh + eps) / ah; sl.tv1 = (sh + th - eps) / ah;
     }
     const TextureHandle atlasTex = renderer.uploadTexture(aw, ah, 4, atlas.data());
+    const TextureHandle normalAtlasTex = renderer.uploadTexture(aw, ah, 4, normalAtlas.data());
 
     // WHERE: off the roads, the graded ground and the water
     FlattenGrid keepOut;
@@ -1996,6 +2003,8 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     farMat.albedo = Vec3(1, 1, 1);
     farMat.roughness = 0.95f; farMat.metallic = 0.0f; farMat.opacity = 1.0f;
     farMat.albedoMap = atlasTex;
+    if (std::getenv("RT_IMPOSTOR_NORMALS") == nullptr || std::string(std::getenv("RT_IMPOSTOR_NORMALS")) != "0")
+        farMat.normalMap = normalAtlasTex;   // #93; RT_IMPOSTOR_NORMALS=0 for the A/B
     farMat.flags = RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_LOD_BAND;
     farMat.lodIn0 = static_cast<float>(fp.nearM - fp.nearFadeM);
     farMat.lodIn1 = static_cast<float>(fp.nearM);

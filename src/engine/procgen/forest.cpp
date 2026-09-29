@@ -272,10 +272,12 @@ void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s
     const double cy = std::cos(t.yaw), sy = std::sin(t.yaw);
     const Vec3 base = t.pos - Vec3(0, 0.15 * sc, 0);
     const Vec3 col(colour, colour, colour);
-    auto quad = [&](const Vec3 p[4], const Vec3 n[4], const double uv[4][2]) {
+    // each card's own frame for the baked normal map (#93, real_tree.h renderImpostor): N the card's plane,
+    // T its u axis; the map carries the crown's shape, so the card lights clump by clump like the model
+    auto quad = [&](const Vec3 p[4], const Vec3 n[4], const Vec3& tangent, const double uv[4][2]) {
         const uint32_t b = static_cast<uint32_t>(mesh.vertices.size());
         for (int k = 0; k < 4; ++k) {
-            Vertex v(p[k], n[k], Vec3(1, 0, 0), static_cast<float>(uv[k][0]), static_cast<float>(uv[k][1]));
+            Vertex v(p[k], n[k], tangent, static_cast<float>(uv[k][0]), static_cast<float>(uv[k][1]));
             v.color = col;
             mesh.vertices.push_back(v);
         }
@@ -286,21 +288,22 @@ void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s
         const double a = k * 1.5707963;
         const Vec3 side(cy * std::cos(a) - sy * std::sin(a), 0.0, sy * std::cos(a) + cy * std::sin(a));
         const Vec3 p[4] = {base - side * hw, base + side * hw, base + side * hw + Vec3(0, H, 0), base - side * hw + Vec3(0, H, 0)};
-        // bent normals: out to each side, up toward the crown's top -- the card lights like a volume
-        const Vec3 n[4] = {normalize(side * -0.7 + Vec3(0, 0.45, 0)), normalize(side * 0.7 + Vec3(0, 0.45, 0)),
-                           normalize(side * 0.55 + Vec3(0, 0.85, 0)), normalize(side * -0.55 + Vec3(0, 0.85, 0))};
+        // the plane's normal (side x up): the bend -- out to each side, up toward the crown's top -- is in the
+        // normal map now, per texel, instead of four corner normals smoothed across the card
+        const Vec3 plane = normalize(cross(side, Vec3(0, 1, 0)));
+        const Vec3 n[4] = {plane, plane, plane, plane};
         const double uv[4][2] = {{s.u0, s.v1}, {s.u1, s.v1}, {s.u1, s.v0}, {s.u0, s.v0}};
-        quad(p, n, uv);
+        quad(p, n, side, uv);
     }
     // the top card, at the crown's broadest, facing up (x -> u, z -> v, turned by the yaw)
     const double yTop = (s.crownBase + 0.55 * (s.height - s.crownBase)) * sc;
     const Vec3 ax(cy, 0, sy), az(-sy, 0, cy);
     const Vec3 c = base + Vec3(0, yTop, 0);
     const Vec3 p[4] = {c - ax * hw - az * hw, c + ax * hw - az * hw, c + ax * hw + az * hw, c - ax * hw + az * hw};
-    const Vec3 n[4] = {normalize(ax * -0.35 - az * 0.35 + Vec3(0, 1, 0)), normalize(ax * 0.35 - az * 0.35 + Vec3(0, 1, 0)),
-                       normalize(ax * 0.35 + az * 0.35 + Vec3(0, 1, 0)), normalize(ax * -0.35 + az * 0.35 + Vec3(0, 1, 0))};
+    const Vec3 up(0, 1, 0);
+    const Vec3 n[4] = {up, up, up, up};
     const double uv[4][2] = {{s.tu0, s.tv0}, {s.tu1, s.tv0}, {s.tu1, s.tv1}, {s.tu0, s.tv1}};
-    quad(p, n, uv);
+    quad(p, n, ax, uv);
 }
 
 }  // namespace engine
