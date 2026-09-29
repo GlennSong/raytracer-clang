@@ -314,81 +314,78 @@ std::vector<float> surf(uint32_t sampleRate, uint32_t seed) {
     return out;
 }
 
-std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
-    // #87 (Glenn: "It's like a low noise ... More of a river sound would be nice"). Water sounds like
-    // water because of BUBBLES: an air pocket closing under the surface rings at its Minnaert resonance,
-    // f = 3.26 / r (Hz, r in metres), damped fast (van den Doel: d = 0.043 f + 0.0014 f^1.5 per second)
-    // and rising a little in pitch as it rises. A stream is thousands of small ones a second; a big river
-    // fewer, larger, lower ones over the roar of the whole body of water moving. All wrapped round the
-    // loop, so it repeats seamlessly.
-    size = std::clamp(size, 0.0, 1.0);
-    const double rate = static_cast<double>(sampleRate);
-    const auto count = static_cast<size_t>(rate * 4.0);
-    std::mt19937 rng(seed * 22695477u + 1u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
-    std::vector<double> white(count);
-    for (double& w : white) w = uni(rng);
-    // the bed: the water's body moving (low roar, stronger for a big river) and surface hiss
-    const std::vector<double> roar = circBand(white, rate, 60.0, 450.0);
-    const std::vector<double> hiss = circBand(white, rate, 2500.0, 9000.0);
-    // THE RUSH: broad mid-band noise, swelling as the water tumbles -- what a river mostly IS to the ear
-    std::vector<double> white2(count);
-    for (double& w : white2) w = uni(rng);
-    // calm (Glenn: "too intense for our rivers ... the narrow rivers should be more calm"): a soft, dark
-    // wash for a narrow river, a fuller one for a broad river; the tumble only a gentle breathing
-    const std::vector<double> rush = circBand(white2, rate, 150.0, 1200.0 + 1000.0 * size);
-    const std::vector<double> tumble = circEnvelope(count, rng, 3, 9, 4);
-    const std::vector<double> swell = circEnvelope(count, rng, 2, 7, 4);
+// One LAYER of bubbling for river(): bursts (Poisson, `bursts` a second) of ~`perBurst` bubbles each,
+// radii between rMin and rMax (power law: many small), each ringing at its Minnaert frequency with a
+// real bubble's damping and a slight rising chirp; wrapped round the loop. Then, for a DISTANT layer,
+// low-passed at `lowpassHz` (0 = none) circularly (two passes of a one-pole round the loop, so the
+// filter state at the seam is the settled one).
+std::vector<double> bubbleLayer(size_t count, double rate, std::mt19937& rng, double bursts, double perBurst,
+                                double rMin, double rMax, double lowpassHz) {
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
-    // GURGLES, not a boil (Glenn: "sounds like a pot of boiling water"): a boiling pot is exactly an even
-    // rain of small independent bubbles. In a river the bubbles come in BURSTS where water tumbles over a
-    // stone and traps air -- a few at once, larger (lower) ones, then a gap -- over a rushing wash that
-    // carries most of the sound. So: burst events (Poisson), each a cluster of bubbles within ~60 ms.
-    // small bubbles plink, big ones glug (Glenn: "hissy and gluggy"): a narrow river only the small, quiet ones
-    const double rMin = 0.0015 + 0.0020 * size, rMax = 0.0040 + 0.0080 * size;   // metres: ~270-2200 Hz
-    const double burstsPerSecond = 2.5 + 3.0 * size;   // a narrow river: a few quiet plinks
-    std::poisson_distribution<int> perBurst(1.5 + 2.5 * size);
-    std::exponential_distribution<double> gap(burstsPerSecond);
-    for (double tb = gap(rng); tb < 4.0; tb += gap(rng)) {
-        const int n = std::max(1, perBurst(rng));
-        const double burstAmp = 0.4 + 0.6 * u01(rng);
+    std::poisson_distribution<int> nOf(perBurst);
+    std::exponential_distribution<double> gap(bursts);
+    const double seconds = static_cast<double>(count) / rate;
+    for (double tb = gap(rng); tb < seconds; tb += gap(rng)) {
+        const int n = std::max(1, nOf(rng));
+        const double burstAmp = 0.5 + 0.5 * u01(rng);
         for (int b = 0; b < n; ++b) {
             const double a = -1.5, u = u01(rng);
             const double r = std::pow(std::pow(rMin, a) + u * (std::pow(rMax, a) - std::pow(rMin, a)), 1.0 / a);
             const double f0 = 3.26 / r;
             const double d = 0.043 * f0 + 0.0014 * std::pow(f0, 1.5);
-            const double amp = burstAmp * (r / rMax) * (0.5 + 0.5 * u01(rng));
-            const double rise = 0.15 * d;
-            const size_t start = static_cast<size_t>((tb + 0.06 * u01(rng)) * rate) % count;
-            const size_t len = static_cast<size_t>(std::min(0.12, 5.0 / d) * rate);
+            const double amp = burstAmp * std::sqrt(r / rMax) * (0.5 + 0.5 * u01(rng));
+            const double rise = 0.12 * d;
+            const size_t start = static_cast<size_t>((tb + 0.08 * u01(rng)) * rate) % count;
+            const size_t len = static_cast<size_t>(std::min(0.15, 6.0 / d) * rate);
             double phase = 0;
             for (size_t k = 0; k < len; ++k) {
                 const double t = static_cast<double>(k) / rate;
+                // a soft onset (~2 ms): a bubble swells into its ring, it doesn't click
+                const double on = std::min(1.0, t / 0.002);
                 phase += 6.283185307179586 * f0 * (1.0 + rise * t) / rate;
-                acc[(start + k) % count] += amp * std::sin(phase) * std::exp(-d * t);
+                acc[(start + k) % count] += amp * on * std::sin(phase) * std::exp(-d * t);
             }
         }
     }
-    // splashes: short broadband bursts where the water breaks over a stone (more in a fast stream)
-    const int splashes = static_cast<int>(4.0 * (0.5 + 3.0 * size));
-    for (int s2 = 0; s2 < splashes; ++s2) {
-        const size_t start = static_cast<size_t>(u01(rng) * count);
-        const double a = 0.2 + 0.4 * u01(rng);
-        const size_t len = static_cast<size_t>(0.04 * rate);
-        for (size_t k = 0; k < len; ++k)
-            acc[(start + k) % count] += a * hiss[(start + k) % count] * std::exp(-static_cast<double>(k) / (0.008 * rate));
+    if (lowpassHz > 0) {
+        const double al = 1.0 - std::exp(-6.283185307179586 * lowpassHz / rate);
+        double y = 0;
+        for (int pass = 0; pass < 2; ++pass)
+            for (size_t k = 0; k < count; ++k) { y += al * (acc[k] - y); if (pass == 1) acc[k] = y; }
     }
-    double bubbleRms = 0;
-    for (double x : acc) bubbleRms += x * x;
-    bubbleRms = std::sqrt(bubbleRms / count);
-    const double norm = bubbleRms > 1e-9 ? 1.0 / bubbleRms : 1.0;
+    double rms = 0;
+    for (double x : acc) rms += x * x;
+    rms = std::sqrt(rms / std::max<size_t>(1, count));
+    if (rms > 1e-12) for (double& x : acc) x /= rms;
+    return acc;
+}
+
+std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
+    // #87, by ear with Glenn: noise-led versions read as static ("too much static", "hissy"), an even rain of
+    // bubbles as a boiling pot. A river is BUBBLING IN LAYERS: a few distinct bubbles near you, more of them
+    // a little way off and softened, and a dense low murmur of them further along -- over a faint bed.
+    // Each bubble rings at its Minnaert resonance (f = 3.26 / r) with a real bubble's damping.
+    size = std::clamp(size, 0.0, 1.0);
+    const double rate = static_cast<double>(sampleRate);
+    const auto count = static_cast<size_t>(rate * 4.0);
+    std::mt19937 rng(seed * 22695477u + 1u);
+    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    const std::vector<double> nearL = bubbleLayer(count, rate, rng, 2.5 + 1.5 * size, 1.8, 0.0020, 0.0060, 0.0);
+    const std::vector<double> midL = bubbleLayer(count, rate, rng, 18.0 + 10.0 * size, 2.5, 0.0022, 0.0080, 1800.0);
+    // the far murmur: dense enough to be continuous -- it is what fills between the near bubbles
+    const std::vector<double> farL = bubbleLayer(count, rate, rng, 80.0 + 60.0 * size, 3.0, 0.0030 + 0.002 * size,
+                                                 0.0110 + 0.006 * size, 800.0 - 350.0 * size);
+    std::vector<double> white(count);
+    for (double& w : white) w = uni(rng);
+    const std::vector<double> bed = circBand(white, rate, 120.0, 900.0);    // the faint body of moving water
+    const std::vector<double> swell = circEnvelope(count, rng, 2, 6, 3);
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
-        const double sw = 1.0 + 0.15 * swell[i] / 2.0;
-        const double tum = std::max(0.3, 0.85 + 0.15 * tumble[i] / 2.0);
-        const double v = (0.15 + 0.6 * size) * roar[i] * sw + (0.55 + 0.1 * size) * rush[i] * tum + 0.012 * hiss[i] +
-                         (0.14 + 0.08 * size) * acc[i] * norm;
-        out[i] = static_cast<float>(std::tanh(0.4 * v));
+        const double sw = 1.0 + 0.2 * swell[i] / 2.0;
+        const double v = (0.20 - 0.08 * size) * nearL[i] + 0.40 * midL[i] * sw + (0.55 + 0.35 * size) * farL[i] * sw +
+                         (0.06 + 0.30 * size) * bed[i] * sw;
+        out[i] = static_cast<float>(std::tanh(0.45 * v));
     }
     normalizeTo(out, 0.7f);
     return out;

@@ -665,18 +665,21 @@ TEST_CASE(ambience_loops_are_seamless_and_audible) {
         maybeDump(std::string("loop_") + l.name, l.f, rate);
     }
     // surf and river are different beds: the surf breathes (two swells), the river does not
+    // steadiness: the loud (90th percentile) 0.1 s window over the quiet (10th) one -- single extreme windows
+    // are one bubble or one gap, not the character of the sound
     auto swing = [](const std::vector<float>& f) {
         const std::size_t win = 4800;
-        double lo = 1e9, hi = 0;
+        std::vector<double> e;
         for (std::size_t i = 0; i + win <= f.size(); i += win) {
-            double e = 0;
-            for (std::size_t k = i; k < i + win; ++k) e += f[k] * f[k];
-            lo = std::min(lo, e); hi = std::max(hi, e);
+            double s2 = 0;
+            for (std::size_t k = i; k < i + win; ++k) s2 += f[k] * f[k];
+            e.push_back(s2);
         }
-        return hi / std::max(lo, 1e-9);
+        std::sort(e.begin(), e.end());
+        return e[e.size() * 9 / 10] / std::max(e[e.size() / 10], 1e-9);
     };
     const double surfSwing = swing(sfx::surf(rate, 1)), riverSwing = swing(sfx::river(rate, 1));
-    std::printf("    [ambience] loudness swing (loudest/quietest 0.1 s): surf %.1fx, river %.1fx\n", surfSwing, riverSwing);
+    std::printf("    [ambience] loudness swing (90th/10th percentile 0.1 s): surf %.1fx, river %.1fx\n", surfSwing, riverSwing);
     CHECK(surfSwing > 3.0 && surfSwing > 2.0 * riverSwing);
 }
 
