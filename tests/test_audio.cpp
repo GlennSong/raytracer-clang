@@ -843,3 +843,16 @@ TEST_CASE(a_stream_and_a_broad_river_sound_different) {
     maybeDump("loop_river_stream", stream, rate);
     maybeDump("loop_river_broad", broad, rate);
 }
+
+TEST_CASE(the_river_heard_from_under_the_water_is_muffled) {
+    // Glenn: the muffled bubbling "works good for underwater ... above water it wouldn't sound so muffled"
+    const uint32_t rate = 48000;
+    const auto air = sfx::river(rate, 9, 0.5), under = sfx::underwaterRiver(rate, 13);
+    const Voiceprint va = voiceprint(air, rate), vu = voiceprint(under, rate);
+    std::printf("    [river] in the air bands %.2f %.2f %.2f %.2f | under water %.2f %.2f %.2f %.2f\n", va.band[0], va.band[1],
+                va.band[2], va.band[3], vu.band[0], vu.band[1], vu.band[2], vu.band[3]);
+    CHECK(va.band[1] + va.band[2] > vu.band[1] + vu.band[2]);   // the air carries the brighter surface sounds
+    CHECK(vu.band[0] > va.band[0] && vu.band[2] + vu.band[3] < 0.02);   // under water: darker, nothing bright
+    maybeDump("loop_river_air", air, rate);
+    maybeDump("loop_river_underwater", under, rate);
+}

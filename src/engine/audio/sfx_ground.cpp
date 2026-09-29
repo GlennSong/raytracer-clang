@@ -361,38 +361,58 @@ std::vector<double> bubbleLayer(size_t count, double rate, std::mt19937& rng, do
     return acc;
 }
 
-std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
-    // #87, by ear with Glenn: noise-led versions read as static ("too much static", "hissy"), an even rain of
-    // bubbles as a boiling pot. A river is BUBBLING IN LAYERS: a few distinct bubbles near you, more of them
-    // a little way off and softened, and a dense low murmur of them further along -- over a faint bed.
-    // Each bubble rings at its Minnaert resonance (f = 3.26 / r) with a real bubble's damping.
+namespace {
+// The river's layered bubbling (#87, tuned by ear with Glenn). `open` = heard in the air: the same low bubbles
+// un-muffled, plus the surface's own clear sounds -- sparse trickle plinks and a little babble. Closed = heard
+// from under the water: everything muffled to the deep bubbling (Glenn: "river5 works good for underwater").
+std::vector<float> riverLayers(uint32_t sampleRate, uint32_t seed, double size, bool open) {
     size = std::clamp(size, 0.0, 1.0);
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 4.0);
     std::mt19937 rng(seed * 22695477u + 1u);
     std::uniform_real_distribution<double> uni(-1.0, 1.0);
-    // LOW bubbles (Glenn: "the bubbling needs to be lower, like a low bubble ... it sounds like boiling
-    // water still"): small bubbles are the fizz of a boiling pot; a river's are big -- 7-25 mm, ~130-450
-    // Hz, each a deep "bloop" that rings on (bigger bubbles damp slower). A broad river's run bigger still.
+    // LOW bubbles: big (7-25 mm, ~130-450 Hz), each a deep bloop that rings on; a broad river's bigger
     const double big = 1.0 + 0.35 * size;
-    const std::vector<double> nearL = bubbleLayer(count, rate, rng, 3.0 + 1.0 * size, 1.6, 0.0075 * big, 0.020 * big, 0.0);
-    const std::vector<double> midL = bubbleLayer(count, rate, rng, 14.0 + 8.0 * size, 2.2, 0.0070 * big, 0.022 * big, 900.0);
-    // the far murmur: dense enough to be continuous -- it is what fills between the near bubbles
+    const std::vector<double> nearL = bubbleLayer(count, rate, rng, 3.0 + 1.0 * size, 1.6, 0.0075 * big, 0.020 * big,
+                                                  open ? 0.0 : 700.0);
+    const std::vector<double> midL = bubbleLayer(count, rate, rng, 14.0 + 8.0 * size, 2.2, 0.0070 * big, 0.022 * big,
+                                                 open ? 0.0 : 900.0);
     const std::vector<double> farL = bubbleLayer(count, rate, rng, 60.0 + 50.0 * size, 3.0, 0.0090 * big, 0.025 * big,
-                                                 450.0 - 150.0 * size);
+                                                 open ? 2200.0 : 450.0 - 150.0 * size);
+    // the surface, in the air only: trickles -- small bubbles breaking at the top (2.5-5 mm, ~650-1300 Hz), sparse
+    // and clear, so the water sounds lively without the dense fizz of a boil
+    const std::vector<double> trickle = open ? bubbleLayer(count, rate, rng, 5.0 - 2.0 * size, 1.5, 0.0025, 0.0050, 0.0)
+                                             : std::vector<double>(count, 0.0);
     std::vector<double> white(count);
     for (double& w : white) w = uni(rng);
-    const std::vector<double> bed = circBand(white, rate, 120.0, 900.0);    // the faint body of moving water
+    const std::vector<double> bed = circBand(white, rate, 120.0, 900.0);
+    // babble: the surface's mid-band chatter, fast-modulated (not a flat bed, which read as static)
+    std::vector<double> white2(count);
+    for (double& w : white2) w = uni(rng);
+    const std::vector<double> chatter = circBand(white2, rate, 500.0, 2500.0);
+    const std::vector<double> chatterAm = circEnvelope(count, rng, 40, 110, 6);
     const std::vector<double> swell = circEnvelope(count, rng, 2, 6, 3);
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
         const double sw = 1.0 + 0.2 * swell[i] / 2.0;
-        // the bed barely there: louder, it was the sea ("the static ... sounds like the sea")
-        const double v = 0.30 * nearL[i] + 0.40 * midL[i] * sw + (0.55 + 0.25 * size) * farL[i] * sw + 0.03 * bed[i] * sw;
+        double v = 0.30 * nearL[i] + 0.40 * midL[i] * sw + (0.55 + 0.25 * size) * farL[i] * sw + 0.03 * bed[i] * sw;
+        if (open) {
+            const double am = std::max(0.0, chatterAm[i] / 3.0);
+            v += 0.40 * trickle[i] + 0.18 * chatter[i] * am * am;
+        }
         out[i] = static_cast<float>(std::tanh(0.45 * v));
     }
     normalizeTo(out, 0.7f);
     return out;
+}
+}  // namespace
+
+std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
+    return riverLayers(sampleRate, seed, size, true);
+}
+
+std::vector<float> underwaterRiver(uint32_t sampleRate, uint32_t seed) {
+    return riverLayers(sampleRate, seed, 0.5, false);
 }
 
 }  // namespace sfx

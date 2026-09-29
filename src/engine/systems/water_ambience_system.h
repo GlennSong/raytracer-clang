@@ -37,6 +37,11 @@ private:
     // #87: a narrow stream babbles, a broad river roars -- two loops crossfaded by the nearest river's width
     double riverSize_ = 0.5;          // 0 stream .. 1 broad river
     double riverSizeTimer_ = 0.0;
+    // UNDER the water (SceneLighting::underwater, from UnderwaterSystem): the surface sounds duck away and a
+    // muffled deep bubbling surrounds you (Glenn, of the muffled river: "works good for underwater")
+    AudioClipHandle underClip_{};
+    AudioVoiceHandle underVoice_{};
+    double underGain_ = 0.0;
     bool surfFound_ = false;        // the last finished sweep's answer
     Vec3 surfTarget_{};
     double surfLevel_ = 0;

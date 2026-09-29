@@ -28,12 +28,17 @@ void WaterAmbienceSystem::onStart(FrameContext& ctx) {
     surfClip_ = ctx.audio.createClip(s.data(), s.size(), 1, rate);
     riverClip_ = ctx.audio.createClip(r.data(), r.size(), 1, rate);
     bigRiverClip_ = ctx.audio.createClip(big.data(), big.size(), 1, rate);
+    const std::vector<float> under = sfx::underwaterRiver(rate, 13);
+    underClip_ = ctx.audio.createClip(under.data(), under.size(), 1, rate);
 }
 
 void WaterAmbienceSystem::onStop(FrameContext& ctx) {
     if (surfVoice_.valid()) ctx.audio.stop(surfVoice_);
     if (riverVoice_.valid()) ctx.audio.stop(riverVoice_);
     if (bigRiverVoice_.valid()) ctx.audio.stop(bigRiverVoice_);
+    if (underVoice_.valid()) ctx.audio.stop(underVoice_);
+    underVoice_ = AudioVoiceHandle{};
+    underGain_ = 0;
     surfVoice_ = riverVoice_ = bigRiverVoice_ = AudioVoiceHandle{};
     haveSurf_ = haveRiver_ = haveBigRiver_ = false;
     surfGain_ = riverGain_ = bigRiverGain_ = 0;
@@ -48,6 +53,19 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
     Vec3 at = ctx.view.camera.position;
     ctx.world.each<Transform, ControlledBy>([&](Entity, Transform& t, ControlledBy&) { at = t.position; });
     const Real dt = std::min<Real>(ctx.frameDelta, 0.1);
+    const bool under = ctx.view.lighting.underwater.active;
+    const double duck = under ? 0.1 : 1.0;   // the surface world, heard through the water: nearly gone
+    {   // the muffled bubbling all around, while under
+        underGain_ += ((under ? 0.7 : 0.0) - underGain_) * (1.0 - std::exp(-dt / 0.25));
+        if (underGain_ > 0.01 && !underVoice_.valid()) {
+            AudioPlayParams pp; pp.loop = true; pp.volume = 0.0f; pp.bus = AudioBus::Ambient;
+            underVoice_ = ctx.audio.play(underClip_, pp);
+        }
+        if (underVoice_.valid()) {
+            ctx.audio.setVoiceVolume(underVoice_, static_cast<float>(underGain_));
+            if (underGain_ < 0.005) { ctx.audio.stop(underVoice_); underVoice_ = AudioVoiceHandle{}; }
+        }
+    }
     const double glide = 1.0 - std::exp(-dt / 0.6);
 
     auto drive = [&](AudioClipHandle clip, AudioVoiceHandle& voice, Vec3& pos, bool& have, double& gain,
@@ -87,7 +105,7 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
             const double above = std::max(0.0, at.y - sea);
             surfLevel_ = std::clamp(1.0 - above / 120.0, 0.15, 1.0);   // #87: the surf a notch louder
         }
-        drive(surfClip_, surfVoice_, surfAt_, haveSurf_, surfGain_, surfFound_, surfTarget_, kSurfRange, surfLevel_);
+        drive(surfClip_, surfVoice_, surfAt_, haveSurf_, surfGain_, surfFound_, surfTarget_, kSurfRange, surfLevel_ * duck);
     }
 
     // RIVERS: the nearest bank, found through the distance field's slope.
@@ -125,8 +143,8 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
             riverSize_ = std::clamp((width - 8.0) / 27.0, 0.0, 1.0);   // 8 m a stream .. 35 m a broad river
         }
         // quieter than the surf: a river murmurs (Glenn: "too intense")
-        drive(riverClip_, riverVoice_, riverAt_, haveRiver_, riverGain_, found, target, kRiverRange, 0.45 * (1.0 - riverSize_));
-        drive(bigRiverClip_, bigRiverVoice_, bigRiverAt_, haveBigRiver_, bigRiverGain_, found, target, kRiverRange, 0.6 * riverSize_);
+        drive(riverClip_, riverVoice_, riverAt_, haveRiver_, riverGain_, found, target, kRiverRange, 0.45 * (1.0 - riverSize_) * duck);
+        drive(bigRiverClip_, bigRiverVoice_, bigRiverAt_, haveBigRiver_, bigRiverGain_, found, target, kRiverRange, 0.6 * riverSize_ * duck);
     }
     static const bool log = std::getenv("RT_WATER_LOG") != nullptr;   // RT_WATER_LOG=1: where each voice sits, twice a second
     static double since = 0;
