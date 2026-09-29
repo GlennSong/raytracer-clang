@@ -371,11 +371,15 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     const auto count = static_cast<size_t>(rate * 4.0);
     std::mt19937 rng(seed * 22695477u + 1u);
     std::uniform_real_distribution<double> uni(-1.0, 1.0);
-    const std::vector<double> nearL = bubbleLayer(count, rate, rng, 2.5 + 1.5 * size, 1.8, 0.0020, 0.0060, 0.0);
-    const std::vector<double> midL = bubbleLayer(count, rate, rng, 18.0 + 10.0 * size, 2.5, 0.0022, 0.0080, 1800.0);
+    // LOW bubbles (Glenn: "the bubbling needs to be lower, like a low bubble ... it sounds like boiling
+    // water still"): small bubbles are the fizz of a boiling pot; a river's are big -- 7-25 mm, ~130-450
+    // Hz, each a deep "bloop" that rings on (bigger bubbles damp slower). A broad river's run bigger still.
+    const double big = 1.0 + 0.35 * size;
+    const std::vector<double> nearL = bubbleLayer(count, rate, rng, 3.0 + 1.0 * size, 1.6, 0.0075 * big, 0.020 * big, 0.0);
+    const std::vector<double> midL = bubbleLayer(count, rate, rng, 14.0 + 8.0 * size, 2.2, 0.0070 * big, 0.022 * big, 900.0);
     // the far murmur: dense enough to be continuous -- it is what fills between the near bubbles
-    const std::vector<double> farL = bubbleLayer(count, rate, rng, 80.0 + 60.0 * size, 3.0, 0.0030 + 0.002 * size,
-                                                 0.0110 + 0.006 * size, 800.0 - 350.0 * size);
+    const std::vector<double> farL = bubbleLayer(count, rate, rng, 60.0 + 50.0 * size, 3.0, 0.0090 * big, 0.025 * big,
+                                                 450.0 - 150.0 * size);
     std::vector<double> white(count);
     for (double& w : white) w = uni(rng);
     const std::vector<double> bed = circBand(white, rate, 120.0, 900.0);    // the faint body of moving water
@@ -383,8 +387,8 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
         const double sw = 1.0 + 0.2 * swell[i] / 2.0;
-        const double v = (0.20 - 0.08 * size) * nearL[i] + 0.40 * midL[i] * sw + (0.55 + 0.35 * size) * farL[i] * sw +
-                         (0.06 + 0.30 * size) * bed[i] * sw;
+        // the bed barely there: louder, it was the sea ("the static ... sounds like the sea")
+        const double v = 0.30 * nearL[i] + 0.40 * midL[i] * sw + (0.55 + 0.25 * size) * farL[i] * sw + 0.03 * bed[i] * sw;
         out[i] = static_cast<float>(std::tanh(0.45 * v));
     }
     normalizeTo(out, 0.7f);

@@ -823,14 +823,16 @@ TEST_CASE(the_camera_knows_whose_water_it_is_under) {
 }
 
 TEST_CASE(a_stream_and_a_broad_river_sound_different) {
-    // #87: "More of a river sound would be nice". Bubbles: a narrow stream is a dense, bright babble; a broad
-    // river is lower, with the body of the water roaring under it.
+    // #87, tuned by ear with Glenn: low bubbling ("like a low bubble"), not a boiling fizz; a broad river
+    // deeper than a narrow one.
     const uint32_t rate = 48000;
     const auto stream = sfx::river(rate, 9, 0.1), broad = sfx::river(rate, 11, 0.9);
     const Voiceprint vs = voiceprint(stream, rate), vb = voiceprint(broad, rate);
     std::printf("    [river] stream bands %.2f %.2f %.2f %.2f | broad %.2f %.2f %.2f %.2f\n", vs.band[0], vs.band[1], vs.band[2], vs.band[3],
                 vb.band[0], vb.band[1], vb.band[2], vb.band[3]);
-    CHECK(vb.band[0] > vs.band[0] + 0.1);        // the broad river's roar
+    // both are low now (Glenn: "like a low bubble"); the broad river is lower still
+    CHECK(vs.band[0] > 0.5);                     // no fizz: most of a river is below 300 Hz
+    CHECK(vb.band[0] > vs.band[0] + 0.05);       // the broad river deeper
     CHECK(vs.centroidish > vb.centroidish);      // the stream's brighter babble
     auto seamIsClean = [](const std::vector<float>& f) {
         float maxStep = 0.0f;
