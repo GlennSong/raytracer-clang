@@ -327,3 +327,32 @@ TEST_CASE(level_cache_status_says_current_out_of_date_and_counts_older_bakes) {
     CHECK(s4.current && s4.older.empty() && s4.cacheStale == 0);
     fs::remove_all(root, ec);
 }
+
+// THE ALL BAKES WINDOW's listing: every bundle with its level and state -- current, out of date, and an
+// orphan whose level file is gone.
+TEST_CASE(list_bakes_says_which_level_and_whether_current) {
+    registerProducer(std::make_unique<FieldProducer>("tA", "a", &g_producedA));
+    registerProducer(std::make_unique<FieldProducer>("tB", "b", &g_producedB));
+    const std::string root = tempDir("lsbakes"); const std::string out = root + "/out";
+    const std::string lv1 = root + "/one.json", lv2 = root + "/two.json";
+    { std::ofstream f(lv1); f << R"({"version":1,"a":{"x":1},"b":{"y":2},"entities":[]})"; }
+    { std::ofstream f(lv2); f << R"({"version":1,"a":{"x":7},"b":{"y":2},"entities":[]})"; }
+    BakeRequest req; req.outRoot = out; req.only = {"tA", "tB"};
+    req.levelPath = lv1; CHECK(bakeLevel(req, nullptr).ok);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    { std::ofstream f(lv1); f << R"({"version":1,"a":{"x":2},"b":{"y":2},"entities":[]})"; }
+    CHECK(bakeLevel(req, nullptr).ok);            // one.json: now one current, one out of date
+    req.levelPath = lv2; CHECK(bakeLevel(req, nullptr).ok);
+    std::error_code ec; fs::remove(lv2, ec);      // two.json deleted: its bake is an orphan
+    const std::vector<BakeListing> all = listBakes(out);
+    int current = 0, stale = 0, orphan = 0;
+    for (const BakeListing& b : all) {
+        CHECK(b.bytes > 0 && !b.created.empty());
+        if (b.state == BakeListing::State::Current) { ++current; CHECK(b.level.find("one.json") != std::string::npos); }
+        if (b.state == BakeListing::State::OutOfDate) { ++stale; CHECK(b.level.find("one.json") != std::string::npos); }
+        if (b.state == BakeListing::State::Orphan) { ++orphan; CHECK(b.level.find("two.json") != std::string::npos); }
+    }
+    CHECK(all.size() == 3 && current == 1 && stale == 1 && orphan == 1);
+    for (const BakeListing& b : listBakes(out, false)) CHECK(b.state == BakeListing::State::Unknown);   // manifests only
+    fs::remove_all(root, ec);
+}

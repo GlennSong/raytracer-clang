@@ -290,6 +290,50 @@ LevelCacheStatus levelCacheStatus(const std::string& levelPath, const std::strin
     return st;
 }
 
+std::vector<BakeListing> listBakes(const std::string& rootIn, bool classify) {
+    const std::string root = rootIn.empty() ? bundleRoot() : rootIn;
+    const PruneReport rep = pruneBundles(root, {}, false);
+    std::vector<BakeListing> out;
+    std::map<std::string, std::string> currentOf;   // level path -> its current bundle dir ("" = none / orphan)
+    std::error_code ec;
+    for (const PruneEntry& e : rep.entries) {
+        BakeListing b;
+        b.dir = e.dir;
+        b.level = e.level;
+        b.created = e.created;
+        b.bytes = e.bytes;
+        if (e.level == "(no manifest)") { b.state = BakeListing::State::Broken; out.push_back(b); continue; }
+        if (classify) {
+            auto it = currentOf.find(e.level);
+            if (it == currentOf.end()) {
+                std::string cur;
+                if (fs::exists(e.level, ec)) {
+                    LevelInputs in;
+                    std::string err;
+                    if (loadLevelInputs(e.level, in, &err)) cur = bundleDirForLevel(in, root);
+                    else cur = "?";   // readable level, inputs not: say out of date rather than orphan
+                }
+                it = currentOf.emplace(e.level, cur).first;
+            }
+            if (it->second.empty()) b.state = BakeListing::State::Orphan;
+            else if (it->second != "?" && fs::equivalent(it->second, e.dir, ec)) b.state = BakeListing::State::Current;
+            else b.state = BakeListing::State::OutOfDate;
+        }
+        out.push_back(b);
+    }
+    return out;
+}
+
+const char* bakeStateName(BakeListing::State s) {
+    switch (s) {
+        case BakeListing::State::Current: return "current";
+        case BakeListing::State::OutOfDate: return "out of date";
+        case BakeListing::State::Orphan: return "level deleted";
+        case BakeListing::State::Broken: return "incomplete";
+        default: return "";
+    }
+}
+
 std::size_t deleteBundleDirs(const std::string& root, const std::vector<std::string>& dirs, std::string* err) {
     std::size_t n = 0;
     std::error_code ec;

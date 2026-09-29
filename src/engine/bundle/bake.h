@@ -137,6 +137,20 @@ struct LevelCacheStatus {
 LevelCacheStatus levelCacheStatus(const std::string& levelPath, const std::string& root = std::string());
 // Delete these bundle directories -- each must sit DIRECTLY under `root` (anything else is refused, as is an
 // in-flight `*.tmp-<pid>` write). Returns how many went; `err` names the first refusal or failure.
+// EVERY BAKE in the root, for the editor's All bakes window (Glenn: "it would be nice to see all of the bakes
+// somewhere"): each bundle's directory, the level it was baked from, when and how big, and -- when `classify`
+// -- whether it is that level's current bake (the level as it is today would load from it), out of date, or
+// an orphan (its level file is gone). classify reads each distinct level's inputs once (~0.2 s a level);
+// without it every bake is Unknown and the listing is manifest reads only. Newest first within a level.
+struct BakeListing {
+    enum class State { Unknown, Current, OutOfDate, Orphan, Broken };   // Broken: no manifest or no bundle file
+    std::string dir, level, created;
+    uint64_t bytes = 0;
+    State state = State::Unknown;
+};
+std::vector<BakeListing> listBakes(const std::string& root = std::string(), bool classify = true);
+const char* bakeStateName(BakeListing::State s);
+
 std::size_t deleteBundleDirs(const std::string& root, const std::vector<std::string>& dirs, std::string* err = nullptr);
 
 }  // namespace bundle

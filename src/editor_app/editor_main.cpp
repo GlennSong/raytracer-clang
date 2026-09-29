@@ -103,6 +103,7 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <future>
 #include <functional>
 #include <atomic>
 #include <mutex>
@@ -1025,6 +1026,14 @@ int main(int argc, char** argv) {
             if (!view.isNull()) { QPainter paint(&shot); paint.drawImage(QRect(viewport->mapTo(&mainWindow, QPoint(0, 0)), viewport->size()), view); }
             std::error_code ec; std::filesystem::remove(frame, ec);
             const bool ok = shot.save(QString::fromStdString(out));
+            // open dialogs are windows of their own: each saved beside it (<out>_dialog<N>.png)
+            int nd = 0;
+            for (QDialog* dlg : mainWindow.findChildren<QDialog*>())
+                if (dlg->isVisible()) {
+                    std::string dp = out;
+                    if (dp.size() > 4) dp.insert(dp.size() - 4, "_dialog" + std::to_string(nd++));
+                    dlg->grab().save(QString::fromStdString(dp));
+                }
             LOG_INFO << "[screenshot] window " << (ok ? "-> " + out : "failed: " + out) << (view.isNull() ? " (no viewport frame)" : "");
             mainWindow.statusBar()->showMessage(QString::fromStdString(ok ? "Window screenshot: " + out : "Window screenshot failed"), 6000);
             *poll = nullptr;   // break the self-reference
@@ -1423,6 +1432,64 @@ int main(int argc, char** argv) {
         if (cacheStatus.current) dirs.push_back(cacheStatus.currentDir);
         deleteBakes(dirs, cacheStatus.olderBytes + cacheStatus.currentBytes, QString("every bake of this level (%1)").arg(dirs.size()));
     };
+    // ALL BAKES (Glenn: "it would be nice to see all of the bakes somewhere"): every bundle under the root, its
+    // level and whether it is current. The list shows at once from the manifests; which bakes are current
+    // takes reading each level (~0.2 s apiece), so that runs on a worker and fills the Status column after.
+    AllBakesWindow* allBakes = nullptr;
+    auto bakeRows = [](const std::vector<engine::bundle::BakeListing>& v) {
+        std::vector<BakeRow> rows;
+        for (const auto& b : v)
+            rows.push_back({b.level == "(no manifest)" ? QString() : QString::fromStdString(b.level), QString::fromStdString(b.dir),
+                            QString::fromStdString(b.created), b.bytes, QString(engine::bundle::bakeStateName(b.state))});
+        return rows;
+    };
+    std::function<void()> refreshAllBakes = [&]() {
+        if (!allBakes) return;
+        const std::string root = engine::bundle::bundleRoot();
+        allBakes->setRows(bakeRows(engine::bundle::listBakes(root, false)), false);
+        auto scan = std::make_shared<std::future<std::vector<engine::bundle::BakeListing>>>(
+            std::async(std::launch::async, [root]() { return engine::bundle::listBakes(root, true); }));
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [&, scan, poll]() {
+            if (scan->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                QTimer::singleShot(150, [poll]() { if (*poll) (*poll)(); });
+                return;
+            }
+            if (allBakes) allBakes->setRows(bakeRows(scan->get()), true);
+            *poll = nullptr;   // break the self-reference
+        };
+        QTimer::singleShot(150, [poll]() { if (*poll) (*poll)(); });
+    };
+    levelCachePanel->onAllBakes = [&]() {
+        if (!allBakes) {
+            allBakes = new AllBakesWindow(&mainWindow);
+            allBakes->onRefresh = [&]() { refreshAllBakes(); };
+            allBakes->onShowDir = [](const QString& dir) {
+                if (!dir.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(dir).absoluteFilePath()));
+            };
+            allBakes->onOpenLevel = [&](const QString& level) { openScene(level.toStdString()); };
+            allBakes->onDeleteDirs = [&](const QStringList& dirs) {
+                if (QMessageBox::question(allBakes, "Delete bakes?", QString("Delete %1 bake%2? A level whose bake is deleted rebuilds from source on its next load.")
+                                                                        .arg(dirs.size()).arg(dirs.size() == 1 ? "" : "s")) != QMessageBox::Yes) return;
+                std::vector<std::string> ds;
+                for (const QString& d : dirs) ds.push_back(d.toStdString());
+                std::string err;
+                const std::size_t n = engine::bundle::deleteBundleDirs(engine::bundle::bundleRoot(), ds, &err);
+                if (!err.empty()) LOG_WARN << "[bake] " << err;
+                LOG_INFO << "[bake] deleted " << n << " bundle(s) from the All bakes window";
+                mainWindow.statusBar()->showMessage(QString("Deleted %1 bake%2").arg(n).arg(n == 1 ? "" : "s"), 8000);
+                refreshAllBakes();
+                refreshLevelCache();
+            };
+        }
+        allBakes->show();
+        allBakes->raise();
+        allBakes->activateWindow();
+        refreshAllBakes();
+    };
+    // RT_EDITOR_SHOW_ALL_BAKES=1: open the All bakes window at start (scripted captures)
+    if (const char* e = std::getenv("RT_EDITOR_SHOW_ALL_BAKES"); e && *e)
+        QTimer::singleShot(3000, [&]() { if (levelCachePanel->onAllBakes) levelCachePanel->onAllBakes(); });
     levelCachePanel->onPruneAll = [&]() {
         if (QMessageBox::question(&mainWindow, "Prune stale bakes?", QString("Delete %1 stale bake%2 (%3) across all levels? Each level keeps its newest bake.")
                                       .arg(cacheStatus.cacheStale).arg(cacheStatus.cacheStale == 1 ? "" : "s").arg(humanBytes(cacheStatus.cacheStaleBytes))) != QMessageBox::Yes) return;

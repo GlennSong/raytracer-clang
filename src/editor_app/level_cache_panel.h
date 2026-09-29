@@ -8,6 +8,7 @@
 // editor_qt_tests without the engine.
 
 #include <QDateTime>
+#include <QDialog>
 #include <QString>
 #include <QWidget>
 #include <cstdint>
@@ -48,7 +49,7 @@ public:
 
     QStringList selectedOlder() const;   // the dirs of the rows picked in the older-bakes list
 
-    std::function<void()> onRefresh, onBuild, onRebuild, onDeleteOlder, onDeleteAll, onPruneAll;
+    std::function<void()> onRefresh, onBuild, onRebuild, onDeleteOlder, onDeleteAll, onPruneAll, onAllBakes;
     std::function<void(const QString&)> onShowDir;             // Show in folder, or a double-clicked older bake
     std::function<void(const QStringList&)> onDeleteDirs;      // Delete selected (older bakes)
 
@@ -67,9 +68,44 @@ public:
     QPushButton* deleteAllButton = nullptr;
     QPushButton* showButton = nullptr;
     QPushButton* pruneButton = nullptr;
+    QPushButton* allBakesButton = nullptr;
 
 private:
     LevelCacheView view_;
+};
+
+// EVERY BAKE in the cache (Glenn: "it would be nice to see all of the bakes somewhere"): one row per bundle --
+// its level, whether it is that level's current bake, size, when it was baked, its folder -- sortable, with
+// Show / Open level / Delete on the selection. editor_main fills it from engine::bundle::listBakes.
+struct BakeRow {
+    QString level;     // the level file's path ("" when the bundle has no manifest)
+    QString dir;       // the bundle directory
+    QString created;   // ISO-8601 UTC
+    uint64_t bytes = 0;
+    QString state;     // "current", "out of date", "level deleted", "incomplete", or "" (still checking)
+};
+
+class QTreeWidget;
+class AllBakesWindow : public QDialog {
+public:
+    explicit AllBakesWindow(QWidget* parent = nullptr);
+    // `checked` false: the states are still being worked out (shown as "checking..." until the next call)
+    void setRows(const std::vector<BakeRow>& rows, bool checked, const QDateTime& now = QDateTime::currentDateTimeUtc());
+    QStringList selectedDirs() const;
+    QStringList selectedLevels() const;
+    void selectOutOfDate();   // every bake that is not a level's current one
+
+    std::function<void()> onRefresh;
+    std::function<void(const QString&)> onShowDir, onOpenLevel;
+    std::function<void(const QStringList&)> onDeleteDirs;
+
+    QTreeWidget* table = nullptr;
+    QLabel* summary = nullptr;
+    QPushButton* refreshButton = nullptr;
+    QPushButton* selectStaleButton = nullptr;
+    QPushButton* showButton = nullptr;
+    QPushButton* openButton = nullptr;
+    QPushButton* deleteButton = nullptr;
 };
 
 #endif

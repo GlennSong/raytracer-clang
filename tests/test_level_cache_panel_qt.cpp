@@ -69,6 +69,40 @@ int runLevelCachePanelQtTests() {
     LevelCacheView none; none.level = "arena.json"; none.applies = false;
     p.setView(none, now);
     LC_REQUIRE(p.status->text().contains("Nothing to bake") && !p.buildButton->isEnabled() && !p.rebuildButton->isEnabled());
+    // ALL BAKES: every bake, its level and state; sizes sort by value; "Select out of date" picks the rest
+    {
+        AllBakesWindow all;
+        std::vector<BakeRow> rows = {
+            {"/g/assets/levels/island.json", "/c/levels/aaaa", "2026-09-28T09:00:00Z", 8482560000ull, "current"},
+            {"/g/assets/levels/island.json", "/c/levels/bbbb", "2026-09-25T12:00:00Z", 900000000ull, "out of date"},
+            {"/g/assets/levels/gone.json", "/c/levels/cccc", "2026-09-20T12:00:00Z", 10000000000ull, "level deleted"},
+            {"/g/assets/levels/arena.json", "/c/levels/dddd", "2026-09-27T12:00:00Z", 50000000ull, "current"}};
+        all.setRows(rows, false, now);
+        LC_REQUIRE(all.table->topLevelItemCount() == 4 && all.summary->text().contains("checking"));
+        LC_REQUIRE(all.table->topLevelItem(0)->text(1) == "checking...");
+        all.setRows(rows, true, now);
+        LC_REQUIRE(all.summary->text().contains("4 bakes") && all.summary->text().contains("2 current") &&
+                   all.summary->text().contains("1 out of date") && all.summary->text().contains("1 of a deleted level"));
+        all.table->sortByColumn(2, Qt::DescendingOrder);   // size: 10 GB, 7.9 GB, 858 MB, 48 MB -- by value
+        LC_REQUIRE(all.table->topLevelItem(0)->text(4) == "/c/levels/cccc" && all.table->topLevelItem(3)->text(4) == "/c/levels/dddd");
+        all.selectOutOfDate();
+        QStringList sel = all.selectedDirs();
+        sel.sort();
+        LC_REQUIRE(sel == QStringList({"/c/levels/bbbb", "/c/levels/cccc"}));
+        LC_REQUIRE(all.deleteButton->isEnabled() && !all.openButton->isEnabled());   // two levels picked: no single one to open
+        QStringList deleted;
+        all.onDeleteDirs = [&](const QStringList& d) { deleted = d; };
+        all.deleteButton->click();
+        LC_REQUIRE(deleted.size() == 2);
+        all.table->clearSelection();
+        for (int i = 0; i < all.table->topLevelItemCount(); ++i)
+            if (all.table->topLevelItem(i)->text(4) == "/c/levels/dddd") all.table->topLevelItem(i)->setSelected(true);
+        QString opened;
+        all.onOpenLevel = [&](const QString& l) { opened = l; };
+        LC_REQUIRE(all.openButton->isEnabled());
+        all.openButton->click();
+        LC_REQUIRE(opened == "/g/assets/levels/arena.json");
+    }
     std::printf("[level cache panel] %s\n", lcFailures == 0 ? "ok" : "FAILED");
     return lcFailures;
 }

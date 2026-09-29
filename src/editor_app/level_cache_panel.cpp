@@ -1,5 +1,8 @@
 #include "level_cache_panel.h"
 
+#include <QColor>
+#include <QFileInfo>
+
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -69,6 +72,9 @@ LevelCachePanel::LevelCachePanel(QWidget* parent) : QWidget(parent) {
     col->addWidget(cacheLine);
     pruneButton = new QPushButton("Prune stale bakes (all levels)", this); pruneButton->setToolTip("Delete every bake superseded by a newer bake of the same level (rt_bake --prune)");
     col->addWidget(pruneButton);
+    allBakesButton = new QPushButton("All bakes...", this);
+    allBakesButton->setToolTip("Every bake in the cache: which level it belongs to, whether it is current, its size");
+    col->addWidget(allBakesButton);
 
     auto call = [](const std::function<void()>& f) { if (f) f(); };
     QObject::connect(refreshButton, &QPushButton::clicked, [this, call]() { call(onRefresh); });
@@ -86,6 +92,7 @@ LevelCachePanel::LevelCachePanel(QWidget* parent) : QWidget(parent) {
         deleteSelectedButton->setEnabled(any && !view_.baking);
     });
     QObject::connect(pruneButton, &QPushButton::clicked, [this, call]() { call(onPruneAll); });
+    QObject::connect(allBakesButton, &QPushButton::clicked, [this, call]() { call(onAllBakes); });
     setView(LevelCacheView{});
 }
 
@@ -153,4 +160,130 @@ void LevelCachePanel::setView(const LevelCacheView& v, const QDateTime& now) {
     deleteOlderButton->setEnabled(idle && n > 0);
     pruneButton->setEnabled(!v.baking && v.cacheStale > 0);
     refreshButton->setEnabled(!v.baking);
+}
+
+// ---- All bakes ---------------------------------------------------------------------------------------------
+namespace {
+// Sorts Size and Baked by value (bytes, time), not by their text ("9 GB" < "10 GB")
+class BakeItem : public QTreeWidgetItem {
+public:
+    using QTreeWidgetItem::QTreeWidgetItem;
+    bool operator<(const QTreeWidgetItem& o) const override {
+        const int c = treeWidget() ? treeWidget()->sortColumn() : 0;
+        const QVariant a = data(c, Qt::UserRole + 1), b = o.data(c, Qt::UserRole + 1);
+        if (a.isValid() && b.isValid()) return a.toULongLong() < b.toULongLong();
+        return text(c).localeAwareCompare(o.text(c)) < 0;
+    }
+};
+enum { kColLevel = 0, kColState, kColSize, kColBaked, kColFolder };
+}  // namespace
+
+AllBakesWindow::AllBakesWindow(QWidget* parent) : QDialog(parent) {
+    setWindowTitle("All bakes");
+    resize(900, 480);
+    auto* col = new QVBoxLayout(this);
+    summary = new QLabel(this);
+    col->addWidget(summary);
+    table = new QTreeWidget(this);
+    table->setColumnCount(5);
+    table->setHeaderLabels({"Level", "Status", "Size", "Baked", "Folder"});
+    table->setRootIsDecorated(false);
+    table->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    table->setSortingEnabled(true);
+    table->sortByColumn(kColLevel, Qt::AscendingOrder);
+    table->header()->setStretchLastSection(true);
+    table->setToolTip("Double-click a bake to open its folder");
+    col->addWidget(table, 1);
+    auto* row = new QHBoxLayout;
+    refreshButton = new QPushButton("Refresh", this);
+    selectStaleButton = new QPushButton("Select out of date", this);
+    selectStaleButton->setToolTip("Select every bake that is not its level's current one (out of date, level deleted, incomplete)");
+    showButton = new QPushButton("Show in folder", this);
+    openButton = new QPushButton("Open level", this);
+    deleteButton = new QPushButton("Delete selected", this);
+    row->addWidget(refreshButton);
+    row->addWidget(selectStaleButton);
+    row->addStretch(1);
+    row->addWidget(showButton);
+    row->addWidget(openButton);
+    row->addWidget(deleteButton);
+    col->addLayout(row);
+
+    auto updateButtons = [this]() {
+        const bool any = !selectedDirs().isEmpty();
+        showButton->setEnabled(any);
+        deleteButton->setEnabled(any);
+        const QStringList lv = selectedLevels();
+        openButton->setEnabled(lv.size() == 1 && !lv.front().isEmpty());
+    };
+    QObject::connect(table, &QTreeWidget::itemSelectionChanged, updateButtons);
+    QObject::connect(refreshButton, &QPushButton::clicked, [this]() { if (onRefresh) onRefresh(); });
+    QObject::connect(selectStaleButton, &QPushButton::clicked, [this]() { selectOutOfDate(); });
+    QObject::connect(showButton, &QPushButton::clicked, [this]() { if (onShowDir) for (const QString& d : selectedDirs()) onShowDir(d); });
+    QObject::connect(openButton, &QPushButton::clicked, [this]() { const QStringList lv = selectedLevels(); if (onOpenLevel && lv.size() == 1) onOpenLevel(lv.front()); });
+    QObject::connect(deleteButton, &QPushButton::clicked, [this]() { const QStringList d = selectedDirs(); if (onDeleteDirs && !d.isEmpty()) onDeleteDirs(d); });
+    QObject::connect(table, &QTreeWidget::itemDoubleClicked, [this](QTreeWidgetItem* it, int) { if (onShowDir && it) onShowDir(it->data(kColFolder, Qt::UserRole).toString()); });
+    updateButtons();
+}
+
+void AllBakesWindow::setRows(const std::vector<BakeRow>& rows, bool checked, const QDateTime& now) {
+    const QStringList keep = selectedDirs();
+    table->setSortingEnabled(false);
+    table->clear();
+    uint64_t total = 0, stale = 0;
+    int nCurrent = 0, nStale = 0, nOrphan = 0;
+    for (const BakeRow& r : rows) {
+        auto* it = new BakeItem(table);
+        const QString name = r.level.isEmpty() ? QString("(unknown)") : QFileInfo(r.level).fileName();
+        it->setText(kColLevel, name);
+        it->setToolTip(kColLevel, r.level);
+        it->setData(kColLevel, Qt::UserRole, r.level);
+        const QString st = checked ? r.state : QString("checking...");
+        it->setText(kColState, st);
+        if (st == "current") it->setForeground(kColState, QColor(60, 170, 60));
+        else if (checked) it->setForeground(kColState, QColor(210, 140, 0));
+        it->setText(kColSize, humanBytes(r.bytes));
+        it->setData(kColSize, Qt::UserRole + 1, QVariant::fromValue<qulonglong>(r.bytes));
+        it->setTextAlignment(kColSize, Qt::AlignRight | Qt::AlignVCenter);
+        const QDateTime t = QDateTime::fromString(r.created, Qt::ISODate);
+        it->setText(kColBaked, t.isValid() ? t.toLocalTime().toString("yyyy-MM-dd HH:mm") + "  (" + bakedAgo(r.created, now) + ")" : r.created);
+        it->setData(kColBaked, Qt::UserRole + 1, QVariant::fromValue<qulonglong>(t.isValid() ? static_cast<qulonglong>(t.toSecsSinceEpoch()) : 0));
+        it->setText(kColFolder, r.dir);
+        it->setData(kColFolder, Qt::UserRole, r.dir);
+        if (keep.contains(r.dir)) it->setSelected(true);
+        total += r.bytes;
+        if (r.state == "current") ++nCurrent;
+        else if (r.state == "level deleted") { ++nOrphan; stale += r.bytes; }
+        else if (!r.state.isEmpty()) { ++nStale; stale += r.bytes; }
+    }
+    table->setSortingEnabled(true);
+    for (int c = 0; c < 4; ++c) table->resizeColumnToContents(c);
+    QString s = QString("%1 bake%2, %3 in total").arg(rows.size()).arg(rows.size() == 1 ? "" : "s").arg(humanBytes(total));
+    if (checked)
+        s += QString(" -- %1 current, %2 out of date, %3 of a deleted level (%4 reclaimable)").arg(nCurrent).arg(nStale).arg(nOrphan).arg(humanBytes(stale));
+    else
+        s += " -- checking which are current...";
+    summary->setText(s);
+    selectStaleButton->setEnabled(checked && nStale + nOrphan > 0);
+}
+
+QStringList AllBakesWindow::selectedDirs() const {
+    QStringList d;
+    for (QTreeWidgetItem* it : table->selectedItems()) d << it->data(kColFolder, Qt::UserRole).toString();
+    return d;
+}
+
+QStringList AllBakesWindow::selectedLevels() const {
+    QStringList l;
+    for (QTreeWidgetItem* it : table->selectedItems()) l << it->data(kColLevel, Qt::UserRole).toString();
+    return l;
+}
+
+void AllBakesWindow::selectOutOfDate() {
+    table->clearSelection();
+    for (int i = 0; i < table->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* it = table->topLevelItem(i);
+        const QString st = it->text(kColState);
+        if (st != "current" && st != "checking...") it->setSelected(true);
+    }
 }
