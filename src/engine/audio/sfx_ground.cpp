@@ -415,10 +415,13 @@ std::vector<float> simmer(uint32_t sampleRate, uint32_t seed, double boil) {
 
 std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     // A RIVER, by ear with Glenn (#87): after bubbles (a boiling pot, then cooking), bright noise ("static"),
-    // and a swelling roar ("sounds like the sea") -- "maybe it should just be a low static noise". So: a dark,
-    // soft, STEADY noise. Low-passed well under a kilohertz for a narrow river (no hiss), a little fuller for a
-    // broad one; no slow swell (that is waves), only a faint quick flutter so the water is moving, not frozen.
+    // and a swelling roar ("sounds like the sea") -- "maybe it should just be a low static noise". A dark,
+    // soft, STEADY noise, no slow swell (that is waves), a faint quick flutter so the water moves.
+    // The WIDE river is the dark 60-700 Hz body he picked ("the first one sounds like a wide river"); a
+    // NARROW one is lighter, not bigger: the rumble thinned out (a little water doesn't roar), a touch more
+    // air and a livelier flutter.
     size = std::clamp(size, 0.0, 1.0);
+    const double narrow = 1.0 - size;
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 4.0);
     std::mt19937 rng(seed * 22695477u + 1u);
@@ -426,13 +429,13 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     std::vector<double> white(count), white2(count);
     for (double& w : white) w = uni(rng);
     for (double& w : white2) w = uni(rng);
-    const std::vector<double> body = circBand(white, rate, 60.0, 700.0 + 400.0 * size);   // the moving water
-    const std::vector<double> lift = circBand(white2, rate, 400.0, 1100.0);                // a little air in it
-    const std::vector<double> flutter = circEnvelope(count, rng, 30, 90, 6);               // quick, shallow
+    const std::vector<double> body = circBand(white, rate, 60.0 + 110.0 * narrow, 700.0 + 200.0 * narrow);
+    const std::vector<double> lift = circBand(white2, rate, 400.0, 1100.0);
+    const std::vector<double> flutter = circEnvelope(count, rng, 30 + static_cast<int>(40 * narrow), 90 + static_cast<int>(60 * narrow), 6);
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
-        const double fl = 1.0 + 0.06 * flutter[i] / 3.0;
-        const double v = (1.0 + 0.3 * size) * body[i] * fl + (0.18 - 0.08 * size) * lift[i] * fl;
+        const double fl = 1.0 + (0.06 + 0.08 * narrow) * flutter[i] / 3.0;
+        const double v = body[i] * fl + (0.10 + 0.14 * narrow) * lift[i] * fl;
         out[i] = static_cast<float>(std::tanh(0.35 * v));
     }
     normalizeTo(out, 0.6f);

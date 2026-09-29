@@ -824,17 +824,18 @@ TEST_CASE(the_camera_knows_whose_water_it_is_under) {
 
 TEST_CASE(a_stream_and_a_broad_river_sound_different) {
     // #87, tuned by ear with Glenn: a river is a low, soft, steady noise ("maybe it should just be a low
-    // static noise"), no hiss; a narrow river calmer and darker ("the narrow rivers should be more calm"),
-    // a broad one fuller.
+    // static noise"), no hiss; the wide river the dark one ("the first one sounds like a wide river"), a
+    // narrow one lighter and quieter ("the narrow rivers should be more calm").
     const uint32_t rate = 48000;
     const auto stream = sfx::river(rate, 9, 0.1), broad = sfx::river(rate, 11, 0.9);
     const Voiceprint vs = voiceprint(stream, rate), vb = voiceprint(broad, rate);
     std::printf("    [river] stream bands %.2f %.2f %.2f %.2f | broad %.2f %.2f %.2f %.2f\n", vs.band[0], vs.band[1], vs.band[2], vs.band[3],
                 vb.band[0], vb.band[1], vb.band[2], vb.band[3]);
-    CHECK(vs.band[0] > 0.6 && vb.band[0] > 0.5);        // low: most of it under 300 Hz
-    CHECK(vs.band[2] + vs.band[3] < 0.08);               // no hiss
-    CHECK(vs.band[0] > vb.band[0]);                      // the narrow one darker, calmer
-    CHECK(vb.band[1] > vs.band[1]);                      // the broad one fuller
+    // Glenn picked the dark one for the WIDE river; a narrow one is lighter: less rumble, a touch more air
+    CHECK(vb.band[0] > 0.6);                             // wide: low, most of it under 300 Hz
+    CHECK(vs.band[2] + vs.band[3] < 0.10 && vb.band[2] + vb.band[3] < 0.08);   // no hiss in either
+    CHECK(vb.band[0] > vs.band[0] + 0.1);                // the wide river deeper
+    CHECK(vs.band[1] > vb.band[1]);                      // the narrow one lighter
     auto seamIsClean = [](const std::vector<float>& f) {
         float maxStep = 0.0f;
         for (size_t i = 1; i < f.size(); i++) maxStep = std::max(maxStep, std::fabs(f[i] - f[i - 1]));
