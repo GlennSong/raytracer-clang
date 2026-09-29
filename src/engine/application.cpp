@@ -295,6 +295,14 @@ void Application::runFrame() {
                 inputMap.processEvent(up);
                 pendingTapRelease_ = KeyCode::Unknown;
             }
+            // `shots <prefix> <n>`: n CONSECUTIVE frames, one dump each -- a motion artifact (the sky's
+            // wobble while driving, #59) lives between frames, and a `shot` every 250 ms cannot see it.
+            if (burstLeft_ > 0 && rendererPtr) {
+                char name[32];
+                std::snprintf(name, sizeof name, "_%03d.png", burstIndex_++);
+                rendererPtr->requestFrameDump(burstPrefix_ + name);
+                --burstLeft_;
+            }
             // `hold <Key> <seconds>`: the same real path, held down (throttle,
             // steering) until its sim-time runs out -- so a probe can DRIVE.
             const std::string holdReq = settingsStore.getString("input.hold", "");
@@ -639,6 +647,14 @@ std::string Application::handleControlCommand(const std::string& line) {
         return rendererPtr->requestFrameDump(cmd.args[0])
                    ? "ok armed " + cmd.args[0]
                    : "err this backend cannot capture frames";
+    }
+
+    if (cmd.name == "shots") {
+        double n = 0;
+        if (cmd.args.size() < 2 || !num(cmd.args[1], n) || n < 1)
+            return "err usage: shots <prefix> <frames>  (writes <prefix>_000.png ...)";
+        burstPrefix_ = cmd.args[0]; burstLeft_ = static_cast<int>(n); burstIndex_ = 0;
+        return "ok shots armed for " + std::to_string(burstLeft_) + " frames";
     }
 
     if (cmd.name == "overlay") {
