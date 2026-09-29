@@ -28,6 +28,8 @@ void WaterAmbienceSystem::onStart(FrameContext& ctx) {
     surfClip_ = ctx.audio.createClip(s.data(), s.size(), 1, rate);
     riverClip_ = ctx.audio.createClip(r.data(), r.size(), 1, rate);
     bigRiverClip_ = ctx.audio.createClip(big.data(), big.size(), 1, rate);
+    const std::vector<float> lapPcm = sfx::lap(rate, 17);
+    lapClip_ = ctx.audio.createClip(lapPcm.data(), lapPcm.size(), 1, rate);
     const std::vector<float> under = sfx::underwaterRiver(rate, 13);
     underClip_ = ctx.audio.createClip(under.data(), under.size(), 1, rate);
 }
@@ -37,6 +39,10 @@ void WaterAmbienceSystem::onStop(FrameContext& ctx) {
     if (riverVoice_.valid()) ctx.audio.stop(riverVoice_);
     if (bigRiverVoice_.valid()) ctx.audio.stop(bigRiverVoice_);
     if (underVoice_.valid()) ctx.audio.stop(underVoice_);
+    if (lapVoice_.valid()) ctx.audio.stop(lapVoice_);
+    lapVoice_ = AudioVoiceHandle{};
+    haveLap_ = lapFound_ = false;
+    lapGain_ = 0;
     underVoice_ = AudioVoiceHandle{};
     underGain_ = 0;
     surfVoice_ = riverVoice_ = bigRiverVoice_ = AudioVoiceHandle{};
@@ -106,6 +112,30 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
             surfLevel_ = std::clamp(1.0 - above / 120.0, 0.15, 1.0);   // #87: the surf a notch louder
         }
         drive(surfClip_, surfVoice_, surfAt_, haveSurf_, surfGain_, surfFound_, surfTarget_, kSurfRange, surfLevel_ * duck);
+    }
+
+    // LAKES: the nearest lake edge, swept like the sea (a lake is still water: lapping, quietly)
+    if (const Hydrology* hy = cfg->params.hydro.get(); hy && !hy->lakes().empty()) {
+        constexpr int kLapRings = 5;
+        const double lapRadii[kLapRings] = {4.0, 10.0, 20.0, 35.0, 55.0};
+        if (lapSweep_ == 0) { lapCentre_ = at; lapBestD2_ = 1e30; }
+        for (int k = 0; k < kPerFrame && lapSweep_ < kLapRings * kDirs; ++k, ++lapSweep_) {
+            const double r = lapRadii[lapSweep_ / kDirs];
+            const double a = 6.283185307179586 * ((lapSweep_ % kDirs) + 0.5 * ((lapSweep_ / kDirs) % 2)) / kDirs;
+            const double x = lapCentre_.x + r * std::cos(a), z = lapCentre_.z + r * std::sin(a);
+            if (r * r < lapBestD2_ && hy->inLake(x, z)) {
+                const double lv = hy->lakeLevelAt(x, z);
+                lapBestD2_ = r * r;
+                lapBest_ = Vec3(x, std::isfinite(lv) ? lv : at.y, z);
+            }
+        }
+        if (lapSweep_ >= kLapRings * kDirs) {
+            lapSweep_ = 0;
+            lapFound_ = lapBestD2_ < 1e29 || hy->inLake(lapCentre_.x, lapCentre_.z);
+            if (lapBestD2_ < 1e29) lapTarget_ = lapBest_;
+            else if (lapFound_) lapTarget_ = Vec3(lapCentre_.x, at.y, lapCentre_.z);
+        }
+        drive(lapClip_, lapVoice_, lapAt_, haveLap_, lapGain_, lapFound_, lapTarget_, 45.0, 0.35 * duck);
     }
 
     // RIVERS: the nearest bank, found through the distance field's slope.

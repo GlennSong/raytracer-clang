@@ -39,6 +39,15 @@ private:
     double riverSizeTimer_ = 0.0;
     // UNDER the water (SceneLighting::underwater, from UnderwaterSystem): the surface sounds duck away and a
     // muffled deep bubbling surrounds you (Glenn, of the muffled river: "works good for underwater")
+    // LAKES: a quiet lapping at the nearest lake edge (the sea sweep's pattern, asking Hydrology::inLake)
+    AudioClipHandle lapClip_{};
+    AudioVoiceHandle lapVoice_{};
+    Vec3 lapAt_{};
+    bool haveLap_ = false, lapFound_ = false;
+    double lapGain_ = 0.0, lapBestD2_ = 1e30;
+    Vec3 lapBest_{}, lapTarget_{};
+    int lapSweep_ = 0;
+    Vec3 lapCentre_{};
     AudioClipHandle underClip_{};
     AudioVoiceHandle underVoice_{};
     double underGain_ = 0.0;

@@ -417,6 +417,7 @@ struct CharacterController {
     Real halfHeight = 0.4;
     Real stepHeight = 0.4;   // tallest ledge it can walk up in one step
     CharacterId characterId = INVALID_CHARACTER;
+    bool swimming = false;   // afloat in deep water (PlayerSystem, #43): footsteps become strokes
 };
 
 // A static triangle-mesh collider (terrain, and later any baked static geometry)

@@ -85,6 +85,7 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 const GroundState g = physicsSys.physicsWorld().characterGroundState(cc.characterId);
                 const bool was = swim_.swimming;
                 swim_.update(depth, g != GroundState::InAir);
+                cc.swimming = swim_.swimming;
                 if (swim_.swimming != was)
                     LOG_INFO << (swim_.swimming ? "[swim] afloat" : "[swim] standing again") << " at (" << t.position.x << ", "
                              << t.position.z << "), water depth " << depth << " m";

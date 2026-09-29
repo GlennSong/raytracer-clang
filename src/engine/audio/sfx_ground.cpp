@@ -108,6 +108,11 @@ Recipe recipeFor(Ground g) {
             r.thumpLevel = 0.35; r.thumpHz = 65; r.thumpDecay = 0.06;
             r.texLevel = 0.30; r.texLo = 800; r.texHi = 5000; r.texAttack = 0.02; r.texDecay = 0.12;
             r.grainLevel = 0.95; r.grainRate = 1400; r.grainSpan = 0.24; r.grainLo = 900; r.grainHi = 6000; break;
+        case Ground::Water:     // wading: the foot pushed through the water, a slosh and a few drops
+            r.length = 0.34; r.clickLevel = 0.10; r.clickLo = 400; r.clickHi = 2500; r.clickDecay = 0.006;
+            r.thumpLevel = 0.30; r.thumpHz = 90; r.thumpDecay = 0.05;
+            r.texLevel = 0.60; r.texLo = 250; r.texHi = 2200; r.texAttack = 0.03; r.texDecay = 0.12;
+            r.grainLevel = 0.25; r.grainRate = 60; r.grainSpan = 0.25; r.grainLo = 900; r.grainHi = 3000; break;
         default: return recipeFor(Ground::Concrete);
     }
     return r;
@@ -236,6 +241,7 @@ const char* groundName(Ground g) {
         case Ground::Snow: return "snow";
         case Ground::Wood: return "wood";
         case Ground::Metal: return "metal";
+        case Ground::Water: return "water";
         default: return "concrete";
     }
 }
@@ -438,6 +444,98 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
         const double v = body[i] * fl + (0.10 + 0.14 * narrow) * lift[i] * fl;
         out[i] = static_cast<float>(std::tanh(0.35 * v));
     }
+    normalizeTo(out, 0.6f);
+    return out;
+}
+
+std::vector<float> splash(double strength, uint32_t sampleRate, uint32_t seed) {
+    // A body meeting the water (#43): the SLAP (a dull broadband crack as the surface is struck), the SPRAY
+    // (droplets flung up and falling back: a scatter of tiny high plinks over ~0.3-0.8 s), and the GULP (air
+    // dragged under: a few low bubbles). A stroke is a soft slap and a little spray; jumping in, all three big.
+    strength = std::clamp(strength, 0.0, 1.0);
+    const double rate = static_cast<double>(sampleRate);
+    const double len = 0.35 + 0.6 * strength;
+    const auto count = static_cast<size_t>(rate * len);
+    std::mt19937 rng(seed * 2654435761u + 97u);
+    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
+    std::vector<double> acc(count, 0.0);
+    BandPass slapBand(250.0, 2500.0 + 2500.0 * strength, rate);
+    const double slapDecay = 0.02 + 0.05 * strength;
+    for (size_t i = 0; i < count; ++i) {
+        const double t = static_cast<double>(i) / rate;
+        const double att = std::min(1.0, t / (0.004 + 0.01 * strength));
+        acc[i] += (0.5 + 0.8 * strength) * slapBand(uni(rng)) * att * std::exp(-t / slapDecay);
+    }
+    // droplets: small bubbles ringing as they land (Minnaert, 1-3 mm), strewn over the fall-back time
+    const int drops = static_cast<int>(8 + 60 * strength);
+    for (int d = 0; d < drops; ++d) {
+        const double at = 0.02 + u01(rng) * (0.15 + 0.75 * strength);
+        const double r = 0.0010 + 0.0020 * u01(rng);
+        const double f0 = 3.26 / r, damp = 0.043 * f0 + 0.0014 * std::pow(f0, 1.5);
+        const double a = (0.08 + 0.12 * u01(rng)) * (1.0 + 1.5 * strength) * (1.0 - 0.5 * at / len);
+        double ph = 0;
+        for (size_t k = static_cast<size_t>(at * rate), n = 0; k < count && n < static_cast<size_t>(rate * 0.03); ++k, ++n) {
+            const double t = static_cast<double>(n) / rate;
+            ph += 6.283185307179586 * f0 * (1.0 + 0.1 * damp * t) / rate;
+            acc[k] += a * std::sin(ph) * std::exp(-damp * t);
+        }
+    }
+    // the gulp: a few big bubbles under the body (only for a real plunge)
+    const int gulps = static_cast<int>(6 * strength);
+    for (int g = 0; g < gulps; ++g) {
+        const double at = 0.05 + 0.3 * u01(rng);
+        const double r = 0.010 + 0.012 * u01(rng);
+        const double f0 = 3.26 / r, damp = 0.043 * f0 + 0.0014 * std::pow(f0, 1.5);
+        double ph = 0;
+        for (size_t k = static_cast<size_t>(at * rate), n = 0; k < count && n < static_cast<size_t>(rate * 0.2); ++k, ++n) {
+            const double t = static_cast<double>(n) / rate;
+            ph += 6.283185307179586 * f0 * (1.0 + 0.15 * damp * t) / rate;
+            acc[k] += 0.7 * std::sin(ph) * std::exp(-damp * t);
+        }
+    }
+    std::vector<float> out(count);
+    for (size_t i = 0; i < count; ++i) {
+        const double tail = std::min(1.0, static_cast<double>(count - i) / (rate * 0.02));
+        out[i] = static_cast<float>(std::tanh(1.2 * acc[i]) * tail);
+    }
+    normalizeTo(out, 0.8f);
+    return out;
+}
+
+std::vector<float> lap(uint32_t sampleRate, uint32_t seed) {
+    // A lake's edge: still water, so no surf -- small wavelets arriving every 1.5-3 s, each a soft low slosh
+    // (rising and falling over ~0.5 s) and a few drops as it runs back. Seamless: each wavelet wraps round.
+    const double rate = static_cast<double>(sampleRate);
+    const auto count = static_cast<size_t>(rate * 12.0);
+    std::mt19937 rng(seed * 40503u + 7u);
+    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
+    std::vector<double> white(count);
+    for (double& w : white) w = uni(rng);
+    const std::vector<double> slosh = circBand(white, rate, 120.0, 1400.0);
+    std::vector<double> env(count, 0.15);   // the lake is never quite silent
+    std::vector<std::pair<size_t, double>> drops;
+    for (double t = u01(rng) * 1.5; t < 12.0; t += 1.5 + 1.5 * u01(rng)) {
+        const double a = 0.5 + 0.5 * u01(rng), w = 0.45 + 0.25 * u01(rng);
+        for (size_t k = 0; k < static_cast<size_t>(w * 2.0 * rate); ++k) {
+            const double x = static_cast<double>(k) / (w * rate);   // 0..2
+            env[(static_cast<size_t>(t * rate) + k) % count] += a * std::pow(std::sin(0.5 * 3.14159265 * std::min(x, 2.0)), 2.0);
+        }
+        for (int d = 0; d < 3; ++d) drops.push_back({static_cast<size_t>((t + w + 0.3 * u01(rng)) * rate) % count, 0.05 + 0.08 * u01(rng)});
+    }
+    std::vector<double> acc(count, 0.0);
+    for (size_t i = 0; i < count; ++i) acc[i] = slosh[i] * env[i];
+    for (const auto& [at, a] : drops) {
+        const double r = 0.0015 + 0.002 * u01(rng);
+        const double f0 = 3.26 / r, damp = 0.043 * f0 + 0.0014 * std::pow(f0, 1.5);
+        double ph = 0;
+        for (size_t n = 0; n < static_cast<size_t>(rate * 0.03); ++n) {
+            const double t = static_cast<double>(n) / rate;
+            ph += 6.283185307179586 * f0 / rate;
+            acc[(at + n) % count] += a * std::sin(ph) * std::exp(-damp * t);
+        }
+    }
+    std::vector<float> out(count);
+    for (size_t i = 0; i < count; ++i) out[i] = static_cast<float>(std::tanh(0.6 * acc[i]));
     normalizeTo(out, 0.6f);
     return out;
 }

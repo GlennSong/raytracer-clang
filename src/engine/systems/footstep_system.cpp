@@ -1,6 +1,7 @@
 #include "footstep_system.h"
 
 #include "physics_system.h"
+#include "underwater_system.h"
 #include "../audio/sfx.h"
 #include "../components.h"
 #include "../procgen/ground_cover.h"
@@ -38,6 +39,8 @@ void FootstepSystem::onStart(FrameContext& ctx) {
             lands_[g][l] = makeClip(ctx.audio, sfx::landing(ground, landHeavy[l], rate, 31u + 5u * l + 97u * g), rate);
     }
     rustle_ = makeClip(ctx.audio, sfx::grassRustle(rate, 3), rate);
+    const double splashStrength[3] = {0.12, 0.35, 1.0};
+    for (int k = 0; k < 3; ++k) splashes_[k] = makeClip(ctx.audio, sfx::splash(splashStrength[k], rate, 5u + k), rate);
     LOG_INFO << "[footsteps] " << kGrounds * (kStepVariants + 1 + kLandLevels) + 1 << " clips synthesized in "
              << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms";
 }
@@ -111,6 +114,29 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     }
     lastFeet_ = feet;
     haveLastFeet_ = true;
+    // SWIMMING (#43): no feet on the ground -- a splash going in (bigger the harder you hit the water), then a
+    // soft stroke every ~0.9 s while you swim
+    if (cc.swimming) {
+        if (!wasSwimming_) {
+            const int k = fallBeforeWater_ > 6.0 ? 2 : 1;
+            AudioPlayParams pp; pp.bus = AudioBus::Sfx; pp.volume = static_cast<float>(k == 2 ? 1.0 : 0.55);
+            ctx.audio.playAt(splashes_[k], t.position, 25.0, pp);
+            strokeTimer_ = 0.6;
+        }
+        wasSwimming_ = true;
+        if (horiz > 0.4 && (strokeTimer_ -= dt) <= 0) {
+            strokeTimer_ = 0.85 + 0.15 * std::uniform_real_distribution<double>(0, 1)(rng_);
+            std::uniform_real_distribution<double> pitch(0.9, 1.1);
+            AudioPlayParams pp; pp.bus = AudioBus::Sfx; pp.volume = 0.4f; pp.pitch = static_cast<float>(pitch(rng_));
+            ctx.audio.playAt(splashes_[0], t.position, 18.0, pp);
+        }
+        fadeRustle(0.0);
+        tracker_ = FootstepTracker{};
+        tracker_.grounded = false;   // leaving the water is a touch-down, not a jump
+        return;
+    }
+    wasSwimming_ = false;
+    fallBeforeWater_ = std::max(0.0, -v.y);
     const FootstepEvent ev = tracker_.update(onGround, horiz, v.y, dt, cc.halfHeight < 0.3);
 
     // #64: tall grass brushing the legs, while walking through it -- only where the ground under the foot
@@ -144,6 +170,23 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     const sfx::Ground ground = leaving && ev.kind == FootstepEvent::Kind::Jump ? lastGround_ : groundAt(ctx.world, surface, feet.x, feet.y, feet.z);
     lastSurface_ = surface;
     lastGround_ = ground;
+    // wading: water over the feet makes every step a slosh, whatever the bed is
+    {
+        const UnderwaterSystem::Surface w = UnderwaterSystem::surfaceAt(ctx.world, feet.x, feet.z);
+        if (w.kind != UnderwaterSystem::Water::None && w.level > feet.y + 0.08) {
+            const int gw = static_cast<int>(sfx::Ground::Water);
+            AudioPlayParams wp; wp.bus = AudioBus::Sfx; wp.pitch = static_cast<float>(std::uniform_real_distribution<double>(0.94, 1.06)(rng_));
+            wp.volume = static_cast<float>(ev.volume * (ev.kind == FootstepEvent::Kind::Land ? 0.9 : 0.5));
+            AudioClipHandle c = ev.kind == FootstepEvent::Kind::Land ? splashes_[1]
+                              : ev.kind == FootstepEvent::Kind::Jump ? jumps_[gw] : steps_[gw][std::max(0, lastVariant_) % kStepVariants];
+            if (ev.kind == FootstepEvent::Kind::Step) {
+                std::uniform_int_distribution<int> pick(0, kStepVariants - 1);
+                c = steps_[gw][pick(rng_)];
+            }
+            ctx.audio.playAt(c, feet, 20.0, wp);
+            return;
+        }
+    }
     const int g = static_cast<int>(ground);
     std::uniform_real_distribution<double> pitch(0.94, 1.06);
     AudioPlayParams pp;

@@ -45,6 +45,11 @@ private:
     std::array<AudioClipHandle, kGrounds> jumps_{};
     std::array<std::array<AudioClipHandle, kLandLevels>, kGrounds> lands_{};
     AudioClipHandle rustle_{};
+    // water (#43): a plunge, a stroke; wading uses sfx::Ground::Water steps
+    std::array<AudioClipHandle, 3> splashes_{};   // stroke, wade in, plunge
+    bool wasSwimming_ = false;
+    double strokeTimer_ = 0.0;
+    double fallBeforeWater_ = 0.0;
     AudioVoiceHandle rustleVoice_{};
     double rustleLevel_ = 0.0;
     FootstepTracker tracker_;

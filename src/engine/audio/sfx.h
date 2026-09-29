@@ -40,7 +40,7 @@ std::vector<float> engine(uint32_t sampleRate = 48000, uint32_t seed = 1);
 // ---- The ground under a foot (#62/#63/#64/#65) --------------------------------------------------
 // What a footstep lands on, as far as the ear cares. The surface resolver (engine/audio/footsteps.h)
 // picks one from the collider's tag (roads) or the ground-cover map (terrain).
-enum class Ground : uint8_t { Asphalt = 0, Concrete, Grass, Dirt, Sand, Rock, Snow, Wood, Metal, Count };
+enum class Ground : uint8_t { Asphalt = 0, Concrete, Grass, Dirt, Sand, Rock, Snow, Wood, Metal, Water, Count };   // Water: wading
 const char* groundName(Ground g);   // "asphalt", "concrete", ... (clip names: "sfx/step/<name>/<n>")
 
 // One footstep on `ground`: the heel's contact, the body's weight, and the surface's own texture --
@@ -57,12 +57,18 @@ std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate = 48
 // Ambience LOOPS, seamless by construction (circular filtering, integer-cycle envelopes), for a
 // looping voice whose volume the caller drives:
 std::vector<float> grassRustle(uint32_t sampleRate = 48000, uint32_t seed = 1);   // walking through tall grass, ~2 s
+// Water lapping at a lake's edge: small irregular wavelets arriving every 1.5-3 s, ~12 s loop (lakes are still;
+// this is the quiet sound of their shore, not surf).
+std::vector<float> lap(uint32_t sampleRate = 48000, uint32_t seed = 1);
 std::vector<float> surf(uint32_t sampleRate = 48000, uint32_t seed = 1);          // waves on a beach, two swells, ~11 s
 // Running water heard from the bank, ~4 s loop: a dark, soft, steady noise. `size` 0..1 narrow .. broad.
 std::vector<float> river(uint32_t sampleRate = 48000, uint32_t seed = 1, double size = 0.5);
 // Something COOKING (a pot simmering to a boil, `boil` 0..1): layered low bubbling, loop. Found tuning the
 // river -- Glenn: "It sounds like something cooking ... mark the sounds for that". Not used in a level yet.
 std::vector<float> simmer(uint32_t sampleRate = 48000, uint32_t seed = 1, double boil = 0.5);
+// A SPLASH (#43): `strength` 0..1 from a swimming stroke to jumping in -- a slap on the surface, a spray of
+// droplets falling back, and a gulp of air pulled under. One-shot.
+std::vector<float> splash(double strength, uint32_t sampleRate = 48000, uint32_t seed = 1);
 // Heard from UNDER the water (river or sea): deep bubbling, muffled -- nothing above ~900 Hz. Glenn: "works good
 // for underwater".
 std::vector<float> underwaterRiver(uint32_t sampleRate = 48000, uint32_t seed = 1);

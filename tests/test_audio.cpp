@@ -608,7 +608,7 @@ TEST_CASE(footsteps_sound_different_on_every_ground) {
     // The issue's gate: "walk grass -> asphalt -> sand -> snow: four distinct footstep sounds, no samples".
     const uint32_t rate = 48000;
     const sfx::Ground grounds[] = {sfx::Ground::Asphalt, sfx::Ground::Concrete, sfx::Ground::Grass, sfx::Ground::Dirt,
-                                   sfx::Ground::Sand, sfx::Ground::Rock, sfx::Ground::Snow};
+                                   sfx::Ground::Sand, sfx::Ground::Rock, sfx::Ground::Snow, sfx::Ground::Water};
     std::vector<Voiceprint> prints;
     for (sfx::Ground g : grounds) {
         const auto a = sfx::footstep(g, rate, 3), b = sfx::footstep(g, rate, 3), c = sfx::footstep(g, rate, 4);
@@ -857,4 +857,33 @@ TEST_CASE(the_river_heard_from_under_the_water_is_muffled) {
     CHECK(vu.band[0] > va.band[0] && vu.band[2] + vu.band[3] < 0.02);   // under water: darker, nothing bright
     maybeDump("loop_river_air", air, rate);
     maybeDump("loop_river_underwater", under, rate);
+}
+
+
+TEST_CASE(splashes_and_a_lake_shore) {
+    // #43: a stroke is a soft slap and a little spray; jumping in is a big one with a gulp of air under it.
+    const uint32_t rate = 48000;
+    const auto stroke = sfx::splash(0.12, rate, 1), plunge = sfx::splash(1.0, rate, 1);
+    const Voiceprint vs = voiceprint(stroke, rate), vp = voiceprint(plunge, rate);
+    std::printf("    [splash] stroke %.0f ms, plunge %.0f ms; plunge low band %.2f vs %.2f\n", vs.length * 1000, vp.length * 1000, vp.band[0], vs.band[0]);
+    CHECK(vp.length > vs.length * 1.5);
+    CHECK(vp.band[0] > vs.band[0]);
+    for (float x : plunge) CHECK(std::fabs(x) <= 1.0f);
+    maybeDump("splash_stroke", stroke, rate);
+    maybeDump("splash_plunge", plunge, rate);
+    // a lake's edge laps: seamless, gentle wavelets (calmer than the surf, not a flat bed)
+    const auto lap = sfx::lap(rate, 1);
+    auto seamIsClean = [](const std::vector<float>& f) {
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < f.size(); i++) maxStep = std::max(maxStep, std::fabs(f[i] - f[i - 1]));
+        return std::fabs(f.front() - f.back()) <= maxStep * 1.5f + 1e-4f;
+    };
+    CHECK(seamIsClean(lap));
+    std::vector<double> e;
+    for (std::size_t i = 0; i + 4800 <= lap.size(); i += 4800) { double s2 = 0; for (std::size_t k = i; k < i + 4800; ++k) s2 += lap[k] * lap[k]; e.push_back(s2); }
+    std::sort(e.begin(), e.end());
+    const double swing = e[e.size() * 9 / 10] / std::max(e[e.size() / 10], 1e-9);
+    std::printf("    [lap] swing %.1fx\n", swing);
+    CHECK(swing > 3.0);   // wavelets come and go
+    maybeDump("loop_lake_lap", lap, rate);
 }
