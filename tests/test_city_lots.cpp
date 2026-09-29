@@ -1256,3 +1256,30 @@ TEST_CASE(a_tower_in_a_plaza_stands_back_from_the_avenue) {
     }
     CHECK(plazas > 0);
 }
+
+// A building fronts a STREET, never a freeway or a ramp (Glenn, 2026-09-29: "buildings shouldn't face a
+// freeway as a road since that's not an accessible road"). A block with a freeway 8 m off its south edge and
+// a local street 12 m off its east edge: every building faces the street, even the lots nearest the freeway.
+TEST_CASE(buildings_face_the_street_not_the_freeway) {
+    const Poly2 block{{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    RoadGraph roads;
+    const int f0 = roads.addNode({-60, -8}), f1 = roads.addNode({100, -8});
+    roads.addEdge(f0, f1, 22, RoadClass::Freeway);
+    const int s0 = roads.addNode({52, -60}), s1 = roads.addNode({52, 100});
+    roads.addEdge(s0, s1, 8, RoadClass::Local);
+    LotParams lp;
+    lp.seed = 7;
+    std::vector<RenderMesh> parts;
+    const std::vector<LotBuilding> lots = growLotBuildings({block}, lp, nullptr, &parts, &roads, 0.0);
+    int units = 0, towardFreeway = 0;
+    for (const LotBuilding& lb : lots)
+        for (const BuildingUnit& u : lb.units) {
+            ++units;
+            const Vec3& d = u.params.faceDir;
+            if (d.z < -0.5) ++towardFreeway;   // -Z in world = graph -y = the freeway's side
+            CHECK(d.x > 0.5);                  // +X: the street
+        }
+    std::printf("    [frontage] %d units, %d facing the freeway\n", units, towardFreeway);
+    CHECK(units > 0);
+    CHECK(towardFreeway == 0);
+}

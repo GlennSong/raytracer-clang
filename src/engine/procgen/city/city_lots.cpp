@@ -507,6 +507,11 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
 // The ribbon DRAPES: a joint every metre, each vertex ground-relative (kDrapedPartBase),
 // so once the host lays it on the finished terrain it follows it instead of floating
 // over a dip or cutting into a rise.
+// WHAT A BUILDING MAY FRONT (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since that's
+// not an accessible road"): a door, its walk and a plaza's mouths reach for city streets. Freeway and ramp
+// edges stay in the graph for what needs them (the deck-shadow test below) but are never frontage.
+static bool faces(const RoadEdge& e) { return e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp; }
+
 void sculptDoorWalks(const LotBuilding& b, const RoadGraph* roads, Real sidewalkWidth,
                      const Poly2* block, std::vector<RenderMesh>* outParts) {
     if (!outParts || !roads || roads->edges.empty() || sidewalkWidth <= 0) return;
@@ -516,6 +521,7 @@ void sculptDoorWalks(const LotBuilding& b, const RoadGraph* roads, Real sidewalk
         for (const RoadEdge& e : roads->edges) {
             if (e.a < 0 || e.b < 0 || e.a >= static_cast<int>(roads->nodes.size()) ||
                 e.b >= static_cast<int>(roads->nodes.size())) continue;
+            if (!faces(e)) continue;   // a building fronts a street, never a freeway or a ramp
             const Vec2& ra = roads->nodes[e.a].pos;
             const Vec2& rb = roads->nodes[e.b].pos;
             const Vec2 ab = rb - ra;
@@ -913,6 +919,7 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
                 if (e.a < 0 || e.b < 0 ||
                     e.a >= static_cast<int>(roads->nodes.size()) ||
                     e.b >= static_cast<int>(roads->nodes.size())) continue;
+                if (!faces(e)) continue;   // a building fronts a street, never a freeway or a ramp
                 const Vec2& ra = roads->nodes[e.a].pos;
                 const Vec2& rb = roads->nodes[e.b].pos;
                 Vec2 ab = rb - ra;
@@ -2947,6 +2954,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     if (e.a < 0 || e.b < 0 ||
                         e.a >= static_cast<int>(roads->nodes.size()) ||
                         e.b >= static_cast<int>(roads->nodes.size())) continue;
+                    if (!faces(e)) continue;   // a building fronts a street, never a freeway or a ramp
                     const Vec2& ra = roads->nodes[e.a].pos;
                     const Vec2& rb = roads->nodes[e.b].pos;
                     Vec2 ab = rb - ra;

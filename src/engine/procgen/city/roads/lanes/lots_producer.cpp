@@ -19,7 +19,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-26.1";   // .1: grows on roads/lotnav (the clearance widths), not the sim graph
+const char* const kLotsBuildTag = "2026-09-29.1";   // 2026-09-29.1: buildings never front a freeway or a ramp   // 2026-09-26.1: grows on roads/lotnav (the clearance widths), not the sim graph
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
