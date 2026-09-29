@@ -51,6 +51,11 @@ public:
         for (const CityEntity& e : cityEntities(in.level)) {
             k = bundle::fnv1aStr("entity" + std::to_string(e.ordinal), k);
             if (e.inlineGraph) { k = bundle::fnv1aStr(e.block.dump(), k); continue; }
+            // The level's sidewalk override is built into the city (loadCityGraph), so it keys it: without it,
+            // a level sharing the graph handed its city forward (bake.cpp's donor search matches this key) --
+            // metro_lanes' 5-6 m sidewalks got the lab metro's narrower ones, one hole more, and 2 buildings.
+            // Hashed only when present, so a level without one keeps its key.
+            if (e.block.contains("sidewalks")) k = bundle::fnv1aStr("sidewalks" + e.block["sidewalks"].dump(), k);
             bundle::InputFile f; f.path = e.graphPath; uint64_t fk = bundle::kFnvOffset;
             if (bundle::fnv1aFile(e.graphPath, fk, &f.bytes, &f.mtime)) { f.fnv = fk; k = bundle::fnv1a(&fk, sizeof(fk), k); }
             else k = bundle::fnv1aStr("missing:" + e.graphPath, k);

@@ -288,7 +288,7 @@ struct LevelFacts {
     int enterableDoorsInsideOk = 0;
     double spawnToEnterableDoor = 1e300;   // XZ metres, nearest enterable foot
     double enterableDoorX = 0, enterableDoorZ = 0, enterableDoorNX = 0,
-           enterableDoorNZ = 0;            // first enterable foot + normal
+           enterableDoorNZ = 0;            // the nearest enterable foot + normal
 };
 
 LevelFacts inspect(const std::string& name) {
@@ -359,12 +359,6 @@ LevelFacts inspect(const std::string& name) {
         for (const BuildingRecord& r : cb.records) {
             if (!r.enterable) continue;
             for (const DoorSpec& d : r.doors) {
-                if (f.enterableDoors == 0) {
-                    f.enterableDoorX = d.foot.x;
-                    f.enterableDoorZ = d.foot.y;
-                    f.enterableDoorNX = d.normal.x;
-                    f.enterableDoorNZ = d.normal.y;
-                }
                 ++f.enterableDoors;
                 const Vec2 outP = d.foot + d.normal * 1.5;
                 const Vec2 inP = d.foot - d.normal * 0.5;
@@ -381,8 +375,14 @@ LevelFacts inspect(const std::string& name) {
                 if (r.plan.size() >= 3 && pointInPolygon(r.plan, inP))
                     ++f.enterableDoorsInsideOk;
                 const double dx = spawn.x - d.foot.x, dz = spawn.z - d.foot.y;
-                f.spawnToEnterableDoor = std::min(
-                    f.spawnToEnterableDoor, std::sqrt(dx * dx + dz * dz));
+                const double dist = std::sqrt(dx * dx + dz * dz);
+                if (dist < f.spawnToEnterableDoor) {   // the NEAREST door is the one to re-author the spawn at
+                    f.spawnToEnterableDoor = dist;
+                    f.enterableDoorX = d.foot.x;
+                    f.enterableDoorZ = d.foot.y;
+                    f.enterableDoorNX = d.normal.x;
+                    f.enterableDoorNZ = d.normal.y;
+                }
             }
         }
     });
@@ -1187,7 +1187,7 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
             return engine::terrainHeight(*params, *noise, x, z);
         };
     });
-    struct Offender { double d, x, z, y, surface, deck, terr; int link; double linkHalf; int layer; double speed; int padHits; };
+    struct Offender { double d, x, z, y, surface, deck, terr; int link; double linkHalf; int layer; double speed; int padHits; double tyreLo, tyreHi; };
     std::vector<Offender> offenders;
     std::size_t padTris = 0;
     for (const engine::RoadDeckField* f : decks) padTris += f->pads.size();
@@ -1233,11 +1233,23 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
                             if (x >= std::min({t.a.x, t.b.x, t.c.x}) - 0.01 && x <= std::max({t.a.x, t.b.x, t.c.x}) + 0.01 &&
                                 z >= std::min({t.a.z, t.b.z, t.c.z}) - 0.01 && z <= std::max({t.a.z, t.b.z, t.c.z}) + 0.01)
                                 ++padHits;
+                    // each tyre's contact patch against the collider under IT: the placement rests the
+                    // LOWEST tyre on the road, so on a crest or a twist the body's centre may float
+                    double tyreLo = 1e9, tyreHi = -1e9;
+                    for (const auto& w : city.carWheels(static_cast<int>(v))) {
+                        const Vec3 l(w.pos.x, w.pos.y - w.radius, w.pos.z);
+                        const double wx = m.m[0][0] * l.x + m.m[0][1] * l.y + m.m[0][2] * l.z + x;
+                        const double wy = m.m[1][0] * l.x + m.m[1][1] * l.y + m.m[1][2] * l.z + y;
+                        const double wz = m.m[2][0] * l.x + m.m[2][1] * l.y + m.m[2][2] * l.z + z;
+                        double ts;
+                        if (!grid.surfaceAt(wx, wz, wy + 0.5, ts)) continue;
+                        tyreLo = std::min(tyreLo, wy - ts); tyreHi = std::max(tyreHi, wy - ts);
+                    }
                     offenders.push_back({d, x, z, y, top, deckY,
                                          terrain ? terrain(x, z) : std::nan(""), link,
                                          link >= 0 ? city.nav().links[link].width * 0.5 : 0.0,
                                          link >= 0 ? city.nav().links[link].layer : -1,
-                                         agents[aid].speed, padHits});
+                                         agents[aid].speed, padHits, tyreLo, tyreHi});
                 }
             }
         }
@@ -1261,9 +1273,9 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
         if (std::find(shown.begin(), shown.end(), cellKey) != shown.end()) continue;
         shown.push_back(cellKey);
         std::printf("      d=%+.2f at (%.1f, %.1f) y=%.2f surface=%.2f deck=%.2f terrain+0.22=%.2f "
-                    "link=%d half=%.1f layer=%d speed=%.1f padTrisOver=%d surfaces:",
+                    "link=%d half=%.1f layer=%d speed=%.1f padTrisOver=%d tyres %+.2f..%+.2f surfaces:",
                     o.d, o.x, o.z, o.y, o.surface, o.deck, o.terr + 0.22, o.link, o.linkHalf,
-                    o.layer, o.speed, o.padHits);
+                    o.layer, o.speed, o.padHits, o.tyreLo, o.tyreHi);
         for (double h : grid.surfacesAt(o.x, o.z)) std::printf(" %.2f", h);
         std::printf("\n");
         if (++printed >= 10) break;
