@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <set>
 #include <string>
 
@@ -96,7 +97,12 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
 
     // BRIDGES over rivers: along a road, each run within a river's banks gets a floor at the water
     // plus bridgeOverWater, held across the run and 25 m either side
-    auto riverFloors = [&](const std::vector<Vec2>& P) {
+    // `freeway`: a freeway carriageway -- its pavement reaches ~8 m either side of the line tested, so "over the
+    // water" starts 10 m from the bank, and a long wet run is floored along its length at the LOCAL water level
+    // (#90, Glenn: "another part of the freeway is on the ground and goes right into a river"): the 200 m rule
+    // below is the pass's, and a freeway meeting a river obliquely or after running beside it got no floor
+    auto riverFloors = [&](const std::vector<Vec2>& P, bool freeway = false) {
+        const double wetAt = freeway ? 10.0 : 3.0;
         json floors = json::array();
         if (!w.hydro || P.size() < 2) return floors;
         std::vector<Vec2> dense;
@@ -108,12 +114,12 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         std::size_t k = 0;
         while (k < dense.size()) {
             double level = 0;
-            if (w.hydro->distanceToRiver(dense[k].x, dense[k].y, 60.0, &level) >= 3.0) { ++k; continue; }
+            if (w.hydro->distanceToRiver(dense[k].x, dense[k].y, 60.0, &level) >= wetAt) { ++k; continue; }
             std::size_t j = k;
             double top = level;
             while (j + 1 < dense.size()) {
                 double lv = 0;
-                if (w.hydro->distanceToRiver(dense[j + 1].x, dense[j + 1].y, 60.0, &lv) >= 3.0) break;
+                if (w.hydro->distanceToRiver(dense[j + 1].x, dense[j + 1].y, 60.0, &lv) >= wetAt) break;
                 if (std::isfinite(lv)) top = std::max(top, lv);
                 ++j;
             }
@@ -121,7 +127,18 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
             // pass follows one up its valley, and flooring that whole run at its highest water put 2.2 km
             // of it on a bridge 110 m up
             const double runLen = 8.0 * static_cast<double>(j - k);
-            if (runLen <= 200.0) {
+            if (freeway && runLen > 200.0) {
+                // a freeway along the water: held over it all the way, each floor at the water beside it
+                for (std::size_t q = k; q <= j; q += 8) {
+                    double lv = 0;
+                    w.hydro->distanceToRiver(dense[q].x, dense[q].y, 60.0, &lv);
+                    const double water = std::isfinite(lv) ? lv : std::isfinite(top) ? top : w.heightAt(dense[q].x, dense[q].y);
+                    floors.push_back({dense[q].x, dense[q].y, water + o.bridgeOverWater, 40.0});
+                }
+                double lv = 0;
+                w.hydro->distanceToRiver(dense[j].x, dense[j].y, 60.0, &lv);
+                floors.push_back({dense[j].x, dense[j].y, (std::isfinite(lv) ? lv : top) + o.bridgeOverWater, 40.0});
+            } else if (runLen <= 200.0) {
                 const Vec2 mid = (dense[k] + dense[j]) * 0.5;
                 double lvMid = 0;
                 w.hydro->distanceToRiver(mid.x, mid.y, 60.0, &lvMid);
@@ -248,7 +265,12 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         json sharedWater = json::array();
         for (int side = 0; side < 2; ++side)
             for (const std::vector<Vec2>& P : chains[side])
-                for (const json& f : riverFloors(P)) sharedWater.push_back(f);
+                for (const json& f : riverFloors(P, /*freeway*/ true)) {
+                    sharedWater.push_back(f);
+                    static const bool listWet = std::getenv("RT_FREEWAY_WATER") != nullptr;   // where the freeway meets water
+                    if (listWet) std::fprintf(stderr, "[freeway] over water at (%.0f, %.0f): deck floor %.1f m, holds %.0f m\n",
+                                              f[0].get<double>(), f[1].get<double>(), f[2].get<double>(), f[3].get<double>());
+                }
         for (int side = 0; side < 2; ++side)
             for (std::size_t c = 0; c < chains[side].size(); ++c) {
                 const std::vector<Vec2>& P = chains[side][c];

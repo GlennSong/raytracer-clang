@@ -307,7 +307,16 @@ RoadSignMeshes buildRoadSignMeshes(const std::vector<IslandSign>& signs, const R
             // a gantry across the carriageway: uprights either side, a truss at the panel's middle
             const double span = carriageHalf + 2.0, trussY = bottom + H / 2;
             for (double side : {-span, span}) {
-                const Vec3 foot = base + right * static_cast<Real>(side);
+                // on a viaduct there is nothing past the deck's edge to stand on: an upright whose ground is far below
+                // the road steps in until it finds the deck (a gantry bolted to the parapet), rather than a column
+                // from the field 20 m down (#92)
+                double sd = side;
+                for (double in = 0.0; in <= 3.5; in += 0.5) {
+                    const double s2 = side - (side > 0 ? in : -in);
+                    const Vec3 f2 = base + right * static_cast<Real>(s2);
+                    if (ground(f2.x, f2.z) > g - 3.0) { sd = s2; break; }
+                }
+                const Vec3 foot = base + right * static_cast<Real>(sd);
                 const double gf = ground(foot.x, foot.z);
                 const double hgt = g + trussY + 0.4 - gf;
                 steelBox(Vec3(0.35f, static_cast<float>(hgt), 0.35f), Vec3(foot.x, static_cast<Real>(gf + hgt / 2), foot.z) + fwd * 0.3f, yaw);

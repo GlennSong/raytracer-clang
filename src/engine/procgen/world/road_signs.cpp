@@ -213,6 +213,24 @@ void planIslandSigns(IslandWorld& w) {
                 const Vec2 right(f.y, -f.x);   // the plan's right: the kerb side
                 sign("entrance", at + right * 9.0, f, "roadside",
                      {{"route", fwyNo}, {"dir", loopName(dir)}, {"city", controlCity(k, dir)}, {"arrow", worldTurn(cross2(f, into))}});
+                // ...and for the traffic coming the OTHER way along the road (#91, Glenn: "It's also confusing which
+                // way to turn to get onto the right side of the freeway. We need signs."): the same ramp, 40 m
+                // before it from beyond, its arrow turned for them
+                {
+                    std::size_t i = 0;
+                    double bd = 1e30;
+                    for (std::size_t m = 0; m < road.size(); ++m) if ((road[m] - rp.terminal).length() < bd) { bd = (road[m] - rp.terminal).length(); i = m; }
+                    double left = 40.0;
+                    std::size_t m = i;
+                    while (m + 1 < road.size() && left > (road[m + 1] - road[m]).length()) { left -= (road[m + 1] - road[m]).length(); ++m; }
+                    if (m + 1 < road.size()) {
+                        const Vec2 at2 = road[m] + (road[m + 1] - road[m]) * (left / std::max(1e-9, (road[m + 1] - road[m]).length()));
+                        const Vec2 f2 = f * -1.0;
+                        const Vec2 right2(f2.y, -f2.x);
+                        sign("entrance", at2 + right2 * 9.0, f2, "roadside",
+                             {{"route", fwyNo}, {"dir", loopName(dir)}, {"city", controlCity(k, dir)}, {"arrow", worldTurn(cross2(f2, into))}});
+                    }
+                }
             } else if (rp.path.size() >= 6) {
                 // DO NOT ENTER where the exit meets the road, WRONG WAY 80 m up it, both facing a driver
                 // who turned into it

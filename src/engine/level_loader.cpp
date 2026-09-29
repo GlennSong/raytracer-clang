@@ -930,7 +930,53 @@ static void loadRoadSignsEntity(const json& ent, const std::string& levelDir, Wo
     if (signs.empty()) return;
     const auto t0 = std::chrono::steady_clock::now();
     const engine::RoadSignAtlas atlas = engine::bakeRoadSignAtlas(signs, *font, "cache/road_signs");
-    const std::function<double(double, double)> groundAt = [ground](double x, double z) { return ground && *ground ? (*ground)(x, z) : 0.0; };
+    // WHAT A SIGN STANDS ON (#92, Glenn: "planted but not visible by cars on the elevated freeway ... Signs that
+    // hang overhead a freeway are buried in the road"): the road deck where there is one -- the freeway's first,
+    // since a freeway sign serves the freeway -- else the terrain. Standing every sign on the terrain put the
+    // viaduct's signs on the ground under it and its gantries' boards inside the deck.
+    auto decks = std::make_shared<std::vector<engine::RoadDeckField>>();
+    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks->push_back(d.field); });
+    const auto terrainAt = [ground](double x, double z) { return ground && *ground ? (*ground)(x, z) : 0.0; };
+    const engine::RoadClass freewayClass = engine::RoadClass::Freeway;
+    auto freewayDeckAt = [decks, freewayClass](double x, double z, double margin, double* y) {
+        for (const engine::RoadDeckField& f : *decks)
+            if (f.heightOn(x, z, margin, &freewayClass, 0.0, 1e9, y)) return true;
+        return false;
+    };
+    const std::function<double(double, double)> groundAt = [decks, terrainAt, freewayDeckAt](double x, double z) {
+        double y;
+        if (freewayDeckAt(x, z, 2.0, &y)) return y;
+        for (const engine::RoadDeckField& f : *decks)
+            if (f.heightAt(x, z, 1.0, &y)) return y;
+        return terrainAt(x, z);
+    };
+    // A ROADSIDE freeway sign where the freeway is up on a viaduct moves onto the deck's edge: stepping in from
+    // where it was planned (beside the pavement) toward the carriageway, to the first freeway deck standing
+    // well above the ground at the sign
+    {
+        int onDeck = 0;
+        for (engine::IslandSign& s : signs) {
+            const bool freewaySign = s.kind == "advance" || s.kind == "route" || s.kind == "distance" || s.kind == "gore";
+            if (!freewaySign || s.mount != "roadside" || decks->empty()) continue;
+            const double gy = terrainAt(s.at.x, s.at.y);
+            double y;
+            if (freewayDeckAt(s.at.x, s.at.y, 0.5, &y)) continue;   // already on it
+            // across the travel direction, both ways (the plan is mirrored into the world: which side the
+            // carriageway lies is not assumed), nearest deck first
+            const engine::Vec2 across(s.facing.y, -s.facing.x);
+            bool moved = false;
+            for (int step = 1; step <= 14 && !moved; ++step)
+                for (double sgn : {1.0, -1.0}) {
+                    const engine::Vec2 in = across * sgn;
+                    const engine::Vec2 p = s.at + in * static_cast<double>(step);
+                    if (!freewayDeckAt(p.x, p.y, 0.0, &y)) continue;
+                    if (y > gy + 3.0) { s.at = p + in * 0.6; ++onDeck; }   // just inside the deck edge: the parapet line
+                    moved = true;
+                    break;
+                }
+        }
+        if (onDeck > 0) LOG_INFO << "[roadsigns] " << onDeck << " roadside sign(s) moved up onto the elevated freeway's deck";
+    }
     const engine::RoadSignMeshes sm = engine::buildRoadSignMeshes(signs, atlas, groundAt, ent.value("carriageHalf", 11.0));
     std::vector<TextureHandle> pages;
     for (const engine::TextImage& pg : atlas.pages) pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
