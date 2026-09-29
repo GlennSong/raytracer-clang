@@ -1174,6 +1174,7 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
 
     int checked = 0, seen = 0, noSurface = 0;
     double sum = 0, lo = 1e9, hi = -1e9;
+    double lowestTyreHi = -1e9;   // over every sample, the gap under the car's LOWEST tyre
     Vec2 worstAt(0, 0);
     double worst = 0;
     // Offender context: what the bridge could have used at that spot.
@@ -1220,6 +1221,20 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
                 lo = std::min(lo, d);
                 hi = std::max(hi, d);
                 if (std::fabs(d) > worst) { worst = std::fabs(d); worstAt = Vec2(x, z); }
+                // each tyre's contact patch against the collider under IT: the placement (ADR-0087's
+                // four wheels) rests the LOWEST tyre on the road, so on a crest or a twist the other
+                // tyres -- and the body's centre -- may float by the fitted plane's residual
+                double tyreLo = 1e9, tyreHi = -1e9;
+                for (const auto& w : city.carWheels(static_cast<int>(v))) {
+                    const Vec3 l(w.pos.x, w.pos.y - w.radius, w.pos.z);
+                    const double wx = m.m[0][0] * l.x + m.m[0][1] * l.y + m.m[0][2] * l.z + x;
+                    const double wy = m.m[1][0] * l.x + m.m[1][1] * l.y + m.m[1][2] * l.z + y;
+                    const double wz = m.m[2][0] * l.x + m.m[2][1] * l.y + m.m[2][2] * l.z + z;
+                    double ts;
+                    if (!grid.surfaceAt(wx, wz, wy + 0.5, ts)) continue;
+                    tyreLo = std::min(tyreLo, wy - ts); tyreHi = std::max(tyreHi, wy - ts);
+                }
+                if (tyreLo < 1e8) lowestTyreHi = std::max(lowestTyreHi, tyreLo);
                 if (std::fabs(d) > 0.25) {
                     double deckY = std::nan("");
                     for (const engine::RoadDeckField* f : decks) {
@@ -1233,18 +1248,6 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
                             if (x >= std::min({t.a.x, t.b.x, t.c.x}) - 0.01 && x <= std::max({t.a.x, t.b.x, t.c.x}) + 0.01 &&
                                 z >= std::min({t.a.z, t.b.z, t.c.z}) - 0.01 && z <= std::max({t.a.z, t.b.z, t.c.z}) + 0.01)
                                 ++padHits;
-                    // each tyre's contact patch against the collider under IT: the placement rests the
-                    // LOWEST tyre on the road, so on a crest or a twist the body's centre may float
-                    double tyreLo = 1e9, tyreHi = -1e9;
-                    for (const auto& w : city.carWheels(static_cast<int>(v))) {
-                        const Vec3 l(w.pos.x, w.pos.y - w.radius, w.pos.z);
-                        const double wx = m.m[0][0] * l.x + m.m[0][1] * l.y + m.m[0][2] * l.z + x;
-                        const double wy = m.m[1][0] * l.x + m.m[1][1] * l.y + m.m[1][2] * l.z + y;
-                        const double wz = m.m[2][0] * l.x + m.m[2][1] * l.y + m.m[2][2] * l.z + z;
-                        double ts;
-                        if (!grid.surfaceAt(wx, wz, wy + 0.5, ts)) continue;
-                        tyreLo = std::min(tyreLo, wy - ts); tyreHi = std::max(tyreHi, wy - ts);
-                    }
                     offenders.push_back({d, x, z, y, top, deckY,
                                          terrain ? terrain(x, z) : std::nan(""), link,
                                          link >= 0 ? city.nav().links[link].width * 0.5 : 0.0,
@@ -1262,6 +1265,7 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
                 "surface mean=%.3fm min=%.3fm max=%.3fm worst=%.3fm at (%.1f, %.1f)\n",
                 checked, seen, noSurface, checked ? sum / checked : 0.0, lo, hi, worst,
                 worstAt.x, worstAt.y);
+    std::printf("    [traffic] the lowest tyre's gap, worst over the samples: %+.3f m\n", lowestTyreHi);
     std::sort(offenders.begin(), offenders.end(),
               [](const Offender& a, const Offender& b) { return std::fabs(a.d) > std::fabs(b.d); });
     std::printf("    [traffic] %zu samples off by > 0.25 m; worst distinct spots:\n", offenders.size());
@@ -1289,7 +1293,11 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
     // current size and the mean/max bounds keep placement honest.
     CHECK(checked > 200);                                  // the fixture must bite
     CHECK(lo > -0.30);                                     // never IN the road
-    CHECK(hi < 0.10);                                      // never hovering
+    // NEVER HOVERING, asked of the tyres: a car rests its lowest tyre on the road (four-wheel
+    // placement), so its body's centre may stand above the surface under it on a crest or a twist
+    // -- 2026-09-29, metro_lanes: one sample of 1200, body +0.28 m, tyres +0.00..+0.40.
+    CHECK(lowestTyreHi < 0.10);
+    CHECK(hi < 0.45);                                      // and the body no further than a twist's residual
     CHECK(std::fabs(checked ? sum / checked : 0.0) < 0.03);   // no systematic term
 }
 
