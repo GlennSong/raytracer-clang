@@ -48,6 +48,7 @@
 #include "../src/renderer/renderer.h"
 
 #include <algorithm>
+#include <cstring>
 #include <set>
 #include <chrono>
 #include <cstdlib>   // setenv (the marker test)
@@ -92,6 +93,21 @@ std::string simLevelPath() {
 
 // Every shipped level, sorted so a failure names the same file run to run.
 // `*.json.cameras.json` sidecars are camera bookmarks, and `*.signs.json` sign plans: not levels.
+// THE HEAVY LEVELS: over a minute each to build cold on a CI runner (measured on the 2026-09-26 macOS run:
+// metro_mountain 366 s, metro_planned 323 s, island_8_weathered 168 s, island_8_saltwood 159 s, piedmont 99 s --
+// with them the gate never finished inside ctest's 30 minutes, so CI was red on a timeout, not on a finding).
+// RT_LEVEL_TESTS_SKIP_HEAVY=1 (the push workflow) leaves them out; the nightly workflow runs everything.
+bool skipHeavy() {
+    const char* e = std::getenv("RT_LEVEL_TESTS_SKIP_HEAVY");
+    return e && *e && std::string(e) != "0";
+}
+bool isHeavyLevel(const std::string& name) {
+    static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "island_8_saltwood.json",
+                                   "piedmont.json"};
+    for (const char* h : kHeavy) if (name == h || (name.size() > std::strlen(h) && name.compare(name.size() - std::strlen(h), std::string::npos, h) == 0 && name[name.size() - std::strlen(h) - 1] == '/')) return true;
+    return false;
+}
+
 std::vector<std::string> shippedLevels() {
     std::vector<std::string> out;
     std::error_code ec;
@@ -114,6 +130,7 @@ std::vector<std::string> shippedLevels() {
             while (start <= list.size()) { const size_t comma = list.find(',', start); const std::string sub = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start); if (!sub.empty() && name.find(sub) != std::string::npos) keep = true; if (comma == std::string::npos) break; start = comma + 1; }
             if (!keep) continue;
         }
+        if (skipHeavy() && isHeavyLevel(name)) { std::printf("    [levels] skipped (heavy, RT_LEVEL_TESTS_SKIP_HEAVY): %s\n", name.c_str()); continue; }
         out.push_back(name);
     }
     std::sort(out.begin(), out.end());
@@ -1424,6 +1441,7 @@ TEST_CASE(metro_bus_network_serves_the_city) {
 // street network gets loops of its own, one REGIONAL loop joins them by freeway at
 // stops the local loops share, and a share of walkers work in another town and ride.
 TEST_CASE(metro_planned_regional_bus_joins_the_towns) {
+    if (skipHeavy()) { std::printf("    skipped: loads metro_planned (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
     std::unique_ptr<Renderer> renderer = Renderer::create();
     RendererMeshUploader uploader(*renderer);
     AssetManager assets(uploader);
@@ -3290,6 +3308,7 @@ TEST_CASE(editor_save_keeps_the_road_signs_entity) {
 // sheet of water tilted down into the ground. Rivers fall gently and a lake is flat, so no triangle of the
 // island's water may span more than a few metres of level.
 TEST_CASE(island_water_surface_has_no_spikes) {
+    if (skipHeavy()) { std::printf("    skipped: loads island_8_saltwood (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
     std::ifstream in(levelsDir() + "/island_8_saltwood.json");
     CHECK(in.good());
     if (!in.good()) return;
