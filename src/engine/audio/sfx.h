@@ -58,11 +58,13 @@ std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate = 48
 // looping voice whose volume the caller drives:
 std::vector<float> grassRustle(uint32_t sampleRate = 48000, uint32_t seed = 1);   // walking through tall grass, ~2 s
 std::vector<float> surf(uint32_t sampleRate = 48000, uint32_t seed = 1);          // waves on a beach, two swells, ~11 s
-// Running water, ~4 s. `size` 0..1: 0 a narrow, fast stream (a dense babble of small bright bubbles),
-// 1 a broad river (fewer, deeper bubbles over a low roar). Physically based: each bubble rings at its
-// Minnaert frequency (~3.3 m / radius) with the damping a real bubble has, rising in pitch as it closes.
+// Running water heard from the bank, ~4 s loop: a dark, soft, steady noise. `size` 0..1 narrow .. broad.
 std::vector<float> river(uint32_t sampleRate = 48000, uint32_t seed = 1, double size = 0.5);
-// Heard from UNDER the water: the same deep bubbling, muffled -- no surface sounds, nothing above ~900 Hz.
+// Something COOKING (a pot simmering to a boil, `boil` 0..1): layered low bubbling, loop. Found tuning the
+// river -- Glenn: "It sounds like something cooking ... mark the sounds for that". Not used in a level yet.
+std::vector<float> simmer(uint32_t sampleRate = 48000, uint32_t seed = 1, double boil = 0.5);
+// Heard from UNDER the water (river or sea): deep bubbling, muffled -- nothing above ~900 Hz. Glenn: "works good
+// for underwater".
 std::vector<float> underwaterRiver(uint32_t sampleRate = 48000, uint32_t seed = 1);
 
 // The firing rate the clip is baked at: pitch 1.0 sounds like this many

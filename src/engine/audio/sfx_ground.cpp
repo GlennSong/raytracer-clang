@@ -407,8 +407,36 @@ std::vector<float> riverLayers(uint32_t sampleRate, uint32_t seed, double size, 
 }
 }  // namespace
 
+std::vector<float> simmer(uint32_t sampleRate, uint32_t seed, double boil) {
+    // Glenn, of the bubbling river: "It sounds like something cooking ... so you may want to mark the sounds
+    // for that, but that's not a river". Kept for a pot on a stove: the layered bubbling heard in the air.
+    return riverLayers(sampleRate, seed, boil, true);
+}
+
 std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
-    return riverLayers(sampleRate, seed, size, true);
+    // A RIVER, by ear with Glenn (#87): after bubbles (a boiling pot, then cooking), bright noise ("static"),
+    // and a swelling roar ("sounds like the sea") -- "maybe it should just be a low static noise". So: a dark,
+    // soft, STEADY noise. Low-passed well under a kilohertz for a narrow river (no hiss), a little fuller for a
+    // broad one; no slow swell (that is waves), only a faint quick flutter so the water is moving, not frozen.
+    size = std::clamp(size, 0.0, 1.0);
+    const double rate = static_cast<double>(sampleRate);
+    const auto count = static_cast<size_t>(rate * 4.0);
+    std::mt19937 rng(seed * 22695477u + 1u);
+    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    std::vector<double> white(count), white2(count);
+    for (double& w : white) w = uni(rng);
+    for (double& w : white2) w = uni(rng);
+    const std::vector<double> body = circBand(white, rate, 60.0, 700.0 + 400.0 * size);   // the moving water
+    const std::vector<double> lift = circBand(white2, rate, 400.0, 1100.0);                // a little air in it
+    const std::vector<double> flutter = circEnvelope(count, rng, 30, 90, 6);               // quick, shallow
+    std::vector<float> out(count);
+    for (size_t i = 0; i < count; ++i) {
+        const double fl = 1.0 + 0.06 * flutter[i] / 3.0;
+        const double v = (1.0 + 0.3 * size) * body[i] * fl + (0.18 - 0.08 * size) * lift[i] * fl;
+        out[i] = static_cast<float>(std::tanh(0.35 * v));
+    }
+    normalizeTo(out, 0.6f);
+    return out;
 }
 
 std::vector<float> underwaterRiver(uint32_t sampleRate, uint32_t seed) {
