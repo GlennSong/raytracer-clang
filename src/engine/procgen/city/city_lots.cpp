@@ -3625,8 +3625,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         eg = p.ground(mid.x, mid.y);
                     }
                 }
+                // ...and never short of its own PAD (#94): the stoop stands on the building's graded pad, whose
+                // plane is groundY; the 2 m sample was taken before the pad exists, and where it came out above
+                // the storey base the drop clamped to 0 and the stoop hung a plinth (0.45 m) over the pad --
+                // island_8_nature's cluster of stoops floating at exactly that height.
                 bp.entranceDropBelow =
-                    std::clamp(b.baseY - eg, Real(0), Real(2.4));
+                    std::clamp(std::max(b.baseY - eg, b.baseY - b.groundY), Real(0), Real(2.4));
             }
             // PLAZA massing (device: "a building structure without the
             // building"): the fitted plan becomes a raised paver podium —
