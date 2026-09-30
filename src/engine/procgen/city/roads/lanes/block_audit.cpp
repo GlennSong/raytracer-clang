@@ -94,12 +94,53 @@ std::vector<Poly2> sceneBlocks(const Result& r, double simplify, double minArea,
 
 std::vector<TerrainFlatten> lanesEarthworkPins(const RoadDeckField& deck, double sidewalk, double below, double falloff) {
     std::vector<TerrainFlatten> out;
+    // THE ELEVATED DECKS, binned: a street's strip must never reach over a LOWER structure beside it -- a ramp
+    // descending 13 m off a collector 2.3 m above it lay under the collector's strip, pinned to the collector's
+    // height (metro_lanes: 396 ramp samples under up to 2.2 m of ground, 2026-09-30).
+    struct ESeg { Vec2 a, b; double ya, yb, hw; };
+    std::vector<ESeg> elev;
+    for (const UnionSpine& sp : deck.spines) {
+        if (!(sp.authoredDeck || sp.layer != 0) || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+            elev.push_back({sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});
+    }
+    constexpr double kCell = 48;
+    auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+    std::unordered_map<long long, std::vector<int>> egrid;
+    for (std::size_t k = 0; k < elev.size(); ++k) {
+        const ESeg& e = elev[k]; const double pad = e.hw + 30.0;
+        for (int cx = static_cast<int>(std::floor((std::min(e.a.x, e.b.x) - pad) / kCell)); cx <= static_cast<int>(std::floor((std::max(e.a.x, e.b.x) + pad) / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor((std::min(e.a.y, e.b.y) - pad) / kCell)); cz <= static_cast<int>(std::floor((std::max(e.a.y, e.b.y) + pad) / kCell)); ++cz)
+                egrid[key(cx, cz)].push_back(static_cast<int>(k));
+    }
+    // how far this strip may reach from its centreline at q before it would cover a deck lower than y
+    auto reachAllowed = [&](const Vec2& q, double y) {
+        double allowed = 1e30;
+        auto it = egrid.find(key(static_cast<int>(std::floor(q.x / kCell)), static_cast<int>(std::floor(q.y / kCell))));
+        if (it == egrid.end()) return allowed;
+        for (int k : it->second) {
+            const ESeg& e = elev[static_cast<std::size_t>(k)];
+            const Vec2 ab = e.b - e.a; const double l2 = dot(ab, ab);
+            double t = l2 > 1e-12 ? dot(q - e.a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
+            const double ey = e.ya + (e.yb - e.ya) * t;
+            if (ey > y - 0.3) continue;   // level with or above this street: not buried by it
+            allowed = std::min(allowed, (q - (e.a + ab * t)).length() - e.hw - 1.0);
+        }
+        return allowed;
+    };
     for (const UnionSpine& sp : deck.spines) {
         if (sp.authoredDeck || sp.layer != 0 || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
         for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
             const Vec2 a = sp.points[i], b = sp.points[i + 1];
             if ((b - a).length() < 0.05) continue;
-            const double hw = (i < sp.hw.size() ? std::max(sp.hw[i], i + 1 < sp.hw.size() ? sp.hw[i + 1] : sp.hw[i]) : sp.halfWidth) + std::max(0.0, sidewalk);
+            double hw = (i < sp.hw.size() ? std::max(sp.hw[i], i + 1 < sp.hw.size() ? sp.hw[i + 1] : sp.hw[i]) : sp.halfWidth) + std::max(0.0, sidewalk);
+            if (!elev.empty()) {
+                const double y = std::max(sp.yAbs[i], sp.yAbs[i + 1]);
+                // the strip AND its feather stop short of the lower deck (the finish's 6 m feather buried the ramp
+                // once its strip was clipped)
+                hw = std::min({hw, reachAllowed(a, y) - falloff, reachAllowed(b, y) - falloff, reachAllowed((a + b) * 0.5, y) - falloff});
+                if (hw < 1.0) continue;   // a lower structure runs right beside or under this piece: no strip here
+            }
             TerrainFlatten f = makeFlattenRamp(Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y), sp.yAbs[i] - below, sp.yAbs[i + 1] - below, hw, falloff);
             f.priority = kRoadFlattenPriority;
             out.push_back(std::move(f));

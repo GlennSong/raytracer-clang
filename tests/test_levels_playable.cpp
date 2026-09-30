@@ -3552,8 +3552,24 @@ TEST_CASE(level_print_road_edges_meet_the_ground) {
         std::sort(rampSunk.begin(), rampSunk.end(), [](const Gap& a2, const Gap& b2) { return a2.gap > b2.gap; });
         std::printf("    [road-edge] %-22s RAMPS with ground over the deck: %zu of %d centreline samples, worst %.2f m\n", name, rampSunk.size(), rampSamples,
                     rampSunk.empty() ? 0.0 : rampSunk[0].gap);
-        for (std::size_t k = 0; k < rampSunk.size() && k < 5; ++k)
+        for (std::size_t k = 0; k < rampSunk.size() && k < 5; ++k) {
             std::printf("      ramp under %.2f m of ground  ->  teleport %.1f %.1f\n", rampSunk[k].gap, rampSunk[k].x, rampSunk[k].z);
+            if (k > 0 || !std::getenv("RT_RAMP_WHY")) continue;
+            // who is around the worst one: every spine within 25 m, its class, layer and deck height nearest the point
+            world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+                for (const auto& sp : d.field.spines) {
+                    if (sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+                    double best = 1e9, y = 0;
+                    for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+                        const Vec2 a2 = sp.points[i], b2 = sp.points[i + 1], ab = b2 - a2; const double l2 = dot(ab, ab);
+                        double t = l2 > 1e-12 ? dot(Vec2(rampSunk[k].x, rampSunk[k].z) - a2, ab) / l2 : 0; t = std::clamp(t, 0.0, 1.0);
+                        const double dd = (Vec2(rampSunk[k].x, rampSunk[k].z) - (a2 + ab * t)).length();
+                        if (dd < best) { best = dd; y = sp.yAbs[i] + (sp.yAbs[i + 1] - sp.yAbs[i]) * t; }
+                    }
+                    if (best < 25) std::printf("        spine class %d layer %d authored %d: %.1f m away, deck %.2f, hw %.1f\n", static_cast<int>(sp.klass), sp.layer, sp.authoredDeck ? 1 : 0, best, y, sp.halfWidth);
+                }
+            });
+        }
         std::sort(floating.begin(), floating.end(), [](const Gap& a, const Gap& b) { return a.gap > b.gap; });
         std::sort(sunk.begin(), sunk.end(), [](const Gap& a, const Gap& b) { return a.gap < b.gap; });
         auto pct = [&](std::size_t k) { return samples ? 100.0 * static_cast<double>(k) / samples : 0.0; };
@@ -3578,5 +3594,61 @@ TEST_CASE(level_print_road_edges_meet_the_ground) {
             if (++printed >= 12) break;
         }
         CHECK(samples > 100);   // the fixture must bite
+    }
+}
+
+// ENTRANCE STEPS MEET THE GROUND (#94, Glenn: "the stairs of buildings are floating. They should be flush with
+// the side walk"). A plain stoop (emitEntranceSteps: platform 1.4 m deep, 0.34 m treads, 0.16 m risers) goes
+// down to baseY - entranceDropBelow, the ground the lot pass sampled 2 m out at grow time. Measured under its
+// OUTERMOST tread against what is really there: the drawn terrain (finest leaf tile) or a paved plate /
+// sidewalk collider at most 0.5 m over the step's bottom, whichever is higher. Printed, not gated.
+TEST_CASE(level_print_entrance_steps_meet_the_ground) {
+    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json", "island_8_nature.json"};
+    for (const char* name : kCities) {
+        if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
+        if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) continue;
+        const engine::TerrainLodConfig* cfg = nullptr;
+        world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) { cfg = &c; });
+        if (!cfg) continue;
+        const engine::Noise noise(cfg->seed);
+        auto drawn = [&](double x, double z) {
+            return engine::lodSurfaceHeight(cfg->params, noise, x, z, cfg->worldHalf, cfg->numLods, cfg->gridRes);
+        };
+        ColliderGrid grid;
+        world.each<MeshCollider>([&](Entity, MeshCollider& mc) { grid.add(mc); });
+        const CityBuildings* cb = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        if (!cb) continue;
+        struct Step { double gap, x, z; };
+        std::vector<Step> floating, buried;
+        int stoops = 0;
+        for (const BuildingRecord& r : cb->records) {
+            if (!r.params.entranceSteps || r.params.portico > 0 || r.params.porch || r.doors.empty()) continue;
+            const DoorSpec& d = r.doors.front();
+            const double drop = std::max(0.0, static_cast<double>(r.params.entranceDropBelow));
+            const double total = 0.4 + drop;
+            const int n = std::max(1, static_cast<int>(total / 0.16));
+            const double reach = 1.4 + (n - 1) * 0.34 - 0.17;   // the outermost tread's centre, from the wall
+            const Vec2 q = d.foot + d.normal * reach;
+            const double bottom = r.baseY - drop;
+            double support = drawn(q.x, q.y), top;
+            if (grid.surfaceAt(q.x, q.y, bottom + 0.5, top)) support = std::max(support, top);
+            ++stoops;
+            const double gap = bottom - support;
+            if (gap > 0.15) floating.push_back({gap, q.x, q.y});
+            else if (gap < -0.35) buried.push_back({gap, q.x, q.y});
+        }
+        std::sort(floating.begin(), floating.end(), [](const Step& a, const Step& b) { return a.gap > b.gap; });
+        std::size_t over05 = 0; for (const Step& s : floating) if (s.gap > 0.5) ++over05;
+        std::printf("    [steps] %-22s %d stoops: FLOATING > 0.15 m %zu (> 0.5 m %zu), worst %.2f m | BURIED > 0.35 m %zu\n", name, stoops,
+                    floating.size(), over05, floating.empty() ? 0.0 : floating[0].gap, buried.size());
+        for (std::size_t k = 0; k < floating.size() && k < 6; ++k)
+            std::printf("      bottom step %.2f m over the ground  ->  teleport %.1f %.1f\n", floating[k].gap, floating[k].x, floating[k].z);
     }
 }

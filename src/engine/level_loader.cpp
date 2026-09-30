@@ -3929,11 +3929,13 @@ bool LevelLoader::load(const std::string& path,
             // A LANE CITY has no road carve regions: its streets are the decks it drew. Pin the same field to
             // them (lanesEarthworkField -- the lot pass fitted its pads to this very field at bake time), so
             // the ground meets every street instead of leaving it on its slab's skirt.
-            if (!terrainParams.earthwork && !g_lanes.deck.spines.empty())
+            static const bool lanesEarthworkOff = [] { const char* e = std::getenv("RT_LANES_EARTHWORK"); return e && e[0] == '0'; }();   // A/B
+            if (!terrainParams.earthwork && !g_lanes.deck.spines.empty() && !lanesEarthworkOff)
             {
                 terrainParams.earthwork = engine::roads::lanes::lanesEarthworkField(
                     g_lanes.deck, g_lanes.pavedSidewalk, levelGround, terrainParams.earthworkParams, sea, &es);
-                if (terrainParams.earthwork) {   // ...and the finish: each street's strip, feathered into the field
+                static const bool finishOff = [] { const char* e = std::getenv("RT_LANES_FINISH"); return e && e[0] == '0'; }();   // A/B
+                if (terrainParams.earthwork && !finishOff) {   // ...and the finish: each street's strip, feathered into the field
                     const std::vector<TerrainFlatten> finish = engine::roads::lanes::lanesStreetFinish(g_lanes.deck, engine::roads::lanes::lanesMinSidewalk(root, g_lanes.pavedSidewalk));
                     terrainParams.flatten.insert(terrainParams.flatten.end(), finish.begin(), finish.end());
                 }
