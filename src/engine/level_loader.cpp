@@ -4026,6 +4026,70 @@ bool LevelLoader::load(const std::string& path,
                     if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
                     pads.push_back(engine::lotPadFlatten(lb));
                 }
+#ifdef RT_ROADS_LANES
+                // RT_LOT_AT="x z r": the lots, blocks and pads near a point, as bounds -- which of them a buried or
+                // padless building belongs to (the census names the building; this names its ground's owners).
+                if (const char* at = std::getenv("RT_LOT_AT")) {
+                    double ax = 0, az = 0, ar = 40;
+                    if (std::sscanf(at, "%lf %lf %lf", &ax, &az, &ar) >= 2) {
+                        auto bb = [](const auto& poly, auto getx, auto getz) {
+                            double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
+                            for (const auto& q : poly) { x0 = std::min(x0, getx(q)); x1 = std::max(x1, getx(q)); z0 = std::min(z0, getz(q)); z1 = std::max(z1, getz(q)); }
+                            char buf[96]; std::snprintf(buf, sizeof buf, "[%.1f %.1f]-[%.1f %.1f]", x0, z0, x1, z1); return std::string(buf);
+                        };
+                        auto near2 = [&](double x, double z) { return std::hypot(x - ax, z - az) <= ar; };
+                        auto v2x = [](const engine::Vec2& q) { return static_cast<double>(q.x); };
+                        auto v2z = [](const engine::Vec2& q) { return static_cast<double>(q.y); };
+                        auto v3x = [](const Vec3& q) { return static_cast<double>(q.x); };
+                        auto v3z = [](const Vec3& q) { return static_cast<double>(q.z); };
+                        for (const engine::LotBuilding& lb : preLots.lots)
+                            if (near2(lb.site.x, lb.site.y)) {
+                                int outside = 0; std::string which;
+                                for (const engine::Vec2& q : lb.lot) {
+                                    int in = -1;
+                                    for (std::size_t bi = 0; bi < g_lanes.blocks.size() && in < 0; ++bi) if (engine::pointInPolygon(g_lanes.blocks[bi], q)) in = static_cast<int>(bi);
+                                    if (in < 0) {
+                                        ++outside;
+                                        double dmin = 1e300;
+                                        for (const engine::Poly2& bl : g_lanes.blocks) for (std::size_t k = 0; k < bl.size(); ++k) {
+                                            const engine::Vec2 A = bl[k], B = bl[(k + 1) % bl.size()], AB = B - A; const double l2 = AB.x * AB.x + AB.y * AB.y;
+                                            double t = l2 > 1e-12 ? ((q.x - A.x) * AB.x + (q.y - A.y) * AB.y) / l2 : 0; t = std::max(0.0, std::min(1.0, t));
+                                            dmin = std::min(dmin, std::hypot(q.x - (A.x + AB.x * t), q.y - (A.y + AB.y * t)));
+                                        }
+                                        double wmin = 1e300; int wAt = -1;
+                                        for (std::size_t wi = 0; wi < g_lanes.water.size(); ++wi) { const auto& wr = g_lanes.water[wi]; for (std::size_t k = 0; k < wr.size(); ++k) {
+                                            const engine::Vec2 A = wr[k], B = wr[(k + 1) % wr.size()], AB = B - A; const double l2 = AB.x * AB.x + AB.y * AB.y;
+                                            double t = l2 > 1e-12 ? ((q.x - A.x) * AB.x + (q.y - A.y) * AB.y) / l2 : 0; t = std::max(0.0, std::min(1.0, t));
+                                            const double d = std::hypot(q.x - (A.x + AB.x * t), q.y - (A.y + AB.y * t)); if (d < wmin) { wmin = d; wAt = static_cast<int>(wi); } } }
+                                        char cb[160]; std::snprintf(cb, sizeof cb, "(%.1f,%.1f) %.1f m out, water ring %d edge %.1f m ", q.x, q.y, dmin, wAt, wmin); which += cb;
+                                        for (std::size_t wi = 0; wi < g_lanes.water.size(); ++wi)
+                                            if (engine::pointInPolygon(g_lanes.water[wi], q)) { which += "(corner in water " + std::to_string(wi) + ") "; break; }
+                                    } else if (which.find(std::to_string(in)) == std::string::npos) which += std::to_string(in) + " ";
+                                }
+                                LOG_INFO << "[lot-at]   lot corners outside every block: " << outside << " of " << lb.lot.size() << "; in block(s) " << which;
+                            }
+                        for (const engine::LotBuilding& lb : preLots.lots)
+                            if (near2(lb.site.x, lb.site.y))
+                                LOG_INFO << "[lot-at] lot " << lb.type << " site (" << lb.site.x << ", " << lb.site.y << ") plan " << bb(lb.plan, v2x, v2z)
+                                         << " lot " << (lb.lot.empty() ? std::string("-") : bb(lb.lot, v2x, v2z)) << " groundY " << lb.groundY;
+                        for (std::size_t i = 0; i < g_lanes.blocks.size(); ++i) {
+                            const engine::Poly2& bl = g_lanes.blocks[i];
+                            bool hit = false; for (const engine::Vec2& q : bl) hit = hit || near2(q.x, q.y);
+                            const engine::Vec2 c = engine::centroid(bl); hit = hit || near2(c.x, c.y);
+                            if (hit) LOG_INFO << "[lot-at] block " << i << " " << bb(bl, v2x, v2z) << " verts " << bl.size();
+                        }
+                        for (std::size_t i = 0; i < g_lanes.water.size(); ++i) {
+                            bool hit = false; for (const engine::Vec2& q : g_lanes.water[i]) hit = hit || near2(q.x, q.y);
+                            if (hit) LOG_INFO << "[lot-at] water " << i << " " << bb(g_lanes.water[i], v2x, v2z) << " verts " << g_lanes.water[i].size();
+                        }
+                        LOG_INFO << "[lot-at] " << g_lanes.water.size() << " water rings in the block derivation";
+                        for (const TerrainFlatten& f : pads) {
+                            bool hit = false; for (const Vec3& q : f.polygon) hit = hit || near2(q.x, q.z);
+                            if (hit) LOG_INFO << "[lot-at] pad " << bb(f.polygon, v3x, v3z) << " plane " << f.c;
+                        }
+                    }
+                }
+#endif
                 for (TerrainFlatten& f : pads) {
                     f.priority = kPadFlattenPriority;
                     terrainParams.flatten.push_back(f);

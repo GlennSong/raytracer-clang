@@ -188,6 +188,11 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
             if (rj) ++rj->edgeShort;
             continue;
         }
+        if (p.isFrontage && !p.isFrontage(b[ei], b[(ei + 1) % n])) {   // a freeway, not a street
+            rng.unit();
+            if (rj) ++rj->notStreet;
+            continue;
+        }
         const Vec2 A = b[ei], B = b[(ei + 1) % n];
         const Vec2 d = dir[ei], nrm = inr[ei];
         // Corner bisectors (only at CONVEX corners — at a reflex corner the
@@ -437,6 +442,13 @@ std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
     // the deep core becomes a reachable court. Falls back to bisection for
     // shallow/degenerate blocks (which bisection still street-fronts, being
     // thin enough that both halves reach opposite streets).
+    // NO STREET AT ALL (every edge a freeway or ramp): nothing faces a street, so nothing is built -- the
+    // bisection below would lay lots with their backs to the carriageway.
+    if (params.isFrontage) {
+        bool any = false;
+        for (std::size_t i = 0; i < b.size() && !any; ++i) any = params.isFrontage(b[i], b[(i + 1) % b.size()]);
+        if (!any) { if (rejectOut) ++rejectOut->notStreet; return lots; }
+    }
     if (rejectOut) ++rejectOut->blocksWalked;
     if (parcelFrontage(b, params, rng, district, lots, rejectOut)) return lots;
     if (rejectOut) ++rejectOut->blocksFailed;

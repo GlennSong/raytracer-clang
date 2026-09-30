@@ -1283,3 +1283,44 @@ TEST_CASE(buildings_face_the_street_not_the_freeway) {
     CHECK(units > 0);
     CHECK(towardFreeway == 0);
 }
+
+// NO LOTS ALONG A FREEWAY: a block edge that borders a freeway or ramp is not frontage, so the parcel walk
+// lays nothing along it; a block with no street at all grows nothing (island_8_nature: a row of lots laid
+// along the freeway's edge overhung its block onto the embankment and were buried 7 m, 2026-09-29).
+TEST_CASE(no_lots_are_laid_along_a_freeway) {
+    // 120 x 80 block: freeway 12 m off its south edge (z = 0), local street 8 m off its east edge (x = 120)
+    const Poly2 block{{0, 0}, {120, 0}, {120, 80}, {0, 80}};
+    RoadGraph roads;
+    roads.addEdge(roads.addNode({-80, -12}), roads.addNode({220, -12}), 22, RoadClass::Freeway);
+    roads.addEdge(roads.addNode({128, -60}), roads.addNode({128, 160}), 8, RoadClass::Local);
+    LotParams lp;
+    lp.seed = 11;
+    LotPlanDebug dbg;
+    std::vector<RenderMesh> parts;
+    const std::vector<LotBuilding> lots = growLotBuildings({block}, lp, &dbg, &parts, &roads, 0.0);
+    int built = 0, onFreewayEdge = 0;
+    for (const LotBuilding& lb : lots) {
+        if (lb.units.empty()) continue;
+        ++built;
+        // a lot laid along the freeway edge has its front on z = 0: its plan reaches the south 3 m
+        Real zmin = 1e9; for (const Vec2& q : lb.plan) zmin = std::min(zmin, q.y);
+        Real xmax = -1e9; for (const Vec2& q : lb.plan) xmax = std::max(xmax, q.x);
+        if (zmin < 3 && xmax < 90) ++onFreewayEdge;   // south-edge lots, away from the street corner
+    }
+    std::printf("    [frontage] %d built, %d along the freeway edge, walk skipped %d freeway edge(s)\n", built, onFreewayEdge, dbg.pNotStreet);
+    CHECK(built > 0);
+    CHECK(onFreewayEdge == 0);
+    CHECK(dbg.pNotStreet >= 1);
+
+    // A block bordered by freeway alone: nothing to face, nothing built.
+    RoadGraph fw;
+    fw.addEdge(fw.addNode({-80, -12}), fw.addNode({220, -12}), 22, RoadClass::Freeway);
+    fw.addEdge(fw.addNode({-80, 92}), fw.addNode({220, 92}), 22, RoadClass::Freeway);
+    fw.addEdge(fw.addNode({-12, -80}), fw.addNode({-12, 160}), 12, RoadClass::Ramp);
+    fw.addEdge(fw.addNode({132, -80}), fw.addNode({132, 160}), 12, RoadClass::Ramp);
+    std::vector<RenderMesh> parts2;
+    const std::vector<LotBuilding> none = growLotBuildings({block}, lp, nullptr, &parts2, &fw, 0.0);
+    int built2 = 0; for (const LotBuilding& lb : none) if (!lb.units.empty()) ++built2;
+    std::printf("    [frontage] freeway-only block: %d built\n", built2);
+    CHECK(built2 == 0);
+}

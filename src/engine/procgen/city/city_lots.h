@@ -277,6 +277,7 @@ struct LotPlanDebug {
     // WHY the frontage walk rejected the lots it tried to lay (ParcelReject,
     // parcel.h — kept as plain ints so this header need not include it).
     int pEdgeShort = 0, pShallow = 0, pMitered = 0, pOverlap = 0;
+    int pNotStreet = 0;   // block edges that border a freeway or ramp, not a street: no lots laid
     int pEscaped = 0, pTiny = 0, pThin = 0, pPlaced = 0;
     int pClips = 0, pLeftOverlapping = 0, pSameEdge = 0, pAtInsert = 0, pConcave = 0, pClipFailed = 0;
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
