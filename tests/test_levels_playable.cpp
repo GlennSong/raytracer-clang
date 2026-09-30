@@ -3652,3 +3652,52 @@ TEST_CASE(level_print_entrance_steps_meet_the_ground) {
             std::printf("      bottom step %.2f m over the ground  ->  teleport %.1f %.1f\n", floating[k].gap, floating[k].x, floating[k].z);
     }
 }
+
+// BUILDINGS BY THE FREEWAY (Glenn, 2026-09-29: "There's a building by the freeway. I'm not sure how a lone city
+// lot remains there"). Every building whose plan comes within 5 m of a freeway or ramp carriageway edge (at-grade
+// or not), nearest first. Printed, not gated.
+TEST_CASE(level_print_buildings_by_the_freeway) {
+    const char* kCities[] = {"metro_lanes.json", "island_8_nature.json"};
+    for (const char* name : kCities) {
+        if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
+        if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) continue;
+        const CityBuildings* cb = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        if (!cb) continue;
+        struct Seg { Vec2 a, b; double hw; int klass, layer; };
+        std::vector<Seg> segs;
+        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+            for (const auto& sp : d.field.spines) {
+                if (sp.klass != engine::RoadClass::Freeway && sp.klass != engine::RoadClass::Ramp) continue;
+                for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+                    segs.push_back({sp.points[i], sp.points[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth, static_cast<int>(sp.klass), sp.layer});
+            }
+        });
+        struct Hit { double d; Vec2 c; std::string type; int klass, layer; };
+        std::vector<Hit> hits;
+        for (const BuildingRecord& r : cb->records) {
+            if (r.plan.size() < 3) continue;
+            double best = 1e9; int bk = -1, bl = 0;
+            for (const Vec2& v : r.plan)
+                for (const Seg& s : segs) {
+                    const Vec2 ab = s.b - s.a; const double l2 = dot(ab, ab);
+                    if (std::fabs(v.x - s.a.x) > 60 && std::fabs(v.x - s.b.x) > 60) continue;
+                    double t = l2 > 1e-12 ? dot(v - s.a, ab) / l2 : 0; t = std::clamp(t, 0.0, 1.0);
+                    const double d = (v - (s.a + ab * t)).length() - s.hw;
+                    if (d < best) { best = d; bk = s.klass; bl = s.layer; }
+                }
+            if (best < 5.0) hits.push_back({best, centroid(r.plan), r.type, bk, bl});
+        }
+        std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.d < b.d; });
+        std::printf("    [by-freeway] %-22s %zu buildings within 5 m of a freeway/ramp carriageway\n", name, hits.size());
+        for (std::size_t k = 0; k < hits.size() && k < 12; ++k)
+            std::printf("      %-8s %5.1f m from a %s (layer %d)  ->  teleport %.1f %.1f\n", hits[k].type.c_str(), hits[k].d,
+                        hits[k].klass == static_cast<int>(engine::RoadClass::Ramp) ? "ramp" : "freeway", hits[k].layer, hits[k].c.x, hits[k].c.y);
+    }
+}

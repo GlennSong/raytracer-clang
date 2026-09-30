@@ -1936,6 +1936,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // quarter points and is a street when most of them lie nearest a street (a merged edge can run past a
     // ramp's end). No road within 60 m of the kerb: a street. A graph with no freeway: every edge a street.
     std::function<bool(const Vec2&, const Vec2&)> isFrontage;
+    // ...and a lot's clearance from them: no lot within kFreewayClear of a freeway or ramp carriageway, even
+    // from behind (island_8_nature: a shop's back wall 0.3 m from an on-ramp, 2026-09-30).
+    std::function<bool(const Vec2&)> nearFreeway;
+    if (p.nearFreeway) { auto f = p.nearFreeway; nearFreeway = [f](const Vec2& q) { return f(q.x, q.y); }; }
+    // 6 m from the lot graph's carriageway edge: its ramp widths run ~2 m narrower than the drawn deck, and at 4 m
+    // an office still stood 1.8 m from a ramp's asphalt
+    constexpr Real kFreewayClear = 6.0;
     if (roads && !roads->edges.empty()) {
         constexpr Real kCell = 32;
         auto segGrid = std::make_shared<std::unordered_map<long long, std::vector<int>>>();
@@ -1952,6 +1959,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             for (int cx = x0; cx <= x1; ++cx) for (int cz = z0; cz <= z1; ++cz) (*segGrid)[key(cx, cz)].push_back(static_cast<int>(ei));
         }
         if (anyFreeway) {
+            if (!nearFreeway) {
+                const RoadGraph* g = roads;
+                nearFreeway = [g, segGrid, key](const Vec2& q) {
+                    const int qx = static_cast<int>(std::floor(q.x / 32)), qz = static_cast<int>(std::floor(q.y / 32));
+                    for (int cx = qx - 1; cx <= qx + 1; ++cx) for (int cz = qz - 1; cz <= qz + 1; ++cz) {
+                        auto it = segGrid->find(key(cx, cz)); if (it == segGrid->end()) continue;
+                        for (int ei : it->second) {
+                            const RoadEdge& e = g->edges[static_cast<std::size_t>(ei)];
+                            if (faces(e) || e.layer != 0) continue;   // at-grade freeway and ramp carriageways
+                            const Vec2& ra = g->nodes[e.a].pos; const Vec2& rb = g->nodes[e.b].pos;
+                            const Vec2 ab = rb - ra; const Real l2 = ab.lengthSquared();
+                            Real u = l2 > 1e-12 ? dot(q - ra, ab) / l2 : Real(0); u = std::max(Real(0), std::min(Real(1), u));
+                            if ((q - (ra + ab * u)).length() - e.width * Real(0.5) < kFreewayClear) return true;
+                        }
+                    }
+                    return false;
+                };
+            }
             const RoadGraph* g = roads;
             isFrontage = [g, segGrid, key](const Vec2& a, const Vec2& b) {
                 int street = 0, freeway = 0;
@@ -2121,6 +2146,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const Vec2 c = centroid(L.footprint);
                 for (const Vec2& v : L.footprint)
                     if (!pointInPolygon(footBeforePush, v + (c - v) * Real(0.02))) return true;
+                if (nearFreeway)
+                    for (const Vec2& v : L.footprint)
+                        if (nearFreeway(v)) return true;
                 return false;
             }), lots.end());
             prj.escaped += static_cast<int>(before - lots.size());
@@ -2214,6 +2242,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // door anywhere (ParcelParams::isFrontage), so it stays open ground.
             bool hasStreet = !bf.pp.isFrontage;
             for (std::size_t i = 0; i < foot.size() && !hasStreet; ++i) hasStreet = bf.pp.isFrontage(foot[i], foot[(i + 1) % foot.size()]);
+            // ...clear of any freeway or ramp, as every parcelled lot is
+            if (hasStreet && nearFreeway)
+                for (const Vec2& v : foot) if (nearFreeway(v)) { hasStreet = false; break; }
             if (!seatable && viable <= 2 && viableA < Real(0.5) * blockA && blockA >= kWholeBlockMinArea &&
                 dbg->wholeBlocks < 24)
                 LOG_INFO << "[citylots] whole block SKIPPED (relief " << (hi - lo) << " m across its edge) "
@@ -2223,7 +2254,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 2 * std::min(fb.half[0], fb.half[1]) >= kWholeBlockMinShort && !padOnCarriageway(foot) &&
                 seatable && hasStreet) {
                 Lot whole;
-                whole.footprint = foot;
+                // the block AS IT CAME when the road push moved a vertex out of it (a folded push -- see the
+                // parcelled lots' containment test above): a landmark never stands past its own block
+                bool pushedOut = false;
+                for (const Vec2& v : foot) if (!pointInPolygon(footBeforePush, v)) { pushedOut = true; break; }
+                whole.footprint = pushedOut ? footBeforePush : foot;
                 whole.area = blockA;
                 whole.wholeBlock = true;
                 // Faces its longest street edge (the door rule re-aims it at the nearest road).

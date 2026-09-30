@@ -58,6 +58,7 @@ struct CityGrowInputs {
     bool smoothGround = false;
     // The height of the street in front of a building (lanesStreetHeight): its pad takes it (LotParams).
     std::function<bool(Real, Real, Real*)> streetHeight;
+    std::function<bool(Real, Real)> nearFreeway;   // lanesNearFreeway (LotParams)
 };
 
 // `setupOut` (optional) receives the parameters the grow ran with — the loader

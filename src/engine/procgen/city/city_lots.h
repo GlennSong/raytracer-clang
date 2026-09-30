@@ -135,6 +135,9 @@ struct LotParams {
     // The height of the street a building fronts, at a point in front of it (a lane city's decks:
     // lanesStreetHeight). Set, the pad takes the street's height, not the lawn's; unset, the ground's.
     std::function<bool(Real, Real, Real*)> streetHeight;
+    // Within the freeway clearance of a freeway or ramp (a lane city's decks: lanesNearFreeway). Set, it replaces
+    // the lot graph's own test.
+    std::function<bool(Real, Real)> nearFreeway;
     Real roadMargin = 11.0;   // inset from the block edge to the buildable interior
                               // (road half-width + sidewalk) — wider = more sidewalk
     Real lotSetback = 1.4;    // building inset from its own lot lines

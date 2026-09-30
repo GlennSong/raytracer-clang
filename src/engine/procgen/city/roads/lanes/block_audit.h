@@ -132,6 +132,10 @@ inline std::vector<TerrainFlatten> lanesStreetFinish(const RoadDeckField& deck, 
 // faces -- not the lawn two metres in front of it, which on a hillside can be metres off (buildings sunk
 // below their streets, 864 on island_8_nature). Segments are binned once; a query touches a few.
 std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckField& deck, double reach);
+// Within `clear` of a FREEWAY or RAMP deck's carriageway edge (any layer), by the drawn decks -- the lot graph can
+// carry an at-grade ramp's links under the street class it merges into, and its widths run narrower than the
+// asphalt (a shop 0.3 m and an office 1.8 m off island_8_nature's ramps, 2026-09-30).
+std::function<bool(double, double)> lanesNearFreeway(const RoadDeckField& deck, double clear);
 std::shared_ptr<const std::function<double(double, double)>> lanesEarthworkField(
     const RoadDeckField& deck, double sidewalk, const std::function<double(double, double)>& natural,
     const EarthworkParams& params, double seaLevel, EarthworkStats* stats = nullptr);

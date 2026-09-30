@@ -46,6 +46,7 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
         s.lp.roadMargin = 0;   // the block already begins behind the drawn sidewalk
         s.lp.smoothGround = in.smoothGround;
         s.lp.streetHeight = in.streetHeight;
+        s.lp.nearFreeway = in.nearFreeway;
 #ifdef RT_ROADS_LANES
         s.lp.sidewalkRise = roads::lanes::lanesSidewalkRise();   // paving meets the drawn sidewalk (ADR-0086)
         s.lp.padFeatherInside = static_cast<Real>(roads::lanes::lanesPadFalloff(in.citysim.value("sidewalk", 4.0)));

@@ -162,6 +162,36 @@ double lanesMinSidewalk(const nlohmann::json& level, double fallback) {
     return best < 1e29 ? std::min(best, fallback > 0 ? fallback : best) : fallback;
 }
 
+std::function<bool(double, double)> lanesNearFreeway(const RoadDeckField& deck, double clear) {
+    struct Seg { Vec2 a, b; double hw; };
+    auto segs = std::make_shared<std::vector<Seg>>();
+    for (const UnionSpine& sp : deck.spines) {
+        if (sp.klass != RoadClass::Freeway && sp.klass != RoadClass::Ramp) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) segs->push_back({sp.points[i], sp.points[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});
+    }
+    if (segs->empty()) return {};
+    constexpr double kCell = 32;
+    auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+    auto grid = std::make_shared<std::unordered_map<long long, std::vector<int>>>();
+    for (std::size_t k = 0; k < segs->size(); ++k) {
+        const Seg& g = (*segs)[k]; const double pad = g.hw + clear;
+        for (int cx = static_cast<int>(std::floor((std::min(g.a.x, g.b.x) - pad) / kCell)); cx <= static_cast<int>(std::floor((std::max(g.a.x, g.b.x) + pad) / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor((std::min(g.a.y, g.b.y) - pad) / kCell)); cz <= static_cast<int>(std::floor((std::max(g.a.y, g.b.y) + pad) / kCell)); ++cz)
+                (*grid)[key(cx, cz)].push_back(static_cast<int>(k));
+    }
+    return [segs, grid, key, clear](double x, double z) {
+        auto it = grid->find(key(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
+        if (it == grid->end()) return false;
+        for (int k : it->second) {
+            const Seg& g = (*segs)[static_cast<std::size_t>(k)];
+            const Vec2 ab = g.b - g.a; const double l2 = dot(ab, ab);
+            double t = l2 > 1e-12 ? dot(Vec2(x, z) - g.a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
+            if ((Vec2(x, z) - (g.a + ab * t)).length() - g.hw < clear) return true;
+        }
+        return false;
+    };
+}
+
 std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckField& deck, double reach) {
     struct Seg { Vec2 a, b; double ya, yb, hw; };
     auto segs = std::make_shared<std::vector<Seg>>();
