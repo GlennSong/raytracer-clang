@@ -129,6 +129,12 @@ struct LotBuilding {
 };
 
 struct LotParams {
+    // The ground already carries the streets smoothly (a lane city's earthwork field): skip the block
+    // planes and terraces -- they would replace a gentle slope with steps.
+    bool smoothGround = false;
+    // The height of the street a building fronts, at a point in front of it (a lane city's decks:
+    // lanesStreetHeight). Set, the pad takes the street's height, not the lawn's; unset, the ground's.
+    std::function<bool(Real, Real, Real*)> streetHeight;
     Real roadMargin = 11.0;   // inset from the block edge to the buildable interior
                               // (road half-width + sidewalk) — wider = more sidewalk
     Real lotSetback = 1.4;    // building inset from its own lot lines

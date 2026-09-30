@@ -44,6 +44,8 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
         const std::vector<Poly2> derived = in.blocks ? std::vector<Poly2>() : cityBlocksFromHoles(*in.holes, in.water);
         const std::vector<Poly2>& blocks = in.blocks ? *in.blocks : derived;
         s.lp.roadMargin = 0;   // the block already begins behind the drawn sidewalk
+        s.lp.smoothGround = in.smoothGround;
+        s.lp.streetHeight = in.streetHeight;
 #ifdef RT_ROADS_LANES
         s.lp.sidewalkRise = roads::lanes::lanesSidewalkRise();   // paving meets the drawn sidewalk (ADR-0086)
         s.lp.padFeatherInside = static_cast<Real>(roads::lanes::lanesPadFalloff(in.citysim.value("sidewalk", 4.0)));

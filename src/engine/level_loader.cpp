@@ -3925,6 +3925,20 @@ bool LevelLoader::load(const std::string& path,
                                    : terrainParams.seaLevel;
             terrainParams.earthwork = buildEarthworkField(
                 roadFlatten, levelGround, terrainParams.earthworkParams, sea, &es);
+#ifdef RT_ROADS_LANES
+            // A LANE CITY has no road carve regions: its streets are the decks it drew. Pin the same field to
+            // them (lanesEarthworkField -- the lot pass fitted its pads to this very field at bake time), so
+            // the ground meets every street instead of leaving it on its slab's skirt.
+            if (!terrainParams.earthwork && !g_lanes.deck.spines.empty())
+            {
+                terrainParams.earthwork = engine::roads::lanes::lanesEarthworkField(
+                    g_lanes.deck, g_lanes.pavedSidewalk, levelGround, terrainParams.earthworkParams, sea, &es);
+                if (terrainParams.earthwork) {   // ...and the finish: each street's strip, feathered into the field
+                    const std::vector<TerrainFlatten> finish = engine::roads::lanes::lanesStreetFinish(g_lanes.deck, engine::roads::lanes::lanesMinSidewalk(root, g_lanes.pavedSidewalk));
+                    terrainParams.flatten.insert(terrainParams.flatten.end(), finish.begin(), finish.end());
+                }
+            }
+#endif
             if (terrainParams.earthwork)
                 LOG_INFO << "[earthwork] " << es.cells << " cells at " << es.cell
                          << " m (" << es.fixed << " fixed), reach "
@@ -4557,10 +4571,10 @@ bool LevelLoader::load(const std::string& path,
                 // metro_lanes' 1034 scenery instances and 62 of the lattice metro's
                 // 1373 stood > 0.3 m above the drawn ground while sitting exactly on
                 // the smooth field at their own point.
-                const TerrainLodConfig cfg = c;
-                drawn = [cfg, nz](double x, double z) {
-                    return lodSurfaceHeight(cfg.params, nz, x, z, cfg.worldHalf, cfg.numLods,
-                                            cfg.gridRes);
+                auto cfgp = std::make_shared<const TerrainLodConfig>(c);   // by pointer: copies of `drawn` stay cheap
+                drawn = [cfgp, nz](double x, double z) {
+                    return lodSurfaceHeight(cfgp->params, nz, x, z, cfgp->worldHalf, cfgp->numLods,
+                                            cfgp->gridRes);
                 };
             });
             // No CDLOD: the drawn surface is the static grid terrain's (one tile, or chunks),
@@ -5588,9 +5602,13 @@ bool LevelLoader::load(const std::string& path,
             world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
                 const TerrainLodConfig cfg = c;
                 auto nz = std::make_shared<Noise>(cfg.seed);
-                dressingGround = [cfg, nz](Real x, Real z) {
-                    return lodSurfaceHeight(cfg.params, *nz, x, z, cfg.worldHalf, cfg.numLods,
-                                            cfg.gridRes);
+                // BY POINTER: the closure is copied into every streamed chunk's preparer, and a by-value
+                // config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks
+                // was 44 GB and the OOM killer (2026-09-29).
+                auto cfgp = std::make_shared<const TerrainLodConfig>(c);
+                dressingGround = [cfgp, nz](Real x, Real z) {
+                    return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods,
+                                            cfgp->gridRes);
                 };
                 const int res = std::max(2, cfg.gridRes + (cfg.gridRes % 2));
                 const float leaf = (2.0f * cfg.worldHalf) / static_cast<float>(1 << std::max(0, cfg.numLods - 1));

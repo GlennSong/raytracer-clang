@@ -1704,7 +1704,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 Real lo = Real(1e30);
                 for (Real t : {Real(0.0), Real(0.5), Real(1.0)}) {
                     const Vec2 q = a + (b - a) * t + f * Real(2.0);
-                    lo = std::min(lo, p.ground(q.x, q.y));
+                    // THE STREET IT FACES (Glenn: buildings "sunk under their roads ... sitting high above
+                    // their roads with no access"): the deck in front, where a lane city knows it -- the
+                    // lawn 2 m out can be metres off the street on a hillside.
+                    Real sy;
+                    if (p.streetHeight && p.streetHeight(q.x, q.y, &sy)) lo = std::min(lo, sy);
+                    else lo = std::min(lo, p.ground(q.x, q.y));
                 }
                 return lo;
             }
@@ -2391,7 +2396,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // heights, and a house in a band the grade later raised sat buried to its
     // eaves. The host consumes outGrade instead of re-deriving (identical
     // input would give an identical fit, but one derivation is one truth).
-    if (p.ground && outGrade && !blockFoots.empty()) {
+    if (p.ground && outGrade && !blockFoots.empty() && !p.smoothGround) {
         std::vector<Poly2> gradePolys;
         gradePolys.reserve(blockFoots.size());
         for (const Poly2& b2 : blockFoots) {
