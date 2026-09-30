@@ -3390,3 +3390,144 @@ TEST_CASE(island_water_surface_has_no_spikes) {
     std::printf("    [water] %zu tris, %d span > 40 m, widest %.1f m at (%.0f, %.0f); %d steeper than 1:2 (cascades)\n", m.indices.size() / 3, spikes, worst, worstAt.x, worstAt.z, steep);
     CHECK(spikes == 0);
 }
+
+// ROAD EDGES MEET THE GROUND (Glenn, 2026-09-29, standing beside Weyby's streets: "a lot of roads tend to
+// float off the ground ... they're not flush"). Every AT-GRADE road (layer 0, no authored deck -- a bridge
+// or a viaduct is meant to stand clear), every 10 m, both sides: walk out from the carriageway edge until
+// the road/sidewalk/plate surface ends (a collider within 1 m of the deck), then compare that last edge's
+// height with the DRAWN ground half a metre past it. Printed, not gated, until the grading is fixed:
+// counts, the worst gaps and where to stand.
+TEST_CASE(level_print_road_edges_meet_the_ground) {
+    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json", "island_8_nature.json"};
+    for (const char* name : kCities) {
+        if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
+        if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) continue;
+        const engine::TerrainLodConfig* cfg = nullptr;
+        world.each<engine::TerrainLodConfig>([&](Entity, engine::TerrainLodConfig& c) { cfg = &c; });
+        if (!cfg) continue;
+        const engine::Noise noise(cfg->seed);
+        // THE GROUND AS DRAWN UP CLOSE: the finest CDLOD leaf tile under the point, generated once and
+        // interpolated on its own triangles -- not a sampler that could disagree with it.
+        const double leafSize = (2.0 * cfg->worldHalf) / double(1 << (cfg->numLods - 1));
+        const int res = (cfg->gridRes % 2) ? cfg->gridRes + 1 : cfg->gridRes;
+        std::unordered_map<long long, engine::LodNodeMesh> tiles;
+        auto drawn = [&](double x, double z) {
+            const int ix = static_cast<int>(std::floor((x + cfg->worldHalf) / leafSize)), iz = static_cast<int>(std::floor((z + cfg->worldHalf) / leafSize));
+            const long long k = (static_cast<long long>(ix) << 32) ^ static_cast<uint32_t>(iz);
+            auto it = tiles.find(k);
+            if (it == tiles.end()) {
+                engine::LodNode ln;
+                ln.level = 0;
+                ln.size = static_cast<float>(leafSize);
+                ln.minX = static_cast<float>(-cfg->worldHalf + ix * leafSize);
+                ln.minZ = static_cast<float>(-cfg->worldHalf + iz * leafSize);
+                it = tiles.emplace(k, engine::generateLodNodeMesh(cfg->params, noise, ln, cfg->gridRes)).first;
+            }
+            const engine::LodNodeMesh& tile = it->second;
+            const double minX = -cfg->worldHalf + ix * leafSize, minZ = -cfg->worldHalf + iz * leafSize;
+            const int n = res + 1;
+            const double step = leafSize / double(res);
+            const int i = std::min(res - 1, std::max(0, int((x - minX) / step)));
+            const int j = std::min(res - 1, std::max(0, int((z - minZ) / step)));
+            const double u = (x - minX) / step - i, v = (z - minZ) / step - j;
+            auto H = [&](int a2, int b2) { return (double)tile.mesh.vertices[size_t(b2) * n + a2].position.y; };
+            return (u >= v) ? H(i, j) + u * (H(i + 1, j) - H(i, j)) + v * (H(i + 1, j + 1) - H(i + 1, j))
+                            : H(i, j) + v * (H(i, j + 1) - H(i, j)) + u * (H(i + 1, j + 1) - H(i, j + 1));
+        };
+        double samplerOff = 0;
+        // Building footprints, binned: a point past the sidewalk that lands under a building is a question
+        // about the BUILDING's pad (sunk below its street), not about the road's edge.
+        std::unordered_map<long long, std::vector<const Poly2*>> planCells;
+        std::vector<Poly2> plans;
+        world.each<CityPlanDebug>([&](Entity, CityPlanDebug& plan) { for (const auto& pr : plan.prisms) if (pr.plan.size() >= 3) plans.push_back(pr.plan); });
+        auto pkey = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+        for (const Poly2& pl : plans) {
+            double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
+            for (const Vec2& q : pl) { x0 = std::min(x0, (double)q.x); x1 = std::max(x1, (double)q.x); z0 = std::min(z0, (double)q.y); z1 = std::max(z1, (double)q.y); }
+            for (int cx = (int)std::floor(x0 / 20); cx <= (int)std::floor(x1 / 20); ++cx)
+                for (int cz = (int)std::floor(z0 / 20); cz <= (int)std::floor(z1 / 20); ++cz) planCells[pkey(cx, cz)].push_back(&pl);
+        }
+        auto underBuilding = [&](double x, double z) {
+            auto it = planCells.find(pkey((int)std::floor(x / 20), (int)std::floor(z / 20)));
+            if (it == planCells.end()) return false;
+            for (const Poly2* pl : it->second) if (pointInPolygon(*pl, Vec2(x, z))) return true;
+            return false;
+        };
+        struct Gap { double gap, x, z, edgeY, ground, reach; };
+        std::vector<Gap> buildingSunk;
+        ColliderGrid grid;
+        world.each<MeshCollider>([&](Entity, MeshCollider& mc) { grid.add(mc); });
+        std::vector<Gap> floating, sunk;
+        int samples = 0, open = 0;
+        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+            for (const auto& sp : d.field.spines) {
+                if (sp.authoredDeck || sp.layer != 0 || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+                double carry = 0;
+                for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+                    const Vec2 a = sp.points[i], b = sp.points[i + 1];
+                    const double L = (b - a).length();
+                    if (L < 1e-6) continue;
+                    const Vec2 t = (b - a) * (1.0 / L), n(-t.y, t.x);
+                    for (double s = carry; s < L; s += 10.0) {
+                        const Vec2 p = a + t * s;
+                        const double deckY = sp.yAbs[i] + (sp.yAbs[i + 1] - sp.yAbs[i]) * (s / L);
+                        const double hw = i < sp.hw.size() ? sp.hw[i] : sp.halfWidth;
+                        for (int side = -1; side <= 1; side += 2) {
+                            double edgeY = deckY, reach = -1;
+                            for (double r = hw; r <= hw + 14.0; r += 0.5) {
+                                const Vec2 q = p + n * (side * r);
+                                double top;
+                                if (grid.surfaceAt(q.x, q.y, deckY + 1.0, top) && top > deckY - 1.0) { edgeY = top; reach = r; continue; }
+                                break;
+                            }
+                            if (reach < 0) continue;                       // no surface at the carriageway edge
+                            if (reach >= hw + 14.0) { ++open; continue; }  // a plaza or a lot at deck height: no edge here
+                            ++samples;
+                            const Vec2 q = p + n * (side * (reach + 1.0));
+                            const double g = drawn(q.x, q.y);
+                            if (underBuilding(q.x, q.y)) {   // the pad a building stands on, below the street it fronts
+                                if (edgeY - g > 0.6) buildingSunk.push_back({edgeY - g, q.x, q.y, edgeY, g, reach});
+                                continue;
+                            }
+                            samplerOff = std::max(samplerOff, std::fabs(g - engine::lodSurfaceHeight(cfg->params, noise, q.x, q.y, cfg->worldHalf, cfg->numLods, cfg->gridRes)));
+                            const double gap = edgeY - g;
+                            if (gap > 0.35) floating.push_back({gap, q.x, q.y, edgeY, g, reach});
+                            else if (gap < -0.35) sunk.push_back({gap, q.x, q.y, edgeY, g, reach});
+                        }
+                    }
+                    carry = std::fmod(carry + 10.0 - std::fmod(L, 10.0), 10.0);
+                }
+            }
+        });
+        std::sort(floating.begin(), floating.end(), [](const Gap& a, const Gap& b) { return a.gap > b.gap; });
+        std::sort(sunk.begin(), sunk.end(), [](const Gap& a, const Gap& b) { return a.gap < b.gap; });
+        auto pct = [&](std::size_t k) { return samples ? 100.0 * static_cast<double>(k) / samples : 0.0; };
+        std::size_t over1 = 0; for (const Gap& g : floating) if (g.gap > 1.0) ++over1;
+        std::printf("    [road-edge] %-22s %d edge samples (%d open): FLOATING > 0.35 m %zu (%.1f%%, > 1 m %zu), worst %.2f m | SUNK > 0.35 m %zu (%.1f%%), worst %.2f m\n",
+                    name, samples, open, floating.size(), pct(floating.size()), over1, floating.empty() ? 0.0 : floating[0].gap,
+                    sunk.size(), pct(sunk.size()), sunk.empty() ? 0.0 : sunk[0].gap);
+        std::printf("    [road-edge] %-22s ground from %zu leaf tiles; lodSurfaceHeight differs from them by up to %.2f m\n", name, tiles.size(), samplerOff);
+        std::sort(buildingSunk.begin(), buildingSunk.end(), [](const Gap& a2, const Gap& b2) { return a2.gap > b2.gap; });
+        std::printf("    [road-edge] %-22s BUILDINGS below the street beside them (> 0.6 m): %zu, worst %.2f m%s\n", name, buildingSunk.size(),
+                    buildingSunk.empty() ? 0.0 : buildingSunk[0].gap, buildingSunk.empty() ? "" : "");
+        for (std::size_t k = 0; k < buildingSunk.size() && k < 5; ++k)
+            std::printf("      building %.2f m below its street  ->  teleport %.1f %.1f\n", buildingSunk[k].gap, buildingSunk[k].x, buildingSunk[k].z);
+        std::vector<std::pair<int, int>> shown;
+        int printed = 0;
+        for (const Gap& g : floating) {
+            const std::pair<int, int> cell{static_cast<int>(std::floor(g.x / 40)), static_cast<int>(std::floor(g.z / 40))};
+            if (std::find(shown.begin(), shown.end(), cell) != shown.end()) continue;
+            shown.push_back(cell);
+            std::printf("      floats %+.2f m: edge %.2f over ground %.2f, %.1f m from the centreline  ->  teleport %.1f %.1f\n",
+                        g.gap, g.edgeY, g.ground, g.reach, g.x, g.z);
+            if (++printed >= 12) break;
+        }
+        CHECK(samples > 100);   // the fixture must bite
+    }
+}
