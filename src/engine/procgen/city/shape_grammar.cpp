@@ -68,17 +68,34 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
     Rng rng(seed ? seed : 1u);
     Real t = rng.unit();
     switch (style) {
-        case FacadeStyle::Brick:
-            // Warm reds/browns, some buff.
-            return lerp(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28), t);
+        case FacadeStyle::Brick: {
+            // Warm reds/browns for most; then the brickyard's other runs (Glenn, 2026-09-30: "more varied
+            // building materials ... it's all very samey"): buff, cream, chocolate, orange, iron-spot grey.
+            const Real k = rng.unit();
+            if (k < 0.52) return lerp(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28), t);
+            static const Vec3 kBrick[] = {
+                {0.74, 0.62, 0.46},   // buff / tan (the Upper East Side apartment tower)
+                {0.82, 0.76, 0.64},   // cream
+                {0.36, 0.23, 0.17},   // chocolate
+                {0.66, 0.34, 0.20},   // orange-red
+                {0.50, 0.47, 0.45},   // iron-spot grey
+            };
+            return kBrick[static_cast<int>((k - 0.52) / 0.48 * 5) % 5] * (0.94 + 0.12 * t);
+        }
         case FacadeStyle::Stucco:
             return lerp(Vec3(0.86, 0.82, 0.72), Vec3(0.80, 0.74, 0.60), t);
         case FacadeStyle::Painted:
             // Muted pastels (residential).
             return lerp(Vec3(0.74, 0.78, 0.78), Vec3(0.80, 0.72, 0.66), t) +
                    Vec3(rng.range(-0.04, 0.04), rng.range(-0.04, 0.04), rng.range(-0.04, 0.04));
-        case FacadeStyle::GlassCurtain:
-            return lerp(Vec3(0.58, 0.62, 0.66), Vec3(0.66, 0.68, 0.70), t);
+        case FacadeStyle::GlassCurtain: {
+            // The frame and trim of a glass building: aluminium, or dark bronze / black / white metal.
+            const Real k = rng.unit();
+            if (k < 0.55) return lerp(Vec3(0.58, 0.62, 0.66), Vec3(0.66, 0.68, 0.70), t);
+            if (k < 0.72) return Vec3(0.20, 0.18, 0.16);   // dark bronze
+            if (k < 0.87) return Vec3(0.12, 0.12, 0.13);   // black
+            return Vec3(0.84, 0.84, 0.82);                 // white
+        }
         case FacadeStyle::Metal:
             // Cool steel / corrugated siding (industrial).
             return lerp(Vec3(0.46, 0.50, 0.54), Vec3(0.56, 0.58, 0.60), t);
@@ -100,12 +117,33 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
         case FacadeStyle::DarkBrick:
             // Deep browns to charcoal reds (lofts, factories, dark towers).
             return lerp(Vec3(0.26, 0.14, 0.11), Vec3(0.38, 0.22, 0.18), t);
-        case FacadeStyle::Sandstone:
-            // Warm buff / honey ashlar (banks, museums, deco masonry).
-            return lerp(Vec3(0.78, 0.66, 0.48), Vec3(0.86, 0.76, 0.58), t);
+        case FacadeStyle::Sandstone: {
+            // Warm buff / honey ashlar (banks, museums, deco masonry) -- and the other dressed stones and
+            // terracottas of a midtown avenue.
+            const Real k = rng.unit();
+            if (k < 0.40) return lerp(Vec3(0.78, 0.66, 0.48), Vec3(0.86, 0.76, 0.58), t);
+            static const Vec3 kStone[] = {
+                {0.80, 0.79, 0.74},   // Indiana limestone
+                {0.90, 0.88, 0.82},   // white glazed terracotta (the Woolworth)
+                {0.62, 0.47, 0.43},   // pink granite
+                {0.50, 0.50, 0.50},   // grey granite
+                {0.19, 0.19, 0.20},   // black granite
+                {0.60, 0.63, 0.56},   // celadon terracotta
+            };
+            return kStone[static_cast<int>((k - 0.40) / 0.60 * 6) % 6] * (0.95 + 0.10 * t);
+        }
         case FacadeStyle::Concrete:
-        default:
-            return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
+        default: {
+            const Real k = rng.unit();
+            if (k < 0.55) return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
+            static const Vec3 kConcrete[] = {
+                {0.86, 0.85, 0.82},   // white precast (432 Park)
+                {0.70, 0.65, 0.58},   // warm sand aggregate
+                {0.56, 0.60, 0.62},   // cool blue-grey
+                {0.40, 0.40, 0.40},   // dark charcoal panel
+            };
+            return kConcrete[static_cast<int>((k - 0.55) / 0.45 * 4) % 4] * (0.95 + 0.10 * t);
+        }
     }
 }
 
@@ -142,20 +180,40 @@ bool litOfficeBay(const Vec3& bayAnchor, Real occupancy) {
     return (positionHash(bayAnchor) & 0xffu) / 255.0 < occupancy;
 }
 
-Vec3 litTint(const Vec3& worldPos, bool curtainWall) {
+int litTintIndex(const Vec3& worldPos, bool curtainWall) {
     // A second hash stream (offset anchor) so the tint is independent of the
     // lit/dark choice and the storey occupancy.
     const uint32_t h = positionHash(worldPos + Vec3(0.37, 0.11, 0.53));
     const Real u = static_cast<Real>(h & 0xffu) / 255.0;
-    if (curtainWall) {
-        if (u < 0.62) return Vec3(1.00, 0.96, 0.88);   // office white
-        if (u < 0.90) return Vec3(0.82, 0.90, 1.00);   // fluorescent blue-white
-        return Vec3(1.00, 0.82, 0.58);                 // a warm room
+    if (curtainWall) return u < 0.62 ? 1 : u < 0.90 ? 2 : 3;
+    return u < 0.60 ? 4 : u < 0.85 ? 5 : u < 0.95 ? 6 : 7;
+}
+
+// The palette mesh.frag (and lighting_surface.metal, mesh.wgsl) decode the index with -- keep them in step.
+Vec3 litTintOf(int index) {
+    switch (index) {
+        case 1: return Vec3(1.00, 0.96, 0.88);   // office white
+        case 2: return Vec3(0.82, 0.90, 1.00);   // fluorescent blue-white
+        case 3: return Vec3(1.00, 0.82, 0.58);   // a warm room
+        case 4: return Vec3(1.00, 0.72, 0.42);   // incandescent
+        case 5: return Vec3(1.00, 0.86, 0.64);   // cream
+        case 6: return Vec3(0.80, 0.88, 1.00);   // a cool room
+        case 7: return Vec3(0.72, 1.00, 0.78);   // the odd green-white
+        default: return Vec3(1, 1, 1);
     }
-    if (u < 0.60) return Vec3(1.00, 0.72, 0.42);       // incandescent
-    if (u < 0.85) return Vec3(1.00, 0.86, 0.64);       // cream
-    if (u < 0.95) return Vec3(0.80, 0.88, 1.00);       // a cool room
-    return Vec3(0.72, 1.00, 0.78);                     // the odd green-white
+}
+
+Vec3 litTint(const Vec3& worldPos, bool curtainWall) { return litTintOf(litTintIndex(worldPos, curtainWall)); }
+
+Vec3 glassGrey() { return Vec3(0.032, 0.073, 0.116); }   // the old grey material (0.18 0.27 0.34) squared
+
+Vec3 litPaneColour(const Vec3& glassCol, const Vec3& worldPos, bool curtainWall) {
+    const int idx = litTintIndex(worldPos, curtainWall);
+    auto chan = [](Real c, int bit) {
+        int b = static_cast<int>(std::lround(std::clamp(c, Real(0), Real(1)) * 255.0)) & ~1;
+        return static_cast<Real>(b | bit) / 255.0;
+    };
+    return Vec3(chan(glassCol.x, idx & 1), chan(glassCol.y, (idx >> 1) & 1), chan(glassCol.z, (idx >> 2) & 1));
 }
 
 RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
@@ -164,7 +222,8 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Glass:
             // Front face only: from inside a streamed interior the facade's
             // pane is not there, and the interior's own clear pane shows out.
-            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
+            // White: the pane's vertex colour is its glass (glassGrey, a curtain wall's tint).
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.9f; m.roughness = 0.08f;
             m.flags |= RenderMaterial::FLAG_FRONT_ONLY; break;
         case PartId::GlassLit:
             // Indistinguishable from Glass by DAY — the lit third of the
@@ -173,7 +232,10 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // and the pane's vertex colour is its TINT (litTint), which the
             // FLAG_EMISSIVE_VERTEX_TINT shader path applies to the emission
             // only, so the day glass stays the one glass colour.
-            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
+            // The vertex colour PACKS the glass and the lit tint (litPaneColour): the interior-mapped path in
+            // mesh.frag unpacks both, so a lit pane is its building's glass by day. This albedo is the fallback
+            // for a renderer that does not unpack (the default grey).
+            m.albedo = glassGrey(); m.metallic = 0.9f; m.roughness = 0.08f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT | RenderMaterial::FLAG_FRONT_ONLY; break;
         case PartId::Beacon:
             // The lamp's LENS: red glass — a dark red by day with a tight
@@ -582,6 +644,9 @@ enum class FacadeMode { Residential, Retail, Entrance, Solid };
 static void appendGlassParts(BuildingMesh& out, RenderMesh& glass, RenderMesh& glassLit,
                              bool clearPanes) {
     if (clearPanes) {
+        // Clear lobby glass is see-through whatever the tower's tint: its own faint colour (the old grey pane).
+        for (RenderMesh* m : {&glass, &glassLit})
+            for (Vertex& v : m->vertices) v.color = Vec3(0.18, 0.27, 0.34);
         appendToPart(out, PartId::GlassClear, glass);
         appendToPart(out, PartId::GlassClear, glassLit);
     } else {
@@ -594,12 +659,16 @@ namespace {
 // The glass by tint (vertex colour on the glass part): 0 keeps the wall-derived grey.
 Vec3 curtainGlassColour(uint8_t tint, const Vec3& grey) {
     switch (tint) {
-        case 1: return Vec3(0.30, 0.44, 0.60);   // blue
-        case 2: return Vec3(0.32, 0.50, 0.46);   // green (Lever House)
-        case 3: return Vec3(0.44, 0.35, 0.26);   // bronze (Seagram)
-        case 4: return Vec3(0.17, 0.18, 0.20);   // smoke
-        case 5: return Vec3(0.70, 0.73, 0.76);   // silver, reflective
-        case 6: return Vec3(0.56, 0.63, 0.66);   // clear
+        // The REFLECTANCE (the glass material is white, metallic): what colour the sky comes back in.
+        case 1: return Vec3(0.18, 0.32, 0.54);   // blue
+        case 2: return Vec3(0.18, 0.42, 0.33);   // green (Lever House)
+        case 3: return Vec3(0.42, 0.28, 0.15);   // bronze (Seagram)
+        case 4: return Vec3(0.06, 0.07, 0.08);   // smoke, near black
+        case 5: return Vec3(0.62, 0.66, 0.70);   // silver, a mirror
+        case 6: return Vec3(0.28, 0.36, 0.38);   // clear, pale green-grey
+        case 7: return Vec3(0.72, 0.54, 0.18);   // gold (the Toronto bank towers)
+        case 8: return Vec3(0.10, 0.38, 0.42);   // teal
+        case 9: return Vec3(0.54, 0.31, 0.23);   // copper / rose
         default: return grey;
     }
 }
@@ -615,13 +684,13 @@ Vec3 curtainMullionColour(uint8_t tone) {
 }  // namespace
 
 void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
-                         const Vec3& wallColor,
+                         const Vec3& /*wallColor: the glass is its own colour now*/,
                          FacadeDetail detail = FacadeDetail::Full,
                          bool clearPanes = false, const CurtainStyle& cs = CurtainStyle{}) {
     Real fh = fr.height, W = fr.width;
     if (W < 0.5 || fh < 0.5) return;
     RenderMesh glass, glassLit, mull;
-    Vec3 glassCol = curtainGlassColour(cs.glassTint, materialFor(PartId::Glass, wallColor).albedo);
+    Vec3 glassCol = curtainGlassColour(cs.glassTint, glassGrey());
     Vec3 spandrelCol = glassCol * 0.45;          // opaque shadow-box band
     Vec3 mullCol = curtainMullionColour(cs.mullionTone);
     Real spandrelH = cs.spandrelH(fh);
@@ -653,7 +722,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         const std::size_t pv0 = vision.vertices.size();
         emitQuad(vision, fr.at(x0, spandrelH) + gin, fr.at(x1, spandrelH) + gin,
                  fr.at(x1, fh) + gin, fr.at(x0, fh) + gin, fr.n,
-                 litBay ? litTint(bayAnchor, true) : glassCol);
+                 litBay ? litPaneColour(glassCol, bayAnchor, true) : glassCol);
         roomUV(vision, pv0, fr);
     }
     // FLAT (LOD1): the spandrel band + vision pane carry the curtain-wall read
@@ -910,7 +979,7 @@ static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real ins
 
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
-                       const Vec3& wallColor, const Poly2& plan,
+                       const Vec3& /*wallColor*/, const Poly2& plan,
                        const Vec3& paint, bool curtainWall, bool clearPanes = false,
                        Real revealFrom = 0.0) {
     RenderMesh wall, glass, glassLit;
@@ -975,8 +1044,8 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
             const bool lit = litWindow(fr.at(o.wx0, o.sill));
             RenderMesh& pane = lit ? glassLit : glass;
             const std::size_t pv0 = pane.vertices.size();
-            const Vec3 pcol = lit ? litTint(fr.at(o.wx0, o.sill), curtainWall)
-                                  : materialFor(PartId::Glass, wallColor).albedo;
+            const Vec3 pcol = lit ? litPaneColour(glassGrey(), fr.at(o.wx0, o.sill), curtainWall)
+                                  : glassGrey();
             q(pane, o.wx0, o.sill, o.wx1, narc > 0 ? ysp : o.head, pcol, in + fr.n * 0.02);
             if (narc > 0) {
                 const Vec3 off = in + fr.n * 0.02;
@@ -1035,7 +1104,7 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
     emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0),
              fr.at(fr.width, fr.height), fr.at(0, fr.height), fr.n, wallColor);
     const Vec3 proud = fr.n * 0.02;
-    const Vec3 gcol = materialFor(PartId::Glass, wallColor).albedo;
+    const Vec3 gcol = glassGrey();
     const Vec3 dcol = materialFor(PartId::Door, wallColor).albedo;
     for (const BayOpening& o : facadeLayout(fr, mode, p).open) {
         // Same anchor as the full emitter's pane (fr.at(wx0, sill)), so a
@@ -1044,7 +1113,7 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
         RenderMesh& dst = o.entrance ? door : (litPane ? glassLit : glass);
         const std::size_t pv0 = dst.vertices.size();
         const Vec3 fcol = o.entrance ? dcol
-                                     : (litPane ? litTint(fr.at(o.wx0, o.sill), p.curtainWall) : gcol);
+                                     : (litPane ? litPaneColour(gcol, fr.at(o.wx0, o.sill), p.curtainWall) : gcol);
         Vec2 farc[9];
         Vec2 farcC;
         const int fn = openingArc(o, farc, 8, &farcC);       // the middle tier arches too
@@ -1215,7 +1284,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
         } else {
             const Vec3 in = fr.n * (-p.windowInset);
             const Vec3 rev = wallColor * 0.82;
-            const Vec3 gcol = materialFor(PartId::Glass, wallColor).albedo;
+            const Vec3 gcol = glassGrey();
             // Reveals: close the recess between the wall opening and the inset
             // glass — sill, jambs to the springline, then a flat lintel or the
             // arc SOFFIT (per-segment quads whose normals point at the arc
@@ -1292,7 +1361,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // emitter hashes, so LOD swaps keep the same homes lit).
             const bool litPane = litWindow(fr.at(wx0, openSill));
             RenderMesh& pane = litPane ? glassLit : glass;
-            const Vec3 pcol = litPane ? litTint(fr.at(wx0, openSill), p.curtainWall) : gcol;
+            const Vec3 pcol = litPane ? litPaneColour(gcol, fr.at(wx0, openSill), p.curtainWall) : gcol;
             const std::size_t pv0 = pane.vertices.size();
             emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, pcol);
             if (rise > 0) {
@@ -1453,7 +1522,7 @@ static BuildingMesh growCylinder(const Scope& scope, const BuildingParams& p) {
     Real R = std::min(scope.size.x, scope.size.z) * 0.5 * 0.96;
     int sides = std::max(20, p.sides);
     Vec3 wall = p.wallColor;
-    Vec3 glass = materialFor(PartId::Glass, wall).albedo;
+    Vec3 glass = glassGrey();
     Real y = baseY;
     Real gh = p.groundHeight;
 
@@ -1557,7 +1626,7 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
                 emitBox(out, Scope{cXZ + Vec3(sx * w - 0.16, y, sz * w - 0.16),
                                    {r, Vec3(0, 1, 0), f}, Vec3(0.32, tierH, 0.32)},
                         PartId::Trim, colCol);
-        boxAt(y + tierH * 0.18, tierH * 0.6, w * 0.82, PartId::Glass, Vec3(0.18, 0.10, 0.06));
+        boxAt(y + tierH * 0.18, tierH * 0.6, w * 0.82, PartId::Glass, Vec3(0.032, 0.027, 0.020));
         y += tierH;
         // Flared roof at the top of this tier (deep eaves, upturned corners).
         emitFlaredRoof(out, cXZ, y, w, w * 0.55, w * 0.62, w * 0.16, tile);
@@ -2485,7 +2554,7 @@ static Real emitSawtoothRoof(BuildingMesh& out, const Poly2& topPlan, Real y,
     const Vec3 C(obb.center.x, 0, obb.center.y);
     const Vec3 up(0, 1, 0);
     const Vec3 roofCol = materialFor(PartId::Roof, wallColor).albedo;
-    const Vec3 glassCol = materialFor(PartId::Glass, wallColor).albedo;
+    const Vec3 glassCol = glassGrey();
     RenderMesh roof, glass, wallM;
     const Real y0 = y + 0.03;
     for (int k = 0; k < teeth; ++k) {

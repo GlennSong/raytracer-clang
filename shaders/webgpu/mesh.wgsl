@@ -629,7 +629,20 @@ fn fs_main(in : VSOut) -> FsOut {
   var albedo    = d.albedoMetallic.rgb * select(in.color, vec3<f32>(1.0), emissiveTint) * albedoSample.rgb;
   let metallic  = clamp(d.albedoMetallic.a * mrSample.b, 0.0, 1.0);   // glTF: B=metal
   var roughness = clamp(d.emissionRough.a * mrSample.g, 0.04, 1.0);   //       G=rough
-  let emission  = d.emissionRough.rgb * emSample * select(vec3<f32>(1.0), in.color, emissiveTint);
+  var paneTint = in.color;
+  // A LIT PANE (emissive tint + interior map, bit 16) packs its glass and lit tint -- mirrors mesh.frag.
+  if (emissiveTint && (rawFlags & 65536u) != 0u) {
+    let by = vec3<i32>(round(clamp(in.color, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));
+    let li = (by.x & 1) | ((by.y & 1) << 1u) | ((by.z & 1) << 2u);
+    if (li > 0) {
+      var kLit = array<vec3<f32>, 7>(vec3<f32>(1.00, 0.96, 0.88), vec3<f32>(0.82, 0.90, 1.00), vec3<f32>(1.00, 0.82, 0.58),
+                                     vec3<f32>(1.00, 0.72, 0.42), vec3<f32>(1.00, 0.86, 0.64), vec3<f32>(0.80, 0.88, 1.00),
+                                     vec3<f32>(0.72, 1.00, 0.78));
+      paneTint = kLit[li - 1];
+      albedo = vec3<f32>(by & vec3<i32>(~1)) / 255.0;
+    }
+  }
+  let emission  = d.emissionRough.rgb * emSample * select(vec3<f32>(1.0), paneTint, emissiveTint);
 
   var N = normalize(in.worldNormal);
   // Normal map (tangent-space -> world via TBN), only with a map + a real tangent.

@@ -485,7 +485,8 @@ void recipePagodaTower(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // towers side by side are not the same building (M2 draws them; the numbers ride the regen key now).
 void glassStyle(BuildingParams& p, Hash& rng, bool modern) {
     const Real r = rng.unit();
-    p.glassTint = static_cast<uint8_t>(r < 0.22 ? 1 : r < 0.36 ? 2 : r < 0.50 ? 3 : r < 0.66 ? 4 : r < 0.84 ? 5 : 6);
+    p.glassTint = static_cast<uint8_t>(r < 0.17 ? 1 : r < 0.27 ? 2 : r < 0.39 ? 3 : r < 0.51 ? 4 : r < 0.66 ? 5
+                                       : r < 0.76 ? 6 : r < 0.83 ? 7 : r < 0.93 ? 8 : 9);
     const Real m = rng.unit();
     p.mullionTone = static_cast<uint8_t>(p.glassTint == 3 ? (m < 0.7 ? 1 : 2)                    // bronze glass, bronze frames (Seagram)
                                          : m < 0.35 ? 0 : m < 0.6 ? 3 : m < 0.85 ? 2 : 4);

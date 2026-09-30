@@ -223,7 +223,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             std::vector<Vec2> water = {{r0 * 0.33, 0.36}, {0.0, 0.36}};
             MeshBuilder::append(
                 (*outParts)[static_cast<std::size_t>(PartId::Glass)],
-                latheMesh(Vec3(c.x, fy, c.y), water, 14, Vec3(0.20, 0.34, 0.40)));
+                latheMesh(Vec3(c.x, fy, c.y), water, 14, Vec3(0.036, 0.092, 0.136)));
             claim(c, r0 * 0.5);
         }
         // BENCHES around the plaza, facing the centre.
@@ -779,7 +779,7 @@ void sculptForecourt(LotBuilding& b, const Poly2& plaza, const SiteFrame& f, Rea
             RenderMesh water;
             const Vec3 w0 = o + u3 * rim + v3 * rim + up * 0.30;
             const Vec3 w1 = w0 + u3 * (s - 2 * rim), w2 = w1 + v3 * (s - 2 * rim), w3 = w0 + v3 * (s - 2 * rim);
-            MeshBuilder::emitQuad(water, w0, w1, w2, w3, up, Vec3(0.20, 0.34, 0.40));
+            MeshBuilder::emitQuad(water, w0, w1, w2, w3, up, Vec3(0.036, 0.092, 0.136));
             MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Glass)], water);
         }
     }
@@ -1038,7 +1038,7 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
         std::vector<Vec2> water = {{r0 * 0.33, 0.36}, {0.0, 0.36}};
         MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::Glass)],
                             latheMesh(Vec3(c.x, slabY, c.y), water, 16,
-                                      Vec3(0.20, 0.34, 0.40)));
+                                      Vec3(0.036, 0.092, 0.136)));
         claim(c, r0 * 0.5 + 0.4);
     }
 

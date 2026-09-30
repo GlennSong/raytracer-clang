@@ -1,10 +1,11 @@
 -- tower_lineup.lua -- the city's TOWER recipes side by side (Glenn, 2026-09-30: "I'd love to see the new
 -- towers in a separate scene just to see them lined up"). Each is grown by the architect exactly as a
 -- downtown lot would grow it (building.grow_plan_parts{recipe = ...}: the recipe's own dice, the slenderness
--- cap on its plan), on a lot shaped for it, in ONE line along +x (the street is on the +z side):
+-- cap on its plan), on a lot shaped for it, in lines along +x (the street is on the +z side):
 --   the New York forms: sky exposure | tower on a base | tapered glass | glass slab | pencil
 --   then the towers that came before: glass tower | podium tower | art deco | stepped | office slab
--- opts.seed (level JSON) rolls every tower's dice again -- glass tint, fins, height; opts.coreness (default 1)
+-- opts.rows (default 3) lines, each rolled on its own dice; opts.seed (level JSON) rolls them all again --
+-- glass tint, cladding, fins, height; opts.coreness (default 1)
 -- is how deep downtown the lots sit (lower = shorter towers).
 
 local opts = args or {}
@@ -19,6 +20,7 @@ local MATS = {
   concrete  = material.new{ surface = "concrete", roughness = 0.92 },
   stucco    = material.new{ surface = "stucco",   roughness = 0.85 },
   metal     = material.new{ surface = "metal",    roughness = 0.45, metallic = 0.55 },
+  -- script materials take the vertex colour, which on glass IS the building's glass (shape_grammar glassGrey / tint)
   glass     = material.new{ roughness = 0.08, metallic = 0.9 },
   glass_lit = material.new{ roughness = 0.08, metallic = 0.9 },
   glass_clear = material.new{ roughness = 0.05, metallic = 0.2, opacity = 0.45, two_sided = true },
@@ -58,21 +60,27 @@ local LOTS = {
 local LINE = {"sky_exposure_tower", "tower_on_base", "tapered_glass_tower", "glass_slab", "pencil_tower",
               "glass_tower", "podium_tower", "art_deco_tower", "stepped_tower", "office_slab"}
 
+-- ROWS lines of the same ten, each on its own dice (the glass, cladding and height vary row to row), 120 m
+-- apart: walk the avenues between them.
+local ROWS = opts.rows or 3
 local GAP = 28
-local x = 0
-for i, name in ipairs(LINE) do
-  local w, d = LOTS[name][1], LOTS[name][2]
-  local cx = x + w / 2
-  local req = { recipe = name, seed = seed0 * 101 + i * 7, coreness = coreness, plan = rect(w, d) }
-  local parts = building.grow_plan_parts(req)
-  for _, e in ipairs(parts) do
-    if not SKIP[e.part] then
-      m:add(mesh.translate(e.mesh, {cx, 0, 0}), MATS[e.part] or MATS.wall)
+for row = 1, ROWS do
+  local z = -(row - 1) * 120
+  local x = 0
+  for i, name in ipairs(LINE) do
+    local w, d = LOTS[name][1], LOTS[name][2]
+    local cx = x + w / 2
+    local req = { recipe = name, seed = seed0 * 101 + row * 1009 + i * 7, coreness = coreness, plan = rect(w, d) }
+    local parts = building.grow_plan_parts(req)
+    for _, e in ipairs(parts) do
+      if not SKIP[e.part] then
+        m:add(mesh.translate(e.mesh, {cx, 0, z}), MATS[e.part] or MATS.wall)
+      end
     end
+    -- the lot's paving, so each stands on its own plate
+    m:add(scope{ origin = {x - 2, -0.1, z - d/2 - 2}, size = {w + 4, 0.1, d + 4} }:box{ 0.55, 0.55, 0.53 }, MATS.ground)
+    print(string.format("[lineup] row %d %-20s %2d floors  lot %dx%d  at x %.0f z %.0f", row, name, req.grown_floors or -1, w, d, cx, z))
+    x = x + w + GAP
   end
-  -- the lot's paving, so each stands on its own plate
-  m:add(scope{ origin = {x - 2, -0.1, -d/2 - 2}, size = {w + 4, 0.1, d + 4} }:box{ 0.55, 0.55, 0.53 }, MATS.ground)
-  print(string.format("[lineup] %-20s %2d floors  lot %dx%d  at x %.0f", name, req.grown_floors or -1, w, d, cx))
-  x = x + w + GAP
 end
 return m

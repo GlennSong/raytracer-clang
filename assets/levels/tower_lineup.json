@@ -48,12 +48,12 @@
       "position": [
         330.0,
         -0.55,
-        0.0
+        -120.0
       ],
       "size": [
         900.0,
         0.4,
-        400.0
+        600.0
       ],
       "material": {
         "albedo": [
@@ -85,7 +85,8 @@
       "seed": 1,
       "opts": {
         "seed": 1,
-        "coreness": 1.0
+        "coreness": 1.0,
+        "rows": 3
       }
     }
   ]

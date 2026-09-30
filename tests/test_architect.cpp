@@ -254,11 +254,12 @@ TEST_CASE(new_facade_styles_have_seeded_palettes) {
             CHECK(c1.y >= 0 && c1.y <= 1);
             CHECK(c1.z >= 0 && c1.z <= 1);
         }
-        // DarkBrick is actually dark; Sandstone is actually warm.
+        // DarkBrick is actually dark; Sandstone (dressed stone: buff ashlar, limestone, granites, terracotta)
+        // is never cool -- a neutral granite at most.
         Vec3 dark = facadeColor(FacadeStyle::DarkBrick, s);
         CHECK(dark.x + dark.y + dark.z < 1.2);
         Vec3 sand = facadeColor(FacadeStyle::Sandstone, s);
-        CHECK(sand.x > sand.z);
+        CHECK(sand.x >= sand.z - 0.02);
     }
     // The new parts carry the intended surfaces.
     RenderMaterial siding = materialFor(PartId::Siding, Vec3(0.7, 0.7, 0.7));
@@ -339,4 +340,29 @@ TEST_CASE(lit_window_choice_is_deterministic_and_about_a_third) {
     // different expressions) can differ by float noise without flipping a
     // window's choice.
     CHECK(litWindow(Vec3(10.0, 5.0, 3.0)) == litWindow(Vec3(10.01, 5.01, 3.01)));
+}
+
+// A lit pane's vertex colour packs its glass (by day) and its lit tint index (by night) -- litPaneColour. Through
+// the 8-bit vertex (vulkan_renderer's unorm8: round) the shader must read back the same index and the glass to a
+// step of the 7-bit colour.
+TEST_CASE(lit_pane_colour_packs_glass_and_lit_tint) {
+    const Vec3 glasses[] = {glassGrey(), Vec3(0.72, 0.54, 0.18), Vec3(0.06, 0.07, 0.08), Vec3(1, 1, 1), Vec3(0, 0, 0)};
+    for (const Vec3& g : glasses)
+        for (int i = 0; i < 40; ++i) {
+            const Vec3 at(i * 3.1, (i % 7) * 3.3, i * -2.7);
+            for (bool curtain : {true, false}) {
+                const Vec3 c = litPaneColour(g, at, curtain);
+                auto u8 = [](Real v) { return static_cast<int>(std::clamp(v, Real(0), Real(1)) * 255.0 + 0.5); };
+                const int r = u8(c.x), gg = u8(c.y), b = u8(c.z);
+                const int idx = (r & 1) | ((gg & 1) << 1) | ((b & 1) << 2);
+                CHECK(idx == litTintIndex(at, curtain));
+                CHECK(idx >= 1 && idx <= 7);
+                CHECK(std::fabs((r & ~1) / 255.0 - g.x) <= 1.5 / 255.0);
+                CHECK(std::fabs((gg & ~1) / 255.0 - g.y) <= 1.5 / 255.0);
+                CHECK(std::fabs((b & ~1) / 255.0 - g.z) <= 1.5 / 255.0);
+            }
+        }
+    // The palette the shaders carry.
+    CHECK_APPROX(litTintOf(1).z, 0.88, 1e-9);
+    CHECK_APPROX(litTintOf(7).y, 1.00, 1e-9);
 }

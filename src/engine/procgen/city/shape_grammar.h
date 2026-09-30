@@ -108,6 +108,16 @@ bool litWindow(const Vec3& worldPos);
 // choice survives the LOD swap. Carried in the pane's vertex colour and
 // applied to the EMISSION only (RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT).
 Vec3 litTint(const Vec3& worldPos, bool curtainWall);
+// THE GLASS COLOUR (Glenn, 2026-09-30: "more varied glass colour, it's all very samey"). The Glass and GlassLit
+// materials are white; a pane's VERTEX COLOUR is its glass -- the reflectance the sky is mirrored in -- so every
+// building carries its own. glassGrey() is the default pane (what every glass looked like before).
+Vec3 glassGrey();
+// A LIT pane's vertex colour carries BOTH its glass (by day) and its lit tint (by night): the glass colour in the
+// top 7 bits of each 8-bit channel, the lit tint's palette index (1..7, litTintOf) in the low bits -- r bit 0, g
+// bit 1, b bit 2. mesh.frag decodes it on the interior-mapped lit part; index 0 = an unpacked, legacy pane.
+int litTintIndex(const Vec3& worldPos, bool curtainWall);
+Vec3 litTintOf(int index);
+Vec3 litPaneColour(const Vec3& glassCol, const Vec3& worldPos, bool curtainWall);
 // Curtain-wall towers light per BAY, not per storey-face (device: "the way
 // it's lit up row by row is odd"): each mullion bay flips its own coin
 // against a per-STOREY occupancy — some floors busy, some nearly dark, the

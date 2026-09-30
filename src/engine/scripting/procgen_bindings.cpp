@@ -1082,7 +1082,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.towerFrac  = static_cast<Real>(optField(L, idx, "tower_frac", p.towerFrac));
     p.towerFloor = static_cast<int>(optField(L, idx, "tower_floor", p.towerFloor));
     // NYC variety: sky_ratio (the plane's slope), taper_top, chamfer_top, feather_from, twist_deg, stack_shift;
-    // the curtain style: glass = "auto"|"blue"|"green"|"bronze"|"smoke"|"silver"|"clear",
+    // the curtain style: glass = "auto"|"blue"|"green"|"bronze"|"smoke"|"silver"|"clear"|"gold"|"teal"|"copper",
     // mullions = "steel"|"bronze"|"black"|"silver"|"white", fins (every N bays, 0 none), curtain_bay (m),
     // spandrel (0 = floor-to-ceiling glass .. ~0.45 ribbon windows).
     p.skyRatio    = static_cast<Real>(optField(L, idx, "sky_ratio", p.skyRatio));
@@ -1096,9 +1096,10 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.spandrelFrac = static_cast<Real>(optField(L, idx, "spandrel", p.spandrelFrac));
     lua_getfield(L, idx, "glass");
     if (lua_isstring(L, -1)) {
-        static const char* names[7] = {"auto", "blue", "green", "bronze", "smoke", "silver", "clear"};
+        static const char* names[10] = {"auto", "blue", "green", "bronze", "smoke", "silver", "clear", "gold",
+                                        "teal", "copper"};
         const std::string g = lua_tostring(L, -1);
-        for (int i = 0; i < 7; ++i) if (g == names[i]) p.glassTint = static_cast<uint8_t>(i);
+        for (int i = 0; i < 10; ++i) if (g == names[i]) p.glassTint = static_cast<uint8_t>(i);
     }
     lua_pop(L, 1);
     lua_getfield(L, idx, "mullions");
