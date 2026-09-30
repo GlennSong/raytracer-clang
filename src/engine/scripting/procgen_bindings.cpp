@@ -1064,8 +1064,15 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     lua_getfield(L, idx, "envelope");
     if (lua_isstring(L, -1)) {
         const std::string e = lua_tostring(L, -1);
-        p.envelope = e == "street_wall_setback" ? BuildingParams::Envelope::StreetWallSetback
-                                                : BuildingParams::Envelope::None;
+        using E = BuildingParams::Envelope;
+        p.envelope = e == "street_wall_setback" ? E::StreetWallSetback
+                   : e == "sky_exposure" ? E::SkyExposure
+                   : e == "taper" ? E::Taper
+                   : e == "slab" ? E::Slab
+                   : e == "feathered" ? E::Feathered
+                   : e == "twist" ? E::Twist
+                   : e == "stack" ? E::Stack
+                                  : E::None;
     }
     lua_pop(L, 1);
     p.baseFloors = static_cast<int>(optField(L, idx, "base_floors", p.baseFloors));
@@ -1074,6 +1081,33 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.stepDepth  = static_cast<Real>(optField(L, idx, "step_depth", p.stepDepth));
     p.towerFrac  = static_cast<Real>(optField(L, idx, "tower_frac", p.towerFrac));
     p.towerFloor = static_cast<int>(optField(L, idx, "tower_floor", p.towerFloor));
+    // NYC variety: sky_ratio (the plane's slope), taper_top, chamfer_top, feather_from, twist_deg, stack_shift;
+    // the curtain style: glass = "auto"|"blue"|"green"|"bronze"|"smoke"|"silver"|"clear",
+    // mullions = "steel"|"bronze"|"black"|"silver"|"white", fins (every N bays, 0 none), curtain_bay (m),
+    // spandrel (0 = floor-to-ceiling glass .. ~0.45 ribbon windows).
+    p.skyRatio    = static_cast<Real>(optField(L, idx, "sky_ratio", p.skyRatio));
+    p.taperTop    = static_cast<Real>(optField(L, idx, "taper_top", p.taperTop));
+    p.chamferTop  = static_cast<Real>(optField(L, idx, "chamfer_top", p.chamferTop));
+    p.featherFrom = static_cast<Real>(optField(L, idx, "feather_from", p.featherFrom));
+    p.twistDeg    = static_cast<Real>(optField(L, idx, "twist_deg", p.twistDeg));
+    p.stackShift  = static_cast<Real>(optField(L, idx, "stack_shift", p.stackShift));
+    p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
+    p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));
+    p.spandrelFrac = static_cast<Real>(optField(L, idx, "spandrel", p.spandrelFrac));
+    lua_getfield(L, idx, "glass");
+    if (lua_isstring(L, -1)) {
+        static const char* names[7] = {"auto", "blue", "green", "bronze", "smoke", "silver", "clear"};
+        const std::string g = lua_tostring(L, -1);
+        for (int i = 0; i < 7; ++i) if (g == names[i]) p.glassTint = static_cast<uint8_t>(i);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "mullions");
+    if (lua_isstring(L, -1)) {
+        static const char* names[5] = {"steel", "bronze", "black", "silver", "white"};
+        const std::string m = lua_tostring(L, -1);
+        for (int i = 0; i < 5; ++i) if (m == names[i]) p.mullionTone = static_cast<uint8_t>(i);
+    }
+    lua_pop(L, 1);
     // The core (M5): core = "auto" | "never" | "always".
     lua_getfield(L, idx, "core");
     if (lua_isstring(L, -1)) {
@@ -1167,6 +1201,11 @@ int l_building_grow_parts(lua_State* L) {
 int l_building_grow_plan_parts(lua_State* L) {
     BuildingParams p = readBuildingParams(L, 1);
     Poly2 plan;
+    // recipe = "name": the architect's own recipe (seed, coreness 0..1), grown as a lot at the city would grow
+    // it on this plan -- a lineup shows exactly what the city builds (NYC variety, 2026-09-30).
+    lua_getfield(L, 1, "recipe");
+    const std::string recipeName = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
     lua_getfield(L, 1, "plan");
     if (lua_istable(L, -1)) {
         const int n = static_cast<int>(lua_rawlen(L, -1));
@@ -1184,11 +1223,27 @@ int l_building_grow_plan_parts(lua_State* L) {
     lua_pop(L, 1);
     const Real setback = static_cast<Real>(optField(L, 1, "setback", 0.0));
     if (setback > 0 && plan.size() >= 3) plan = inset(plan, setback);
+    if (!recipeName.empty() && plan.size() >= 3) {
+        const OBB2 ob = orientedBoundingBox(plan);
+        BuildingRecipe rc;
+        if (!architectRecipeByName(recipeName, static_cast<uint32_t>(optField(L, 1, "seed", 1.0)),
+                                   static_cast<Real>(optField(L, 1, "coreness", 1.0)),
+                                   2 * std::min(ob.half[0], ob.half[1]), area(plan), rc))
+            return luaL_error(L, "building.grow_plan_parts: unknown recipe '%s'", recipeName.c_str());
+        p = rc.params;
+        p.openDoorway = true;
+        lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
+        lua_setfield(L, 1, "grown_floors");
+    }
     BuildingMesh bm = growPlanBuilding(plan, p);
+    // Every part by name, in PartId order (materialIndexFor is the ordinal); a draped slot keeps its base name.
     static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
                                        "ground", "detail", "brick", "concrete",
                                        "stucco", "metal", "wood",
-                                       "siding", "path", "foliage"};
+                                       "siding", "path", "foliage", "vent", "utility", "fan", "shingle",
+                                       "glass_lit", "interior", "interior_floor", "interior_tile",
+                                       "interior_marble", "interior_carpet", "beacon", "beacon_glow",
+                                       "beacon_haze", "lit_band", "glass_clear"};
     lua_newtable(L);
     int cnt = 0;
     for (const RenderMesh& part : bm.parts) {

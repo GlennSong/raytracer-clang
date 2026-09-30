@@ -3701,3 +3701,35 @@ TEST_CASE(level_print_buildings_by_the_freeway) {
                         hits[k].klass == static_cast<int>(engine::RoadClass::Ramp) ? "ramp" : "freeway", hits[k].layer, hits[k].c.x, hits[k].c.y);
     }
 }
+
+// THE SKYLINE BY RECIPE (NYC variety, 2026-09-30): how many of each tower recipe a level grew (15+ floors
+// above the ground storey, from the records' params), their tallest, and how many of them kept a door
+// (enterable = the core fit every tier). Printed, not gated.
+TEST_CASE(level_print_skyline_by_recipe) {
+    const char* kCities[] = {"metro_lanes.json", "island_8_nature.json"};
+    for (const char* name : kCities) {
+        if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
+        if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) continue;
+        const CityBuildings* cb = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        if (!cb) continue;
+        struct Tally { int n = 0, enterable = 0, tallest = 0; Vec2 at{0, 0}; };
+        std::map<std::string, Tally> by;
+        for (const BuildingRecord& r : cb->records) {
+            if (r.params.floors < 15) continue;
+            Tally& t = by[r.recipe.empty() ? std::string("?") : r.recipe];
+            ++t.n;
+            if (r.enterable) ++t.enterable;
+            if (r.params.floors > t.tallest) { t.tallest = r.params.floors; t.at = centroid(r.plan); }
+        }
+        std::printf("    [skyline] %-22s towers of 15+ floors by recipe:\n", name);
+        for (const auto& [k, t] : by)
+            std::printf("      %-20s %4d (enterable %4d), tallest %2d floors  ->  teleport %.0f %.0f\n", k.c_str(), t.n, t.enterable, t.tallest, t.at.x, t.at.y);
+    }
+}

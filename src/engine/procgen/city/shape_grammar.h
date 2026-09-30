@@ -428,7 +428,22 @@ struct BuildingParams {
     //                      from `towerFloor` a shaft covering `towerFrac` of
     //                      the base plan rises to the top (Empire State,
     //                      Chrysler). Floors count above the ground storey.
-    enum class Envelope : uint8_t { None, StreetWallSetback };
+    //   SkyExposure        the SKY EXPOSURE PLANE (New York 1916/1961, Glenn 2026-09-30: "rules about building
+    //                      step back to avoid having the whole city in shadow"): the street wall rises
+    //                      `baseFloors`, then the mass steps back every `stepFloors` along a plane rising
+    //                      `skyRatio` metres per metre back (1961: 2.7 on a narrow street, 5.6 on a wide one),
+    //                      the first step at least `setback1`, until it covers `towerFrac` of the lot -- above
+    //                      that a tower may rise straight (the wedding cake; Empire State, 1916).
+    //   Taper              a tower on its lot's rectangle from `baseFloors`, narrowing to `taperTop` of its
+    //                      width at the top, its corners chamfered up to `chamferTop` of the short side (One
+    //                      World Trade Center), in steps of a few floors.
+    //   Slab               a thin rectangular slab on the lot's long axis from `baseFloors` (UN Secretariat,
+    //                      Lever House) -- its width `towerFrac` of the short side, never under a core's 14 m.
+    //   Feathered          a pencil tower (432 Park, 111 W 57th): the lot's rectangle full height, stepping back
+    //                      on ONE face every two floors from `featherFrom` of its height, then a second face.
+    //   Twist, Stack       overhanging forms (milestone 3): each tier rotated `twistDeg` over the height /
+    //                      shifted `stackShift` metres from the one below, with a soffit under the overhang.
+    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack };
     Envelope envelope = Envelope::None;
     int   baseFloors = 5;
     Real  setback1 = 6.0;
@@ -436,6 +451,21 @@ struct BuildingParams {
     Real  stepDepth = 3.0;
     Real  towerFrac = 0.35;      // 0 = no shaft
     int   towerFloor = 20;       // 0 = no shaft
+    Real  skyRatio = 2.7;        // SkyExposure: metres up per metre back
+    Real  taperTop = 0.7;        // Taper: width at the top, as a fraction of the base's
+    Real  chamferTop = 0.0;      // Taper: corner cut at the top, fraction of the short side
+    Real  featherFrom = 0.7;     // Feathered: where the one-sided steps begin, fraction of floors
+    Real  twistDeg = 0.0;        // Twist: total rotation over the height (degrees)
+    Real  stackShift = 0.0;      // Stack: each tier's offset from the one below (m)
+    // THE CURTAIN STYLE (skyscrapers NYC variety M2): glassTint 0 auto grey, 1 blue, 2 green, 3 bronze, 4 smoke,
+    // 5 silver (reflective), 6 clear; mullionTone 0 steel, 1 bronze, 2 black, 3 silver, 4 white; fins: a vertical
+    // fin every `fins` bays (0 none); curtainBay the mullion spacing (m); spandrelFrac the opaque band's share of
+    // the storey (0 = floor-to-ceiling glass, ~0.45 = ribbon windows).
+    uint8_t glassTint = 0;
+    uint8_t mullionTone = 0;
+    uint8_t fins = 0;
+    Real  curtainBay = 1.6;
+    Real  spandrelFrac = 0.30;
     // THE CORE (skyscrapers v2 M5, core_plan.h): 0 = auto (four floors and
     // up get an elevator bank and two enclosed stairwells when one fits),
     // 1 = never (the straight stair of ADR-0080, or nothing), 2 = always.
@@ -461,6 +491,19 @@ struct BuildingParams {
 // (lot-system-plan §15.2). Cylinder and Pagoda shapes currently emit Full at
 // both levels (they are already lean; their flat pass is a later follow-up).
 enum class FacadeDetail : uint8_t { Full, Flat };
+
+// THE CURTAIN STYLE a glass facade is drawn in (skyscrapers NYC variety M2; the numbers live on BuildingParams:
+// glassTint, mullionTone, fins, curtainBay, spandrelFrac). The defaults are the curtain wall as it always was:
+// grey glass from the wall colour, steel mullions every 1.6 m, a 30% spandrel band (at most 0.9 m), no fins.
+struct CurtainStyle {
+    uint8_t glassTint = 0, mullionTone = 0, fins = 0;
+    Real bay = 1.6, spandrelFrac = 0.30;
+    Real spandrelH(Real storey) const {   // the opaque band: 0 = floor-to-ceiling glass (a slim slab edge stays)
+        return spandrelFrac <= 0.02 ? std::min(Real(0.14), storey * 0.05) : std::min(Real(1.4), storey * spandrelFrac);
+    }
+    int bays(Real width) const { return std::max(1, static_cast<int>(std::lround(width / std::max(Real(0.8), bay)))); }
+};
+CurtainStyle curtainStyleOf(const BuildingParams& p);
 
 // Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
 BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,

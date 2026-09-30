@@ -6,6 +6,7 @@
 
 #include "../src/engine/procgen/city/polygon.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/core_plan.h"   // coreFor (the NYC envelopes keep a core)
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
@@ -801,6 +802,70 @@ TEST_CASE(street_wall_setback_envelope_stacks_a_base_steps_and_a_shaft) {
     const std::vector<StoreyPlan> s2 = storeyPlans(plan, q);
     CHECK(s2.back().tier == 2);
     CHECK(s2[5].tier == 1);                // floor 4: the first uniform setback
+}
+
+// THE NEW YORK ENVELOPES (Glenn, 2026-09-30: "rules about building step back to avoid having the whole city in
+// shadow ... recipes that mimic that and create more variety"): on a 44 x 32 m lot, 40 floors, each form stacks
+// tiers that stand on the one below, keeps a tier a core fits in to the top (an interior and a door), and has
+// its own shape.
+TEST_CASE(nyc_envelopes_stack_nested_tiers_that_keep_a_core) {
+    const Poly2 plan = {{0, 0}, {44, 0}, {44, 32}, {0, 32}};
+    using E = BuildingParams::Envelope;
+    auto base = [] { BuildingParams p; p.floors = 40; p.openDoorway = true; return p; };
+    auto nestedAndCored = [&](const BuildingParams& p, const char* name) {
+        const std::vector<MassTier> tiers = massStack(plan, p);
+        for (std::size_t i = 1; i < tiers.size(); ++i) {
+            CHECK(tiers[i].floor0 > tiers[i - 1].floor0);
+            CHECK(area(tiers[i].plan) < area(tiers[i - 1].plan));
+            const Vec2 c = centroid(tiers[i].plan);
+            for (const Vec2& v : tiers[i].plan) CHECK(pointInPolygon(tiers[i - 1].plan, v + (c - v) * 0.02));
+        }
+        const OBB2 top = orientedBoundingBox(tiers.back().plan);
+        CHECK(2 * std::min(top.half[0], top.half[1]) >= 14.0 - 1e-6);
+        CHECK(coreFor(plan, p, 0).valid);
+        CHECK(!growPlanBuilding(plan, p).parts.empty());
+        std::printf("    [nyc] %-12s %zu tiers, top %.0f m2 of %.0f\n", name, tiers.size(), area(tiers.back().plan), area(plan));
+        return tiers;
+    };
+    {   // THE SKY EXPOSURE PLANE: a 6-floor street wall, then a step every 2 floors, 2.7 m up per metre back
+        BuildingParams p = base();
+        p.envelope = E::SkyExposure; p.baseFloors = 6; p.stepFloors = 2; p.skyRatio = 2.7; p.setback1 = 3.0; p.towerFrac = 0.25;
+        const auto t = nestedAndCored(p, "sky_exposure");
+        CHECK(t.size() >= 4u);
+        CHECK(t[1].floor0 == 6);
+        if (t.size() > 3) {   // a later step goes back floorHeight * stepFloors / skyRatio on every side
+            const OBB2 a = orientedBoundingBox(t[2].plan), b = orientedBoundingBox(t[3].plan);
+            const Real run = 2 * p.floorHeight / 2.7;
+            CHECK(std::fabs((a.half[0] - b.half[0]) - run) < 0.05);
+            CHECK(t[3].floor0 - t[2].floor0 == 2);
+        }
+    }
+    {   // THE TAPER: narrowing to taperTop and chamfering into an octagon toward the top
+        BuildingParams p = base();
+        p.envelope = E::Taper; p.baseFloors = 2; p.taperTop = 0.6; p.chamferTop = 0.25;
+        const auto t = nestedAndCored(p, "taper");
+        CHECK(t.size() >= 8u);
+        CHECK(t.back().plan.size() == 8u);
+        CHECK(area(t.back().plan) < 0.5 * area(plan));
+    }
+    {   // THE SLAB: thin on the short axis, nearly the lot's length on the long one
+        BuildingParams p = base();
+        p.envelope = E::Slab; p.baseFloors = 2; p.towerFrac = 0.4;
+        const auto t = nestedAndCored(p, "slab");
+        CHECK(t.size() == 2u);
+        const OBB2 sb = orientedBoundingBox(t.back().plan);
+        CHECK(2 * std::max(sb.half[0], sb.half[1]) > 40.0);
+        CHECK(2 * std::min(sb.half[0], sb.half[1]) < 16.0);
+    }
+    {   // THE PENCIL: the front face (axis 1, plus side) never steps; the back and a side feather near the top
+        BuildingParams p = base();
+        p.envelope = E::Feathered; p.baseFloors = 1; p.featherFrom = 0.6; p.stepDepth = 2.0;
+        const auto t = nestedAndCored(p, "feathered");
+        CHECK(t.size() >= 3u);
+        CHECK(t.back().floor0 >= 24);
+        Real maxY = -1e9; for (const Vec2& v : t.back().plan) maxY = std::max(maxY, v.y);
+        CHECK(std::fabs(maxY - 32.0) < 0.05 || std::fabs(maxY - 0.0) < 0.05 || maxY > 31.9);   // one long face stays on the lot line
+    }
 }
 
 // NIGHT LIGHTING (skyscrapers v2 M4): a lit pane's vertex colour is its tint,

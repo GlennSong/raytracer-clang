@@ -590,17 +590,41 @@ static void appendGlassParts(BuildingMesh& out, RenderMesh& glass, RenderMesh& g
     }
 }
 
+namespace {
+// The glass by tint (vertex colour on the glass part): 0 keeps the wall-derived grey.
+Vec3 curtainGlassColour(uint8_t tint, const Vec3& grey) {
+    switch (tint) {
+        case 1: return Vec3(0.30, 0.44, 0.60);   // blue
+        case 2: return Vec3(0.32, 0.50, 0.46);   // green (Lever House)
+        case 3: return Vec3(0.44, 0.35, 0.26);   // bronze (Seagram)
+        case 4: return Vec3(0.17, 0.18, 0.20);   // smoke
+        case 5: return Vec3(0.70, 0.73, 0.76);   // silver, reflective
+        case 6: return Vec3(0.56, 0.63, 0.66);   // clear
+        default: return grey;
+    }
+}
+Vec3 curtainMullionColour(uint8_t tone) {
+    switch (tone) {
+        case 1: return Vec3(0.34, 0.25, 0.16);   // bronze
+        case 2: return Vec3(0.06, 0.06, 0.07);   // black
+        case 3: return Vec3(0.72, 0.74, 0.77);   // silver
+        case 4: return Vec3(0.88, 0.88, 0.86);   // white
+        default: return Vec3(0.34, 0.36, 0.40);  // steel
+    }
+}
+}  // namespace
+
 void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
                          const Vec3& wallColor,
                          FacadeDetail detail = FacadeDetail::Full,
-                         bool clearPanes = false) {
+                         bool clearPanes = false, const CurtainStyle& cs = CurtainStyle{}) {
     Real fh = fr.height, W = fr.width;
     if (W < 0.5 || fh < 0.5) return;
     RenderMesh glass, glassLit, mull;
-    Vec3 glassCol = materialFor(PartId::Glass, wallColor).albedo;
+    Vec3 glassCol = curtainGlassColour(cs.glassTint, materialFor(PartId::Glass, wallColor).albedo);
     Vec3 spandrelCol = glassCol * 0.45;          // opaque shadow-box band
-    Vec3 mullCol(0.34, 0.36, 0.40);              // steel mullions
-    Real spandrelH = std::min(Real(0.9), fh * 0.30);
+    Vec3 mullCol = curtainMullionColour(cs.mullionTone);
+    Real spandrelH = cs.spandrelH(fh);
 
     // Glass sits INSET behind the frame plane; the mullion grid is SOLID
     // geometry — front face + side returns back to the glass — so up close it
@@ -619,7 +643,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     // full-width band (`curtain_wall_lights_vary_within_a_storey`). The
     // spandrel band stays dark. Flat (LOD1) runs this same loop, so the two
     // detail levels light the same offices.
-    const int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));
+    const int bays = cs.bays(W);
     const Real occupancy = litStoreyOccupancy(fr.at(0, spandrelH));
     for (int b = 0; b < bays; ++b) {
         const Real x0 = W * b / bays, x1 = W * (b + 1) / bays;
@@ -667,6 +691,19 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     for (Real ty : {spandrelH, fh - 0.04}) {     // transoms (spandrel line + head)
         Real t0 = std::max(Real(0), ty - mw * 0.5), t1 = std::min(fh, ty + mw * 0.5);
         bar(0, t0, W, t1, false);
+    }
+    // FINS: a deep vertical blade every `fins` bays (111 W 57th's ribs, a modern glass tower's shading fins),
+    // standing well proud of the grid -- they catch the light and break a glass face into strips.
+    if (cs.fins > 0) {
+        const Real finOut = 0.42, finW = 0.12;
+        const Vec3 fo = fr.n * finOut;
+        for (int b = 0; b <= bays; b += cs.fins) {
+            const Real x = std::min(std::max(b * W / bays, finW * 0.5), W - finW * 0.5);
+            const Real a0 = x - finW * 0.5, a1 = x + finW * 0.5;
+            emitQuad(mull, fr.at(a0, 0) + fo, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a0, fh) + fo, fr.n, mullCol);
+            emitQuad(mull, fr.at(a0, 0) + outv, fr.at(a0, 0) + fo, fr.at(a0, fh) + fo, fr.at(a0, fh) + outv, fr.h * -1, mullCol);
+            emitQuad(mull, fr.at(a1, 0) + outv, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a1, fh) + outv, fr.h, mullCol);
+        }
     }
     appendGlassParts(out, glass, glassLit, clearPanes);
     appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
@@ -843,9 +880,10 @@ static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge
 // 1.6 m bays). The same bay count and transom lines as emitCurtainWallRect,
 // as bars standing proud of the inner glass into the room, so a bay reads
 // as the same bay from both sides.
-static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real inset, Real spandrelH) {
+static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real inset, Real spandrelH,
+                                 const CurtainStyle& cs = CurtainStyle{}) {
     RenderMesh mull;
-    const Vec3 mullCol(0.34, 0.36, 0.40);
+    const Vec3 mullCol = curtainMullionColour(cs.mullionTone);
     const Real W = fr.width, fh = fr.height, mw = 0.09, proud = 0.06;
     if (W < 2.0 * inset + 0.5 || fh < 0.5) return;
     const Vec3 gin = fr.n * -inset;               // the inner glass plane
@@ -859,7 +897,7 @@ static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real ins
         emitQuad(mull, fr.at(a0, b0) + inv, fr.at(a1, b0) + inv, fr.at(a1, b1) + inv, fr.at(a0, b1) + inv,
                  fr.n * -1.0, mullCol);
     };
-    const int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));   // emitCurtainWallRect's rule
+    const int bays = cs.bays(W);   // emitCurtainWallRect's rule
     for (int b = 0; b <= bays; ++b) {
         const Real x = std::min(std::max(b * W / bays, inset + mw * 0.5), W - inset - mw * 0.5);
         bar(x - mw * 0.5, 0, x + mw * 0.5, fh, true);
@@ -1870,7 +1908,7 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
                                              : FacadeMode::Residential;
         for (int side = 0; side < 4; ++side) {
             if (params.curtainWall)
-                emitCurtainWallRect(out, faceOf(storey, side), wallColor, detail);
+                emitCurtainWallRect(out, faceOf(storey, side), wallColor, detail, false, curtainStyleOf(params));
             else emitFacade(out, storey, side, mode, upper, wallColor, detail);
         }
         if (i == params.floors / 2) {
@@ -2729,6 +2767,49 @@ bool tierInsetOk(const Poly2& outer, const Poly2& inner) {
     }
     return true;
 }
+
+// ---- the NYC-variety envelopes' plan vocabulary (skyscrapers NYC variety M1) ----------------------------
+// The narrowest a tier may get: the core (a hoistway bank, two stairs and a corridor round them, ~12.3 x
+// 10.5 m) is placed in the TOP tier and must fit every tier, or the building loses its door.
+constexpr Real kCoreTierMin = 14.0;
+Real tierShortSide(const Poly2& p) { const OBB2 b = orientedBoundingBox(p); return 2 * std::min(b.half[0], b.half[1]); }
+// `inner` stands on `outer`: every vertex inside it (nudged 2% to its centroid, so a shared edge counts),
+// smaller, and big enough to be a floor at all.
+bool tierNestedIn(const Poly2& outer, const Poly2& inner) {
+    if (inner.size() < 3) return false;
+    const Real ai = area(inner);
+    if (ai < 60.0 || ai >= area(outer) * 0.999) return false;
+    const Vec2 c = centroid(inner);
+    for (const Vec2& q : inner) if (!pointInPolygon(outer, q + (c - q) * 0.02)) return false;
+    return true;
+}
+// A box on `ob`'s axes: half extents hw (axis 0) x hd (axis 1), its centre moved `shift` along the axes, its
+// corners chamfered by `cut` (an octagon; < 0.3 m none).
+Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0)) {
+    const Vec2 c = ob.center + ob.axis[0] * shift.x + ob.axis[1] * shift.y, a0 = ob.axis[0], a1 = ob.axis[1];
+    Poly2 p;
+    if (cut < 0.3) {
+        p = {c - a0 * hw - a1 * hd, c + a0 * hw - a1 * hd, c + a0 * hw + a1 * hd, c - a0 * hw + a1 * hd};
+    } else {
+        cut = std::min(cut, std::min(hw, hd) * 0.9);
+        p = {c - a0 * (hw - cut) - a1 * hd, c + a0 * (hw - cut) - a1 * hd, c + a0 * hw - a1 * (hd - cut), c + a0 * hw + a1 * (hd - cut),
+             c + a0 * (hw - cut) + a1 * hd, c - a0 * (hw - cut) + a1 * hd, c - a0 * hw + a1 * (hd - cut), c - a0 * hw - a1 * (hd - cut)};
+    }
+    ensureCCW(p);
+    return p;
+}
+// The biggest box on the plan's own axes that stands inside it (the plan's OBB, shrunk until it fits).
+bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd) {
+    hw = ob.half[0]; hd = ob.half[1];
+    for (int k = 0; k < 14; ++k) {
+        const Poly2 b = tierBox(ob, hw, hd);
+        bool in = true;
+        for (const Vec2& q : b) if (!pointInPolygon(plan, q + (ob.center - q) * 0.02)) { in = false; break; }
+        if (in) return true;
+        hw *= 0.93; hd *= 0.93;
+    }
+    return false;
+}
 }  // namespace
 
 std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& params) {
@@ -2796,6 +2877,76 @@ std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& param
                 cur = next;
                 out.push_back({cur, i});
             }
+        }
+        return out;
+    }
+    using Env = BuildingParams::Envelope;
+    // THE SKY EXPOSURE PLANE: the street wall, then a step every `stepFloors` along the plane (skyRatio up per
+    // metre back), the first at least setback1, until the mass covers towerFrac of the lot; the tower above
+    // rises straight.
+    if (params.envelope == Env::SkyExposure && params.baseFloors > 0 && params.floors > params.baseFloors + 1) {
+        const int sf = std::max(1, params.stepFloors);
+        const Real run = sf * params.floorHeight / std::max(Real(0.5), params.skyRatio);
+        const Real towerArea = area(plan) * std::clamp(params.towerFrac, Real(0.15), Real(0.6));
+        bool first = true;
+        for (int g = params.baseFloors; g < params.floors - 1; g += sf) {
+            if (area(cur) <= towerArea) break;
+            const Poly2 next = offsetPlan(cur, first ? std::max(run, params.setback1) : run);
+            if (!tierInsetOk(cur, next) || tierShortSide(next) < kCoreTierMin) break;
+            out.push_back({next, g});
+            cur = next;
+            first = false;
+        }
+        return out;
+    }
+    // THE TOWER ON ITS LOT'S RECTANGLE: Taper (narrowing, chamfering), Slab (a thin slab on the long axis) and
+    // Feathered (a pencil stepping back one face at a time near the top), from `baseFloors` (the floors below
+    // are the lot plan -- a base when the rectangle is smaller than the lot).
+    if (params.envelope == Env::Taper || params.envelope == Env::Slab || params.envelope == Env::Feathered) {
+        const OBB2 ob = orientedBoundingBox(plan);
+        Real hw = 0, hd = 0;
+        if (!tierBoxInside(plan, ob, hw, hd)) return out;
+        const int f0 = std::max(1, params.baseFloors);
+        if (f0 >= params.floors) return out;
+        auto stand = [&](const Poly2& next, int floor0) {   // a tier on the one below, or (equal to it) nothing new
+            if (area(next) >= area(cur) * 0.999) return true;
+            if (!tierNestedIn(cur, next) || tierShortSide(next) < kCoreTierMin) return false;
+            out.push_back({next, floor0});
+            cur = next;
+            return true;
+        };
+        if (params.envelope == Env::Taper) {
+            if (!stand(tierBox(ob, hw, hd), f0)) return out;
+            const int span = params.floors - f0;
+            const int sf = std::max(1, span / 16);   // ~16 steps over the height: a taper, not a staircase
+            for (int g = f0 + sf; g < params.floors; g += sf) {
+                const Real t = Real(g - f0) / span;
+                const Real sc = 1 - (1 - std::clamp(params.taperTop, Real(0.3), Real(1))) * t;
+                const Real cut = std::clamp(params.chamferTop, Real(0), Real(0.45)) * t * 2 * std::min(hw, hd) * sc;
+                if (!stand(tierBox(ob, hw * sc, hd * sc, cut), g)) break;
+            }
+            return out;
+        }
+        if (params.envelope == Env::Slab) {
+            const bool longX = hw >= hd;
+            const Real shortHalf = longX ? hd : hw, longHalf = longX ? hw : hd;
+            const Real sw = std::max(kCoreTierMin * 0.5 + 0.25, shortHalf * std::clamp(params.towerFrac, Real(0.3), Real(1)));
+            const Real sl = longHalf * 0.97;
+            if (sw >= shortHalf) { stand(tierBox(ob, hw, hd), f0); return out; }
+            stand(longX ? tierBox(ob, sl, sw) : tierBox(ob, sw, sl), f0);
+            return out;
+        }
+        // Feathered: the rectangle, then from featherFrom every two floors the BACK face (axis 1, minus side)
+        // steps in stepDepth, and from the third step the SIDE face (axis 0, plus side) alternates with it.
+        if (!stand(tierBox(ob, hw, hd), f0)) return out;
+        Real x0 = -hw, x1 = hw, z0 = -hd, z1 = hd;
+        const Real d = std::clamp(params.stepDepth, Real(1.0), Real(4.0));
+        const int ff = std::max(f0 + 1, static_cast<int>(params.floors * std::clamp(params.featherFrom, Real(0.3), Real(0.95))));
+        int k = 0;
+        for (int g = ff; g < params.floors - 1; g += 2, ++k) {
+            if (k < 2 || k % 2 == 0) z0 += d; else x1 -= d;
+            if (x1 - x0 < kCoreTierMin || z1 - z0 < kCoreTierMin) break;
+            if (!stand(tierBox(ob, (x1 - x0) * 0.5, (z1 - z0) * 0.5, 0, Vec2((x0 + x1) * 0.5, (z0 + z1) * 0.5)), g)) break;
         }
         return out;
     }
@@ -3185,12 +3336,13 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 // floor looks out over the city; the band is painted.
                 // The band is the exterior's spandrel (emitCurtainWallRect:
                 // min(0.9, 0.30 fh)), and the grid inside mirrors its bays.
-                const Real band = std::min(Real(0.9), spk.h * 0.30);
+                const CurtainStyle ics = curtainStyleOf(params);
+                const Real band = ics.spandrelH(spk.h);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0, band,
                               interiorInset(params), interiorPaintFor(params), false);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0 + band, spk.h - band,
                               interiorInset(params), Vec3(1, 1, 1), false, PartId::Glass);
-                emitInnerCurtainGrid(out, fr, interiorInset(params), band);
+                emitInnerCurtainGrid(out, fr, interiorInset(params), band, ics);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, upperP),
                                   interiorInset(params), params.wallColor,
@@ -3598,7 +3750,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         // detail (the lobby shows from the street, the street from the lobby).
         const bool clearLobby = full && params.openDoorway;
         if (params.curtainWall && mode != FacadeMode::Entrance)
-            emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor, detail, clearLobby);
+            emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor, detail, clearLobby, curtainStyleOf(params));
         else if (full)
             emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor, clearLobby);
         else
@@ -3818,7 +3970,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
             if (params.curtainWall)
                 emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor,
-                                    detail);
+                                    detail, false, curtainStyleOf(params));
             else if (full) {
                 bool stairEdgeU = false;
                 if (params.openDoorway && cur.size() == plan.size()) {
@@ -4223,6 +4375,14 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         out.proxy = scratch.merged();
     }
     return out;
+}
+
+CurtainStyle curtainStyleOf(const BuildingParams& p) {
+    CurtainStyle cs;
+    cs.glassTint = p.glassTint; cs.mullionTone = p.mullionTone; cs.fins = p.fins;
+    cs.bay = p.curtainBay > 0.5 ? p.curtainBay : 1.6;
+    cs.spandrelFrac = p.spandrelFrac;
+    return cs;
 }
 
 }  // namespace engine

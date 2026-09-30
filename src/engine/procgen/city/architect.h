@@ -163,6 +163,10 @@ struct ArchetypeBook {
 int architectRecipeIndex(const std::string& name);
 int architectRecipeCount();
 const char* architectRecipeName(int index);   // nullptr out of range
+// ONE named recipe, grown as the city would grow it on a footprint of `shortSide` / `area` at `coreness` (the
+// slenderness cap included) -- a gallery or a lineup shows exactly what a lot gets. False for an unknown name.
+bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness, Real shortSide, Real area,
+                           BuildingRecipe& out);
 
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no

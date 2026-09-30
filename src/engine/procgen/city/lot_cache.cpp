@@ -11,12 +11,13 @@ namespace lotcache {
 using bundle::BinReader;
 using bundle::BinWriter;
 
+constexpr std::size_t kBuildingParamsSize = 432;   // 352 until the NYC-variety envelope + curtain fields (params v5)
 // If this trips, BuildingParams gained or changed a field: extend putBuildingParams/getBuildingParams, the
 // every-field test, and bump kLotsFormatVersion. (304 on clang/Linux x86_64 with Real = double.)
-static_assert(sizeof(BuildingParams) == 352, "BuildingParams layout changed: update lot_cache.cpp");
+static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 4, kLotsVersion = 6, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 5, kLotsVersion = 6, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -44,6 +45,8 @@ void putBuildingParams(BinWriter& w, const BuildingParams& p) {
     w.put<uint8_t>(static_cast<uint8_t>(p.roofStyle)); w.put<double>(p.roofPitch); putBool(w, p.retailStreetOnly); putBool(w, p.balconies); putBool(w, p.porch); putBool(w, p.chimney); putBool(w, p.spire); putBool(w, p.steeple); putBool(w, p.parkingDecks);
     w.put<int32_t>(p.sideBays); putVec3(w, p.trimColor); w.put<uint8_t>(static_cast<uint8_t>(p.shape)); w.put<int32_t>(p.tiers); w.put<int32_t>(p.sides); w.put<uint32_t>(p.seed);
     w.put<uint8_t>(static_cast<uint8_t>(p.envelope)); w.put<int32_t>(p.baseFloors); w.put<double>(p.setback1); w.put<int32_t>(p.stepFloors); w.put<double>(p.stepDepth); w.put<double>(p.towerFrac); w.put<int32_t>(p.towerFloor); w.put<uint8_t>(p.core); w.put<uint8_t>(p.crown); w.put<uint8_t>(p.signage); w.put<uint8_t>(p.uplights);
+    w.put<double>(p.skyRatio); w.put<double>(p.taperTop); w.put<double>(p.chamferTop); w.put<double>(p.featherFrom); w.put<double>(p.twistDeg); w.put<double>(p.stackShift);
+    w.put<uint8_t>(p.glassTint); w.put<uint8_t>(p.mullionTone); w.put<uint8_t>(p.fins); w.put<double>(p.curtainBay); w.put<double>(p.spandrelFrac);
 }
 
 bool getBuildingParams(BinReader& r, BuildingParams& p) {
@@ -62,6 +65,8 @@ bool getBuildingParams(BinReader& r, BuildingParams& p) {
     if (!r.get(envelope) || !r.get(p.baseFloors) || !r.get(p.setback1) || !r.get(p.stepFloors) || !r.get(p.stepDepth) || !r.get(p.towerFrac) || !r.get(p.towerFloor)) return false;
     p.envelope = static_cast<BuildingParams::Envelope>(envelope);
     if (!r.get(p.core) || !r.get(p.crown) || !r.get(p.signage) || !r.get(p.uplights)) return false;
+    if (!r.get(p.skyRatio) || !r.get(p.taperTop) || !r.get(p.chamferTop) || !r.get(p.featherFrom) || !r.get(p.twistDeg) || !r.get(p.stackShift)) return false;
+    if (!r.get(p.glassTint) || !r.get(p.mullionTone) || !r.get(p.fins) || !r.get(p.curtainBay) || !r.get(p.spandrelFrac)) return false;
     p.wallPart = static_cast<PartId>(wallPart); o.head = static_cast<OpeningStyle::Head>(head); o.hood = static_cast<OpeningStyle::Hood>(hood);
     p.roofStyle = static_cast<BuildingParams::RoofStyle>(roof); p.shape = static_cast<BuildingShape>(shape);
     return r.ok();

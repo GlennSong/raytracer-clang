@@ -130,6 +130,8 @@ void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
 // weighted lists over these functions, so a new archetype (school, hospital,
 // fire station) is one recipe + a table entry, and its place type is whatever
 // the schedule sim understands.
+void glassStyle(BuildingParams& p, Hash& rng, bool modern);   // the NYC-variety curtain styles (below)
+
 struct RecipeCtx {
     Real shortSide = 0, area = 0, coreness = 0;
     bool roomy = false;
@@ -162,6 +164,7 @@ void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     else if (cx.roomy && cx.coreness > 0.4 && rng.unit() < 0.5)
         out.massing = BuildingRecipe::Massing::TowerInPlaza;
     out.placeType = "office";
+    if (p.curtainWall) glassStyle(p, rng, true);   // every glass tower its own glass (NYC variety M2)
     out.name = "glass_tower";
 }
 
@@ -424,6 +427,7 @@ void recipeDrumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     cx.slender = 2.8 + cx.coreness * 1.2;
     out.massing = BuildingRecipe::Massing::Circle;
     out.placeType = "office";
+    if (p.curtainWall) glassStyle(p, rng, true);   // every glass tower its own glass (NYC variety M2)
     out.name = "drum_tower";
 }
 
@@ -441,6 +445,7 @@ void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     cx.slender = 3.0 + cx.coreness * 4.5;
     out.massing = BuildingRecipe::Massing::PodiumTower;
     out.placeType = "office";
+    if (p.curtainWall) glassStyle(p, rng, true);   // every glass tower its own glass (NYC variety M2)
     out.name = "podium_tower";
 }
 
@@ -471,6 +476,134 @@ void recipePagodaTower(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     out.massing = BuildingRecipe::Massing::BoxMass;
     out.placeType = "shop";
     out.name = "pagoda_tower";
+}
+
+// ---- NEW YORK HIGH-RISES (Glenn, 2026-09-30: "more variety of glass skyscrapers and the types of high rises
+// you'd see in New York ... rules about building step back to avoid having the whole city in shadow") ---------
+
+// A curtain style for a glass tower: tint, mullions, bay, ribbon or floor-to-ceiling, fins -- so two glass
+// towers side by side are not the same building (M2 draws them; the numbers ride the regen key now).
+void glassStyle(BuildingParams& p, Hash& rng, bool modern) {
+    const Real r = rng.unit();
+    p.glassTint = static_cast<uint8_t>(r < 0.22 ? 1 : r < 0.36 ? 2 : r < 0.50 ? 3 : r < 0.66 ? 4 : r < 0.84 ? 5 : 6);
+    const Real m = rng.unit();
+    p.mullionTone = static_cast<uint8_t>(p.glassTint == 3 ? (m < 0.7 ? 1 : 2)                    // bronze glass, bronze frames (Seagram)
+                                         : m < 0.35 ? 0 : m < 0.6 ? 3 : m < 0.85 ? 2 : 4);
+    p.curtainBay = modern ? rng.range(1.5, 3.0) : rng.range(1.2, 1.8);
+    p.spandrelFrac = modern ? (rng.unit() < 0.6 ? 0.0 : rng.range(0.18, 0.3)) : rng.range(0.3, 0.45);
+    p.fins = static_cast<uint8_t>(rng.unit() < (modern ? 0.35 : 0.2) ? rng.irange(1, 3) : 0);
+}
+
+// The SKY EXPOSURE tower: the midtown masonry classic cut by the plane -- a 60-85 ft street wall (taller on an
+// avenue), a first setback, then steps up the plane (2.7:1 on a side street, 5.6:1 on an avenue) until the mass
+// covers a quarter (1916) or up to 40% (1961) of the lot, and the tower goes straight up from there.
+void recipeSkyExposureTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 14) + static_cast<int>(cx.coreness * 44);   // the district rim keeps to its 10-16
+    p.groundRetail = true;
+    const Real r = rng.unit();
+    dress(p, r < 0.40 ? FacadeStyle::Sandstone : r < 0.70 ? FacadeStyle::Brick : r < 0.85 ? FacadeStyle::DarkBrick : FacadeStyle::Concrete, rng);
+    const bool avenue = rng.unit() < 0.45;
+    p.envelope = BuildingParams::Envelope::SkyExposure;
+    p.baseFloors = avenue ? rng.irange(7, 9) : rng.irange(5, 7);
+    p.skyRatio = avenue ? 5.6 : 2.7;
+    p.stepFloors = rng.irange(2, 3);
+    p.setback1 = rng.range(3.0, 6.0);
+    p.towerFrac = rng.unit() < 0.5 ? 0.25 : rng.range(0.30, 0.40);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    p.spire = p.floors > 30 && rng.unit() < 0.35;
+    cx.slender = 3.2 + cx.coreness * 2.5;
+    out.placeType = "office";
+    out.name = "sky_exposure_tower";
+}
+
+// The TOWER ON A BASE (the 1990s contextual rules): a base on the lot line up to the street wall, a 10-15 ft
+// setback, and a glass tower over 30-40% of the lot.
+void recipeTowerOnBase(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 14) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::StreetWallSetback;
+    p.baseFloors = rng.irange(5, 8);
+    p.setback1 = rng.range(3.0, 4.5);
+    p.stepFloors = 0;
+    p.stepDepth = 0;
+    p.towerFrac = rng.range(0.30, 0.40);
+    p.towerFloor = p.baseFloors + 1;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 3.4 + cx.coreness * 3.5;
+    out.placeType = "office";
+    out.name = "tower_on_base";
+}
+
+// The TAPERED glass tower (One World Trade Center): narrowing all the way up, its corners chamfered more and
+// more toward the top -- a square base, an octagon at mid-height.
+void recipeTaperedGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 52);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Taper;
+    p.baseFloors = rng.irange(1, 3);
+    p.taperTop = rng.range(0.55, 0.80);
+    p.chamferTop = rng.unit() < 0.5 ? rng.range(0.15, 0.30) : 0.0;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    out.name = "tapered_glass_tower";
+}
+
+// The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
+// podium, ribbon windows in blue-green glass.
+void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 14) + static_cast<int>(cx.coreness * 24);
+    p.groundRetail = rng.unit() < 0.6;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, false);
+    if (rng.unit() < 0.6) p.glassTint = static_cast<uint8_t>(rng.unit() < 0.5 ? 1 : 2);
+    p.spandrelFrac = rng.range(0.35, 0.45);   // the slab's ribbon windows
+    p.envelope = BuildingParams::Envelope::Slab;
+    p.baseFloors = rng.unit() < 0.45 ? 2 : 1;   // Lever House stands on a two-storey podium
+    p.towerFrac = rng.range(0.35, 0.55);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 3.0 + cx.coreness * 2.0;
+    out.placeType = "office";
+    out.name = "glass_slab";
+}
+
+// The PENCIL tower (432 Park Avenue, 111 West 57th): a supertall on a small lot, very slender, the top
+// feathered back one face at a time. A concrete grid or glass with bronze fins.
+void recipePencilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 66);   // a supertall only where the city is densest
+    p.groundRetail = true;
+    if (rng.unit() < 0.5) {
+        dress(p, FacadeStyle::Concrete, rng);   // 432 Park's white concrete grid
+        p.window.lightsX = 1;
+        p.window.lightsY = 1;
+    } else {
+        dress(p, FacadeStyle::GlassCurtain, rng);
+        glassStyle(p, rng, true);
+        p.fins = static_cast<uint8_t>(rng.irange(1, 2));   // 111 W 57th's terracotta-and-bronze ribs
+        p.mullionTone = 1;
+    }
+    p.envelope = BuildingParams::Envelope::Feathered;
+    p.baseFloors = 1;
+    p.featherFrom = rng.range(0.6, 0.8);
+    p.stepDepth = rng.range(1.5, 2.5);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 10.0 + cx.coreness * 4.0;
+    out.placeType = "home";   // the supertalls on Billionaires' Row are residential
+    out.name = "pencil_tower";
 }
 
 // ---- CONDOS + midtown living -------------------------------------------------
@@ -1056,6 +1189,11 @@ const NamedRecipe kRecipeRegistry[] = {
     {"parking_garage", recipeParkingGarage},
     {"pagoda_tower", recipePagodaTower},
     {"condo_tower", recipeCondoTower},
+    {"sky_exposure_tower", recipeSkyExposureTower},
+    {"tower_on_base", recipeTowerOnBase},
+    {"tapered_glass_tower", recipeTaperedGlassTower},
+    {"glass_slab", recipeGlassSlab},
+    {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},
     {"loft_block", recipeLoftConversion},
     {"cinema", recipeCinema},
@@ -1099,6 +1237,22 @@ int architectRecipeIndex(const std::string& name) {
     return -1;
 }
 int architectRecipeCount() { return kRecipeRegistryCount; }
+bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness, Real shortSide, Real area,
+                           BuildingRecipe& out) {
+    const int ri = architectRecipeIndex(name);
+    if (ri < 0) return false;
+    Hash rng(seed * 2654435761u ^ 0x9e3779b9u);
+    out = BuildingRecipe{};
+    out.params.seed = rng.next();
+    RecipeCtx cx;
+    cx.shortSide = shortSide;
+    cx.area = area;
+    cx.coreness = std::clamp(coreness, Real(0), Real(1));
+    cx.roomy = area > 900;
+    kRecipeRegistry[ri].fn(out, rng, cx);
+    capFloors(out.params, shortSide, cx.slender);
+    return true;
+}
 const char* architectRecipeName(int index) {
     return index >= 0 && index < kRecipeRegistryCount ? kRecipeRegistry[index].name
                                                       : nullptr;
@@ -1191,11 +1345,18 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
         case DistrictTag::Financial:
         case DistrictTag::Commercial: {
             const Real r = rng.unit();
-            if (r < 0.45) {
+            if (r < 0.30) {
                 recipeGlassTower(out, rng, cx);
                 out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
-            } else if (r < 0.8) {
+            } else if (r < 0.50) {
                 recipePodiumTower(out, rng, cx);
+            } else if (r < 0.65) {
+                recipeSkyExposureTower(out, rng, cx);                  // the whole block cut by the plane
+                out.massing = BuildingRecipe::Massing::LotPlan;
+            } else if (r < 0.78) {
+                recipeTaperedGlassTower(out, rng, cx);
+            } else if (r < 0.88) {
+                recipeGlassSlab(out, rng, cx);
             } else {
                 recipeSteppedTower(out, rng, cx);
                 out.massing = BuildingRecipe::Massing::LotPlan;       // the block's own polygon, stepped
@@ -1253,12 +1414,20 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
     // The district ARCHETYPE TABLES: weighted picks over the named recipes.
     switch (tag) {
         case DistrictTag::Financial:
-            if (roll < 0.26)      recipeGlassTower(out, rng, cx);
-            else if (roll < 0.38) recipePodiumTower(out, rng, cx);
-            else if (roll < 0.55) recipeOfficeSlab(out, rng, cx);
-            else if (roll < 0.64) recipeArtDecoTower(out, rng, cx);
-            else if (roll < 0.73) recipeSteppedTower(out, rng, cx);
-            else if (roll < 0.80) recipeDrumTower(out, rng, cx);
+            // THE SKYLINE MIX (NYC variety, 2026-09-30): the classic glass tower and podium keep a share, the
+            // New York forms join -- the sky-exposure masonry cake, the tower on a base, the tapered and slab
+            // glass towers, and a pencil tower where the city is densest (a small lot at the core).
+            if (roll < 0.14)      recipeGlassTower(out, rng, cx);
+            else if (roll < 0.22) recipePodiumTower(out, rng, cx);
+            else if (roll < 0.29) recipeTowerOnBase(out, rng, cx);
+            else if (roll < 0.35) recipeTaperedGlassTower(out, rng, cx);
+            else if (roll < 0.40) recipeGlassSlab(out, rng, cx);
+            else if (roll < 0.44) recipePencilTower(out, rng, cx);
+            else if (roll < 0.52) recipeSkyExposureTower(out, rng, cx);
+            else if (roll < 0.58) recipeArtDecoTower(out, rng, cx);
+            else if (roll < 0.63) recipeSteppedTower(out, rng, cx);
+            else if (roll < 0.67) recipeDrumTower(out, rng, cx);
+            else if (roll < 0.79) recipeOfficeSlab(out, rng, cx);
             else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
             else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
             else if (roll < 0.97) recipePlaza(out, rng, cx);
