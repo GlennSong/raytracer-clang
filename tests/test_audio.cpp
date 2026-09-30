@@ -693,11 +693,12 @@ TEST_CASE(footsteps_keep_a_walking_cadence_and_land_by_the_fall) {
             if (t.update(true, speed, 0, dt, crouch).kind == FootstepEvent::Kind::Step) ++steps;
         return steps;
     };
-    // a walk (1.4 m/s): ~1.9 steps a second; a run (6 m/s): ~5.5; standing still: none
+    // a walk (1.4 m/s): ~1.9 steps a second; a run (6 m/s): ~3.2 (1.9 m strides -- 5.5 a second was
+    // "sped up", #98); standing still: none
     const int walk = count(1.4, 10), run = count(6.0, 10), still = count(0.0, 10);
     std::printf("    [steps] 10 s: walk %d, run %d, still %d\n", walk, run, still);
     CHECK(walk >= 17 && walk <= 21);
-    CHECK(run >= 50 && run <= 58);
+    CHECK(run >= 29 && run <= 34);
     CHECK(still == 0);
     // the first step after starting off comes within half a stride, not a whole one
     { FootstepTracker t; int first = -1;
@@ -794,7 +795,7 @@ TEST_CASE(hard_ground_steps_are_a_heel_and_a_toe) {
         for (uint32_t seed : {1u, 2u, 3u}) {
             std::vector<double> on;
             const double hits = analyse(sfx::footstep(g, rate, seed), on);
-            if (seed == 1) std::printf("    [hard] %-8s onsets %zu (gap %.0f ms), %.0f%% of the energy in the hits\n", sfx::groundName(g), on.size(),
+            std::printf("    [hard] %-8s seed %u onsets %zu (gap %.0f ms), %.0f%% of the energy in the hits\n", sfx::groundName(g), seed, on.size(),
                                        on.size() > 1 ? (on[1] - on[0]) * 1000 : 0.0, hits * 100);
             CHECK(on.size() == 2);
             if (on.size() == 2) CHECK(on[1] - on[0] > 0.06 && on[1] - on[0] < 0.15);

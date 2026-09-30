@@ -21,9 +21,10 @@ struct FootstepEvent {
 };
 
 struct FootstepTracker {
-    // Stride: ~0.75 m at a walk, lengthening to ~1.1 m at a run (people take longer strides, not only
-    // faster ones). One step sounds per stride travelled on the ground.
-    static constexpr double kWalkStride = 0.75, kRunStride = 1.1, kRunSpeed = 6.0;
+    // Stride: ~0.75 m at a walk, lengthening to ~1.9 m at a run (people take longer strides, not only
+    // faster ones). One step sounds per stride travelled on the ground. 1.1 m at the player's 6 m/s was
+    // 5.5 steps a second -- "the footsteps feel sped up" (Glenn, #98); a runner at 6 m/s takes ~3.
+    static constexpr double kWalkStride = 0.75, kRunStride = 1.9, kRunSpeed = 6.0;
     static constexpr double kMinSpeed = 0.35;        // slower than this is shuffling on the spot: no steps
     static constexpr double kJumpUp = 1.5;           // leaving the ground this fast upward is a jump
     static constexpr double kLandQuiet = 1.8;        // landing slower than this is just the next step

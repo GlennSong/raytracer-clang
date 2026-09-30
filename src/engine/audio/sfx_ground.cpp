@@ -65,16 +65,22 @@ struct Recipe {
 Recipe recipeFor(Ground g) {
     Recipe r;
     switch (g) {
-        case Ground::Asphalt:   // a dull heel click with grit under it
-            r.length = 0.22; r.clickLevel = 0.8; r.clickLo = 1200; r.clickHi = 6000; r.clickDecay = 0.003;
-            r.ringLevel = 0.35; r.ringHz = 900; r.ringDecay = 0.005; r.toeDelay = 0.085; r.toeLevel = 0.55;
-            r.thumpLevel = 0.30; r.thumpHz = 85; r.thumpDecay = 0.02;
-            r.texLevel = 0.06; r.texLo = 2000; r.texHi = 7000; r.texDecay = 0.02;
-            r.grainLevel = 0.12; r.grainRate = 700; r.grainSpan = 0.03; r.grainLo = 3000; r.grainHi = 9000; break;
-        case Ground::Concrete:  // the clean, bright click-clack of a pavement
-            r.length = 0.20; r.clickLevel = 1.0; r.clickLo = 2000; r.clickHi = 10000; r.clickDecay = 0.0022;
-            r.ringLevel = 0.55; r.ringHz = 1700; r.ringHz2 = 3100; r.ringDecay = 0.006; r.toeDelay = 0.09; r.toeLevel = 0.6;
-            r.thumpLevel = 0.22; r.thumpHz = 100; r.thumpDecay = 0.015; r.texLevel = 0.02; break;
+        // A PERSON'S WEIGHT, not a click-clack (#98, Glenn: "spindly sounding ... like some weird creature
+        // walking on spindly long legs like a spider"). Two bright ticks per step -- a 1-10 kHz heel click and
+        // a toe click 90 ms later at 60% -- with almost no low end read as many small legs. The step is now
+        // carried by the THUMP (the body's weight arriving), with a duller, lower heel, a soft toe roll just
+        // behind it, and a little shoe scuff; asphalt a touch darker and grittier than the sidewalk.
+        case Ground::Asphalt:   // a heavy, dull footfall with a little grit under the sole
+            r.length = 0.24; r.clickLevel = 0.65; r.clickLo = 450; r.clickHi = 3000; r.clickDecay = 0.004;
+            r.ringLevel = 0.10; r.ringHz = 480; r.ringDecay = 0.006; r.toeDelay = 0.09; r.toeLevel = 0.62;
+            r.thumpLevel = 0.6; r.thumpHz = 66; r.thumpDecay = 0.02;
+            r.texLevel = 0.06; r.texLo = 600; r.texHi = 3200; r.texAttack = 0.003; r.texDecay = 0.022;
+            r.grainLevel = 0.11; r.grainRate = 480; r.grainSpan = 0.028; r.grainLo = 1800; r.grainHi = 6000; break;
+        case Ground::Concrete:  // a firm pavement step: weight, a clean but low heel, a short scuff
+            r.length = 0.22; r.clickLevel = 0.85; r.clickLo = 1100; r.clickHi = 6000; r.clickDecay = 0.003;
+            r.ringLevel = 0.32; r.ringHz = 1150; r.ringHz2 = 2100; r.ringDecay = 0.005; r.toeDelay = 0.082; r.toeLevel = 0.45;
+            r.thumpLevel = 0.42; r.thumpHz = 88; r.thumpDecay = 0.02;
+            r.texLevel = 0.03; r.texLo = 1200; r.texHi = 5000; r.texAttack = 0.003; r.texDecay = 0.025; break;
         case Ground::Rock:      // a hard knock on stone, a little loose grit scattering
             r.length = 0.24; r.clickLevel = 0.9; r.clickLo = 1500; r.clickHi = 8000; r.clickDecay = 0.0025;
             r.ringLevel = 0.5; r.ringHz = 2300; r.ringHz2 = 3700; r.ringDecay = 0.004; r.toeDelay = 0.095; r.toeLevel = 0.5;
