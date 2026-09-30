@@ -1324,3 +1324,28 @@ TEST_CASE(no_lots_are_laid_along_a_freeway) {
     std::printf("    [frontage] freeway-only block: %d built\n", built2);
     CHECK(built2 == 0);
 }
+
+// ...and the street it faces is ON THE GROUND (Glenn, 2026-09-30: "assuming the city road is on the ground in
+// front of the house"): a city street on a bridge 6 m off the block's south edge, an at-grade one 12 m off its
+// east edge -- the building faces the one it can walk out onto.
+TEST_CASE(buildings_face_an_at_grade_street_not_a_bridge) {
+    const Poly2 block{{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    RoadGraph roads;
+    roads.addEdge(roads.addNode({-60, -6}), roads.addNode({100, -6}), 10, RoadClass::Collector);
+    roads.edges.back().layer = 1;   // on a bridge over the ground here
+    roads.addEdge(roads.addNode({56, -60}), roads.addNode({56, 100}), 8, RoadClass::Local);
+    LotParams lp;
+    lp.seed = 7;
+    std::vector<RenderMesh> parts;
+    const std::vector<LotBuilding> lots = growLotBuildings({block}, lp, nullptr, &parts, &roads, 0.0);
+    int units = 0, towardBridge = 0;
+    for (const LotBuilding& lb : lots)
+        for (const BuildingUnit& u : lb.units) {
+            ++units;
+            if (u.params.faceDir.z < -0.5) ++towardBridge;
+            CHECK(u.params.faceDir.x > 0.5);
+        }
+    std::printf("    [frontage] %d units, %d facing the bridge\n", units, towardBridge);
+    CHECK(units > 0);
+    CHECK(towardBridge == 0);
+}

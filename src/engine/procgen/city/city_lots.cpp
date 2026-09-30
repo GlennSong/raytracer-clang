@@ -513,7 +513,9 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
 // WHAT A BUILDING MAY FRONT (Glenn, 2026-09-29: "buildings shouldn't face a freeway as a road since that's
 // not an accessible road"): a door, its walk and a plaza's mouths reach for city streets. Freeway and ramp
 // edges stay in the graph for what needs them (the deck-shadow test below) but are never frontage.
-static bool faces(const RoadEdge& e) { return e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp; }
+// ...and ON THE GROUND (Glenn, 2026-09-30: "assuming the city road is on the ground in front of the house"):
+// a city street carried over the block on a bridge is no one's front door either.
+static bool faces(const RoadEdge& e) { return e.klass != RoadClass::Freeway && e.klass != RoadClass::Ramp && e.layer == 0; }
 
 void sculptDoorWalks(const LotBuilding& b, const RoadGraph* roads, Real sidewalkWidth,
                      const Poly2* block, std::vector<RenderMesh>* outParts) {
