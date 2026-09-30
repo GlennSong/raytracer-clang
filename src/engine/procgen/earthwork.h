@@ -58,7 +58,11 @@ std::shared_ptr<const std::function<double(double, double)>> buildEarthworkField
     const std::vector<TerrainFlatten>& roadRegions,
     const std::function<double(double, double)>& natural,
     const EarthworkParams& params, double seaLevel,
-    EarthworkStats* statsOut = nullptr);
+    EarthworkStats* statsOut = nullptr,
+    // HOLD regions: where the field is pinned to ZERO (natural ground kept) unless a road region pins the
+    // node first -- the ground under an elevated deck, which its piers and underside were built on at bake
+    // time (a deck's girders stand only where it cleared that ground; a pier's foot is at it minus 1 m).
+    const std::vector<TerrainFlatten>* holdRegions = nullptr);
 
 }  // namespace engine
 

@@ -39,7 +39,8 @@ struct Level {
 std::shared_ptr<const std::function<double(double, double)>> buildEarthworkField(
     const std::vector<TerrainFlatten>& roadRegions,
     const std::function<double(double, double)>& natural,
-    const EarthworkParams& p, double seaLevel, EarthworkStats* statsOut) {
+    const EarthworkParams& p, double seaLevel, EarthworkStats* statsOut,
+    const std::vector<TerrainFlatten>* holdRegions) {
     if (!p.enabled || !natural) return nullptr;
     // Domain: the road regions' union AABB, plus the margin the field needs to
     // decay in (3 * reach is where a screened field is under 5%).
@@ -62,6 +63,9 @@ std::shared_ptr<const std::function<double(double, double)>> buildEarthworkField
     for (const TerrainFlatten& r : roadRegions)
         if (r.polygon.size() >= 3 && r.priority == kRoadFlattenPriority) roads.push_back(r);
     const FlattenGrid index = buildFlattenGrid(roads);
+    std::vector<TerrainFlatten> holds;
+    if (holdRegions) for (const TerrainFlatten& r : *holdRegions) if (r.polygon.size() >= 3) holds.push_back(r);
+    const FlattenGrid holdIndex = holds.empty() ? FlattenGrid{} : buildFlattenGrid(holds);
 
     // Finest cell: the requested one, coarsened until the grid fits a sane
     // budget (a 2.8 km city at 4 m is ~0.5 M nodes; 16 km at 4 m would not be).
@@ -105,6 +109,9 @@ std::shared_ptr<const std::function<double(double, double)>> buildEarthworkField
                 // lands within centimetres of the plane by the smoothness.
                 if (flattenCovers(index, roads, x, z, 0.0)) {
                     L.y[k] = applyFlatten(index, roads, x, z, nat, 0.0) - nat;
+                    L.fixed[k] = 1;
+                } else if (!holds.empty() && flattenCovers(holdIndex, holds, x, z, 0.0)) {
+                    L.y[k] = 0.0;   // held: the ground an elevated structure was built on
                     L.fixed[k] = 1;
                 }
             }

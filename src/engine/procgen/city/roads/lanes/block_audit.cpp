@@ -161,7 +161,22 @@ std::shared_ptr<const std::function<double(double, double)>> lanesEarthworkField
     const EarthworkParams& params, double seaLevel, EarthworkStats* stats) {
     const std::vector<TerrainFlatten> pins = lanesEarthworkPins(deck, sidewalk);
     if (pins.empty()) return nullptr;
-    return buildEarthworkField(pins, natural, params, seaLevel, stats);
+    // HOLD the ground under every elevated deck (layer > 0 or an authored deck), its shadow plus 6 m: its
+    // piers and underside were built at bake time on the ground there (#96 pillars floating, #95 ramps
+    // sunk, 2026-09-30 -- the street pins pulled the field up or down beneath the structures).
+    std::vector<TerrainFlatten> holds;
+    static const bool holdOff = [] { const char* e = std::getenv("RT_EARTHWORK_HOLD"); return e && e[0] == '0'; }();   // A/B
+    for (const UnionSpine& sp : deck.spines) {
+        if (holdOff) break;
+        if (!(sp.authoredDeck || sp.layer != 0) || sp.points.size() < 2) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+            const Vec2 a = sp.points[i], b = sp.points[i + 1];
+            if ((b - a).length() < 0.05) continue;
+            const double hw = (i < sp.hw.size() ? sp.hw[i] : sp.halfWidth) + 6.0;
+            holds.push_back(makeFlattenRamp(Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y), 0.0, 0.0, hw, 0.0));
+        }
+    }
+    return buildEarthworkField(pins, natural, params, seaLevel, stats, &holds);
 }
 
 double lanesSidewalkRise() { return Rules{}.skirtDrop + kSidewalkLift; }

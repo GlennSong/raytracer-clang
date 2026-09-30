@@ -3505,6 +3505,30 @@ TEST_CASE(level_print_road_edges_meet_the_ground) {
                 }
             }
         });
+        // SUNK RAMPS (#95, Glenn: "some onramps have sunk into the ground"): along every ramp's centreline, any
+        // layer, the drawn ground against the deck -- ground over the asphalt is a ramp in the dirt.
+        int rampSamples = 0; std::vector<Gap> rampSunk;
+        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+            for (const auto& sp : d.field.spines) {
+                if (sp.klass != engine::RoadClass::Ramp || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+                for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+                    const Vec2 a = sp.points[i], b = sp.points[i + 1];
+                    const double L = (b - a).length();
+                    for (double s = 0; s < L; s += 5.0) {
+                        const Vec2 q = a + (b - a) * (s / std::max(L, 1e-9));
+                        const double deckY = sp.yAbs[i] + (sp.yAbs[i + 1] - sp.yAbs[i]) * (s / std::max(L, 1e-9));
+                        ++rampSamples;
+                        const double g = drawn(q.x, q.y);
+                        if (g > deckY + 0.05) rampSunk.push_back({g - deckY, q.x, q.y, deckY, g, 0});
+                    }
+                }
+            }
+        });
+        std::sort(rampSunk.begin(), rampSunk.end(), [](const Gap& a2, const Gap& b2) { return a2.gap > b2.gap; });
+        std::printf("    [road-edge] %-22s RAMPS with ground over the deck: %zu of %d centreline samples, worst %.2f m\n", name, rampSunk.size(), rampSamples,
+                    rampSunk.empty() ? 0.0 : rampSunk[0].gap);
+        for (std::size_t k = 0; k < rampSunk.size() && k < 5; ++k)
+            std::printf("      ramp under %.2f m of ground  ->  teleport %.1f %.1f\n", rampSunk[k].gap, rampSunk[k].x, rampSunk[k].z);
         std::sort(floating.begin(), floating.end(), [](const Gap& a, const Gap& b) { return a.gap > b.gap; });
         std::sort(sunk.begin(), sunk.end(), [](const Gap& a, const Gap& b) { return a.gap < b.gap; });
         auto pct = [&](std::size_t k) { return samples ? 100.0 * static_cast<double>(k) / samples : 0.0; };
