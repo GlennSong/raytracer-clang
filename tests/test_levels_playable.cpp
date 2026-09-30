@@ -3524,6 +3524,31 @@ TEST_CASE(level_print_road_edges_meet_the_ground) {
                 }
             }
         });
+        // ELEVATED DECKS (#96 pillars, #97 undersides): the highest clearances over the drawn ground, as places
+        // to stand under one, and how many elevated samples sit within 0.5 m of the ground (a "viaduct" on it).
+        std::vector<Gap> clear; int elevSamples = 0, elevLow = 0;
+        world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
+            for (const auto& sp : d.field.spines) {
+                if (sp.layer == 0 && !sp.authoredDeck) continue;
+                if (sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+                for (std::size_t i = 0; i < sp.points.size(); i += 4) {
+                    const Vec2 q = sp.points[i];
+                    const double g = drawn(q.x, q.y), c = sp.yAbs[i] - g;
+                    ++elevSamples; if (c < 0.5) ++elevLow;
+                    clear.push_back({c, q.x, q.y, sp.yAbs[i], g, 0});
+                }
+            }
+        });
+        std::sort(clear.begin(), clear.end(), [](const Gap& a2, const Gap& b2) { return a2.gap > b2.gap; });
+        std::printf("    [road-edge] %-22s ELEVATED deck samples %d: %d within 0.5 m of the ground; highest clearances:\n", name, elevSamples, elevLow);
+        std::vector<std::pair<int, int>> seenC;
+        for (const Gap& c : clear) {
+            const std::pair<int, int> cell{static_cast<int>(std::floor(c.x / 300)), static_cast<int>(std::floor(c.z / 300))};
+            if (std::find(seenC.begin(), seenC.end(), cell) != seenC.end()) continue;
+            seenC.push_back(cell);
+            std::printf("      deck %.1f m over ground %.1f  ->  camera %.1f %.1f %.1f\n", c.gap, c.ground, c.x, c.ground + 1.7, c.z);
+            if (seenC.size() >= 6) break;
+        }
         std::sort(rampSunk.begin(), rampSunk.end(), [](const Gap& a2, const Gap& b2) { return a2.gap > b2.gap; });
         std::printf("    [road-edge] %-22s RAMPS with ground over the deck: %zu of %d centreline samples, worst %.2f m\n", name, rampSunk.size(), rampSamples,
                     rampSunk.empty() ? 0.0 : rampSunk[0].gap);
