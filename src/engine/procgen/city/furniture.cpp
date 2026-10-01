@@ -34,9 +34,10 @@ struct Placement {
     const RoomFrame* f = nullptr;
     int side = 0;
     Real t = 0, w = 0, d = 0;
+    Real off = 0;   // side 0 only: how far out from the wall the footprint starts (an open-plan grid's row)
     Vec2 roomAt(Real x, Real z) const {   // footprint point (x along the wall, z out from it) -> room coords
         switch (side) {
-            case 0: return Vec2(t + x, z);
+            case 0: return Vec2(t + x, off + z);
             case 1: return Vec2(f->W - z, t + x);
             case 2: return Vec2(f->W - (t + x), f->D - z);
             default: return Vec2(z, f->D - (t + x));
@@ -130,7 +131,8 @@ struct Furnisher {
                 for (int attempt = 0; attempt < 2; ++attempt) {
                     const Real dd = attempt == 0 ? d : d2;
                     if (dd <= 0 || z + dd > f.D - 0.8 + 1e-6) continue;
-                    Placement c{&f, 0, x, w, dd};
+                    // the row's offset from the window wall (it used to be dropped: every row landed in the first)
+                    Placement c{&f, 0, x, w, dd, z};
                     const Box2 fp = c.footprint();
                     bool clear = true;
                     for (const Box2& b : taken)
@@ -326,6 +328,62 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 auto counterAtBack = [&]() {
                     if (F.place(1.8, 1.6, {2, 1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0, true);
                 };
+                // BIG-BOX floors (Glenn, 2026-10-01): RUNS of a piece along x, `runN` bays to a run, a cross aisle
+                // between runs, `aisleZ` between rows -- long aisles you can walk down, not one solid field.
+                auto runs = [&](Piece pc, Real w, Real d, Real aisleZ, int runN, Real cross, Real xa, Real xb) {
+                    int n = 0;
+                    for (Real z = 1.2; z + d <= F.f.D - 1.2 + 1e-6; z += d + aisleZ)
+                        for (Real x = xa; x + w <= xb + 1e-6;) {
+                            for (int k = 0; k < runN && x + w <= xb + 1e-6; ++k, x += w) {
+                                Placement c{&F.f, 0, x, w, d, z};
+                                const Box2 fp = c.footprint();
+                                bool clear = true;
+                                for (const Box2& b : F.taken)
+                                    if (overlaps(fp, b, 0.05)) { clear = false; break; }
+                                if (!clear) continue;
+                                F.taken.push_back(fp);
+                                F.put(c, pc, w * 0.5, 0.0);
+                                ++n;
+                            }
+                            x += cross;
+                        }
+                    return n;
+                };
+                const Real xa = 1.0, xb = F.f.W - 1.0, xm = F.f.W * 0.5;
+                if (room.style >= 7) {
+                    switch (room.style) {
+                        case 7:   // WAREHOUSE CLUB: pallet racking, wide aisles for the forklifts
+                        case 9:   // HOME IMPROVEMENT: the same racking, wider aisles
+                            along(Piece::DrinksFridge, 0.8, 0.75, {1}, 8);
+                            runs(Piece::PalletRack, 2.8, 2.2, room.style == 7 ? 3.6 : 4.2, 8, 4.0, xa + 1.0, xb - 1.0);
+                            break;
+                        case 8:   // ELECTRONICS: the TV wall at the back, shelving down the sides, gondola runs
+                            along(Piece::TvUnit, 1.6, 0.42, {2}, 40);
+                            along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 30);
+                            runs(Piece::Gondola, 2.4, 1.0, 2.4, 6, 3.0, xa + 2.0, xb - 2.0);
+                            break;
+                        case 10:  // DISCOUNT STORE: clothes on one side of the main aisle, gondolas on the other
+                            along(Piece::WallShelf, 2.0, 0.45, {2, 1, 3}, 40);
+                            runs(Piece::ClothesRack, 1.6, 0.6, 1.4, 5, 2.4, xa + 1.0, xm - 2.5);
+                            runs(Piece::Gondola, 2.4, 1.0, 2.2, 6, 3.0, xm + 2.5, xb - 1.0);
+                            break;
+                        case 11: {   // THE CHECKOUTS: lanes in a row 3 m in from the doors, the doorway clear
+                            for (int sideK = 0; sideK < 2; ++sideK)
+                                for (int k = 0; k < 16; ++k) {
+                                    const Real x = sideK == 0 ? xm - 6.0 - (k + 1) * 3.0 : xm + 6.0 + k * 3.0;
+                                    if (x < xa || x + 0.9 > xb) break;
+                                    Placement c{&F.f, 0, x, 0.9, 3.2, 3.0};
+                                    F.taken.push_back(c.footprint());
+                                    F.put(c, Piece::Checkout, 0.45, 0.0);
+                                }
+                            break;
+                        }
+                        default:  // THE STOCKROOM: racking, single-sided rows against nothing in particular
+                            runs(Piece::PalletRack, 2.8, 2.2, 3.0, 10, 3.5, xa, xb);
+                            break;
+                    }
+                    break;
+                }
                 switch (room.style % 7) {
                     case 0:   // CAFE
                         counterAtBack();

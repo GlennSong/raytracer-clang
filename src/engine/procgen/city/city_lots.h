@@ -280,6 +280,8 @@ struct LotPlanDebug {
     int attachedSites = 0;   // sites run out to a shared side line (attached buildings)
     int attachedBuilt = 0;   // buildings grown with at least one party wall
     std::vector<Vec2> attachedAt;   // a few of them, for the log's teleport hint
+    int bigBoxBlocks = 0;            // whole blocks given to a big-box store and its parking lot
+    std::vector<Vec2> bigBoxAt;
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors

@@ -7,6 +7,7 @@
 #include "../src/engine/procgen/city/room_plan.h"
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/architect.h"
 #include <cmath>
 #include <cstdio>
 
@@ -201,4 +202,54 @@ TEST_CASE(a_storefront_ground_floor_is_shops_with_their_own_doors) {
         if (pp.piece == static_cast<uint8_t>(Piece::ShopCounter)) ++counters;
     std::printf("    [shops] ground floor: %zu pieces, %d counters\n", in.furniture.size(), counters);
     CHECK(counters >= 2);
+}
+
+// BIG-BOX STORES (Glenn, 2026-10-01: "Big box stores like Costco or Bestbuy"). Each chain: one door on the front
+// (+z), blank walls but for it, the lit sign over it; inside, checkout lanes inside the doors with the doorway
+// itself clear, the chain's own stock on the sales floor, racking in the stockroom.
+TEST_CASE(a_big_box_store_has_its_sign_checkouts_and_stock) {
+    const Poly2 plan = {{-40, -28}, {40, -28}, {40, 28}, {-40, 28}};
+    for (int chain = 1; chain <= 4; ++chain) {
+        BuildingRecipe rec = architectBigBox(static_cast<uint32_t>(chain * 7));
+        BuildingParams p = rec.params;
+        CHECK(rec.massing == BuildingRecipe::Massing::BigBox);
+        dressBigBox(p, chain, p.seed);
+        CHECK(p.bigBox == chain);
+        p.openDoorway = true;
+        p.faceDir = Vec3(0, 0, 1);
+        const BuildingMesh bm = growPlanBuilding(plan, p);
+        int fronts = 0;
+        Vec2 door(0, 0);
+        for (const AttachPoint& ap : bm.attaches)
+            if (ap.tag == "entrance") { ++fronts; door = Vec2(ap.position.x, ap.position.z); CHECK(ap.normal.z > 0.9); }
+        CHECK(fronts == 1);
+        int signLit = 0, sideGlass = 0;
+        for (const RenderMesh& part : bm.parts) {
+            for (const Vertex& v : part.vertices) {
+                if (part.materialIndex == static_cast<int>(PartId::LitBand) && v.position.z > 28 && v.position.y > 5) ++signLit;
+                if ((part.materialIndex == static_cast<int>(PartId::Glass) ||
+                     part.materialIndex == static_cast<int>(PartId::GlassLit)) && std::fabs(v.normal.x) > 0.9) ++sideGlass;
+            }
+        }
+        CHECK(signLit > 0);
+        CHECK(sideGlass == 0);
+        RenderMesh col;
+        const BuildingMesh in = growInterior(plan, p, 0.0, &col, 0, -1);
+        int checkouts = 0, stock = 0, racks = 0, inDoorway = 0;
+        const Piece own = (chain == 1 || chain == 3) ? Piece::PalletRack : Piece::Gondola;
+        for (const PlacedPiece& pp : in.furniture) {
+            const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+            if (pp.piece == static_cast<uint8_t>(Piece::Checkout)) ++checkouts;
+            if (pp.piece == static_cast<uint8_t>(own) && at.y > -16 && at.y < 18) ++stock;
+            if (pp.piece == static_cast<uint8_t>(Piece::PalletRack) && at.y < -16) ++racks;
+            if ((at - door).length() < 3.0) ++inDoorway;
+        }
+        std::printf("    [big box] chain %d: %zu pieces, %d checkouts, %d of its stock, %d stockroom racks\n", chain,
+                    in.furniture.size(), checkouts, stock, racks);
+        CHECK(checkouts >= 10);
+        CHECK(stock >= 20);
+        CHECK(racks >= 8);
+        CHECK(inDoorway == 0);
+        CHECK(!col.indices.empty());
+    }
 }

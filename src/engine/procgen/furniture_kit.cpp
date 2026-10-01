@@ -631,6 +631,63 @@ FurniturePiece build(Piece p, uint32_t variant) {
             }
             break;
         }
+        case Piece::PalletRack: {
+            // A big box's PALLET RACKING (Glenn, 2026-10-01: "big box stores like Costco"): a double-sided bay of
+            // steel uprights and orange beams, shelf-height goods on the floor level, shrink-wrapped pallets of
+            // cartons on the two levels above. Runs along x, stocked on both faces.
+            k.out.size = {2.8, 4.4, 2.2};
+            k.out.colliderH = 2.6;   // high enough to wall the aisle; the pallets above are out of reach
+            const Vec3 upright(0.16, 0.30, 0.55), beam(0.92, 0.42, 0.10);
+            for (double x : {-1.37, 1.37})
+                for (double z : {0.06, 1.1, 2.14})
+                    k.box(F::Metal, {x, 2.2, z}, {0.07, 4.4, 0.07}, 0.0, upright, 1);
+            uint32_t r = variant * 2654435761u + 11u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            static const Vec3 kCarton[5] = {{0.62, 0.48, 0.32}, {0.70, 0.56, 0.38}, {0.55, 0.42, 0.28},
+                                            {0.85, 0.85, 0.82}, {0.30, 0.42, 0.62}};
+            for (double y : {1.55, 3.0}) {
+                for (double z : {0.06, 2.14})
+                    k.box(F::Metal, {0, y, z}, {2.74, 0.12, 0.06}, 0.0, beam, 1);
+                for (int side = 0; side < 2; ++side) {
+                    const Real zc = side == 0 ? 0.58 : 1.62;
+                    for (double x : {-0.68, 0.68}) {
+                        k.box(F::Wood, {x, y + 0.13, zc}, {1.2, 0.14, 0.95}, 0.0, Vec3(0.72, 0.60, 0.42), 1);   // pallet
+                        const Real hh = 0.7 + 0.55 * next();
+                        k.box(F::Hard, {x, y + 0.2 + hh * 0.5, zc}, {1.14, hh, 0.9}, 0.01,
+                              kCarton[static_cast<int>(next() * 5) % 5], 1);
+                    }
+                }
+            }
+            // the floor level: shelf-height goods both sides
+            for (int side = 0; side < 2; ++side) {
+                const Real zc = side == 0 ? 0.55 : 1.65;
+                k.box(F::Metal, {0, 0.08, zc}, {2.7, 0.04, 0.9}, 0.0, kSteel * 0.8, 1);
+                Real x = -1.3;
+                while (x < 1.25) {
+                    const Real w = 0.25 + 0.35 * next(), hh = 0.35 + 0.6 * next();
+                    if (x + w > 1.32) break;
+                    k.box(F::Hard, {x + w * 0.5, 0.1 + hh * 0.5, zc}, {w - 0.02, hh, 0.8}, 0.0,
+                          kCarton[static_cast<int>(next() * 5) % 5] * (0.8 + 0.4 * next()), 1);
+                    x += w;
+                }
+            }
+            break;
+        }
+        case Piece::Checkout: {
+            // A CHECKOUT LANE: a long counter running out from the front (z), its belt, the register and card
+            // reader at the far end, and the lane's numbered light on a pole.
+            k.out.size = {0.9, 2.3, 3.2};
+            k.out.colliderH = 0.95;
+            k.box(F::Hard, {0, 0.45, 1.6}, {0.85, 0.9, 3.2}, 0.01, Vec3(0.30, 0.31, 0.34), 2);    // the counter
+            k.box(F::Hard, {0, 0.915, 1.1}, {0.6, 0.03, 2.0}, 0.005, kBlack, 1);                 // the belt
+            k.box(F::Hard, {0, 0.915, 2.6}, {0.75, 0.03, 1.0}, 0.005, kSteel, 1);                // bagging well
+            k.box(F::Hard, {0.25, 1.15, 2.3}, {0.30, 0.28, 0.08}, 0.01, kBlack, 1);              // register screen
+            k.rod(F::Metal, {0.25, 0.92, 2.3}, {0.25, 1.02, 2.3}, 0.02, kSteel, 8);
+            k.box(F::Hard, {-0.3, 1.0, 2.1}, {0.12, 0.16, 0.08}, 0.01, Vec3(0.15, 0.15, 0.17), 1);   // card reader
+            k.rod(F::Metal, {0.38, 0.9, 0.1}, {0.38, 2.15, 0.1}, 0.025, kSteel, 8);                // the light pole
+            k.box(F::Hard, {0.38, 2.2, 0.1}, {0.3, 0.22, 0.12}, 0.01, Vec3(0.95, 0.85, 0.25), 1);   // its lamp
+            break;
+        }
         case Piece::Rug: {
             k.out.size = {2.0, 0.04, 1.4};
             k.out.solid = false;
@@ -649,7 +706,8 @@ const char* const kPieceNames[kPieceCount] = {
     "tv_unit", "kitchen_base", "kitchen_sink", "kitchen_hob", "kitchen_tall", "kitchen_wall", "dining_table",
     "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug",
     "desk_pod", "cubicle", "meeting_table", "whiteboard",
-    "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase"};
+    "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase",
+    "pallet_rack", "checkout"};
 
 }  // namespace
 

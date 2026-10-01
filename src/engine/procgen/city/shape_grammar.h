@@ -529,6 +529,10 @@ struct BuildingParams {
     Real  partyAt[2] = {0, 0};
     bool  backDoor = false;
     bool  fireEscape = false;
+    // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
+    // improvement, 4 discount store. The front edge wears the chain's sign and canopy, the rear its loading docks,
+    // a band in the chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
+    uint8_t bigBox = 0;
 };
 
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?

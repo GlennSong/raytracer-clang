@@ -1017,7 +1017,8 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
         // TOO NARROW TO BE A WINDOW (Glenn: "some windows are super skinny"): a face narrower than a window
         // module, or an opening squeezed under 0.55 m, is BLANK -- solid wall. Encoded as a zero-height opening at
         // mid-storey, so every reader (the facade, its far tier, the inner wall) fills the bay with wall unchanged.
-        if (!o.entrance && (fr.width < 1.2 || o.wx1 - o.wx0 < 0.55)) {
+        // ...and a BIG BOX's walls are blank but for its doors (the sign and the entry glazing dress the front).
+        if (!o.entrance && (fr.width < 1.2 || o.wx1 - o.wx0 < 0.55 || p.bigBox)) {
             const Real mid = (o.x0 + o.x1) * 0.5;
             o.wx0 = o.wx1 = mid;
             o.sill = o.head = fh * 0.5;
@@ -3772,6 +3773,50 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
 // to see that with smaller buildings"): a room behind every shop unit of every storefront edge (facadeLayout's own
 // units, so the room sits behind its shopfront and door), from the facade back to a wall that stops short of the
 // core or the stair, party walls between. The lobby is whatever is left.
+// THE BIG BOX'S FLOOR (Glenn, 2026-10-01): one store. Inside the doors the CHECKOUT lanes (a 10 m band along the
+// front), behind them the sales floor in the chain's own stock (furniture.cpp: pallet racks, gondolas, televisions,
+// racks of clothes), and across the back the STOCKROOM behind a wall with two doors. Rooms carry the trade:
+// Shop styles 7-10 the chain's floor (7 + chain - 1), 11 the checkouts, 12 the stockroom.
+static RoomPlan bigBoxRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = false;
+    rp.finish = interiorFinishFor(params);
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    if (plan.size() != 4 || entranceEdge >= plan.size()) return rp;
+    const Real inset = interiorInset(params);
+    const Vec2 a = plan[entranceEdge], b = plan[(entranceEdge + 1) % 4];
+    const Real W = (b - a).length();
+    if (W < 20) return rp;
+    const Vec2 d = (b - a) * (1.0 / W), nOut(d.y, -d.x);
+    Real D = 0;
+    for (const Vec2& v : plan) D = std::max(D, dot(a - v, nOut));
+    if (D < 30) return rp;
+    auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
+    auto rect = [&](Real v0, Real v1) { return Poly2{P(inset, v0), P(W - inset, v0), P(W - inset, v1), P(inset, v1)}; };
+    const Real vc = inset + 10.0, vs = D - inset - 12.0;
+    Room checkout, floor, stock;
+    checkout.kind = floor.kind = stock.kind = RoomKind::Shop;
+    checkout.style = 11;
+    floor.style = static_cast<uint8_t>(7 + (std::clamp<int>(params.bigBox, 1, 4) - 1));
+    stock.style = 12;
+    checkout.rect = rect(inset, vc);
+    floor.rect = rect(vc, vs);
+    stock.rect = rect(vs, D - inset);
+    checkout.edge = floor.edge = stock.edge = entranceEdge;
+    rp.rooms = {checkout, floor, stock};
+    // the stockroom wall, in two runs, each with a door
+    for (int k = 0; k < 2; ++k) {
+        RoomWall w;
+        w.a = P(k == 0 ? W - inset : W * 0.5, vs);
+        w.b = P(k == 0 ? W * 0.5 : inset, vs);
+        w.doorAt = 0.5;
+        rp.walls.push_back(w);
+    }
+    return rp;
+}
+
 static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge, Real y0,
                              Real h, const CorePlan& core, const Poly2& well, const Vec2& stairFoot = Vec2(1e30, 1e30)) {
     RoomPlan rp;
@@ -3985,7 +4030,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
     const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
-    if (storeys.size() < 2) return out;   // no storeys above ground
+    // no storeys above ground -- but a BIG BOX is its one tall storey, and that is the store
+    if (storeys.size() < 2 && !params.bigBox) return out;
     // The core (M5) and the storey window [kA, kB).
     const CorePlan core = coreFor(plan, params, entranceEdge);
     const int nS = static_cast<int>(storeys.size());
@@ -4361,7 +4407,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
         if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
         // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
-        RoomPlan rp = ki == 0 ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
+        RoomPlan rp = ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
+                    : ki == 0 ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
                                              il.hasStair ? il.well : Poly2{},
                                              il.hasStair ? il.stairFoot : Vec2(1e30, 1e30))
                               : RoomPlan{};
@@ -4419,6 +4466,63 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     appendToPart(out, stairFinishPartFor(params), stairMesh);
     out.height = storeys.back().y0 + storeys.back().h;
     return out;
+}
+
+// THE BIG BOX'S FRONT (Glenn, 2026-10-01: "Big box stores like Costco or Bestbuy"): a band in the chain's colour
+// round the top of every wall; over the doors a deep canopy on two posts, the glazed entry either side of them,
+// and above it the chain's lit sign with its name in letter blocks. The walls and the door are the ordinary
+// facade's (one aperture, so the interior and its colliders agree); this only dresses them.
+static void emitBigBoxDress(BuildingMesh& out, const Poly2& plan, std::size_t entranceEdge, Real y, Real gh,
+                            const BuildingParams& params, bool full) {
+    const Vec3 brand = params.trimColor;
+    for (std::size_t i = 0; i < plan.size(); ++i) {   // the band
+        const FaceRect fr = planEdgeRect(plan, i, y, gh);
+        if (fr.width < 1.0) continue;
+        emitBox(out, Scope{fr.at(0, gh - 1.7), {fr.h, Vec3(0, 1, 0), fr.n}, Vec3(fr.width, 1.0, 0.08)}, PartId::Trim, brand);
+    }
+    if (entranceEdge >= plan.size()) return;
+    const FaceRect fr = planEdgeRect(plan, entranceEdge, y, gh);
+    const Real cx = fr.width * 0.5;
+    const Vec3 X = fr.h, U(0, 1, 0), N = fr.n;
+    // the canopy and its posts
+    const Real cw = std::min(fr.width - 4.0, Real(18.0)), cd = 4.0, cy = 4.4;
+    if (cw > 6) {
+        emitBox(out, Scope{fr.at(cx - cw * 0.5, cy), {X, U, N}, Vec3(cw, 0.55, cd)}, PartId::Trim, brand * 0.85);
+        emitBox(out, Scope{fr.at(cx - cw * 0.5, cy - 0.06), {X, U, N}, Vec3(cw, 0.06, cd)}, PartId::Trim, Vec3(0.85, 0.85, 0.83));
+        for (Real px : {cx - cw * 0.5 + 0.4, cx + cw * 0.5 - 0.8})
+            emitBox(out, Scope{fr.at(px, 0) + N * (cd - 0.8), {X, U, N}, Vec3(0.4, cy, 0.4)}, PartId::Metal, Vec3(0.30, 0.31, 0.33));
+    }
+    // the glazed entry either side of the doors: dark glass panels, mullions
+    if (full) {
+        RenderMesh glass, mull;
+        for (int side = 0; side < 2; ++side) {
+            const Real g0 = side == 0 ? cx - 7.0 : cx + 1.2, g1 = side == 0 ? cx - 1.2 : cx + 7.0;
+            if (g0 < 0.5 || g1 > fr.width - 0.5) continue;
+            const Vec3 o = N * 0.03;
+            emitQuad(glass, fr.at(g0, 0.1) + o, fr.at(g1, 0.1) + o, fr.at(g1, 3.4) + o, fr.at(g0, 3.4) + o, N, glassGrey());
+            for (Real mx = g0; mx <= g1 + 1e-6; mx += (g1 - g0) / 4)
+                emitBox(out, Scope{fr.at(mx - 0.05, 0.1), {X, U, N}, Vec3(0.1, 3.3, 0.08)}, PartId::Metal, Vec3(0.55, 0.57, 0.6));
+            emitBox(out, Scope{fr.at(g0, 3.4), {X, U, N}, Vec3(g1 - g0, 0.12, 0.08)}, PartId::Metal, Vec3(0.55, 0.57, 0.6));
+        }
+        appendToPart(out, PartId::Glass, glass);
+    }
+    // the sign: a dark board, the lit face in the chain's colour, the name in pale letter blocks
+    const Real sw = std::min(fr.width * 0.4, Real(24.0));
+    // a 2.4 m board just above the canopy -- standing proud of the roofline on a low box, as real ones do
+    const Real sy0 = std::max(cy + 0.9, gh - 4.6), sy1 = std::max(sy0 + 2.4, gh - 1.9);
+    if (sw > 6 && sy1 - sy0 > 1.2) {
+        emitBox(out, Scope{fr.at(cx - sw * 0.5 - 0.3, sy0 - 0.3), {X, U, N}, Vec3(sw + 0.6, sy1 - sy0 + 0.6, 0.25)},
+                PartId::Trim, Vec3(0.10, 0.10, 0.11));
+        // the board in the chain's colour by day; the NAME is what lights (LitBand, a warm white at night)
+        const Vec3 o = N * 0.26;
+        emitBox(out, Scope{fr.at(cx - sw * 0.5, sy0) + N * 0.25, {X, U, N}, Vec3(sw, sy1 - sy0, 0.02)}, PartId::Trim, brand);
+        const int nL = 5 + static_cast<int>(params.seed % 4u);
+        const Real lh = (sy1 - sy0) * 0.62, lw = std::min(lh * 0.75, sw * 0.8 / nL);
+        const Real lx0 = cx - (nL * lw * 1.15) * 0.5;
+        for (int k = 0; k < nL; ++k)
+            emitBox(out, Scope{fr.at(lx0 + k * lw * 1.15, sy0 + (sy1 - sy0 - lh) * 0.5) + o, {X, U, N},
+                               Vec3(lw, lh, full ? 0.12 : 0.02)}, PartId::LitBand, Vec3(1.0, 0.96, 0.88));
+    }
 }
 
 BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
@@ -4548,6 +4652,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             emitBayFront(out, planEdgeRect(plan, i, y, gh), params, wallColor);
             continue;
         }
+        // A BIG BOX's back is its LOADING DOCKS: roller doors along the rear wall.
+        if (params.bigBox && i != entranceEdge && i == rearEdgeOf(plan, params)) {
+            BuildingParams sp = params;
+            const FaceRect dfr = planEdgeRect(plan, i, y, gh);
+            sp.groundBays = std::clamp(static_cast<int>(dfr.width / 14.0), 2, 6);
+            emitBayFront(out, dfr, sp, wallColor);
+            if (full && params.openDoorway)
+                emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
+            continue;
+        }
         if (i == sideEdge) {
             BuildingParams sp = params;
             sp.groundBays = params.sideBays;
@@ -4664,6 +4778,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
         }
     }
+    if (params.bigBox) emitBigBoxDress(out, plan, entranceEdge, y, gh, params, full);
     // The covered timber PORCH (bungalow/craftsman) — brings its own platform
     // and steps, so it replaces the classical entrance elements.
     if (full && params.porch) {

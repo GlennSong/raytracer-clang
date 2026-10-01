@@ -798,6 +798,28 @@ void recipeSupermarket(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     out.name = "supermarket";
 }
 
+// The BIG BOX (Glenn, 2026-10-01): a chain's store -- one tall storey, its walls in the chain's colours, the sign
+// and canopy over the doors (shape_grammar's big-box front), loading docks at the back.
+void recipeBigBox(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    const int chain = 1 + static_cast<int>(rng.next() % 4u);
+    p.bigBox = static_cast<uint8_t>(chain);
+    p.floors = 0;
+    p.groundHeight = rng.range(8.0, 10.0);
+    p.groundRetail = false;
+    p.solidFacade = true;
+    p.walkableGround = true;
+    p.awning = false;
+    p.baseCourse = false;
+    p.stringCourse = false;
+    p.parapet = 0.9;
+    p.core = 1;   // one storey: no core
+    dressBigBox(p, chain, rng.next());
+    out.massing = BuildingRecipe::Massing::BigBox;
+    out.placeType = "shop";
+    out.name = "big_box";
+}
+
 // The OFFICE PARK pavilion: a low glass slab on landscaped grounds.
 void recipeOfficePark(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
@@ -1291,6 +1313,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"bank", recipeBank},
     {"strip_mall", recipeStripMall},
     {"supermarket", recipeSupermarket},
+    {"big_box", recipeBigBox},
     {"office_park", recipeOfficePark},
     {"modern_house", recipeModernHouse},
     {"bungalow", recipeBungalow},
@@ -1765,6 +1788,43 @@ BuildingParams architectRowUnit(uint32_t seed, int floors) {
         p.roofPitch = rng.range(0.35, 0.55);
     }
     return p;
+}
+
+void dressBigBox(BuildingParams& p, int chain, uint32_t seed) {
+    Hash rng(seed | 1u);
+    p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 4));
+    switch (p.bigBox) {
+        case 1:   // warehouse club: grey corrugated steel, a red band
+            dress(p, FacadeStyle::Metal, rng);
+            p.wallColor = Vec3(0.62, 0.63, 0.64);
+            p.trimColor = Vec3(0.72, 0.10, 0.10);
+            break;
+        case 2:   // electronics: a dark blue box, a yellow tag
+            dress(p, FacadeStyle::Metal, rng);
+            p.wallColor = Vec3(0.10, 0.20, 0.42);
+            p.trimColor = Vec3(0.98, 0.82, 0.10);
+            break;
+        case 3:   // home improvement: buff block, an orange band
+            dress(p, FacadeStyle::Concrete, rng);
+            p.wallColor = Vec3(0.72, 0.66, 0.56);
+            p.trimColor = Vec3(0.95, 0.45, 0.08);
+            break;
+        default:  // discount store: white render, a red band
+            dress(p, FacadeStyle::Stucco, rng);
+            p.wallColor = Vec3(0.88, 0.87, 0.84);
+            p.trimColor = Vec3(0.80, 0.08, 0.12);
+            break;
+    }
+}
+
+BuildingRecipe architectBigBox(uint32_t seed) {
+    Hash rng(seed * 2654435761u ^ 0x7f4a7c15u);
+    BuildingRecipe out;
+    out.params.seed = rng.next();
+    out.params.retailStreetOnly = true;
+    RecipeCtx cx;
+    recipeBigBox(out, rng, cx);
+    return out;
 }
 
 }  // namespace engine

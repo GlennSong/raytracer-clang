@@ -31,6 +31,7 @@ struct Lot {
     // SHARED SIDES (attached buildings): up to two side lot lines this lot shares with a neighbouring lot of its
     // block, each as its outward normal and offset dot(normal, point) -- the lot pass may build up to them and
     // blank the wall there (BuildingParams::partyWalls). Filled by the lot pass in dense districts only.
+    bool  bigBox = false;   // a whole-block BIG-BOX store site (the lot pass picks these; Massing::BigBox)
     uint8_t partyCount = 0;
     Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
     Real  partyAt[2] = {0, 0};

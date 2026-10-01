@@ -992,6 +992,11 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
         }
     }
     lua_pop(L, 1);
+    // big_box = 1..4 picks a big-box store's chain (warehouse club, electronics, home improvement, discount)
+    if (p.bigBox) {
+        const int chain = static_cast<int>(optField(L, idx, "big_box", 0.0));
+        if (chain >= 1 && chain <= 4) dressBigBox(p, chain, p.seed);
+    }
     p.backDoor = optBoolField(L, idx, "back_door", p.backDoor);
     p.fireEscape = optBoolField(L, idx, "fire_escape", p.fireEscape);
 }

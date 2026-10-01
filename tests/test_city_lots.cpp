@@ -686,8 +686,9 @@ TEST_CASE(every_built_lot_touches_a_road) {
     // any stray — so a mid-block building here is a real regression. Stock
     // lotDepth is 28 (financial pads reach 60), so the bound is 60 m.
     const Real centreBound = std::max(ParcelParams().lotDepth * 1.6, Real(60.0));
+    // A BIG-BOX store is the exception by design: a whole block, the store at the back behind its own parking lot.
     for (const LotBuilding& b : buildings) {
-        if (b.type == "park" || b.type == "green") continue;
+        if (b.type == "park" || b.type == "green" || b.recipe == "big_box") continue;
         CHECK(distToRoads(b) <= centreBound);
     }
 }

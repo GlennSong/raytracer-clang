@@ -17,7 +17,7 @@ constexpr std::size_t kBuildingParamsSize = 496;   // 432 before the party walls
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 8, kLotsVersion = 7, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 9, kLotsVersion = 7, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -47,7 +47,7 @@ void putBuildingParams(BinWriter& w, const BuildingParams& p) {
     w.put<uint8_t>(static_cast<uint8_t>(p.envelope)); w.put<int32_t>(p.baseFloors); w.put<double>(p.setback1); w.put<int32_t>(p.stepFloors); w.put<double>(p.stepDepth); w.put<double>(p.towerFrac); w.put<int32_t>(p.towerFloor); w.put<uint8_t>(p.core); w.put<uint8_t>(p.crown); w.put<uint8_t>(p.signage); w.put<uint8_t>(p.uplights); w.put<uint8_t>(p.top); w.put<uint8_t>(p.windowGroup); w.put<uint8_t>(p.verticals ? 1 : 0); w.put<uint8_t>(p.residential ? 1 : 0);
     w.put<double>(p.skyRatio); w.put<double>(p.taperTop); w.put<double>(p.chamferTop); w.put<double>(p.featherFrom); w.put<double>(p.twistDeg); w.put<double>(p.stackShift);
     w.put<uint8_t>(p.glassTint); w.put<uint8_t>(p.mullionTone); w.put<uint8_t>(p.fins); w.put<double>(p.curtainBay); w.put<double>(p.spandrelFrac);
-    w.put<uint8_t>(p.partyWalls); for (int k = 0; k < 2; ++k) { w.put<double>(p.partyN[k].x); w.put<double>(p.partyN[k].y); w.put<double>(p.partyAt[k]); } putBool(w, p.backDoor); putBool(w, p.fireEscape);
+    w.put<uint8_t>(p.partyWalls); for (int k = 0; k < 2; ++k) { w.put<double>(p.partyN[k].x); w.put<double>(p.partyN[k].y); w.put<double>(p.partyAt[k]); } putBool(w, p.backDoor); putBool(w, p.fireEscape); w.put<uint8_t>(p.bigBox);
 }
 
 bool getBuildingParams(BinReader& r, BuildingParams& p) {
@@ -71,7 +71,7 @@ bool getBuildingParams(BinReader& r, BuildingParams& p) {
     if (!r.get(p.glassTint) || !r.get(p.mullionTone) || !r.get(p.fins) || !r.get(p.curtainBay) || !r.get(p.spandrelFrac)) return false;
     if (!r.get(p.partyWalls)) return false;
     for (int k = 0; k < 2; ++k) { double nx = 0, nz = 0; if (!r.get(nx) || !r.get(nz) || !r.get(p.partyAt[k])) return false; p.partyN[k] = Vec2(nx, nz); }
-    if (!getBool(r, p.backDoor) || !getBool(r, p.fireEscape)) return false;
+    if (!getBool(r, p.backDoor) || !getBool(r, p.fireEscape) || !r.get(p.bigBox)) return false;
     p.wallPart = static_cast<PartId>(wallPart); o.head = static_cast<OpeningStyle::Head>(head); o.hood = static_cast<OpeningStyle::Hood>(hood);
     p.roofStyle = static_cast<BuildingParams::RoofStyle>(roof); p.shape = static_cast<BuildingShape>(shape);
     return r.ok();
