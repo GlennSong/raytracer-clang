@@ -2817,6 +2817,60 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
     return rise;
 }
 
+
+// THE EXPOSED EDGES of a lower tier (buildings M10): the stretches of its outline that are roof edge, not wall --
+// what is left of each edge once the stretches an upper tier's edges run along (collinear, within 5 cm) are taken
+// out. A setback tier sits wholly inside the one below and covers nothing: then `covered` is false and the caller
+// keeps the closed parapet ring exactly as before. A FLUSH face (a bundled tube that drops out, a feathered step)
+// covers part of the outline: only the rest gets a parapet, so no ledge wraps round the tower at the drop-off.
+struct ExposedRun { Vec2 a, b; };
+static std::vector<ExposedRun> exposedRuns(const Poly2& lowerIn, const Poly2& upperIn, bool& covered) {
+    Poly2 lower = lowerIn, upper = upperIn;
+    ensureCCW(lower); ensureCCW(upper);
+    std::vector<ExposedRun> runs;
+    covered = false;
+    for (std::size_t i = 0; i < lower.size(); ++i) {
+        const Vec2 a = lower[i], b = lower[(i + 1) % lower.size()];
+        const Real L = (b - a).length();
+        if (L < 1e-6) continue;
+        const Vec2 d = (b - a) * (1.0 / L);
+        std::vector<std::pair<Real, Real>> cov;
+        for (std::size_t j = 0; j < upper.size(); ++j) {
+            const Vec2 c = upper[j], e = upper[(j + 1) % upper.size()];
+            auto off = [&](const Vec2& q) { return std::fabs(cross(d, q - a)); };
+            if (off(c) > 0.05 || off(e) > 0.05) continue;
+            Real t0 = dot(c - a, d), t1 = dot(e - a, d);
+            if (t0 > t1) std::swap(t0, t1);
+            t0 = std::max(t0, Real(0)); t1 = std::min(t1, L);
+            if (t1 - t0 > 0.05) cov.push_back({t0, t1});
+        }
+        if (cov.empty()) { runs.push_back({a, b}); continue; }
+        covered = true;
+        std::sort(cov.begin(), cov.end());
+        Real t = 0;
+        for (const auto& [c0, c1] : cov) {
+            if (c0 > t + 0.05) runs.push_back({a + d * t, a + d * c0});
+            t = std::max(t, c1);
+        }
+        if (L > t + 0.05) runs.push_back({a + d * t, b});
+    }
+    return runs;
+}
+
+// One straight PARAPET RUN: an upstand `h` tall on the edge a->b of a CCW plan (the interior on its left), its
+// coping on top. The open-run sibling of emitPlanParapet's closed ring.
+static void emitParapetRun(BuildingMesh& out, const Vec2& a, const Vec2& b, Real roofY, Real h, const Vec3& wallCol,
+                           PartId wallPart, const Vec3& copingCol) {
+    const Real L = (b - a).length();
+    if (L < 0.05 || h <= 0) return;
+    const Vec2 d = (b - a) * (1.0 / L), in(-d.y, d.x);
+    const Real th = 0.24;
+    const Vec3 X(d.x, 0, d.y), Z(in.x, 0, in.y);
+    emitBox(out, Scope{Vec3(a.x, roofY, a.y), {X, Vec3(0, 1, 0), Z}, Vec3(L, h, th)}, wallPart, wallCol);
+    emitBox(out, Scope{Vec3(a.x, roofY + h, a.y) - Z * 0.05, {X, Vec3(0, 1, 0), Z}, Vec3(L, 0.09, th + 0.10)},
+            PartId::Trim, copingCol);
+}
+
 static Real emitSpireCrown(BuildingMesh& out, const OBB2& topObb, Real roofY,
                            const BuildingParams& p, const Vec3& wallColor) {
     const Vec3 up(0, 1, 0);
@@ -4363,13 +4417,22 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             // A setback landed at this floor: cap the tier below.
             emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
                          materialFor(PartId::Roof, wallColor).albedo);
-            if (full && params.stringCourse && !params.curtainWall)
-                sweptCornice(cur, y - 0.4, 1.0);
+            bool flushFace = false;
+            (void)exposedRuns(cur, sp.plan, flushFace);
+            if (full && params.stringCourse && !params.curtainWall && !flushFace)
+                sweptCornice(cur, y - 0.4, 1.0);   // a cornice rings a setback; a flush face runs on unbroken
             if (full) cornerPosts(cur, tierY0, y - tierY0);
-            emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
-                            materialFor(PartId::Trim, wallColor).albedo,
-                            PartId::Trim,
-                            materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            bool flush = false;
+            const std::vector<ExposedRun> runs = exposedRuns(cur, sp.plan, flush);
+            if (!flush)
+                emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
+                                materialFor(PartId::Trim, wallColor).albedo,
+                                PartId::Trim,
+                                materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            else
+                for (const ExposedRun& r : runs)
+                    emitParapetRun(out, r.a, r.b, y, 0.55, materialFor(PartId::Trim, wallColor).albedo,
+                                   PartId::Trim, materialFor(PartId::Trim, wallColor).albedo * 0.9);
             cur = sp.plan;
             tierY0 = y;
         }

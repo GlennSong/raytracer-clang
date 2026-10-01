@@ -1327,3 +1327,78 @@ TEST_CASE(lighting_spec_overrides_the_hash) {
     p.signage = 2;
     CHECK(litBand(p, roof - 4.0, roof - 0.9, nullptr) > 0);
 }
+
+// PARAPETS RUN ONLY ALONG EXPOSED ROOF EDGES (buildings M10). At a tier change the lower tier is capped with a
+// parapet -- but where the upper tier's wall runs on FLUSH (a feathered step, a bundled tube that drops out) that
+// edge is not a roof edge, and the old closed ring wrapped the tower in a ledge there. Feathered tower: no parapet
+// triangle (Trim, in the upstand band above a tier change) lies along a flush stretch. Plain setback tower: every
+// lower edge keeps its parapet, as before.
+TEST_CASE(parapets_run_only_along_exposed_roof_edges) {
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 26}, {0, 26}};
+    auto parapetTris = [](const BuildingMesh& bm, Real y) {
+        std::vector<Vec2> c;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::Trim)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vec3 a = part.vertices[part.indices[i]].position, b = part.vertices[part.indices[i + 1]].position,
+                           d = part.vertices[part.indices[i + 2]].position;
+                const Vec3 m = (a + b + d) * (1.0 / 3.0);
+                if (m.y > y + 0.05 && m.y < y + 0.62) c.push_back(Vec2(m.x, m.z));
+            }
+        }
+        return c;
+    };
+    {   // FEATHERED: the faces that do not step run on flush through every tier change.
+        BuildingParams p;
+        p.floors = 40; p.envelope = BuildingParams::Envelope::Feathered; p.baseFloors = 1; p.featherFrom = 0.6;
+        p.stepDepth = 2.5; p.curtainWall = false; p.openDoorway = false;
+        const std::vector<MassTier> tiers = massStack(plan, p);
+        CHECK(tiers.size() >= 3u);
+        const BuildingMesh bm = growPlanBuilding(plan, p);
+        int flushChecked = 0;
+        for (std::size_t k = 1; k < tiers.size(); ++k) {
+            const Real y = p.groundHeight + tiers[k].floor0 * p.floorHeight;
+            const std::vector<Vec2> tris = parapetTris(bm, y);
+            const Poly2& lo = tiers[k - 1].plan;
+            const Poly2& up = tiers[k].plan;
+            for (std::size_t j = 0; j < up.size(); ++j) {
+                const Vec2 c0 = up[j], c1 = up[(j + 1) % up.size()];
+                const Real L = (c1 - c0).length();
+                if (L < 1.0) continue;
+                const Vec2 d = (c1 - c0) * (1.0 / L);
+                bool onLower = false;   // is this upper edge flush with a lower one?
+                for (std::size_t i = 0; i < lo.size(); ++i) {
+                    const Vec2 a = lo[i], b = lo[(i + 1) % lo.size()];
+                    if (std::fabs(cross(normalize(b - a), c0 - a)) < 0.05 && std::fabs(cross(normalize(b - a), c1 - a)) < 0.05)
+                        onLower = true;
+                }
+                if (!onLower) continue;
+                ++flushChecked;
+                for (const Vec2& m : tris) {
+                    const Real t = dot(m - c0, d), off = std::fabs(cross(d, m - c0));
+                    CHECK(!(t > 0.6 && t < L - 0.6 && off < 0.4));
+                }
+            }
+        }
+        CHECK(flushChecked > 0);
+    }
+    {   // A SETBACK that steps in on every side keeps its whole ring.
+        BuildingParams p;
+        p.floors = 20; p.setbackFloors = 8; p.setbackEvery = 2.0; p.curtainWall = false; p.openDoorway = false;
+        const std::vector<MassTier> tiers = massStack(plan, p);
+        CHECK(tiers.size() >= 2u);
+        const BuildingMesh bm = growPlanBuilding(plan, p);
+        const Real y = p.groundHeight + tiers[1].floor0 * p.floorHeight;
+        const std::vector<Vec2> tris = parapetTris(bm, y);
+        const Poly2& lo = tiers[0].plan;
+        for (std::size_t i = 0; i < lo.size(); ++i) {
+            const Vec2 a = lo[i], b = lo[(i + 1) % lo.size()];
+            const Real L = (b - a).length();
+            const Vec2 d = (b - a) * (1.0 / L);
+            int near = 0;
+            for (const Vec2& m : tris)
+                if (std::fabs(cross(d, m - a)) < 0.5 && dot(m - a, d) > 0 && dot(m - a, d) < L) ++near;
+            CHECK(near > 0);
+        }
+    }
+}

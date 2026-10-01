@@ -28,11 +28,18 @@ std::vector<Real> bayBoundaries(Real W, const BuildingParams& p) {
 }
 
 // Distance from the line through a->b (outward normal n) to the nearest
-// corner of the core's outline, measured inward; +inf without a core.
-Real depthToCore(const Vec2& a, const Vec2& nOut, const CorePlan& core) {
+// corner of the core's outline, measured inward; +inf without a core -- or
+// when the core does not stand IN FRONT of the edge: on an L or cross plate
+// (buildings M10) the core beside an arm's edge is no limit on that arm's
+// rooms. The edge's span along `d` (length W) is widened by the corridor ring.
+Real depthToCore(const Vec2& a, const Vec2& d, Real W, const Vec2& nOut, const CorePlan& core) {
     if (!core.valid) return 1e9;
-    Real best = 1e9;
-    for (const Vec2& c : core.rect()) best = std::min(best, dot(a - c, nOut));
+    Real t0 = 1e30, t1 = -1e30, best = 1e9;
+    for (const Vec2& c : core.rect()) {
+        t0 = std::min(t0, dot(c - a, d)); t1 = std::max(t1, dot(c - a, d));
+        best = std::min(best, dot(a - c, nOut));
+    }
+    if (t1 < -kCorridorRing || t0 > W + kCorridorRing) return 1e9;
     return best;
 }
 
@@ -66,7 +73,7 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         ed.nOut = Vec2(ed.d.y, -ed.d.x);            // CCW: the interior is to the left
         if (e == blankEdge) continue;
         // The corridor ring: the band ends 2.2 m short of the core.
-        const Real room = depthToCore(ed.a, ed.nOut, core) - kCorridorRing - inset;
+        const Real room = depthToCore(ed.a, ed.d, ed.W, ed.nOut, core) - kCorridorRing - inset;
         ed.depth = std::min(depthWant, room);
         // Two bands may NEVER meet. Cap the depth at half the plate's own
         // depth less a gap to walk through: a shallow plate used to grow the
@@ -140,8 +147,14 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         if (!E[e].rooms) continue;
         const Edge& prev = E[(e + n - 1) % n];
         const Edge& next = E[(e + 1) % n];
-        const Real startAt = prev.rooms ? inset + prev.depth : inset;
-        const Real endAt = E[e].W - (next.rooms ? inset + next.depth : inset);
+        // Only a CONVEX corner is shared: there the neighbour's band runs into this one's and takes the corner.
+        // At an INSIDE corner (an L, T or cross plate -- a bundled tower once tubes drop out, buildings M10) the
+        // two bands meet at the corner without crossing; trimming this one by the neighbour's depth left a dead
+        // strip along the wall. Run to the corner instead and close the band with a full end partition.
+        const bool convexStart = cross(prev.d, E[e].d) > 1e-6;
+        const bool convexEnd = cross(E[e].d, next.d) > 1e-6;
+        const Real startAt = prev.rooms && convexStart ? inset + prev.depth : inset;
+        const Real endAt = E[e].W - (next.rooms && convexEnd ? inset + next.depth : inset);
         Real fw, lw;
         lay(e, startAt, endAt, fw, lw);
         if (fw <= 0) continue;
@@ -156,8 +169,8 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             w.b = P(x, to);
             rp.walls.push_back(w);
         };
-        endWall(startAt, prev.rooms ? inset + prev.cornerEnd : inset);
-        endWall(endAt, next.rooms ? inset + next.cornerStart : inset);
+        endWall(startAt, prev.rooms && convexStart ? inset + prev.cornerEnd : inset);
+        endWall(endAt, next.rooms && convexEnd ? inset + next.cornerStart : inset);
     }
     return rp;
 }
