@@ -205,7 +205,16 @@ Vec3 litTintOf(int index) {
 
 Vec3 litTint(const Vec3& worldPos, bool curtainWall) { return litTintOf(litTintIndex(worldPos, curtainWall)); }
 
-Vec3 glassGrey() { return Vec3(0.032, 0.073, 0.116); }   // the old grey material (0.18 0.27 0.34) squared
+Vec3 glassGrey() { return Vec3(0.032, 0.073, 0.116); }
+
+bool mechanicalStorey(const BuildingParams& p, int floor) {
+    if (p.floors < 30 || p.parkingDecks || floor < 1 || floor >= p.floors) return false;
+    if (floor == p.floors - 1 && p.floors >= 40) return true;   // the plant under the roof
+    const int every = 15 + static_cast<int>((p.seed >> 7) % 11);
+    return floor % every == 0 && floor + 3 < p.floors;
+}
+
+  // the old grey material (0.18 0.27 0.34) squared
 
 Vec3 litPaneColour(const Vec3& glassCol, const Vec3& worldPos, bool curtainWall) {
     const int idx = litTintIndex(worldPos, curtainWall);
@@ -683,6 +692,38 @@ Vec3 curtainMullionColour(uint8_t tone) {
 }
 }  // namespace
 
+namespace {
+// The LOUVRE BAND of a mechanical storey across one face: a dark recess with horizontal blades proud of it (the
+// intake and exhaust of the plant room behind), a solid sill and head. `full` adds the blades; the far tier keeps
+// the dark band and its three lines.
+void emitLouvreBand(BuildingMesh& out, const FaceRect& fr, const Vec3& bladeCol, bool full) {
+    const Real W = fr.width, H = fr.height;
+    if (W < 0.5 || H < 0.5) return;
+    RenderMesh m;
+    const Real sill = std::min(Real(0.5), H * 0.12), head = std::min(Real(0.35), H * 0.08);
+    const Vec3 in = fr.n * -0.18;
+    const Vec3 dark(0.13, 0.13, 0.14);
+    // The solid sill and head, flush with the face.
+    MeshBuilder::emitQuad(m, fr.at(0, 0), fr.at(W, 0), fr.at(W, sill), fr.at(0, sill), fr.n, bladeCol * 0.7);
+    MeshBuilder::emitQuad(m, fr.at(0, H - head), fr.at(W, H - head), fr.at(W, H), fr.at(0, H), fr.n, bladeCol * 0.7);
+    // The recess and its reveals.
+    MeshBuilder::emitQuad(m, fr.at(0, sill) + in, fr.at(W, sill) + in, fr.at(W, H - head) + in, fr.at(0, H - head) + in,
+                          fr.n, dark);
+    MeshBuilder::emitQuad(m, fr.at(0, sill), fr.at(W, sill), fr.at(W, sill) + in, fr.at(0, sill) + in, fr.v, dark);
+    MeshBuilder::emitQuad(m, fr.at(0, H - head) + in, fr.at(W, H - head) + in, fr.at(W, H - head), fr.at(0, H - head),
+                          fr.v * -1.0, dark);
+    const Real span = H - sill - head;
+    const int blades = full ? std::max(3, static_cast<int>(span / 0.32)) : 3;
+    for (int k = 0; k < blades; ++k) {
+        // Each blade leans out and down: a strip from the recess up to near the face.
+        const Real y = sill + span * (k + 0.75) / blades;
+        const Vec3 top0 = fr.at(0, y) + in * 0.15, top1 = fr.at(W, y) + in * 0.15;
+        const Vec3 bot0 = fr.at(0, y - 0.16) + in * 0.9, bot1 = fr.at(W, y - 0.16) + in * 0.9;
+        MeshBuilder::emitQuad(m, bot0, bot1, top1, top0, normalize(fr.n + fr.v * -0.8), bladeCol);
+    }
+    appendToPart(out, PartId::Detail, m);
+}
+}  // namespace 
 void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
                          const Vec3& /*wallColor: the glass is its own colour now*/,
                          FacadeDetail detail = FacadeDetail::Full,
@@ -809,6 +850,13 @@ struct FacadeLayout {
     std::vector<BayOpening> open;
 };
 
+// How many windows make a group on this face (M3): the building's windowGroup on its punched residential faces
+// with flat heads; 1 on storefronts, clerestories and arched windows.
+static int windowGroupOf(const BuildingParams& p, FacadeMode mode, bool retailish) {
+    if (mode != FacadeMode::Residential || retailish || p.window.head != OpeningStyle::Head::Flat) return 1;
+    return std::clamp(static_cast<int>(p.windowGroup), 1, 3);
+}
+
 static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                                  const BuildingParams& p) {
     FacadeLayout L;
@@ -828,6 +876,12 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     } else {
         sill = L.retailish ? 0.4 : human::WINDOW_SILL;
         head = std::min(fh - 0.4, L.retailish ? fh - 0.4 : human::WINDOW_HEAD);
+        // An OFFICE storey's window (buildings M3): a building of office-height storeys (3.6 m and up, M1) glazes
+        // its storey, not a flat's 1.5 m opening -- sill at desk height, head under the ceiling void.
+        if (!L.retailish && p.floorHeight >= 3.6) {
+            sill = 0.75;
+            head = fh - std::max(Real(0.55), fh * 0.15);
+        }
         // A CONSTANT window module across every face (the piers absorb the slack),
         // so a wide face and a narrow one show the same window size, not different
         // ones (ADR-0040). Width is the bay minus piers, clamped PORTRAIT: the
@@ -844,11 +898,19 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     if (head <= sill) { head = fh * 0.75; sill = fh * 0.2; }
 
     const int centreBay = L.bays / 2;
+    const int group = windowGroupOf(p, mode, L.retailish);
     for (int b = 0; b < L.bays; ++b) {
         BayOpening o;
         o.x0 = b * bw; o.x1 = (b + 1) * bw;
         o.entrance = (mode == FacadeMode::Entrance && b == centreBay);
         o.wx0 = o.x0 + margin; o.wx1 = o.x1 - margin;       // window/opening span
+        if (group > 1) {
+            // GROUPED windows (M3): a slim mullion inside the group, a broad pier at its ends.
+            const bool first = b % group == 0, last = b % group == group - 1 || b == L.bays - 1;
+            const Real outer = std::max(Real(0.3), margin * 1.25);
+            o.wx0 = o.x0 + (first ? outer : 0.08);
+            o.wx1 = o.x1 - (last ? outer : 0.08);
+        }
         o.sill = o.entrance ? 0.0 : sill;
         o.head = o.entrance ? std::min(human::DOOR_HEIGHT, fh - 0.3) : head;
         if (o.entrance) {
@@ -1127,6 +1189,29 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
                                  fr.at(farc[k + 1].x, farc[k + 1].y) + proud, fr.n, fcol);
         if (!o.entrance) roomUV(dst, pv0, fr);
     }
+    // VERTICALS on the middle tier (M3): the dark spandrel bands and the pier fronts -- the stripe that carries
+    // the tower's look across the street.
+    const FacadeLayout FL = facadeLayout(fr, mode, p);
+    if (p.verticals && mode == FacadeMode::Residential && !FL.retailish) {
+        const int g = windowGroupOf(p, mode, FL.retailish);
+        const Vec3 sp = fr.n * 0.01, sc = wallColor * 0.62;
+        for (std::size_t b = 0; b < FL.open.size(); ++b) {
+            const BayOpening& o = FL.open[b];
+            if (o.entrance || o.rise > 0) continue;
+            const bool first = g <= 1 || b % g == 0, last = g <= 1 || static_cast<int>(b % g) == g - 1 || b + 1 == FL.open.size();
+            const Real sx0 = first ? o.wx0 : o.x0, sx1 = last ? o.wx1 : o.x1;
+            emitQuad(wall, fr.at(sx0, 0) + sp, fr.at(sx1, 0) + sp, fr.at(sx1, o.sill) + sp, fr.at(sx0, o.sill) + sp, fr.n, sc);
+            emitQuad(wall, fr.at(sx0, o.head) + sp, fr.at(sx1, o.head) + sp, fr.at(sx1, fr.height) + sp,
+                     fr.at(sx0, fr.height) + sp, fr.n, sc);
+        }
+        for (int b = 0; b <= FL.bays; b += g) {
+            const Real pw = 0.6, x = std::min(std::max(std::min(b, FL.bays) * FL.bw, pw * 0.5), fr.width - pw * 0.5);
+            const Vec3 o3 = fr.n * 0.24, al = fr.h * (pw * 0.5);
+            emitQuad(wall, fr.at(x, 0) - al + o3, fr.at(x, 0) + al + o3, fr.at(x, fr.height) + al + o3,
+                     fr.at(x, fr.height) - al + o3, fr.n, wallColor * 1.05);
+            if (b == FL.bays) break;
+        }
+    }
     appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::GlassLit, glassLit);
@@ -1189,8 +1274,30 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
 
         // Wall surround: below, piers to the springline, above the apex — and
         // for an arch, the SPANDRELS between the arc and the apex line.
-        wallQuad(x0, x1, 0, openSill);                       // below opening
-        wallQuad(x0, x1, openHead, fh);                      // above apex
+        if (p.verticals && !entrance && !retailish && rise <= 0 && mode == FacadeMode::Residential) {
+            // VERTICALS (M3): the spandrel under and over the window set back and darker, running across the
+            // group's inner mullions; the broad piers stay on the wall plane (and wear the proud pier below).
+            const int g = windowGroupOf(p, mode, retailish);
+            const int bi = static_cast<int>(std::lround(x0 / std::max(bw, Real(1e-6))));
+            const bool first = g <= 1 || bi % g == 0, last = g <= 1 || bi % g == g - 1 || bi == bays - 1;
+            const Real sx0 = first ? wx0 : x0, sx1 = last ? wx1 : x1;
+            const Real sd = 0.10;
+            const Vec3 in = fr.n * -sd, sc = wallColor * 0.62;
+            wallQuad(x0, sx0, 0, openSill); wallQuad(sx1, x1, 0, openSill);
+            wallQuad(x0, sx0, openHead, fh); wallQuad(sx1, x1, openHead, fh);
+            for (const auto& [b0, b1] : {std::pair<Real, Real>{0, openSill}, std::pair<Real, Real>{openHead, fh}}) {
+                if (b1 - b0 < 1e-3) continue;
+                emitQuad(wall, fr.at(sx0, b0) + in, fr.at(sx1, b0) + in, fr.at(sx1, b1) + in, fr.at(sx0, b1) + in,
+                         fr.n, sc);
+                if (first) emitQuad(wall, fr.at(sx0, b0), fr.at(sx0, b0) + in, fr.at(sx0, b1) + in, fr.at(sx0, b1),
+                                    fr.h, wallColor * 0.8);
+                if (last) emitQuad(wall, fr.at(sx1, b0) + in, fr.at(sx1, b0), fr.at(sx1, b1), fr.at(sx1, b1) + in,
+                                   fr.h * -1, wallColor * 0.8);
+            }
+        } else {
+            wallQuad(x0, x1, 0, openSill);                   // below opening
+            wallQuad(x0, x1, openHead, fh);                  // above apex
+        }
         wallQuad(x0, wx0, openSill, ysp);                    // left pier
         wallQuad(wx1, x1, openSill, ysp);                    // right pier
         if (rise > 0) {
@@ -1454,6 +1561,26 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
         appendToPart(out, PartId::Trim, trim);
     }
 
+    // VERTICAL PIERS (M3): a pier proud of the wall at every window group's edge, the storey's full height -- the
+    // storeys stack them into one unbroken line up the tower.
+    if (p.verticals && mode == FacadeMode::Residential && !retailish) {
+        const int g = windowGroupOf(p, mode, retailish);
+        const Real proud = 0.24;
+        for (int b = 0; b <= bays; b += g) {
+            const int bb = std::min(b, bays);
+            const Real outer = bb < bays ? (L.open[static_cast<std::size_t>(bb)].wx0 - L.open[static_cast<std::size_t>(bb)].x0)
+                                         : (L.open.back().x1 - L.open.back().wx1);
+            const Real pw = std::clamp(outer * 1.5, Real(0.35), Real(0.9));
+            const Real x = std::min(std::max(bb * bw, pw * 0.5), fr.width - pw * 0.5);
+            const Vec3 c0 = fr.at(x, 0), c1 = fr.at(x, fh);
+            const Vec3 along = fr.h * (pw * 0.5), outv = fr.n * proud;
+            const Vec3 pc = wallColor * 1.05;
+            emitQuad(wall, c0 - along + outv, c0 + along + outv, c1 + along + outv, c1 - along + outv, fr.n, pc);
+            emitQuad(wall, c0 + along, c0 + along + outv, c1 + along + outv, c1 + along, fr.h, pc * 0.85);
+            emitQuad(wall, c0 - along + outv, c0 - along, c1 - along, c1 - along + outv, fr.h * -1, pc * 0.85);
+            if (b == bays) break;
+        }
+    }
     // The wall surface goes to the building's chosen facade part (procedural
     // brick/concrete/stucco/metal, or the flat Wall).
     appendToPart(out, p.wallPart, wall);
@@ -2487,6 +2614,202 @@ static void emitParkingDeckRect(BuildingMesh& out, const FaceRect& fr,
 // ART-DECO SPIRE CROWN: stepped setback blocks over the top tier and a
 // lathe-turned mast — the skyline finial (replaces the mechanical penthouse).
 // Returns the crown's rise above roofY.
+// THE TOP of a tower (buildings M2; Glenn, 2026-09-30: "tops ... the skyline is where variety shows most"): what
+// stands on the roof against the sky, by BuildingParams::top --
+//   2 SCREEN   the curtain wall run on past the roof, a storey and a half of glass hiding the plant;
+//   3 SLOPED   a single-pitch glass roof across the short side (Citigroup Center);
+//   4 FACETED  a truncated glass pyramid and a mast (Bank of America Plaza), glowing at night on half of them;
+//   5 LANTERN  a lit glass box set back on the roof, capped -- the skyline's lamp after dark;
+//   6 FRAME    an open frame of posts and beams, a storey and a half tall (the open crowns of the new towers);
+//   7 ANTENNAS two masts on the long axis (Sears);
+//   8 MAST     one mast on a plinth (One World Trade Center).
+// The plan forms (screen, faceted, lantern, frame) take any CONVEX top plan, octagon and drum included; sloped needs a
+// rect-ish top. A top that cannot stand on this plan returns 0 and the caller keeps the penthouse. Returns the rise
+// above roofY. `bodyH` is the building's height to the roof (the masts scale with it).
+static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real bodyH, const BuildingParams& p,
+                         const Vec3& wallColor, bool full, bool rectish) {
+    if (topIn.size() < 3 || p.top < 2) return 0;
+    Poly2 top = topIn;
+    ensureCCW(top);
+    bool convex = true;
+    for (std::size_t i = 0; i < top.size(); ++i) {
+        const Vec2 a = top[i], b = top[(i + 1) % top.size()], c = top[(i + 2) % top.size()];
+        if ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) < -1e-6) { convex = false; break; }
+    }
+    const OBB2 obb = orientedBoundingBox(top);
+    const Real shortW = 2 * std::min(obb.half[0], obb.half[1]);
+    const Real fh = std::max(Real(3.0), p.floorHeight);
+    const Vec2 c2 = centroid(top);
+    const Vec3 up(0, 1, 0);
+    const Vec3 glass = p.curtainWall ? curtainGlassColour(p.glassTint, glassGrey()) : glassGrey();
+    const Vec3 metal = curtainMullionColour(p.mullionTone);
+    const uint32_t h = positionHash(Vec3(c2.x, roofY, c2.y) + Vec3(0.17, 0.41, 0.83));
+    RenderMesh glassM, litM, metalM, roofM;
+    auto Y = [](const Vec2& v, Real y) { return Vec3(v.x, y, v.y); };
+    auto quad = [](RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& cc, const Vec3& d, const Vec3& col) {
+        const Vec3 n = normalize(cross(b - a, d - a));
+        emitQuad(m, a, b, cc, d, n, col);
+    };
+    // A vertical box post or beam (metal), centred on a segment's foot.
+    auto post = [&](const Vec2& at, Real y0, Real hgt, Real w) {
+        emitBox(out, Scope{Vec3(at.x - w * 0.5, y0, at.y - w * 0.5), {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(w, hgt, w)},
+                PartId::Detail, metal * 1.1);
+    };
+    auto beacon = [&](const Vec3& at) {
+        emitBox(out, Scope{at - Vec3(0.2, 0, 0.2), {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(0.4, 0.5, 0.4)},
+                PartId::Beacon, Vec3(1.0, 0.04, 0.02));
+        out.attaches.push_back({at + Vec3(0, 0.25, 0), up, "beacon"});
+    };
+    // A mast: three stacked, narrowing boxes and a beacon at the tip.
+    auto mast = [&](const Vec2& at, Real y0, Real hgt, Real w, const Vec3& col) {
+        Real y = y0;
+        const Real seg[3] = {0.45, 0.35, 0.20}, wid[3] = {1.0, 0.7, 0.4};
+        for (int k = 0; k < 3; ++k) {
+            const Real ww = w * wid[k], hh = hgt * seg[k];
+            emitBox(out, Scope{Vec3(at.x - ww * 0.5, y, at.y - ww * 0.5), {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(ww, hh, ww)},
+                    PartId::Detail, col);
+            y += hh;
+        }
+        beacon(Vec3(at.x, y, at.y));
+        return y - y0;
+    };
+    // The glass screen around a plan, `H` tall: glass outside, a dark back inside, a mullion every bay, a cap.
+    auto screen = [&](const Poly2& pl, Real y0, Real H) {
+        for (std::size_t e = 0; e < pl.size(); ++e) {
+            const Vec2 a = pl[e], b = pl[(e + 1) % pl.size()];
+            const Real W = (b - a).length();
+            if (W < 0.3) continue;
+            quad(glassM, Y(a, y0), Y(b, y0), Y(b, y0 + H), Y(a, y0 + H), glass);
+            quad(metalM, Y(b, y0), Y(a, y0), Y(a, y0 + H), Y(b, y0 + H), Vec3(0.10, 0.10, 0.11));
+            const int bays = std::max(1, static_cast<int>(std::lround(W / 3.0)));
+            if (full)
+                for (int k = 0; k <= bays; ++k) {
+                    const Vec2 at = a + (b - a) * (static_cast<Real>(k) / bays);
+                    const Vec2 n = normalize(Vec2(b.y - a.y, a.x - b.x));   // outward (CCW)
+                    const Vec2 o = at + n * 0.08;
+                    quad(metalM, Y(o - normalize(b - a) * 0.06, y0), Y(o + normalize(b - a) * 0.06, y0),
+                         Y(o + normalize(b - a) * 0.06, y0 + H), Y(o - normalize(b - a) * 0.06, y0 + H), metal);
+                }
+        }
+        emitPlanParapet(out, pl, y0 + H - 0.05, 0.05, metal, PartId::Detail, metal);
+    };
+    Real rise = 0;
+    switch (p.top) {
+        case 2: {   // SCREEN
+            const Real H = std::clamp(fh * 1.6, Real(5.0), Real(9.0));
+            screen(top, roofY, H);
+            rise = H;
+            break;
+        }
+        case 3: {   // SLOPED
+            if (!rectish) return 0;
+            const int la = obb.longAxis(), sa = 1 - la;
+            const Vec2 L = obb.axis[la] * obb.half[la], S = obb.axis[sa] * obb.half[sa];
+            const Vec2 o = obb.center;
+            const Real H = shortW * (0.55 + 0.35 * ((h & 0xffu) / 255.0));
+            // Low edge on -S, high edge on +S.
+            const Vec3 A = Y(o - L - S, roofY), B = Y(o + L - S, roofY), C = Y(o + L + S, roofY), D = Y(o - L + S, roofY);
+            const Vec3 Cu = C + up * H, Du = D + up * H;
+            quad(glassM, A, B, Cu, Du, glass);                 // the slope
+            quad(glassM, C, D, Du, Cu, glass);                 // the tall back face
+            MeshBuilder::emitTri(glassM, B, C, Cu, normalize(cross(C - B, Cu - B)), glass);
+            MeshBuilder::emitTri(glassM, D, A, Du, normalize(cross(A - D, Du - D)), glass);
+            if (full) {   // mullion lines down the slope
+                const int n = std::max(2, static_cast<int>((obb.half[la] * 2) / 3.0));
+                for (int k = 1; k < n; ++k) {
+                    const Real t = static_cast<Real>(k) / n;
+                    const Vec3 lo = A + (B - A) * t, hi = Du + (Cu - Du) * t;
+                    const Vec3 side = normalize(B - A) * 0.07, lift = normalize(cross(B - A, Du - A)) * 0.05;
+                    quad(metalM, lo - side + lift, lo + side + lift, hi + side + lift, hi - side + lift, metal);
+                }
+            }
+            rise = H;
+            break;
+        }
+        case 4: {   // FACETED
+            if (!convex) return 0;
+            const Real H = shortW * (0.55 + 0.25 * ((h & 0xffu) / 255.0));
+            Poly2 lo = offsetPlan(top, 0.4), hi = top;
+            for (Vec2& v : hi) v = c2 + (v - c2) * 0.14;
+            const bool glow = ((h >> 8) & 1u) != 0;
+            // A masonry tower's pyramid is METAL -- verdigris copper, bright copper or slate -- not glass.
+            static const Vec3 kRoofMetal[3] = {{0.45, 0.72, 0.60}, {0.80, 0.45, 0.28}, {0.30, 0.32, 0.36}};
+            RenderMesh& faces = glow ? litM : (p.curtainWall ? glassM : metalM);
+            const Vec3 faceCol = glow ? Vec3(0.95, 0.90, 0.80) : p.curtainWall ? glass : kRoofMetal[(h >> 12) % 3];
+            for (std::size_t e = 0; e < lo.size() && e < hi.size(); ++e) {
+                const std::size_t f = (e + 1) % lo.size();
+                quad(faces, Y(lo[e], roofY), Y(lo[f], roofY), Y(hi[f], roofY + H), Y(hi[e], roofY + H), faceCol);
+                if (full) {   // a metal rib up each arris
+                    const Vec3 a = Y(lo[e], roofY), b = Y(hi[e], roofY + H);
+                    const Vec3 side = normalize(Y(lo[f], roofY) - a) * 0.09;
+                    quad(metalM, a - side, a + side, b + side * 0.4, b - side * 0.4, metal);
+                }
+            }
+            emitPlanSlab(out, hi, roofY + H + 0.3, 0.3, PartId::Roof, metal);
+            rise = H + 0.3 + mast(c2, roofY + H + 0.3, std::clamp(H * 0.6, Real(6), Real(30)), 0.9, metal * 1.2);
+            break;
+        }
+        case 5: {   // LANTERN
+            if (!convex) return 0;
+            const Poly2 lan = offsetPlan(top, std::max(Real(2.0), shortW * 0.18));
+            if (lan.size() < 3 || std::fabs(area(lan)) < 20) return 0;
+            const Real H = fh * 2.0;
+            for (std::size_t e = 0; e < lan.size(); ++e) {
+                const Vec2 a = lan[e], b = lan[(e + 1) % lan.size()];
+                quad(litM, Y(a, roofY), Y(b, roofY), Y(b, roofY + H), Y(a, roofY + H), Vec3(0.95, 0.92, 0.85));
+            }
+            if (full)
+                for (const Vec2& v : lan) post(v, roofY, H, 0.35);
+            emitPlanSlab(out, offsetPlan(lan, -0.5), roofY + H + 0.6, 0.6, PartId::Roof, metal);
+            rise = H + 0.6;
+            break;
+        }
+        case 6: {   // FRAME
+            if (!convex) return 0;
+            const Real H = fh * 1.6, w = 0.55;
+            const Poly2 ring = offsetPlan(top, 0.3);
+            for (std::size_t e = 0; e < ring.size(); ++e) {
+                const Vec2 a = ring[e], b = ring[(e + 1) % ring.size()];
+                const Real W = (b - a).length();
+                const int n = std::max(1, static_cast<int>(std::lround(W / 4.5)));
+                for (int k = 0; k < n; ++k) post(a + (b - a) * (static_cast<Real>(k) / n), roofY, H, w);
+                // The ring beam along the edge.
+                const Vec2 d = normalize(b - a), nn(-d.y, d.x);
+                const Vec2 a0 = a + nn * (w * 0.5), b0 = b + nn * (w * 0.5), a1 = a - nn * (w * 0.5), b1 = b - nn * (w * 0.5);
+                quad(metalM, Y(a1, roofY + H), Y(b1, roofY + H), Y(b0, roofY + H), Y(a0, roofY + H), metal * 1.1);
+                quad(metalM, Y(a1, roofY + H - w), Y(b1, roofY + H - w), Y(b1, roofY + H), Y(a1, roofY + H), metal * 1.1);
+                quad(metalM, Y(b0, roofY + H - w), Y(a0, roofY + H - w), Y(a0, roofY + H), Y(b0, roofY + H), metal * 1.1);
+            }
+            rise = H;
+            break;
+        }
+        case 7: {   // ANTENNAS
+            const int la = obb.longAxis();
+            const Vec2 L = obb.axis[la] * (obb.half[la] * 0.45);
+            const Real Hm = std::clamp(bodyH * 0.18, Real(20), Real(90));
+            const Vec3 white(0.82, 0.82, 0.80);
+            const Real r1 = mast(obb.center - L, roofY, Hm, 1.6, white);
+            const Real r2 = mast(obb.center + L, roofY, Hm * (0.88 + 0.12 * ((h & 0xffu) / 255.0)), 1.6, white);
+            rise = std::max(r1, r2);
+            break;
+        }
+        case 8: {   // MAST
+            if (!convex) return 0;
+            const Poly2 plinth = offsetPlan(top, shortW * 0.3);
+            if (plinth.size() >= 3) screen(plinth, roofY, fh);
+            const Real Hm = std::clamp(bodyH * 0.25, Real(25), Real(120));
+            rise = fh + mast(c2, roofY + fh, Hm, 2.2, Vec3(0.78, 0.79, 0.80));
+            break;
+        }
+        default: return 0;
+    }
+    appendToPart(out, PartId::Glass, glassM);
+    appendToPart(out, PartId::LitBand, litM);
+    appendToPart(out, PartId::Detail, metalM);
+    appendToPart(out, PartId::Roof, roofM);
+    return rise;
+}
+
 static Real emitSpireCrown(BuildingMesh& out, const OBB2& topObb, Real roofY,
                            const BuildingParams& p, const Vec3& wallColor) {
     const Vec3 up(0, 1, 0);
@@ -3399,6 +3722,12 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (std::size_t e = 0; e < spk.plan.size(); ++e) {
             const FaceRect fr =
                 planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
+            if (mechanicalStorey(params, ki)) {
+                // The plant room: a closed painted wall behind the louvres.
+                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
+                              interiorInset(params), interiorPaintFor(params) * 0.8, false);
+                continue;
+            }
             if (params.curtainWall) {
                 // The inside of a curtain wall is GLASS above a spandrel band:
                 // the pane part, which the interior system draws clear, so a
@@ -3581,6 +3910,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // and the ring pass returns nothing for a lobby anyway.
     for (int ki = kA; ki < kB; ++ki) {
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
+        if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
         const RoomPlan rp = roomPlan(spk.plan, params, core,
                                      il.hasStair ? il.edge : static_cast<std::size_t>(-1),
                                      interiorInset(params), ki,
@@ -4031,7 +4361,13 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             tierY0 = y;
         }
         const Real fh = params.floorHeight;
+        const bool plant = mechanicalStorey(params, i + 1);
         for (std::size_t e = 0; e < cur.size(); ++e) {
+            if (plant) {
+                const Vec3 blade = params.curtainWall ? curtainMullionColour(params.mullionTone) * 1.2 : wallColor * 0.8;
+                emitLouvreBand(out, planEdgeRect(cur, e, y, fh), blade, full);
+                continue;
+            }
             if (full && params.parkingDecks && !params.curtainWall) {
                 emitParkingDeckRect(out, planEdgeRect(cur, e, y, fh), upper,
                                     wallColor);
@@ -4418,11 +4754,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             emitRotunda(out, Vec3(topObb.center.x, 0, topObb.center.y), R,
                         y + 0.05, r3, f3, wallColor, params.trimColor);
             roofRise = R * 0.62 + std::max(Real(2.6), R * 0.85) + 1.7;
-        } else if (full) {
+        } else {
+            // THE TOP (buildings M2) -- both tiers: it is the skyline. The penthouse stays behind a screen and
+            // wherever no top stands; a sloped, faceted, lantern, frame or mast top houses the plant itself.
+            const Real topRise = emitTowerTop(out, cur, y + 0.05, y - baseY, params, wallColor, full, rectish);
+            roofRise = std::max(roofRise, topRise);
             // Flat (LOD1) keeps spire/dome/steeple — they are the skyline —
             // but skips the penthouse + roof-furniture pack.
-            emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
-                      y + 0.05, params, rng, &cur);
+            if (full && (topRise <= 0 || params.top == 2 || params.top == 7))
+                emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
+                          y + 0.05, params, rng, &cur);
         }
     }
     out.attaches.push_back({Vec3(centroid(cur).x, y + roofRise, centroid(cur).y),
@@ -4445,6 +4786,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     }
     return out;
 }
+
 
 CurtainStyle curtainStyleOf(const BuildingParams& p) {
     CurtainStyle cs;

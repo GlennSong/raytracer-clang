@@ -115,10 +115,76 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
 // Slenderness cap shared by every table (device: no pencil towers). Real
 // towers ARE slender — the tower recipes ask for a higher ratio so the
 // skyscraper cluster can actually rise; everything else keeps the squat cap.
+// STOREY HEIGHTS BY USE (buildings M1; Glenn, 2026-09-30: "our buildings aren't to scale with real buildings ...
+// different heights for different use cases is a good idea"). Every storey used to be 3.2 m, a flat's: an office
+// floor is 3.9-4.1 m floor to floor, a supertall condo's 4.4-4.8, a tower lobby 6-8. Applied after the recipe, ONLY
+// where it left the defaults (a warehouse's 3.6, a capitol's 4.2 stand), on its own dice so no other pick moves.
+// Houses, shops and walk-ups keep theirs.
+void storeyHeightsByUse(BuildingRecipe& out) {
+    BuildingParams& p = out.params;
+    const bool fhDefault = std::fabs(p.floorHeight - human::FLOOR_HEIGHT) < 1e-9;
+    const bool ghDefault = std::fabs(p.groundHeight - human::GROUND_HEIGHT) < 1e-9;
+    Hash h(p.seed ^ 0x51ae7b3du);
+    const std::string& n = out.name;
+    const bool office = out.placeType == "office";
+    const bool civic = out.placeType == "civic";
+    const bool homeTower = out.placeType == "home" && p.floors >= 12;
+    const bool tower = p.floors >= 15;
+    if (fhDefault) {
+        if (n == "pencil_tower") p.floorHeight = h.range(4.4, 4.8);
+        else if (office) p.floorHeight = h.range(3.9, 4.1);
+        else if (civic) p.floorHeight = h.range(3.8, 4.1);
+        else if (homeTower) p.floorHeight = h.range(3.1, 3.3);
+        else if (n == "hotel" || n == "commercial_block") p.floorHeight = h.range(3.4, 3.7);
+    }
+    if (ghDefault) {
+        if (office && tower) p.groundHeight = h.range(6.0, 8.0);
+        else if (office || civic) p.groundHeight = h.range(5.0, 5.6);
+        else if (homeTower || n == "hotel") p.groundHeight = h.range(5.5, 6.5);
+    }
+}
+
+// The SLENDERNESS cap in metres: the plate's short side times `slender` is as tall as the building may stand,
+// whatever its storeys are.
 void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
+    const Real fh = std::max(Real(2.4), p.floorHeight);
     const int maxFloors =
-        std::max(1, static_cast<int>(shortSide * slender / 3.2) - 1);
+        std::max(1, static_cast<int>(shortSide * slender / fh) - 1);
     p.floors = std::min(p.floors, maxFloors);
+}
+void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
+    storeyHeightsByUse(out);
+    capFloors(out.params, shortSide, slender);
+    if (out.params.floors < 15) out.params.top = 0;   // a top is a tower's: the short ones keep the penthouse
+}
+
+// MASONRY DEPTH (buildings M3): window groups and full-height verticals on a punched-window building, rolled on its
+// OWN dice. `vertChance` of the verticals (and a deeper reveal with them); the group size from {size, weight}.
+void masonryDepth(BuildingParams& p, Real vertChance, std::initializer_list<std::pair<uint8_t, Real>> groups) {
+    if (p.curtainWall) return;
+    Hash h(p.seed ^ 0x2b7e1516u);
+    p.verticals = h.unit() < vertChance;
+    if (p.verticals) p.windowInset = std::max(p.windowInset, Real(0.22));
+    Real total = 0;
+    for (const auto& [g, w] : groups) total += w;
+    Real r = h.unit() * total;
+    for (const auto& [g, w] : groups) {
+        if (r < w) { p.windowGroup = g; return; }
+        r -= w;
+    }
+}
+
+// THE TOP a tower stands under (buildings M2): a weighted menu {top, weight}, rolled on the building's OWN dice
+// (its seed), so no other pick moves. 1 = penthouse; emitTowerTop has the rest.
+void towerTop(BuildingParams& p, std::initializer_list<std::pair<uint8_t, Real>> menu) {
+    Hash h(p.seed ^ 0x7c3e9a15u);
+    Real total = 0;
+    for (const auto& [t, w] : menu) total += w;
+    Real r = h.unit() * total;
+    for (const auto& [t, w] : menu) {
+        if (r < w) { p.top = t; return; }
+        r -= w;
+    }
 }
 
 // ---- NAMED RECIPES -----------------------------------------------------------
@@ -165,6 +231,7 @@ void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
         out.massing = BuildingRecipe::Massing::TowerInPlaza;
     out.placeType = "office";
     if (p.curtainWall) glassStyle(p, rng, true);   // every glass tower its own glass (NYC variety M2)
+    towerTop(p, {{2, 30}, {4, 12}, {3, 10}, {5, 10}, {6, 10}, {8, 6}, {7, 4}, {1, 18}});   // buildings M2
     out.name = "glass_tower";
 }
 
@@ -179,6 +246,8 @@ void recipeOfficeSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
                         p.setbackEvery = rng.range(1.1, 1.6); }
     cx.slender = 2.4 + cx.coreness * 0.8;
     out.placeType = "office";
+    towerTop(p, {{1, 70}, {2, 30}});   // buildings M2
+    masonryDepth(p, 0.25, {{1, 60}, {2, 40}});   // buildings M3
     out.name = "office_slab";
 }
 
@@ -237,6 +306,7 @@ void recipeOfficeMidrise(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.groundRetail = true;
     dress(p, FacadeStyle::Concrete, rng);
     out.placeType = "office";
+    masonryDepth(p, 0.2, {{1, 60}, {2, 40}});   // buildings M3
     out.name = "office_midrise";
 }
 
@@ -318,6 +388,7 @@ void recipeApartments(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
         p.roofPitch = rng.range(0.4, 0.6);
     }
     out.placeType = "home";
+    masonryDepth(p, 0.1, {{1, 70}, {2, 30}});   // buildings M3
     out.name = "apartments";
 }
 
@@ -362,6 +433,8 @@ void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
                         p.setbackEvery = rng.range(1.0, 1.4); }
     cx.slender = 2.2;
     out.placeType = "shop";
+    towerTop(p, {{5, 30}, {1, 70}});   // buildings M2
+    masonryDepth(p, 0.3, {{1, 70}, {2, 30}});   // buildings M3
     out.name = "hotel";
 }
 
@@ -402,6 +475,7 @@ void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     cx.slender = 2.8 + cx.coreness * 1.5;
     streetWallEnvelope(p, rng, cx);
     out.placeType = "office";
+    masonryDepth(p, 0.8, {{1, 20}, {2, 60}, {3, 20}});   // buildings M3
     out.name = "art_deco_tower";
 }
 
@@ -414,6 +488,7 @@ void recipeSteppedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     cx.slender = 2.6 + cx.coreness * 1.2;
     streetWallEnvelope(p, rng, cx);
     out.placeType = "office";
+    masonryDepth(p, 0.5, {{1, 50}, {2, 50}});   // buildings M3
     out.name = "stepped_tower";
 }
 
@@ -428,6 +503,7 @@ void recipeDrumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.massing = BuildingRecipe::Massing::Circle;
     out.placeType = "office";
     if (p.curtainWall) glassStyle(p, rng, true);   // every glass tower its own glass (NYC variety M2)
+    towerTop(p, {{5, 40}, {2, 30}, {4, 30}});   // buildings M2
     out.name = "drum_tower";
 }
 
@@ -446,6 +522,7 @@ void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.massing = BuildingRecipe::Massing::PodiumTower;
     out.placeType = "office";
     if (p.curtainWall) glassStyle(p, rng, true);   // every glass tower its own glass (NYC variety M2)
+    towerTop(p, {{2, 30}, {3, 15}, {4, 15}, {6, 10}, {7, 10}, {1, 20}});   // buildings M2
     out.name = "podium_tower";
 }
 
@@ -516,6 +593,8 @@ void recipeSkyExposureTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.spire = p.floors > 30 && rng.unit() < 0.35;
     cx.slender = 3.2 + cx.coreness * 2.5;
     out.placeType = "office";
+    towerTop(p, {{5, 25}, {4, 15}, {8, 10}, {7, 10}, {1, 40}});   // buildings M2
+    masonryDepth(p, 0.7, {{1, 20}, {2, 50}, {3, 30}});   // buildings M3
     out.name = "sky_exposure_tower";
 }
 
@@ -538,6 +617,7 @@ void recipeTowerOnBase(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 3.4 + cx.coreness * 3.5;
     out.placeType = "office";
+    towerTop(p, {{2, 35}, {5, 20}, {3, 10}, {6, 10}, {1, 25}});   // buildings M2
     out.name = "tower_on_base";
 }
 
@@ -557,6 +637,7 @@ void recipeTaperedGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 4.0;
     out.placeType = "office";
+    towerTop(p, {{8, 40}, {4, 20}, {2, 25}, {5, 15}});   // buildings M2
     out.name = "tapered_glass_tower";
 }
 
@@ -577,6 +658,7 @@ void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 3.0 + cx.coreness * 2.0;
     out.placeType = "office";
+    towerTop(p, {{1, 60}, {2, 30}, {6, 10}});   // buildings M2
     out.name = "glass_slab";
 }
 
@@ -604,6 +686,7 @@ void recipePencilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 10.0 + cx.coreness * 4.0;
     out.placeType = "home";   // the supertalls on Billionaires' Row are residential
+    towerTop(p, {{6, 35}, {2, 35}, {5, 30}});   // buildings M2
     out.name = "pencil_tower";
 }
 
@@ -623,6 +706,8 @@ void recipeCondoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
                         p.setbackEvery = rng.range(1.0, 1.4); }
     cx.slender = 2.2;
     out.placeType = "home";
+    towerTop(p, {{1, 50}, {2, 30}, {6, 20}});   // buildings M2
+    masonryDepth(p, 0.1, {{1, 70}, {2, 30}});   // buildings M3
     out.name = "condo_tower";
 }
 
@@ -1251,7 +1336,7 @@ bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness
     cx.coreness = std::clamp(coreness, Real(0), Real(1));
     cx.roomy = area > 900;
     kRecipeRegistry[ri].fn(out, rng, cx);
-    capFloors(out.params, shortSide, cx.slender);
+    capFloors(out, shortSide, cx.slender);
     return true;
 }
 const char* architectRecipeName(int index) {
@@ -1377,7 +1462,7 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
             recipeFactory(out, rng, cx);
             break;
     }
-    capFloors(out.params, shortSide, cx.slender);
+    capFloors(out, shortSide, cx.slender);
     return out;
 }
 
@@ -1408,7 +1493,7 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
         for (const auto& [thr, idx] : tbl)
             if (roll < thr) { ri = idx; break; }
         kRecipeRegistry[ri].fn(out, rng, cx);
-        capFloors(out.params, shortSide, cx.slender);
+        capFloors(out, shortSide, cx.slender);
         return out;
     }
 
@@ -1481,7 +1566,7 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else                  recipeCornerShop(out, rng, cx);
             break;
     }
-    capFloors(out.params, shortSide, cx.slender);
+    capFloors(out, shortSide, cx.slender);
     return out;
 }
 
@@ -1526,7 +1611,7 @@ BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
         case LandmarkKind::Museum:     recipeMuseum(out, rng, cx); break;
         default: break;
     }
-    capFloors(out.params, shortSide, cx.slender);
+    capFloors(out, shortSide, cx.slender);
     return out;
 }
 

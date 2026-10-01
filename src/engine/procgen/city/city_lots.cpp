@@ -3285,7 +3285,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         plazaPoly = {f.toWorld({fx0, fy0}), f.toWorld({fx1, fy0}), f.toWorld({fx1, fy0 + P}), f.toWorld({fx0, fy0 + P})};
                         ensureCCW(plazaPoly);
                         // Re-cap on the tower's own plate (the recipe capped on the site's).
-                        const int maxFloors = std::max(1, static_cast<int>(std::min(tw, td) * 6.0 / 3.2) - 1);
+                        const int maxFloors = std::max(1, static_cast<int>(std::min(tw, td) * 6.0 / std::max(Real(2.4), bp.floorHeight)) - 1);
                         bp.floors = std::min(bp.floors, maxFloors);
                         bp.setbackFloors = 0;   // a slab in a plaza rises sheer
                         bp.setbackEvery = 0;

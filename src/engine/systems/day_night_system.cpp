@@ -618,6 +618,27 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
     nightAdapt_ = baseExposure_ > 0.0f ? lit.exposure / baseExposure_ : 1.0f;
 }
 
+// The glow at one ramp, per ENTITY (see NightGlow::appliedRamp): the ramp holds still for long stretches (a staged
+// hour, the cycle off) while building chunks stream in around the player; each is written once at the ramp it has
+// not seen yet.
+void applyNightGlowRamp(World& world, Real ramp) {
+    const float rf = static_cast<float>(ramp);
+    world.each<NightGlow, Renderable>(
+        [&](Entity, NightGlow& glow, Renderable& r) {
+            if (glow.appliedRamp == rf) return;
+            glow.appliedRamp = rf;
+            r.material.emission = glow.fullEmission * ramp;
+            if (glow.nightAlbedo < 1.0f)
+                r.material.albedo = glow.dayAlbedo * (1.0 - (1.0 - glow.nightAlbedo) * ramp);
+        });
+    world.each<NightGlow, InstanceGroup>(
+        [&](Entity, NightGlow& glow, InstanceGroup& g) {
+            if (glow.appliedRamp == rf) return;
+            glow.appliedRamp = rf;
+            g.material.emission = glow.fullEmission * ramp;
+        });
+}
+
 // NIGHT GLOW (WS3): everything the loader tagged — street-lamp glow shells,
 // lit building windows — fades in on the shared dusk ramp, so every light in
 // the city agrees with the headlights on when evening starts. Runs even when
@@ -626,18 +647,8 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
 // structural mutation inside each() (ADR-0006).
 void DayNightSystem::applyNightGlow(FrameContext& ctx) {
     const Real ramp = duskRamp(ctx.view.lighting.solarElevation);
-    if (ramp == lastGlowRamp_) return;   // emission writes only on change
     lastGlowRamp_ = ramp;
-    ctx.world.each<NightGlow, Renderable>(
-        [&](Entity, NightGlow& glow, Renderable& r) {
-            r.material.emission = glow.fullEmission * ramp;
-            if (glow.nightAlbedo < 1.0f)
-                r.material.albedo = glow.dayAlbedo * (1.0 - (1.0 - glow.nightAlbedo) * ramp);
-        });
-    ctx.world.each<NightGlow, InstanceGroup>(
-        [&](Entity, NightGlow& glow, InstanceGroup& g) {
-            g.material.emission = glow.fullEmission * ramp;
-        });
+    applyNightGlowRamp(ctx.world, ramp);
 }
 
 // BEACON FLASH: the aviation lamps on tall roofs. Their chunks carry NightGlow

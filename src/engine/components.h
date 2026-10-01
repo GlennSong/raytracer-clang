@@ -542,6 +542,10 @@ struct NightGlow {
     // and its lit-window glow reads. 1 = leave the albedo alone.
     float nightAlbedo = 1.0f;
     Vec3 dayAlbedo{1.0, 1.0, 1.0};
+    // The ramp this entity was last lit at (DayNightSystem). -1 = never: a chunk that STREAMS IN after dusk is
+    // lit on its first frame, not left dark until the ramp next changes (Glenn's towers that went dark once he
+    // had walked past them, 2026-09-30).
+    float appliedRamp = -1.0f;
 };
 
 // A FLASHING night light (skyscrapers v2 M4): with NightGlow on the same

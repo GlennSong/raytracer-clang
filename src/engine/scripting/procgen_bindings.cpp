@@ -962,6 +962,20 @@ std::string optStrField(lua_State* L, int idx, const char* key, const char* def)
 
 }  // namespace
 
+// top = "screen" | "sloped" | ... (buildings M2): the tower's top, emitTowerTop. Read for a plain building and
+// again over a recipe's params, so a script can try every top on one tower.
+static void readTopField(lua_State* L, int idx, BuildingParams& p) {
+    lua_getfield(L, idx, "top");
+    if (lua_isstring(L, -1)) {
+        static const char* names[9] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
+                                       "antennas", "mast"};
+        const std::string t = lua_tostring(L, -1);
+        for (int i = 0; i < 9; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
+    }
+    lua_pop(L, 1);
+}
+
+
 // Overlay variant: reads the table's fields ONTO `p`, leaving everything the
 // table doesn't mention untouched — the style book applies recipe overrides
 // through this, so a book entry of { roof = "hip" } changes only the roof.
@@ -1102,6 +1116,9 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
         for (int i = 0; i < 10; ++i) if (g == names[i]) p.glassTint = static_cast<uint8_t>(i);
     }
     lua_pop(L, 1);
+    readTopField(L, idx, p);
+    p.windowGroup = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "window_group", p.windowGroup)), 1, 3));
+    p.verticals = optBoolField(L, idx, "verticals", p.verticals);
     lua_getfield(L, idx, "mullions");
     if (lua_isstring(L, -1)) {
         static const char* names[5] = {"steel", "bronze", "black", "silver", "white"};
@@ -1233,6 +1250,7 @@ int l_building_grow_plan_parts(lua_State* L) {
             return luaL_error(L, "building.grow_plan_parts: unknown recipe '%s'", recipeName.c_str());
         p = rc.params;
         p.openDoorway = true;
+        readTopField(L, 1, p);   // a script may try another top on the recipe's tower
         lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
         lua_setfield(L, 1, "grown_floors");
     }

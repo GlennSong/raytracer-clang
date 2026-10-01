@@ -24,6 +24,10 @@ struct DayNightConfig;
 // current state into the view every frame). Settings persist
 // time/dayMinutes/latitude/dayOfYear/enabled; ImGui exposes them under
 // "Day / Night" in debug mode.
+// Write every NightGlow entity's emission for `ramp` (0 day .. 1 night) -- each entity once per ramp value, so one
+// that streamed in since the last change is lit too.
+void applyNightGlowRamp(World& world, Real ramp);
+
 class DayNightSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;

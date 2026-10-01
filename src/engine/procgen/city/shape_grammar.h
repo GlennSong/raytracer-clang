@@ -489,6 +489,16 @@ struct BuildingParams {
     uint8_t crown = 0;
     uint8_t signage = 0;
     uint8_t uplights = 0;
+    // THE TOP (buildings M2): what stands on a flat roof against the sky -- 0/1 the mechanical penthouse, 2 screen,
+    // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop). spire/dome win over it.
+    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse".
+    uint8_t top = 0;
+    // MASONRY DEPTH (buildings M3): windowGroup 1-3 -- windows in pairs or triples, a slim mullion between them and
+    // a broad pier between groups; verticals -- full-height piers proud of the wall at every group, the spandrel
+    // panels between storeys recessed and darker (Rockefeller Center, the Empire State). Lua: window_group = 2,
+    // verticals = true.
+    uint8_t windowGroup = 1;
+    bool  verticals = false;
 };
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.
@@ -514,6 +524,11 @@ struct CurtainStyle {
     int bays(Real width) const { return std::max(1, static_cast<int>(std::lround(width / std::max(Real(0.8), bay)))); }
 };
 CurtainStyle curtainStyleOf(const BuildingParams& p);
+// MECHANICAL FLOORS (buildings M1): a tall tower's plant storeys -- a louvre band in place of its windows, never lit,
+// no rooms inside -- every 15-25 floors (by the seed) on a tower of 30+ floors, and the storey under the roof of a
+// 40+ one. `floor` counts from 1 (the first storey above the ground storey). Derived from the params alone, so the
+// exterior, its far tier and the interior agree.
+bool mechanicalStorey(const BuildingParams& p, int floor);
 
 // Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
 BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,

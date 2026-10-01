@@ -4,7 +4,7 @@
 -- cap on its plan), on a lot shaped for it, in lines along +x (the street is on the +z side):
 --   the New York forms: sky exposure | tower on a base | tapered glass | glass slab | pencil
 --   then the towers that came before: glass tower | podium tower | art deco | stepped | office slab
--- opts.rows (default 3) lines, each rolled on its own dice; opts.seed (level JSON) rolls them all again --
+-- opts.tops (default on) adds a row of one tower under each top. opts.rows (default 3) lines, each rolled on its own dice; opts.seed (level JSON) rolls them all again --
 -- glass tint, cladding, fins, height; opts.coreness (default 1)
 -- is how deep downtown the lots sit (lower = shorter towers).
 
@@ -81,6 +81,22 @@ for row = 1, ROWS do
     m:add(scope{ origin = {x - 2, -0.1, z - d/2 - 2}, size = {w + 4, 0.1, d + 4} }:box{ 0.55, 0.55, 0.53 }, MATS.ground)
     print(string.format("[lineup] row %d %-20s %2d floors  lot %dx%d  at x %.0f z %.0f", row, name, req.grown_floors or -1, w, d, cx, z))
     x = x + w + GAP
+  end
+end
+-- THE TOPS ROW (buildings M2), behind the rest: one glass tower per top, the same tower every time, so only the
+-- top differs -- penthouse | screen | sloped | faceted | lantern | frame | antennas | mast.
+if opts.tops ~= false then
+  local TOPS = {"penthouse", "screen", "sloped", "faceted", "lantern", "frame", "antennas", "mast"}
+  local z = -(ROWS) * 120
+  for i, top in ipairs(TOPS) do
+    local w, d = 40, 34
+    local cx = (i - 1) * (w + 46) + w / 2
+    local req = { recipe = "glass_tower", seed = seed0 * 101 + 4242, coreness = 0.6, plan = rect(w, d), top = top }
+    for _, e in ipairs(building.grow_plan_parts(req)) do
+      if not SKIP[e.part] then m:add(mesh.translate(e.mesh, {cx, 0, z}), MATS[e.part] or MATS.wall) end
+    end
+    m:add(scope{ origin = {cx - w/2 - 2, -0.1, z - d/2 - 2}, size = {w + 4, 0.1, d + 4} }:box{ 0.55, 0.55, 0.53 }, MATS.ground)
+    print(string.format("[lineup] tops %-10s %2d floors at x %.0f z %.0f", top, req.grown_floors or -1, cx, z))
   end
 end
 return m

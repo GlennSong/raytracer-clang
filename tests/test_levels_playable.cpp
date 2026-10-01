@@ -3719,17 +3719,21 @@ TEST_CASE(level_print_skyline_by_recipe) {
         const CityBuildings* cb = nullptr;
         world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
         if (!cb) continue;
-        struct Tally { int n = 0, enterable = 0, tallest = 0; Vec2 at{0, 0}; };
+        // Heights in METRES (buildings M1: storeys by use) and the ground plate's mean area, beside the floors.
+        struct Tally { int n = 0, enterable = 0, tallest = 0; double metres = 0, plate = 0; Vec2 at{0, 0}; };
         std::map<std::string, Tally> by;
         for (const BuildingRecord& r : cb->records) {
             if (r.params.floors < 15) continue;
             Tally& t = by[r.recipe.empty() ? std::string("?") : r.recipe];
             ++t.n;
             if (r.enterable) ++t.enterable;
-            if (r.params.floors > t.tallest) { t.tallest = r.params.floors; t.at = centroid(r.plan); }
+            t.plate += std::fabs(area(r.plan));
+            const double m = r.params.groundHeight + r.params.floors * r.params.floorHeight;
+            if (r.params.floors > t.tallest) { t.tallest = r.params.floors; t.metres = m; t.at = centroid(r.plan); }
         }
         std::printf("    [skyline] %-22s towers of 15+ floors by recipe:\n", name);
         for (const auto& [k, t] : by)
-            std::printf("      %-20s %4d (enterable %4d), tallest %2d floors  ->  teleport %.0f %.0f\n", k.c_str(), t.n, t.enterable, t.tallest, t.at.x, t.at.y);
+            std::printf("      %-20s %4d (enterable %4d), tallest %2d floors %4.0f m, mean plate %5.0f m2  ->  teleport %.0f %.0f\n",
+                        k.c_str(), t.n, t.enterable, t.tallest, t.metres, t.plate / std::max(1, t.n), t.at.x, t.at.y);
     }
 }
