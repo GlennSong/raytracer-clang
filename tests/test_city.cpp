@@ -997,7 +997,10 @@ TEST_CASE(curtain_wall_interior_skins_meet_at_the_corners) {
     p.core = 1;   // no core: the four facade skins are the whole room
     p.seed = 3;
     const Real inset = std::max(p.wallThickness, Real(0.55));
-    auto cornersShared = [&](const BuildingMesh& bm, Real y0, const Poly2& storeyPlan) {
+    // The upper storeys' skin is drawn against the outer glass (0.10 + 0.02, buildings D: no cavity between the
+    // inside and the curtain); the ground storey's lobby walls keep the clipping inset.
+    const Real skinInset = 0.12;
+    auto cornersShared = [&](const BuildingMesh& bm, Real y0, const Poly2& storeyPlan, Real inset) {
         const Poly2 inner = offsetPolygonEdges(storeyPlan, std::vector<Real>(storeyPlan.size(), -inset));
         int shared = 0;
         for (const Vec2& c : inner) {
@@ -1015,9 +1018,9 @@ TEST_CASE(curtain_wall_interior_skins_meet_at_the_corners) {
     };
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
     const BuildingMesh upper = growInterior(plan, p, 0.0);
-    CHECK(cornersShared(upper, storeys[2].y0, storeys[2].plan) == 4);
+    CHECK(cornersShared(upper, storeys[2].y0, storeys[2].plan, skinInset) == 4);
     const BuildingMesh ground = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
-    CHECK(cornersShared(ground, 0.0, plan) == 4);   // the entrance wall and the blank stair wall mitre too
+    CHECK(cornersShared(ground, 0.0, plan, inset) == 4);   // the entrance wall and the blank stair wall mitre too
 }
 
 // Glenn's walk (2026-09-14): "looking out the windows there's a gap between

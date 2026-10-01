@@ -716,6 +716,9 @@ Vec3 curtainMullionColour(uint8_t tone) {
 }
 }  // namespace
 
+// How far a curtain wall's glass sits behind its mullion grid (the interior's skin is drawn just behind it).
+constexpr Real kCurtainGlassIn = 0.10;
+
 namespace {
 // The LOUVRE BAND of a mechanical storey across one face: a dark recess with horizontal blades proud of it (the
 // intake and exhaust of the plant room behind), a solid sill and head. `full` adds the blades; the far tier keeps
@@ -763,7 +766,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     // Glass sits INSET behind the frame plane; the mullion grid is SOLID
     // geometry — front face + side returns back to the glass — so up close it
     // reads as a frame the panes sit in, not a decal (device feedback).
-    const Real glassIn = 0.10;                   // glass plane behind the grid
+    const Real glassIn = kCurtainGlassIn;        // glass plane behind the grid
     Vec3 gin = fr.n * (-glassIn);
     // A face too NARROW for a pane (a chamfer's first steps, a setback's sliver face): an opaque metal panel the
     // storey's full height, not a stick-thin window (Glenn, 2026-09-30: "some windows are super skinny").
@@ -3832,13 +3835,19 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 // floor looks out over the city; the band is painted.
                 // The band is the exterior's spandrel (emitCurtainWallRect:
                 // min(0.9, 0.30 fh)), and the grid inside mirrors its bays.
+                // DRAWN AGAINST THE OUTER GLASS (Glenn, 2026-09-30: "in the skyscrapers with the steel frames the
+                // interior and exterior don't really match up, it feels like there's a gap between the two"): the
+                // inner skin sat at the 0.55 m clipping inset, 0.45 m behind the curtain's glass (0.10 in), so a
+                // cavity and a second, offset mullion grid showed between. It is drawn 2 cm behind the glass now;
+                // the COLLIDER planes keep the 0.55 m inset, so the camera still cannot reach it.
+                const Real skin = kCurtainGlassIn + 0.02;
                 const CurtainStyle ics = curtainStyleOf(params);
                 const Real band = ics.spandrelH(spk.h);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0, band,
-                              interiorInset(params), interiorPaintFor(params), false);
+                              skin, interiorPaintFor(params), false);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0 + band, spk.h - band,
-                              interiorInset(params), Vec3(1, 1, 1), false, PartId::Glass);
-                emitInnerCurtainGrid(out, fr, interiorInset(params), band, ics);
+                              skin, Vec3(1, 1, 1), false, PartId::Glass);
+                emitInnerCurtainGrid(out, fr, skin, band, ics);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, upperP),
                                   interiorInset(params), params.wallColor,
