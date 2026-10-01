@@ -965,6 +965,37 @@ std::string optStrField(lua_State* L, int idx, const char* key, const char* def)
 
 // top = "screen" | "sloped" | ... (buildings M2): the tower's top, emitTowerTop. Read for a plain building and
 // again over a recipe's params, so a script can try every top on one tower.
+// ATTACHED buildings: party = {{nx, nz, at}, ...} -- each a party line, its outward normal and offset
+// dot(normal, point); back_door / fire_escape the rear's service door and steel stair.
+static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
+    lua_getfield(L, idx, "party");
+    if (lua_istable(L, -1)) {
+        p.partyWalls = 0;
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n && p.partyWalls < 2; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                Real v[3] = {0, 0, 0};
+                for (int j = 0; j < 3; ++j) {
+                    lua_rawgeti(L, -1, j + 1);
+                    v[j] = lua_isnumber(L, -1) ? static_cast<Real>(lua_tonumber(L, -1)) : Real(0);
+                    lua_pop(L, 1);
+                }
+                const Vec2 nn(v[0], v[1]);
+                if (nn.length() > 1e-6) {
+                    p.partyN[p.partyWalls] = normalize(nn);
+                    p.partyAt[p.partyWalls] = v[2];
+                    ++p.partyWalls;
+                }
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    p.backDoor = optBoolField(L, idx, "back_door", p.backDoor);
+    p.fireEscape = optBoolField(L, idx, "fire_escape", p.fireEscape);
+}
+
 static void readTopField(lua_State* L, int idx, BuildingParams& p) {
     lua_getfield(L, idx, "top");
     if (lua_isstring(L, -1)) {
@@ -1121,6 +1152,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.windowGroup = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "window_group", p.windowGroup)), 1, 3));
     p.verticals = optBoolField(L, idx, "verticals", p.verticals);
     p.residential = optBoolField(L, idx, "residential", p.residential);   // apartments inside (buildings B)
+    readAttachedFields(L, idx, p);
     lua_getfield(L, idx, "mullions");
     if (lua_isstring(L, -1)) {
         static const char* names[5] = {"steel", "bronze", "black", "silver", "white"};
@@ -1287,6 +1319,7 @@ static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
         p = rc.params;
         p.openDoorway = true;
         readTopField(L, 1, p);   // a script may try another top on the recipe's tower
+        readAttachedFields(L, 1, p);   // ...or stand it against its neighbours
         lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
         lua_setfield(L, 1, "grown_floors");
     }

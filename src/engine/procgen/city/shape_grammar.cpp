@@ -666,7 +666,9 @@ Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height,
 
 namespace {
 
-enum class FacadeMode { Residential, Retail, Entrance, Solid };
+// Rear: a residential ground face whose middle bay is a plain SERVICE door (attached buildings' back doors);
+// facadeLayout and the emitters read it as Residential everywhere else.
+enum class FacadeMode { Residential, Retail, Entrance, Solid, Rear };
 
 // A curtain-wall storey (ADR-0040 Pass B): a continuous glass skin, not punched
 // windows — an opaque spandrel band hiding the floor slab, vision glass above,
@@ -877,6 +879,7 @@ struct BayOpening {
                               // sill..head box is the arch's bounding box.
     bool entrance = false;    // this opening is the door
     bool shopDoor = false;    // ...a SHOP's own street door (buildings: shops), not the building's entrance
+    bool backDoor = false;    // ...the building's rear service door (FacadeMode::Rear)
 };
 // A SHOP on a storefront face (Glenn, 2026-10-01: "I'm still waiting to see these small shops"): bays b0..b1
 // (inclusive), its door in bay `door`, its trade.
@@ -901,6 +904,8 @@ static int windowGroupOf(const BuildingParams& p, FacadeMode mode, bool retailis
 static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                                  const BuildingParams& p) {
     FacadeLayout L;
+    const bool rear = mode == FacadeMode::Rear;
+    if (rear) mode = FacadeMode::Residential;
     L.bays = std::max(1, static_cast<int>(std::lround(fr.width / std::max(p.bayWidth, Real(0.5)))));
     L.bw = fr.width / L.bays;
     const Real bw = L.bw;
@@ -988,6 +993,12 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
         o.x0 = b * bw; o.x1 = (b + 1) * bw;
         o.entrance = (mode == FacadeMode::Entrance && b == centreBay);
         if (isShopDoor(b)) { o.entrance = true; o.shopDoor = true; }
+        // the back door: the middle bay, or with a fire escape the END bay, so the stair has the rest of the wall
+        // for a walkable pitch
+        if (rear && b == (p.fireEscape && L.bays >= 3 ? 0 : centreBay) && fr.width >= 1.6) {
+            o.entrance = true;
+            o.backDoor = true;
+        }
         o.wx0 = o.x0 + margin; o.wx1 = o.x1 - margin;       // window/opening span
         if (group > 1) {
             // GROUPED windows (M3): a slim mullion inside the group, a broad pier at its ends.
@@ -1036,9 +1047,48 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
 // are: the entrance edge is the Entrance, a vehicle-bay front or the stair's wall carries no openings to speak of
 // (Solid), a storefront edge that does not face the street (retailStreetOnly) is a plain wall. One answer for the
 // exterior, its far tier, the interior's colliders and its shops.
+}  // namespace (the two below are declared in the header)
+
+bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e) {
+    const std::size_t n = plan.size();
+    if (params.partyWalls == 0 || n < 3) return false;
+    const Vec2 a = plan[e % n], b = plan[(e + 1) % n];
+    const Vec2 d = b - a;
+    const Real len = d.length();
+    if (len < 1e-6) return false;
+    const Vec2 nrm(d.y / len, -d.x / len);   // CCW plan: outward
+    for (int k = 0; k < std::min<int>(params.partyWalls, 2); ++k) {
+        const Vec2 N = params.partyN[k];
+        if (dot(nrm, N) < 0.98) continue;
+        if (std::fabs(dot(a, N) - params.partyAt[k]) < 0.35 && std::fabs(dot(b, N) - params.partyAt[k]) < 0.35)
+            return true;
+    }
+    return false;
+}
+
+std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params) {
+    std::size_t best = plan.size();
+    Real bestLen = 0;
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        const Vec2 d = plan[(i + 1) % plan.size()] - plan[i];
+        const Real len = d.length();
+        if (len < 2.0 || len <= bestLen) continue;
+        const Vec2 nrm(d.y / len, -d.x / len);
+        if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z > -0.7) continue;
+        if (partyEdge(plan, params, i)) continue;
+        best = i;
+        bestLen = len;
+    }
+    return best;
+}
+
+namespace {
+
 static FacadeMode groundModeFor(const Poly2& plan, const BuildingParams& params, std::size_t e,
                                 std::size_t entranceEdge) {
     if (e == entranceEdge && params.groundBays > 0) return FacadeMode::Solid;
+    // A PARTY WALL has nothing in it: the neighbour stands against it.
+    if (e != entranceEdge && partyEdge(plan, params, e)) return FacadeMode::Solid;
     const FacadeMode base = params.solidFacade ? FacadeMode::Solid
                           : params.groundRetail ? FacadeMode::Retail
                                                 : FacadeMode::Residential;
@@ -1053,6 +1103,10 @@ static FacadeMode groundModeFor(const Poly2& plan, const BuildingParams& params,
         const Vec2 nrm(d.y, -d.x);
         if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z < 0.35) mode = FacadeMode::Residential;
     }
+    // The BACK DOOR: the rear face's middle bay, out to the yard (attached buildings).
+    if (params.backDoor && params.walkableGround && e != entranceEdge && mode != FacadeMode::Entrance &&
+        e == rearEdgeOf(plan, params))
+        mode = FacadeMode::Rear;
     return mode;
 }
 
@@ -1283,12 +1337,14 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
 static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                                const BuildingParams& p, const Vec3& wallColor) {
     RenderMesh wall, glass, glassLit, door;
+    const FacadeMode layoutMode = mode;   // Rear lays its back door out, and is Residential otherwise
+    if (mode == FacadeMode::Rear) mode = FacadeMode::Residential;
     emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0),
              fr.at(fr.width, fr.height), fr.at(0, fr.height), fr.n, wallColor);
     const Vec3 proud = fr.n * 0.02;
     const Vec3 gcol = glassGrey();
     const Vec3 dcol = materialFor(PartId::Door, wallColor).albedo;
-    for (const BayOpening& o : facadeLayout(fr, mode, p).open) {
+    for (const BayOpening& o : facadeLayout(fr, layoutMode, p).open) {
         // Same anchor as the full emitter's pane (fr.at(wx0, sill)), so a
         // window keeps its lit/dark choice across the LOD swap.
         if (!o.entrance && o.head - o.sill < 1e-3) continue;   // a BLANK bay (facadeLayout): the wall quad has it
@@ -1349,6 +1405,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
     // The splitter's decisions come from the SHARED layout (see facadeLayout):
     // this function only decides how much detail to draw them with.
     const FacadeLayout L = facadeLayout(fr, mode, p);
+    if (mode == FacadeMode::Rear) mode = FacadeMode::Residential;   // the layout has its back door
     const int bays = L.bays;
     const Real bw = L.bw;
     const Real fh = fr.height;
@@ -1493,7 +1550,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // AWNING over the DOOR (device: it was centred on the face, not the
             // door — it belongs to the door grammar): a projecting ledge just
             // above the opening, spanning a little wider than the leaf.
-            if (p.awning) {
+            if (p.awning && !bay.backDoor) {
                 const Real aw = std::min((wx1 - wx0) + 1.2, fr.width - 0.4);
                 const Real ac = (wx0 + wx1) * 0.5;
                 Vec3 c0 = fr.at(ac - aw * 0.5, openHead + 0.22);
@@ -1509,7 +1566,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // aperture: the lot layer turns it into a DoorSpec for colliders,
             // records and the leaf.
             out.attaches.push_back({fr.at((wx0 + wx1) * 0.5, 0), fr.n,
-                                    bay.shopDoor ? "shopdoor" : "entrance", wx1 - wx0, openHead});
+                                    bay.shopDoor ? "shopdoor" : bay.backDoor ? "backdoor" : "entrance", wx1 - wx0, openHead});
         } else {
             const Vec3 in = fr.n * (-p.windowInset);
             const Vec3 rev = wallColor * 0.82;
@@ -3819,9 +3876,109 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
     return rp;
 }
 
+// THE FIRE ESCAPE (attached buildings; Glenn, 2026-10-01: "different ways up to the second floor"). A steel
+// stair on the REAR face, at the end clear of the back door: an inner strip of grating along the wall at every
+// floor, and in an outer strip a flight from each level to the next -- every flight rising the same way, so each
+// stands a storey above the one below (no flight under another's treads). The first flight starts in the yard.
+// `vis` gets the drawing (Metal), `col` the walkable treads, landings and rails (the streamed interior's
+// collider); either may be null. Derived from the plan and params alone: exterior and interior agree.
+static void emitFireEscape(BuildingMesh* vis, RenderMesh* col, const Poly2& planIn, const BuildingParams& params,
+                           Real baseY, bool full) {
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return;
+    ensureCCW(plan);
+    const std::size_t re = rearEdgeOf(plan, params);
+    if (re >= plan.size()) return;
+    const std::vector<StoreyPlan> st = storeyPlans(plan, params);
+    if (st.size() < 2) return;
+    const FaceRect fr = planEdgeRect(plan, re, baseY, params.groundHeight);
+    const Real W = fr.width;
+    Real doorX0 = W * 0.5, doorX1 = W * 0.5;
+    if (params.backDoor)
+        for (const BayOpening& o : facadeLayout(fr, FacadeMode::Rear, params).open)
+            if (o.backDoor) { doorX0 = o.x0; doorX1 = o.x1; }
+    // the side of the door with more room; built as if on the right, mirrored onto the left (x -> W - x)
+    const bool flip = doorX0 > W - doorX1;
+    const Real room = flip ? doorX0 : W - doorX1;
+    const Real xe1 = W - 0.3;
+    const Real span = std::min(Real(9.0), room - 0.5);
+    if (span < 3.4) return;
+    const Real xe0 = xe1 - span;
+    auto mx = [&](Real x) { return flip ? W - x : x; };
+    const Real zi0 = 0.05, zi1 = 0.85, zo1 = 1.55;   // inner strip (landing), outer strip (flights)
+    const Real fx0 = xe0, fx1 = xe1 - 0.8;            // the flights' run; the arrival platform beyond it
+    const Vec3 X = fr.h, U(0, 1, 0), N = fr.n;
+    const Vec3 iron(0.11, 0.11, 0.12);
+    auto boxQuads = [&](RenderMesh& m, const Scope& sc) {
+        const Vec3 c000 = sc.corner(0, 0, 0), c100 = sc.corner(1, 0, 0), c110 = sc.corner(1, 1, 0),
+                   c010 = sc.corner(0, 1, 0), c001 = sc.corner(0, 0, 1), c101 = sc.corner(1, 0, 1),
+                   c111 = sc.corner(1, 1, 1), c011 = sc.corner(0, 1, 1);
+        const Vec3 r = sc.axis[0], u = sc.axis[1], f = sc.axis[2];
+        emitQuad(m, c000, c100, c110, c010, f * -1, iron);
+        emitQuad(m, c001, c101, c111, c011, f, iron);
+        emitQuad(m, c000, c001, c011, c010, r * -1, iron);
+        emitQuad(m, c100, c101, c111, c110, r, iron);
+        emitQuad(m, c000, c100, c101, c001, u * -1, iron);
+        emitQuad(m, c010, c110, c111, c011, u, iron);
+    };
+    RenderMesh steel;
+    // An axis-aligned box in face space (x along the wall, y up from baseY, z out from it).
+    auto box = [&](Real x0, Real x1, Real y0, Real y1, Real z0, Real z1, bool collide) {
+        const Real a = std::min(mx(x0), mx(x1)), b = std::max(mx(x0), mx(x1));
+        const Scope sc{fr.at(a, 0) + U * y0 + N * z0, {X, U, N}, Vec3(b - a, y1 - y0, z1 - z0)};
+        if (vis) boxQuads(steel, sc);
+        if (col && collide) boxQuads(*col, sc);
+    };
+    // A box sloped up the flight (x0,y0) -> (x1,y1): `lift` above the pitch line, `t` thick, z0..z1.
+    auto sloped = [&](Real x0, Real y0, Real x1, Real y1, Real lift, Real t, Real z0, Real z1, bool collide) {
+        const Real dx = mx(x1) - mx(x0), dy = y1 - y0, len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-6) return;
+        const Real sx = dx < 0 ? -1.0 : 1.0;   // the up-normal of the pitch line stays up when mirrored
+        const Vec3 a0 = (X * dx + U * dy) * (1.0 / len), a1 = (X * (-dy * sx) + U * (dx * sx)) * (1.0 / len);
+        const Scope sc{fr.at(mx(x0), 0) + U * y0 + a1 * lift + N * z0, {a0, a1, N}, Vec3(len, t, z1 - z0)};
+        if (vis) boxQuads(steel, sc);
+        if (col && collide) boxQuads(*col, sc);
+    };
+    Real yPrev = 0;   // the yard
+    for (std::size_t k = 1; k < st.size(); ++k) {
+        if (st[k].plan.size() != plan.size()) break;   // a setback moved the rear wall: stop at the tier
+        const Real Y = st[k].y0;
+        const Real rise = Y - yPrev;
+        // the flight: treads (solid risers in the collider), stringers, the outer handrail
+        const int n = std::max(1, static_cast<int>(std::ceil(rise / 0.19)));
+        const Real tread = (fx1 - fx0) / n;
+        for (int i = 0; i < n; ++i) {
+            const Real top = yPrev + rise * (i + 1) / n;
+            const Real xa = fx0 + tread * i, xb = xa + tread;
+            if (vis && full) box(xa, xb, top - 0.04, top, zi1 + 0.04, zo1 - 0.04, false);   // a tread
+            if (col) box(xa, xb, top - rise / n, top, zi1, zo1, true);                       // its riser, solid
+        }
+        sloped(fx0, yPrev, fx1, Y, -0.22, 0.2, zi1, zi1 + 0.03, false);          // inner stringer
+        sloped(fx0, yPrev, fx1, Y, -0.22, 0.2, zo1 - 0.03, zo1, false);          // outer stringer
+        sloped(fx0, yPrev + 0.95, fx1, Y + 0.95, 0, 0.05, zo1 - 0.05, zo1, true);   // handrail
+        // the landing: grating along the wall, the arrival platform, rails and corner posts
+        box(xe0, xe1, Y - 0.06, Y, zi0, zi1, true);
+        box(fx1, xe1, Y - 0.06, Y, zi1, zo1, true);
+        box(fx1, xe1, Y + 0.95, Y + 1.0, zo1 - 0.05, zo1, true);                 // platform's outer rail
+        box(xe1 - 0.05, xe1, Y, Y + 1.0, zi0, zo1, true);                        // end rail
+        box(xe0, xe0 + 0.05, Y, Y + 1.0, zi0, zi1, true);                        // the other end
+        if (vis && full) {
+            for (Real px : {xe0, fx1, xe1 - 0.05})
+                box(px, px + 0.05, Y - 0.3, Y + 1.0, zo1 - 0.05, zo1, false);
+            for (int b = 1; b * 0.12 < xe1 - fx1; ++b)                            // balusters
+                box(fx1 + b * 0.12, fx1 + b * 0.12 + 0.02, Y, Y + 0.95, zo1 - 0.04, zo1 - 0.02, false);
+            box(xe0, xe1, Y - 0.22, Y - 0.06, zi0, zi0 + 0.05, false);           // the bracket band on the wall
+        }
+        yPrev = Y;
+    }
+    if (vis) appendToPart(*vis, PartId::Metal, steel);
+}
+
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
+    // The fire escape's treads and landings are walkable while the interior is resident (its back door streams it).
+    if (params.fireEscape && colliderOut) emitFireEscape(nullptr, colliderOut, planIn, params, baseY, true);
     Poly2 plan = planIn;
     if (plan.size() < 3) return out;
     ensureCCW(plan);
@@ -4003,6 +4160,11 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (std::size_t e = 0; e < spk.plan.size(); ++e) {
             const FaceRect fr =
                 planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
+            if (partyEdge(spk.plan, params, e)) {   // the party wall: painted plaster, no windows
+                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
+                              interiorInset(params), interiorPaintFor(params), false);
+                continue;
+            }
             if (mechanicalStorey(params, ki)) {
                 // The plant room: a closed painted wall behind the louvres.
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
@@ -4423,14 +4585,17 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 interiorLayout(plan, params, entranceEdge);
             stairEdge = ilw.hasStair && i == ilw.edge;
         }
-        if (stairEdge) {
+        // A PARTY WALL is the same blank wall, at every detail level (attached buildings).
+        const bool party = i != entranceEdge && partyEdge(plan, params, i);
+        if (stairEdge || party) {
             const FaceRect bfr = planEdgeRect(plan, i, y, gh);
             RenderMesh bw;
             emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
                      bfr.at(bfr.width, bfr.height), bfr.at(0, bfr.height),
                      bfr.n, wallColor);
             appendToPart(out, params.wallPart, bw);
-            emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
+            if (full && params.openDoorway)
+                emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
             continue;
         }
         // An enterable building's ground storey has CLEAR panes at Full
@@ -4711,6 +4876,14 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                     wallColor);
                 continue;
             }
+            if (partyEdge(cur, params, e)) {   // a party wall: blank to the roof
+                const FaceRect bfr = planEdgeRect(cur, e, y, fh);
+                RenderMesh bw;
+                emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0), bfr.at(bfr.width, bfr.height),
+                         bfr.at(0, bfr.height), bfr.n, wallColor);
+                appendToPart(out, params.wallPart, bw);
+                continue;
+            }
             if (params.curtainWall)
                 emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor,
                                     detail, false, curtainStyleOf(params));
@@ -4766,6 +4939,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         y += fh;
     }
     if (full) cornerPosts(cur, tierY0, y - tierY0);
+    if (params.fireEscape) emitFireEscape(&out, nullptr, plan, params, baseY, full);
 
     // ROOF (P3.c): a Gable/Hip pitched roof over a rect-ish top plan — the
     // residential silhouette — else the flat deck + parapet + crown.

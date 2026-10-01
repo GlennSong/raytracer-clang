@@ -518,7 +518,24 @@ struct BuildingParams {
     // WHAT IT IS FOR (buildings B): a residential building's typical floors are whole apartments off a corridor
     // (room_plan.h, PlateTopology::Apartments); anything else keeps its office ring. Set from the recipe's use.
     bool  residential = false;
+    // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each other ...
+    // windows aren't made on the sides and we have back doors and different ways up to the second floor"). Up to
+    // two PARTY WALLS, each the world line it stands on: outward normal (x, z) and offset dot(normal, point). A
+    // plan edge lying on one is a blank wall, ground to roof, inside and out. backDoor: the rear edge's middle bay
+    // is a plain service door. fireEscape: a steel fire escape climbs the rear face -- a landing at every floor,
+    // a flight between landings, a drop ladder over the yard. Set by the lot pass (city_lots), never by recipes.
+    uint8_t partyWalls = 0;
+    Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
+    Real  partyAt[2] = {0, 0};
+    bool  backDoor = false;
+    bool  fireEscape = false;
 };
+
+// Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
+bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
+// The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
+// plan.size() when there is none.
+std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params);
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.
 // Full is today's facades — reveals, frames, muntins, sills, cornices, trim.

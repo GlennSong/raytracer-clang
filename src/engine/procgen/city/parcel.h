@@ -28,6 +28,12 @@ struct Lot {
     bool  wholeBlock = false;   // the whole block as ONE site (the parcel walk
                                 // could not fill it): the lot pass builds a
                                 // landmark on it (architectBlockLandmark)
+    // SHARED SIDES (attached buildings): up to two side lot lines this lot shares with a neighbouring lot of its
+    // block, each as its outward normal and offset dot(normal, point) -- the lot pass may build up to them and
+    // blank the wall there (BuildingParams::partyWalls). Filled by the lot pass in dense districts only.
+    uint8_t partyCount = 0;
+    Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
+    Real  partyAt[2] = {0, 0};
 };
 
 struct ParcelParams {

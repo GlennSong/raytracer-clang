@@ -1443,3 +1443,69 @@ TEST_CASE(a_face_too_narrow_for_a_window_is_solid) {
         CHECK(onCut == 0);
     }
 }
+
+// ATTACHED BUILDINGS (Glenn, 2026-10-01: "buildings right next to each other ... windows aren't made on the sides
+// and we have back doors and different ways up to the second floor"). A 12 x 18 m walk-up whose two side walls
+// are party walls: no glass within them at any storey, a back door on the rear face (away from the street, +z),
+// and a fire escape whose landings are walkable at every floor, from the yard up.
+TEST_CASE(an_attached_building_has_blank_party_walls_a_back_door_and_a_fire_escape) {
+    const Poly2 plan = {{-6, -9}, {6, -9}, {6, 9}, {-6, 9}};
+    BuildingParams p;
+    p.floors = 4; p.openDoorway = true; p.faceDir = Vec3(0, 0, 1);
+    p.partyWalls = 2;
+    p.partyN[0] = Vec2(-1, 0); p.partyAt[0] = 6;
+    p.partyN[1] = Vec2(1, 0);  p.partyAt[1] = 6;
+    p.backDoor = true; p.fireEscape = true;
+    Poly2 ccw = plan;
+    ensureCCW(ccw);
+    int partyEdges = 0;
+    for (std::size_t e = 0; e < ccw.size(); ++e) partyEdges += partyEdge(ccw, p, e) ? 1 : 0;
+    CHECK(partyEdges == 2);
+    const BuildingMesh bm = growPlanBuilding(plan, p);
+    int sideGlass = 0, frontGlass = 0;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.materialIndex != static_cast<int>(PartId::Glass) &&
+            part.materialIndex != static_cast<int>(PartId::GlassLit) &&
+            part.materialIndex != static_cast<int>(PartId::GlassClear)) continue;
+        for (const Vertex& v : part.vertices) {
+            // a pane IN a side wall faces across it (the storefront's corner bay ends 0.15 m short of the side)
+            if (std::fabs(std::fabs(v.position.x) - 6) < 0.6 && std::fabs(v.normal.x) > 0.9) {
+                if (sideGlass < 4) std::printf("    [party] glass part %d at %.2f %.2f %.2f\n", part.materialIndex, v.position.x, v.position.y, v.position.z);
+                ++sideGlass;
+            }
+            if (v.position.z > 8.5) ++frontGlass;
+        }
+    }
+    CHECK(sideGlass == 0);
+    CHECK(frontGlass > 0);
+    int backDoors = 0, frontDoors = 0;
+    for (const AttachPoint& ap : bm.attaches) {
+        if (ap.tag == "backdoor" && ap.normal.z < -0.9) ++backDoors;
+        if (ap.tag == "entrance" && ap.normal.z > 0.9) ++frontDoors;
+    }
+    CHECK(backDoors == 1);
+    CHECK(frontDoors == 1);
+    // the steel stands behind the rear wall, up to the top floor
+    Real metalTop = -1;
+    for (const RenderMesh& part : bm.parts)
+        if (part.materialIndex == static_cast<int>(PartId::Metal))
+            for (const Vertex& v : part.vertices)
+                if (v.position.z < -9.0) metalTop = std::max(metalTop, v.position.y);
+    const std::vector<StoreyPlan> st = storeyPlans(plan, p);
+    CHECK(metalTop > st.back().y0 + 0.8);
+    // every floor's landing is a walkable top in the collider, behind the wall
+    RenderMesh col;
+    (void)growInterior(plan, p, 0.0, &col, 0, -1);
+    for (std::size_t k = 1; k < st.size(); ++k) {
+        int tops = 0;
+        for (std::size_t i = 0; i + 2 < col.indices.size(); i += 3) {
+            const Vertex& a = col.vertices[col.indices[i]];
+            const Vertex& b = col.vertices[col.indices[i + 1]];
+            const Vertex& c = col.vertices[col.indices[i + 2]];
+            const Vec3 m = (a.position + b.position + c.position) * (1.0 / 3.0);
+            if (a.normal.y > 0.9 && m.z < -9.0 && m.z > -10.0 && std::fabs(m.y - st[k].y0) < 0.02) ++tops;
+        }
+        if (tops == 0) std::printf("    [fire escape] no landing at storey %zu (y %.2f)\n", k, st[k].y0);
+        CHECK(tops > 0);
+    }
+}

@@ -36,6 +36,7 @@ struct DoorSpec {
     Vec2 normal;
     Real width = 0;
     Real height = 0;
+    bool back = false;   // the rear service door (attached buildings): it faces the yard, not the street
 };
 
 // One GROWN MASSING and its verbatim regen key (ADR-0080): growPlanBuilding
@@ -276,6 +277,9 @@ struct LotPlanDebug {
     int rejSliver = 0;   // site's OBB short side under minShort
     int rejAspect = 0;   // long/short over maxAspect (knife blade)
     int rejFill = 0;     // polygon fills too little of its OBB
+    int attachedSites = 0;   // sites run out to a shared side line (attached buildings)
+    int attachedBuilt = 0;   // buildings grown with at least one party wall
+    std::vector<Vec2> attachedAt;   // a few of them, for the log's teleport hint
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors

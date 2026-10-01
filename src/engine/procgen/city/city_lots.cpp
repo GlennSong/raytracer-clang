@@ -1841,12 +1841,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             else if (ap.tag == "beacon")
                 u.beacons.push_back(ap.position);
         }
-        // The SHOPS' street doors after the building's own entrance: doors.front() stays the front door (the
-        // citysim's place entrance); every door gets its collider gap and its leaf.
+        // The SHOPS' street doors and the BACK door after the building's own entrance: doors.front() stays the
+        // front door (the citysim's place entrance); every door gets its collider gap and its leaf.
         for (const AttachPoint& ap : um.attaches)
-            if (ap.tag == "shopdoor")
+            if (ap.tag == "shopdoor" || ap.tag == "backdoor")
                 u.doors.push_back({Vec2(ap.position.x, ap.position.z), Vec2(ap.normal.x, ap.normal.z), ap.width,
-                                   ap.height});
+                                   ap.height, ap.tag == "backdoor"});
         // Enterable requires an ACTUAL collected door: recipes that never
         // take FacadeMode::Entrance (cylinders, pagodas, bay fronts) can
         // carry openDoorway without ever emitting an aperture. Evaluated
@@ -2295,6 +2295,41 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 ++dbg->wholeBlocks;
             }
         }
+        // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each
+        // other"): in an old town or a commercial block, a lot's SIDE line that a neighbouring lot shares (the
+        // same street run's next slot) is a party line -- the building stands on it, blank against its
+        // neighbour, instead of a side yard. Front and rear lines never are.
+        if ((bf.tag == DistrictTag::OldTown || bf.tag == DistrictTag::Commercial) && lots.size() >= 2)
+            for (std::size_t ai = 0; ai < lots.size(); ++ai) {
+                Lot& A = lots[ai];
+                if (A.court || A.wholeBlock) continue;
+                Poly2 pa = A.footprint;
+                ensureCCW(pa);
+                for (std::size_t i = 0; i < pa.size() && A.partyCount < 2; ++i) {
+                    const Vec2 a = pa[i], b = pa[(i + 1) % pa.size()];
+                    const Vec2 d = b - a;
+                    const Real len = d.length();
+                    if (len < 3.0) continue;
+                    const Vec2 dn = d * (1.0 / len), nrm(dn.y, -dn.x);
+                    if (std::fabs(dot(nrm, normalize(A.frontage))) > 0.5) continue;   // a front or rear line
+                    bool shared = false;
+                    for (std::size_t bi = 0; bi < lots.size() && !shared; ++bi) {
+                        if (bi == ai || lots[bi].court || lots[bi].wholeBlock) continue;
+                        const Poly2& pb = lots[bi].footprint;
+                        for (std::size_t j = 0; j < pb.size() && !shared; ++j) {
+                            const Vec2 c = pb[j], e = pb[(j + 1) % pb.size()];
+                            if (std::fabs(cross(dn, c - a)) > 0.15 || std::fabs(cross(dn, e - a)) > 0.15) continue;
+                            const Real t0 = dot(c - a, dn), t1 = dot(e - a, dn);
+                            const Real ov = std::min(len, std::max(t0, t1)) - std::max(Real(0), std::min(t0, t1));
+                            shared = ov >= std::min(Real(4.0), len * 0.6);
+                        }
+                    }
+                    if (!shared) continue;
+                    A.partyN[A.partyCount] = nrm;
+                    A.partyAt[A.partyCount] = dot(a, nrm);
+                    ++A.partyCount;
+                }
+            }
         for (const Lot& lot : lots) dbg->lots.push_back(lot.footprint);
         bf.foot = foot;
         binfos.push_back(bf);
@@ -2834,6 +2869,37 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     std::printf("\n");
                 }
                 siteRectified = rectified;
+            }
+            // ATTACHED (Glenn, 2026-10-01): on a lot with shared side lines, the rectangle's sides run out to them
+            // -- 5 cm short, so neighbouring walls never coincide -- and the building stands wall to wall with its
+            // neighbours (the party flags follow the final plan, below). Landmarks keep their yards.
+            if (siteRectified && site.size() == 4 && lot.partyCount > 0 && cand.landmark < 0 && !lot.wholeBlock) {
+                const SiteFrame& fm = siteFrameOf;
+                Real x0 = 1e30, x1 = -1e30, y0 = 1e30, y1 = -1e30;
+                for (const Vec2& v : site) {
+                    const Vec2 f = fm.toFrame(v);
+                    x0 = std::min(x0, f.x); x1 = std::max(x1, f.x);
+                    y0 = std::min(y0, f.y); y1 = std::max(y1, f.y);
+                }
+                Real nx0 = x0, nx1 = x1;
+                for (int k = 0; k < lot.partyCount; ++k) {
+                    const Vec2 N = lot.partyN[k];
+                    const Real nu = dot(N, fm.u), nv = dot(N, fm.v);
+                    if (std::fabs(nu) < 0.99) continue;   // a slanted side line: keep the yard
+                    // where the line crosses the rectangle's front and back edges, in frame x
+                    const Real base = lot.partyAt[k] - dot(fm.origin, N);
+                    const Real xa = (base - y0 * nv) / nu, xb = (base - y1 * nv) / nu;
+                    if (nu < 0) nx0 = std::min(nx0, std::max(xa, xb) + 0.05);
+                    else nx1 = std::max(nx1, std::min(xa, xb) - 0.05);
+                }
+                if ((nx0 < x0 - 0.02 || nx1 > x1 + 0.02) && nx1 - nx0 < (x1 - x0) + 4.0) {
+                    Poly2 rect{fm.toWorld({nx0, y0}), fm.toWorld({nx1, y0}), fm.toWorld({nx1, y1}), fm.toWorld({nx0, y1})};
+                    if (signedArea(rect) < 0) std::reverse(rect.begin(), rect.end());
+                    if (rectFits(rect, lot.footprint)) {
+                        retakeSite(std::move(rect));
+                        ++dbg->attachedSites;
+                    }
+                }
             }
             if (longSide > shortSide * p.maxAspect) {                           // knife blade
                 // RECOVERABLE (density round): a too-long lot still holds a
@@ -3760,6 +3826,35 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                 }
             }
+            if (planOk && lot.partyCount > 0 && cand.landmark < 0 && !lot.wholeBlock) {
+                // PARTY WALLS where the final plan still stands on a shared side line (a clearance inset or a
+                // massing rescue pulls it off, and then the wall keeps its windows), and the attached building's
+                // way out the back: a service door and, on a walk-up, a fire escape.
+                BuildingParams tp = bp;
+                tp.partyWalls = 0;
+                for (int k = 0; k < lot.partyCount; ++k) {
+                    BuildingParams one = bp;
+                    one.partyWalls = 1;
+                    one.partyN[0] = lot.partyN[k];
+                    one.partyAt[0] = lot.partyAt[k];
+                    Poly2 cp = plan;
+                    ensureCCW(cp);
+                    bool on = false;
+                    for (std::size_t e = 0; e < cp.size() && !on; ++e) on = partyEdge(cp, one, e);
+                    if (!on) continue;
+                    tp.partyN[tp.partyWalls] = lot.partyN[k];
+                    tp.partyAt[tp.partyWalls] = lot.partyAt[k];
+                    ++tp.partyWalls;
+                }
+                if (tp.partyWalls > 0) {
+                    bp = tp;
+                    bp.backDoor = bp.walkableGround && bp.groundBays <= 0;
+                    bp.fireEscape = !bp.curtainWall && !bp.solidFacade && bp.floors >= 2 && bp.floors <= 6 &&
+                                    bp.envelope == BuildingParams::Envelope::None && bp.setbackFloors == 0;
+                    ++dbg->attachedBuilt;
+                    if (bp.fireEscape && dbg->attachedAt.size() < 4) dbg->attachedAt.push_back(centroid(plan));
+                }
+            }
             if (planOk) {
                 if (wantsDoorway(plan, bp)) bp.openDoorway = true;
                 bm = growPlanBuilding(plan, bp, b.baseY);
@@ -3859,8 +3954,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         for (const Poly2& b2 : dbg->blocks) blockArea += std::fabs(area(b2));
         const double coverPct =
             blockArea > 1.0 ? 100.0 * builtArea / blockArea : 0.0;
+        for (const Vec2& a : dbg->attachedAt)
+            LOG_INFO << "[citylots] attached walk-up with a fire escape -> teleport " << static_cast<int>(a.x) << " "
+                     << static_cast<int>(a.y);
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
-                 << dbg->lots.size() << " lots (" << dbg->wholeBlocks << " whole-block landmark sites), " << nBuilt << " built, "
+                 << dbg->lots.size() << " lots (" << dbg->wholeBlocks << " whole-block landmark sites), " << nBuilt << " built ("
+                 << dbg->attachedBuilt << " attached of " << dbg->attachedSites << " sites run to a party line), "
                  << nGreen << " green, " << nCourt << " courts | COVER "
                  << static_cast<int>(builtArea) << " m2 of "
                  << static_cast<int>(blockArea) << " m2 buildable ("

@@ -2515,6 +2515,7 @@ TEST_CASE(front_doors_face_their_street) {
             for (const BuildingRecord& r : cb.records)
                 for (const DoorSpec& d : r.doors) {
                     if (d.normal.length() < Real(1e-6)) continue;
+                    if (d.back) continue;   // a back door faces its yard (attached buildings), by design
                     ++doors;
                     engine::Vec2 at(0, 0);
                     const Real dist = nearestStreet(d.foot, at);
