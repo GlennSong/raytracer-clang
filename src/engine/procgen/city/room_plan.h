@@ -50,7 +50,9 @@ enum class PlateTopology : uint8_t {
 
 // What a room is FOR. The ring names its rooms by use only; the whole floor
 // names them properly, which is what furniture and lighting read later.
-enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet };
+// OpenPlan, Meeting, Kitchenette: the office floor's zones (buildings C). An OpenPlan room is a zone, not a room:
+// it has no walls of its own and overlaps the rooms set into it (the corner offices, the meeting rooms).
+enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

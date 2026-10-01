@@ -231,6 +231,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
             // One 0.6 m module of a counter run: the carcass on its kick plinth, a door (or drawers), a slice of
             // worktop -- and in it the sink (a stainless bowl and a tap) or the hob (black glass, four rings).
             k.out.size = {0.6, p == Piece::KitchenSink ? 1.18 : 0.92, 0.62};   // the sink's tap stands tall
+            k.out.colliderH = 0.92;                                              // but the run collides as a counter
             const Vec3 door = (style & 1u) ? kWhite : fabric * 0.75 + Vec3(0.12, 0.12, 0.12);
             k.box(F::Hard, {0, 0.05, 0.27}, {0.6, 0.10, 0.52}, 0.0, kBlack * 2.0, 1);
             k.box(F::Hard, {0, 0.48, 0.29}, {0.6, 0.76, 0.58}, 0.0, kWhite * 0.95, 1);
@@ -412,6 +413,79 @@ FurniturePiece build(Piece p, uint32_t variant) {
             }
             break;
         }
+        case Piece::DeskPod: {
+            // BENCHING, running from the windows into the room: three desks (style bit 4: two) either side of a
+            // low fabric screen on the x = 0 line, a monitor, keyboard and chair at each. Footprint 3.1 (x) by
+            // 4.8 (z) for six, 3.2 for four.
+            const bool four = (style & 4u) != 0;
+            const Real L = four ? 3.2 : 4.8;
+            k.out.size = {3.1, 1.38, L};
+            k.out.colliderH = 0.75;   // the desks collide; the low screen above them need not
+            k.box(F::Wood, {0, 0.735, L * 0.5}, {1.6, 0.03, L}, 0.004, wood, 1);
+            for (double x : {-0.76, 0.76})
+                for (double z : {0.05, L * 0.5, L - 0.05}) k.leg(F::Metal, {x, 0, z}, 0.72, 0.04, kWhite * 0.9);
+            k.box(F::Fabric, {0, 1.05, L * 0.5}, {0.04, 0.62, L}, 0.012, fabric * 0.7 + Vec3(0.12, 0.12, 0.12));
+            const std::vector<double> seatsZ = four ? std::vector<double>{0.8, 2.4} : std::vector<double>{0.8, 2.4, 4.0};
+            for (double z : seatsZ)
+                for (int side = 0; side < 2; ++side) {
+                    const Real s = side == 0 ? -1.0 : 1.0;
+                    const Real xm = s * 0.22;
+                    k.box(F::Hard, {xm, 0.76, z}, {0.16, 0.012, 0.22}, 0.004, kBlack, 1);              // foot
+                    k.box(F::Hard, {xm, 0.92, z}, {0.02, 0.30, 0.04}, 0.004, kBlack, 1);               // neck
+                    k.box(F::Hard, {xm + s * 0.02, 1.06, z}, {0.022, 0.34, 0.58}, 0.004, kBlack, 1);   // screen
+                    k.box(F::Hard, {s * 0.55, 0.75, z}, {0.14, 0.02, 0.44}, 0.004, kBlack, 1);         // keyboard
+                    const Real xch = s * 1.15;
+                    k.turned(F::Metal, {xch, 0, z}, {{0.26, 0.0}, {0.26, 0.03}, {0.03, 0.06}, {0.025, 0.44}, {0.0, 0.45}}, kBlack, 1.0, 10);
+                    k.box(F::Fabric, {xch, 0.48, z}, {0.46, 0.07, 0.48}, 0.03, fabric * 0.75);
+                    k.box(F::Fabric, {xch + s * 0.22, 0.80, z}, {0.05, 0.50, 0.44}, 0.025, fabric * 0.75);
+                }
+            break;
+        }
+        case Piece::Cubicle: {
+            // A CUBICLE: fabric partitions on three sides (1.4 m), an L-shaped worktop, a pedestal, the chair
+            // and the monitor; open at +z.
+            k.out.size = {2.4, 1.45, 2.4};
+            const Vec3 panel = fabric * 0.6 + Vec3(0.18, 0.18, 0.18);
+            k.box(F::Fabric, {0, 0.70, 0.03}, {2.4, 1.4, 0.06}, 0.015, panel);
+            for (double x : {-1.17, 1.17}) k.box(F::Fabric, {x, 0.70, 1.2}, {0.06, 1.4, 2.4}, 0.015, panel);
+            for (double x : {-1.17, 1.17}) k.box(F::Metal, {x, 1.405, 1.2}, {0.07, 0.012, 2.4}, 0.0, kSteel, 1);
+            k.box(F::Metal, {0, 1.405, 0.03}, {2.4, 0.012, 0.07}, 0.0, kSteel, 1);
+            k.box(F::Wood, {0, 0.73, 0.40}, {2.2, 0.03, 0.70}, 0.004, wood, 1);                 // the back run
+            k.box(F::Wood, {-0.80, 0.73, 1.15}, {0.60, 0.03, 0.85}, 0.004, wood, 1);            // the return
+            k.box(F::Hard, {0.75, 0.33, 0.40}, {0.42, 0.62, 0.58}, 0.004, kSteel * 0.85, 1);    // the pedestal
+            k.box(F::Hard, {0, 0.76, 0.22}, {0.22, 0.012, 0.16}, 0.004, kBlack, 1);
+            k.box(F::Hard, {0, 0.92, 0.20}, {0.04, 0.30, 0.02}, 0.004, kBlack, 1);
+            k.box(F::Hard, {0, 1.06, 0.23}, {0.58, 0.34, 0.022}, 0.004, kBlack, 1);
+            k.turned(F::Metal, {0, 0, 1.2}, {{0.26, 0.0}, {0.26, 0.03}, {0.03, 0.06}, {0.025, 0.44}, {0.0, 0.45}}, kBlack, 1.0, 10);
+            k.box(F::Fabric, {0, 0.48, 1.2}, {0.48, 0.07, 0.46}, 0.03, fabric * 0.75);
+            k.box(F::Fabric, {0, 0.80, 1.43}, {0.44, 0.50, 0.05}, 0.025, fabric * 0.75);
+            break;
+        }
+        case Piece::MeetingTable: {
+            // A meeting table for six: a long top on two pedestal legs, three chairs a side.
+            k.out.size = {3.0, 0.95, 2.4};
+            k.box(F::Wood, {0, 0.735, 1.2}, {2.6, 0.04, 1.1}, 0.015, wood, 1);
+            for (double x : {-0.8, 0.8}) k.box(F::Metal, {x, 0.36, 1.2}, {0.12, 0.72, 0.7}, 0.01, kSteel * 0.7, 1);
+            for (double x : {-0.85, 0.0, 0.85})
+                for (int side = 0; side < 2; ++side) {
+                    const Real s = side == 0 ? -1.0 : 1.0;
+                    const Real zch = 1.2 + s * 0.85;
+                    k.turned(F::Metal, {x, 0, zch}, {{0.24, 0.0}, {0.24, 0.03}, {0.03, 0.06}, {0.025, 0.44}, {0.0, 0.45}}, kChrome, 1.0, 10);
+                    k.box(F::Fabric, {x, 0.48, zch}, {0.46, 0.07, 0.44}, 0.03, fabric);
+                    k.box(F::Fabric, {x, 0.78, zch + s * 0.21}, {0.44, 0.46, 0.05}, 0.025, fabric);
+                }
+            break;
+        }
+        case Piece::Whiteboard: {
+            k.out.size = {1.9, 2.1, 0.06};
+            k.out.solid = false;
+            k.box(F::Metal, {0, 1.45, 0.02}, {1.84, 1.04, 0.03}, 0.004, kChrome, 1);
+            k.box(F::Ceramic, {0, 1.45, 0.037}, {1.78, 0.98, 0.004}, 0.0, kPorcelain, 1);
+            k.box(F::Metal, {0, 0.92, 0.05}, {1.4, 0.02, 0.06}, 0.004, kChrome, 1);          // the pen tray
+            k.box(F::Hard, {-0.3, 1.6, 0.04}, {0.6, 0.012, 0.002}, 0.0, Vec3(0.15, 0.25, 0.6), 1);   // a scrawl
+            k.box(F::Hard, {0.2, 1.35, 0.04}, {0.8, 0.012, 0.002}, 0.0, Vec3(0.6, 0.15, 0.15), 1);
+            break;
+        }
         case Piece::Rug: {
             k.out.size = {2.0, 0.04, 1.4};
             k.out.solid = false;
@@ -428,7 +502,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
 const char* const kPieceNames[kPieceCount] = {
     "desk", "office_chair", "monitor", "filing_cabinet", "bed", "nightstand", "wardrobe", "sofa", "coffee_table",
     "tv_unit", "kitchen_base", "kitchen_sink", "kitchen_hob", "kitchen_tall", "kitchen_wall", "dining_table",
-    "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug"};
+    "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug",
+    "desk_pod", "cubicle", "meeting_table", "whiteboard"};
 
 }  // namespace
 

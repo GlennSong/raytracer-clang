@@ -630,6 +630,104 @@ static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params,
     return rp;
 }
 
+// ------------------------------------------------------------- the office floor
+// THE OFFICE FLOOR (Glenn, 2026-09-30: "the wider floors seem to have a lot of floorspace which in an office would
+// be good for cubicles or open floorplans"). A glass tower's typical floor, rectangular with a core:
+//
+//   +-----+---------------------------+-----+    the corners: glass-fronted corner OFFICES;
+//   | ofc |   open plan (desks by the  | ofc |    the rest of each band, windows to the corridor: OPEN PLAN,
+//   +-----+   windows)  +------+-----+-+-----+    filled with desk clusters (furniture.cpp);
+//   |     |   MEETING   |KITCH.|            |    on two bands, a strip against the corridor: a glass MEETING
+//   ...         corridor round the core            room, and once a floor a KITCHENETTE (open, counters).
+//
+// No partitions but the corner offices' and the meeting rooms' glass, so the floor walks by construction.
+static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
+                           int storey) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = true;
+    if (storey < 1 || !core.valid || planIn.size() != 4) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    const Poly2 coreR = core.rect();
+    struct Band { Vec2 a, d, nOut; Real W = 0, D = 0; bool rooms = false; Real s0 = 0, s1 = 0; };
+    std::vector<Band> B(n);
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        b.a = plan[e];
+        const Vec2 dv = plan[(e + 1) % n] - b.a;
+        b.W = dv.length();
+        if (b.W < 1e-6) continue;
+        b.d = dv * (1.0 / b.W);
+        b.nOut = Vec2(b.d.y, -b.d.x);
+        Real toCore = 1e9;
+        for (const Vec2& c : coreR) toCore = std::min(toCore, dot(b.a - c, b.nOut));
+        b.D = std::min(toCore - kCorridor - inset, Real(16.0));
+        b.rooms = b.D >= 4.0;
+    }
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        if (!b.rooms) continue;
+        if (e % 2 == 0) { b.s0 = inset; b.s1 = b.W - inset; }
+        else {
+            const Band& p = B[(e + n - 1) % n];
+            const Band& q = B[(e + 1) % n];
+            b.s0 = inset + (p.rooms ? p.D : 0);
+            b.s1 = b.W - inset - (q.rooms ? q.D : 0);
+        }
+    }
+    // The longest band gets the kitchenette; it and the band opposite get a meeting room each.
+    std::size_t longest = 0;
+    for (std::size_t e = 0; e < n; ++e)
+        if (B[e].rooms && B[e].s1 - B[e].s0 > B[longest].s1 - B[longest].s0) longest = e;
+    const std::size_t opposite = (longest + 2) % n;
+    const Real kCornerW = 5.0, kMeetW = 6.4, kMeetD = 4.0, kKitW = 5.0;
+    for (std::size_t e = 0; e < n; ++e) {
+        const Band& b = B[e];
+        if (!b.rooms || b.s1 - b.s0 < 6.0) continue;
+        auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
+        const Real vIn = inset, vFront = inset + b.D;
+        auto room = [&](Real x0, Real x1, Real v0, Real v1, RoomKind kind) {
+            Room rm; rm.edge = e; rm.kind = kind;
+            rm.rect = {P(x0, v0), P(x1, v0), P(x1, v1), P(x0, v1)};
+            rp.rooms.push_back(rm);
+        };
+        auto glassWall = [&](const Vec2& a, const Vec2& c, Real doorAt) {
+            RoomWall w; w.a = a; w.b = c; w.glass = true; w.doorAt = doorAt;
+            rp.walls.push_back(w);
+        };
+        Real x0 = b.s0, x1 = b.s1;
+        // CORNER OFFICES on the even bands, which own the corners: glass fronts, the door into the open plan.
+        if (e % 2 == 0 && b.s1 - b.s0 > 2 * kCornerW + 8.0) {
+            const Real cd = std::min(b.D - 1.6, Real(5.0));
+            for (int side = 0; side < 2; ++side) {
+                const Real a0 = side == 0 ? b.s0 : b.s1 - kCornerW, a1 = side == 0 ? b.s0 + kCornerW : b.s1;
+                room(a0, a1, vIn, vIn + cd, RoomKind::Office);
+                glassWall(P(a0, vIn + cd), P(a1, vIn + cd), side == 0 ? 0.75 : 0.25);
+                const Real xs = side == 0 ? a1 : a0;
+                glassWall(P(xs, vIn), P(xs, vIn + cd), -1);
+            }
+        }
+        // THE CORE-SIDE STRIP: a meeting room (and the kitchenette) against the corridor, mid-band.
+        const bool meet = (e == longest || e == opposite) && b.D >= kMeetD + 3.5 && b.s1 - b.s0 >= kMeetW + kKitW + 6.0;
+        if (meet) {
+            const Real mid = (x0 + x1) * 0.5;
+            const Real m0 = e == longest ? mid - kMeetW : mid - kMeetW * 0.5, m1 = m0 + kMeetW;
+            room(m0, m1, vFront - kMeetD, vFront, RoomKind::Meeting);
+            glassWall(P(m0, vFront - kMeetD), P(m1, vFront - kMeetD), 0.5);    // the front onto the open plan
+            glassWall(P(m0, vFront - kMeetD), P(m0, vFront), -1);
+            glassWall(P(m1, vFront - kMeetD), P(m1, vFront), -1);
+            glassWall(P(m0, vFront), P(m1, vFront), -1);                       // and onto the corridor
+            if (e == longest) room(m1 + 0.4, m1 + 0.4 + kKitW, vFront - kMeetD, vFront, RoomKind::Kitchenette);
+        }
+        // THE OPEN PLAN: the band from the windows to the corridor, between the corner offices.
+        room(x0, x1, vIn, vFront, RoomKind::OpenPlan);
+    }
+    (void)params;
+    return rp;
+}
+
 PlateTopology plateTopologyFor(const Poly2& plan, const BuildingParams& params, const CorePlan& core) {
     // A RESIDENTIAL tower with a core and a rectangular plate is APARTMENTS, glass or masonry; offices keep the ring.
     if (core.valid && params.residential && plan.size() == 4) return PlateTopology::Apartments;
@@ -820,6 +918,11 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         RoomPlan rg = ringPlan(planIn, params, core, blankEdge, inset, storey);
         rg.finish = interiorFinishFor(params);
         return rg;
+    }
+    if (topo == PlateTopology::Ring && params.curtainWall && core.valid && planIn.size() == 4) {
+        // An OFFICE floor: open plan with corner offices, meeting rooms and a kitchenette (buildings C).
+        RoomPlan of = officePlan(planIn, params, core, inset, storey);
+        if (!of.rooms.empty()) { of.finish = interiorFinishFor(params); return of; }
     }
     RoomPlan rp = topo == PlateTopology::WholeFloor
                       ? housePlan(planIn, params, stairWell, entranceEdge, inset, storey)

@@ -32,6 +32,7 @@ enum class Piece : uint8_t {
     Bathtub, Toilet, Vanity,
     LoungeChair, Planter,
     Picture, Shelving, Rug,   // buildings B: wall art, a closet's shelves, a living-room rug
+    DeskPod, Cubicle, MeetingTable, Whiteboard,   // buildings C: the office floor
     Count
 };
 constexpr int kPieceCount = static_cast<int>(Piece::Count);
@@ -40,6 +41,7 @@ struct FurniturePiece {
     std::array<RenderMesh, kFurnMatCount> mesh;   // by FurnMat; an empty mesh = the piece has none of it
     Vec3 size{1, 1, 1};                           // the footprint box: x width, y height, z depth
     bool solid = true;                            // the placer adds its box to the collider
+    Real colliderH = 0;                           // the collider's height when not size.y (a tap is not a wall)
 };
 
 // The piece, modelled once per (piece, variant) and cached (thread-safe). Variant: bits 0-2 the fabric, 3-4 the

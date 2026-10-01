@@ -1,7 +1,7 @@
 -- floor_lab.lua -- ONE STOREY of a building's interior, cut away at head height and laid out to be seen from above
 -- (buildings B; Glenn, 2026-09-30: "make entire apartments out of the floor"). building.grow_floor grows exactly
 -- what the streamed interior grows -- rooms, walls, floors, the furniture -- so this is the plan the city has.
---   left:  a condo tower's apartment floor        right: a glass tower's office floor
+--   left:  a condo tower's apartment floor        right: a podium tower's office floor
 -- opts.seed rolls the buildings again; opts.storey picks the floor.
 local opts = args or {}
 local seed = opts.seed or 1
@@ -28,7 +28,7 @@ local function rect(w, d) return {{-w/2, -d/2}, {w/2, -d/2}, {w/2, d/2}, {-w/2, 
 
 local FLOORS = {
   { recipe = "condo_tower", plan = rect(44, 32), x = 0 },
-  { recipe = "glass_tower", plan = rect(42, 32), x = 56 },
+  { recipe = "podium_tower", plan = rect(42, 32), x = 56 },
 }
 for _, f in ipairs(FLOORS) do
   local parts = building.grow_floor{ recipe = f.recipe, seed = seed * 13 + 7, coreness = 1.0, plan = f.plan,

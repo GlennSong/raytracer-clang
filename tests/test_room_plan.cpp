@@ -33,27 +33,33 @@ TEST_CASE(rooms_ring_the_plate_and_keep_the_core_clear) {
     const Real inset = std::max(p.wallThickness, Real(0.55));
     const RoomPlan rp = roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 5);
     CHECK(rp.office);
-    CHECK(rp.rooms.size() >= 12);
-    // Every room sits inside the plan and outside the core's corridor ring.
-    const Poly2 ring = core.rect();
+    // THE OFFICE FLOOR (buildings C): open-plan zones window to corridor, glass corner offices, a meeting room and
+    // a kitchenette against the corridor. Every room inside the plan and outside the core.
+    int open = 0, corner = 0, meeting = 0, kitchenette = 0;
     for (const Room& r : rp.rooms) {
+        if (r.kind == RoomKind::OpenPlan) ++open;
+        if (r.kind == RoomKind::Office) ++corner;
+        if (r.kind == RoomKind::Meeting) ++meeting;
+        if (r.kind == RoomKind::Kitchenette) ++kitchenette;
+    }
+    CHECK(open >= 3);
+    CHECK(corner >= 2);
+    CHECK(meeting >= 1);
+    CHECK(kitchenette == 1);
+    const Poly2 ring = core.rect();
+    for (const Room& r : rp.rooms)
         for (const Vec2& c : r.rect) {
-            CHECK(pointInPolygon(plan, c));
-            Real best = 1e9;
-            for (const Vec2& q : ring) best = std::min(best, (c - q).length());
-            (void)best;
+            CHECK(pointInPolygon(plan, c + (centroid(r.rect) - c) * 0.01));
             CHECK(!pointInPolygon(ring, c));
         }
-    }
-    // Office fronts are glass with a door; partitions are drywall.
-    int glassFronts = 0, doors = 0;
+    // Every wall is glass, and every enclosed room (a corner office, a meeting room) has a door.
+    int doors = 0;
     for (const RoomWall& w : rp.walls) {
-        if (w.glass) ++glassFronts;
+        CHECK(w.glass);
         if (w.doorAt >= 0) ++doors;
         CHECK(segLen(w) > 0.3);
     }
-    CHECK(glassFronts == static_cast<int>(rp.rooms.size()));
-    CHECK(doors == static_cast<int>(rp.rooms.size()));
+    CHECK(doors == corner + meeting);
     // The lobby gets none.
     CHECK(roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 0).rooms.empty());
 }

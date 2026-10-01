@@ -85,7 +85,7 @@ struct Furnisher {
             return Vec3(a.x + X.x * px + Z.x * pz, 0, a.y + X.z * px + Z.z * pz);
         };
         const Vec3 c[4] = {W(-hw, 0), W(hw, 0), W(hw, kit.size.z), W(-hw, kit.size.z)};
-        const Real ya = y0 + yOff, yb = y0 + yOff + kit.size.y;
+        const Real ya = y0 + yOff, yb = y0 + yOff + (kit.colliderH > 0 ? kit.colliderH : kit.size.y);
         auto V = [&](int i, Real y) { return Vec3(c[i].x, y, c[i].z); };
         auto q = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3) {
             MeshBuilder::emitTri(*collider, p0, p1, p2, normalize(cross(p1 - p0, p2 - p0)), Vec3(1, 1, 1));
@@ -120,11 +120,39 @@ struct Furnisher {
         return false;
     }
 
+    // THE OPEN PLAN's grid (buildings C): `pc` footprints (w across x, d out from the window wall, side 0) in rows
+    // from the windows, aisles between, every one clear of the rooms set into the zone and of the doorways.
+    // `d2` > 0: a shorter fallback footprint (variant `variant2`) tried where the full one does not fit.
+    int fill(Piece pc, Real w, Real d, Real aisleX, Real aisleZ, Real d2 = 0, uint32_t variant2 = 0) {
+        int placed = 0;
+        for (Real z = 0.6; z + std::min(d, d2 > 0 ? d2 : d) <= f.D - 0.8 + 1e-6; z += d + aisleZ)
+            for (Real x = 0.6; x + w <= f.W - 0.6 + 1e-6; x += w + aisleX) {
+                for (int attempt = 0; attempt < 2; ++attempt) {
+                    const Real dd = attempt == 0 ? d : d2;
+                    if (dd <= 0 || z + dd > f.D - 0.8 + 1e-6) continue;
+                    Placement c{&f, 0, x, w, dd};
+                    const Box2 fp = c.footprint();
+                    bool clear = true;
+                    for (const Box2& b : taken)
+                        if (overlaps(fp, b, 0.1)) { clear = false; break; }
+                    if (!clear) continue;
+                    taken.push_back(fp);
+                    const uint32_t keep = variant;
+                    if (attempt == 1) variant = variant2;
+                    put(c, pc, w * 0.5, 0.0);
+                    variant = keep;
+                    ++placed;
+                    break;
+                }
+            }
+        return placed;
+    }
+
     // WALL ART (Glenn: "the walls are bare. So some pictures hanging on there would be nice"): a picture on the
     // first of `sides` with a clear stretch -- not over a doorway or a tall piece (a wardrobe, a TV, a cupboard);
     // over a sofa or a bed is where pictures go.
-    bool hang(const std::vector<int>& sides, uint32_t artVariant) {
-        const FurniturePiece& kit = furniturePiece(Piece::Picture, artVariant);
+    bool hang(const std::vector<int>& sides, uint32_t artVariant, Piece what = Piece::Picture) {
+        const FurniturePiece& kit = furniturePiece(what, artVariant);
         const Real w = kit.size.x;
         for (int s : sides) {
             const Real len = (s == 0 || s == 2) ? f.W : f.D;
@@ -139,7 +167,7 @@ struct Furnisher {
                 if (!clear) continue;
                 const uint32_t keep = variant;
                 variant = artVariant;
-                put(c, Piece::Picture, w * 0.5, 0.0);
+                put(c, what, w * 0.5, 0.0);
                 variant = keep;
                 return true;
             }
@@ -176,6 +204,19 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
             F.taken.push_back({l.x - 0.6, l.y - 0.6, l.x + 0.6, l.y + 0.6});
             F.doorways.push_back(F.taken.back());
         }
+        // An OPEN PLAN zone has rooms set into it (corner offices, meeting rooms, the kitchenette): they are
+        // obstacles here, with a clear margin round them.
+        if (room.kind == RoomKind::OpenPlan)
+            for (const Room& other : rp.rooms) {
+                if (&other == &room || other.kind == RoomKind::OpenPlan) continue;
+                Real a0 = 1e9, b0 = 1e9, a1 = -1e9, b1 = -1e9;
+                for (const Vec2& v : other.rect) {
+                    const Vec2 l = F.f.local(v);
+                    a0 = std::min(a0, l.x); a1 = std::max(a1, l.x); b0 = std::min(b0, l.y); b1 = std::max(b1, l.y);
+                }
+                if (a1 < 0 || a0 > F.f.W || b1 < 0 || b0 > F.f.D) continue;
+                F.taken.push_back({a0 - 0.4, b0 - 0.4, a1 + 0.4, b1 + 0.4});
+            }
         // Sides by preference: a ring room's window wall is side 0, its front (door) side 2; a house room goes
         // longest wall first.
         const bool ring = rp.topology == PlateTopology::Ring;
@@ -244,6 +285,32 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 if (F.place(1.4, 1.85, {0, 1, 2, 3}, p)) {
                     F.put(p, Piece::DiningTable, 0.7, 0.5);
                     F.put(p, Piece::DiningChair, 0.7, 0.0 + 0.0, true);
+                    F.put(p, Piece::DiningChair, 0.7, 1.85, false);
+                }
+                break;
+            }
+            case RoomKind::OpenPlan: {
+                // Benching pods or cubicles, by the building (one style a building).
+                if ((hb >> 13) & 1u) F.fill(Piece::Cubicle, 2.4, 2.4, 0.2, 1.6);
+                else F.fill(Piece::DeskPod, 3.1, 4.8, 1.3, 1.6, 3.2, (F.variant & ~(7u << 5)) | (4u << 5));   // six, else four
+                break;
+            }
+            case RoomKind::Meeting: {
+                Placement m;
+                if (F.place(3.0, 2.4, {0, 2}, m)) F.put(m, Piece::MeetingTable, 1.5, 0.0);
+                F.hang({1, 3}, F.variant, Piece::Whiteboard);
+                break;
+            }
+            case RoomKind::Kitchenette: {
+                const int mods = std::clamp(static_cast<int>((F.f.W - 0.6) / 0.6), 2, 6);
+                if (F.place(mods * 0.6, 0.64, {2, 0}, p, true))
+                    for (int i = 0; i < mods; ++i) {
+                        const Piece pc = i == 0 ? Piece::KitchenTall : i == 1 ? Piece::KitchenSink : Piece::KitchenBase;
+                        F.put(p, pc, 0.3 + i * 0.6, 0.0);
+                    }
+                if (F.place(1.4, 1.85, {0, 1, 3}, p)) {
+                    F.put(p, Piece::DiningTable, 0.7, 0.5);
+                    F.put(p, Piece::DiningChair, 0.7, 0.0, true);
                     F.put(p, Piece::DiningChair, 0.7, 1.85, false);
                 }
                 break;

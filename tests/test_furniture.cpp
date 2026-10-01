@@ -46,8 +46,8 @@ TEST_CASE(every_furniture_piece_is_modelled_inside_its_footprint) {
     }
 }
 
-// An office floor is furnished: a desk, its chair and monitor in the rooms, every piece inside the plate, none in
-// a doorway's swing, drawn as placements (not merged triangles).
+// An office floor is furnished: workstations across the open plan and desks in the corner offices, every piece
+// inside the plate, none in a doorway's swing, drawn as placements (not merged triangles).
 TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {
     const Poly2 plan = {{0, 0}, {40, 0}, {40, 30}, {0, 30}};
     BuildingParams p;
@@ -58,22 +58,24 @@ TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {
     std::vector<PlacedPiece> placed;
     RenderMesh col;
     emitFurniture(placed, &col, rp, 25.0, p.seed);
-    int desks = 0, chairs = 0;
+    int desks = 0, chairs = 0, seats = 0;
     std::vector<Vec2> doors;
     for (const RoomWall& w : rp.walls)
         if (w.doorAt >= 0) doors.push_back(w.a + (w.b - w.a) * w.doorAt);
     for (const PlacedPiece& pp : placed) {
-        if (pp.piece == static_cast<uint8_t>(Piece::Desk)) ++desks;
+        if (pp.piece == static_cast<uint8_t>(Piece::Desk)) { ++desks; ++seats; }
         if (pp.piece == static_cast<uint8_t>(Piece::OfficeChair)) ++chairs;
+        if (pp.piece == static_cast<uint8_t>(Piece::DeskPod)) seats += ((pp.variant >> 5) & 4u) ? 4 : 6;      // the open plan (buildings C)
+        if (pp.piece == static_cast<uint8_t>(Piece::Cubicle)) seats += 1;
         const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
         CHECK(pointInPolygon(plan, at));
         CHECK(std::fabs(pp.xform.m[1][3] - 25.0) < 1.0);
         for (const Vec2& d : doors) CHECK((at - d).length() > 0.45);
     }
-    CHECK(desks >= static_cast<int>(rp.rooms.size()) / 2);
+    CHECK(seats >= 28);   // a 40 x 30 m office floor seats a team (~30 cubicles, ~90 at benches), not a desk a room
     CHECK(chairs == desks);
     CHECK(col.indices.size() > 0);   // the desks and cabinets are solid
-    std::printf("    [furnish] %zu rooms: %zu pieces, %d desks\n", rp.rooms.size(), placed.size(), desks);
+    std::printf("    [furnish] %zu rooms: %zu pieces, %d workstations\n", rp.rooms.size(), placed.size(), seats);
 }
 
 // WHOLE-FLOOR APARTMENTS (buildings B; Glenn: "make entire apartments out of the floor ... then naturally there
