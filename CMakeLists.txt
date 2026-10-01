@@ -130,6 +130,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
+    src/engine/procgen/city/furniture.cpp
     src/engine/procgen/city/patch_fabric.cpp
     src/engine/procgen/city/city_footprint.cpp
     src/engine/procgen/city/arterial_skeleton.cpp

@@ -1,6 +1,7 @@
 #include "shape_grammar.h"
 #include "core_plan.h"
-#include "room_plan.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
+#include "room_plan.h"
+#include "furniture.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
 
 #include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
 #include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
@@ -265,6 +266,12 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // glass look by day, emission tinted per vertex at night, no room.
             m.albedo = {0.16, 0.20, 0.26}; m.metallic = 0.6f; m.roughness = 0.2f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+        case PartId::Furniture:
+            // Neutral and matte: the piece's colour rides the vertex (a dark monitor stays dark, a chair keeps its
+            // fabric), with a little of drywall's self-light so a room without a staged light is not black.
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.0f; m.roughness = 0.7f;
+            m.emission = {0.04, 0.04, 0.04};
+            break;
         case PartId::GlassClear:
             // Clear glass: a faint blue, a sharp fresnel, most of what is
             // behind it coming through (the transparent pass), both faces.
@@ -2627,7 +2634,7 @@ static void emitParkingDeckRect(BuildingMesh& out, const FaceRect& fr,
 // rect-ish top. A top that cannot stand on this plan returns 0 and the caller keeps the penthouse. Returns the rise
 // above roofY. `bodyH` is the building's height to the roof (the masts scale with it).
 static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real bodyH, const BuildingParams& p,
-                         const Vec3& wallColor, bool full, bool rectish) {
+                         const Vec3& /*wallColor*/, bool full, bool rectish) {
     if (topIn.size() < 3 || p.top < 2) return 0;
     Poly2 top = topIn;
     ensureCCW(top);
@@ -3921,6 +3928,12 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         appendToPart(out, PartId::Interior, rm.drywall);
         appendToPart(out, PartId::GlassClear, rm.glass);
         appendToPart(out, rp.finish.part, rm.accent);   // brick, concrete or timber
+        // FURNITURE (buildings M4): every named room gets its pieces.
+        FurnitureMeshes fm;
+        emitFurniture(fm, colliderOut, rp, baseY + spk.y0, params.seed);
+        // Wood too rides the plain furniture material: the Wood part's siding planks read as decking on a desk.
+        appendToPart(out, PartId::Furniture, fm.wood);
+        appendToPart(out, PartId::Furniture, fm.soft);
     }
 
     // --- the core (M5): shaft walls with doors, the dog-leg flights and

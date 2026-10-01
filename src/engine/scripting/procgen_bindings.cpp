@@ -1262,7 +1262,7 @@ int l_building_grow_plan_parts(lua_State* L) {
                                        "siding", "path", "foliage", "vent", "utility", "fan", "shingle",
                                        "glass_lit", "interior", "interior_floor", "interior_tile",
                                        "interior_marble", "interior_carpet", "beacon", "beacon_glow",
-                                       "beacon_haze", "lit_band", "glass_clear"};
+                                       "beacon_haze", "lit_band", "glass_clear", "furniture"};
     lua_newtable(L);
     int cnt = 0;
     for (const RenderMesh& part : bm.parts) {

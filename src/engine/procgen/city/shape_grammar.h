@@ -94,6 +94,8 @@ enum class PartId : uint8_t {
              // the lobby that ships with the exterior shows from the street
              // and the street shows from the lobby. Transparent, both faces,
              // no room behind it.
+    Furniture,    // FURNITURE (buildings M4): upholstery, laminate, ceramic, metal -- a neutral matte material
+             // whose colour is the vertex's, with the faint self-light drywall has (furniture.h).
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
