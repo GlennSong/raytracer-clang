@@ -901,6 +901,15 @@ std::string Application::handleControlCommand(const std::string& line) {
                " timescale " + std::to_string(clock.timeScale());
     }
 
+    // FURNITURE INTERACTIONS (InteractionSystem): `interact` taps the interact key, `interact hold` holds it,
+    // `interact stand` stands up; `interact?` reports the prompt or the pose.
+    if (cmd.name == "interact") {
+        const std::string a = cmd.args.empty() ? "" : cmd.args[0];
+        settingsStore.setDouble("interact.request", a == "hold" ? 2.0 : a == "stand" ? 3.0 : 1.0);
+        return "ok staged";
+    }
+    if (cmd.name == "interact?") return "ok " + settingsStore.getString("interact.status", "none");
+
     if (cmd.name == "keys?") {
         // WHAT DOES THIS KEY DO. Bindings live in a dozen systems' onStart, so
         // the only way to answer that was grep. A shared key is legitimate --
@@ -1316,7 +1325,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     }
 
     return "err unknown command: " + cmd.name +
-           " (ping|info|camera|camera?|shot|overlay|sim|reload|set|get|"
+           " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
            "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?)";
 }

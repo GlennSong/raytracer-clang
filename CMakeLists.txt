@@ -132,6 +132,8 @@ add_library(engine_core STATIC
     src/engine/procgen/city/room_plan.cpp
     src/engine/procgen/city/furniture.cpp
     src/engine/procgen/furniture_kit.cpp
+    src/engine/procgen/furniture_library.cpp
+    src/engine/interaction.cpp
     src/engine/procgen/city/patch_fabric.cpp
     src/engine/procgen/city/city_footprint.cpp
     src/engine/procgen/city/arterial_skeleton.cpp
@@ -223,6 +225,7 @@ add_library(engine_core STATIC
     src/engine/systems/building_interior_system.cpp
     src/engine/systems/door_system.cpp
     src/engine/systems/elevator_system.cpp
+    src/engine/systems/interaction_system.cpp
     src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp
@@ -390,6 +393,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
         src/engine/scripting/vehicle_spec.cpp
+        src/engine/scripting/furniture_library_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -823,7 +827,8 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_gun_script.cpp
         tests/test_flora.cpp
         tests/test_agent_goals.cpp
-        tests/test_vehicle_body.cpp)
+        tests/test_vehicle_body.cpp
+        tests/test_interaction.cpp)
     # Lets the gun test read the actual shipped assets/scripts/gun.lua.
     target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()

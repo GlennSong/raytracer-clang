@@ -7,7 +7,9 @@
 #include "../world.h"
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
-#include "../procgen/furniture_kit.h"   // the furniture kit (buildings M4b)
+#include "../procgen/furniture_kit.h"
+#include "../procgen/furniture_library.h"   // which pieces are interactive
+#include "../interaction.h"   // the furniture kit (buildings M4b)
 #include <map>
 #include <algorithm>
 #include <chrono>
@@ -394,6 +396,21 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
                 res.entities.push_back(ge);
                 tris += pm.indices.size() / 3 * xforms.size();
             }
+        }
+    }
+
+    // INTERACTIONS (the furniture library, M1): the pieces someone can sit or lie on, as ONE set entity with the
+    // building -- InteractionSystem asks it what is in reach; released with the rest of the resident.
+    {
+        const FurnitureLibrary& lib = FurnitureLibrary::global();
+        Interactables set;
+        for (const PlacedPiece& pp : bm.furniture)
+            if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+        if (!set.pieces.empty()) {
+            set.refreshBounds();
+            Entity ie = world.create();
+            world.add<Interactables>(ie, std::move(set));
+            res.entities.push_back(ie);
         }
     }
 

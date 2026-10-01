@@ -2,6 +2,7 @@
 #include "underwater_system.h"
 #include "physics_system.h"
 #include "../components.h"
+#include "../interaction.h"   // Seated
 #include "../camera/scene_camera.h"
 #include "../../log.h"
 
@@ -57,6 +58,8 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             if (ctx.world.has<InVehicle>(e)) return;
             // A PASSENGER (a bus): the carrier owns the position every step.
             if (ctx.world.has<Passenger>(e)) return;
+            // SEATED on a piece of furniture (InteractionSystem): the body stays where it stood; the camera sits.
+            if (ctx.world.has<Seated>(e)) return;
             if (cc.characterId == INVALID_CHARACTER) return;
             if (!spawnCaptured) {                                  // authored spawn
                 spawnPos = t.position;
@@ -307,7 +310,8 @@ void PlayerSystem::update(FrameContext& ctx) {
     // ...but NOT while seated: Space is the brake in a car, and staging a
     // jump on every brake press would fire it the moment the player got out.
     if (ctx.actions.pressed("player_jump") &&
-        !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity)))
+        !(ctx.world.alive(playerEntity) &&
+          (ctx.world.has<InVehicle>(playerEntity) || ctx.world.has<Seated>(playerEntity))))
         jumpRequested = true;
 
     // The one-shot beside the V key (device: "how do I switch between third
@@ -378,6 +382,19 @@ void PlayerSystem::update(FrameContext& ctx) {
                   std::max(Real(1e-3), standHalfHeight + standRadius)
             : Real(1);
     camera.eye = t->position + Vec3(0, eyeHeight * eyeScale, 0);
+    // SEATED or LYING (InteractionSystem, engine/interaction.h): the eye is the pose's, turned once to face along
+    // it -- after that the mouse looks round as usual. First person while there: the shoulder rig frames the
+    // standing capsule, not the seat.
+    Seated* seated = ctx.world.get<Seated>(playerEntity);
+    if (seated) {
+        camera.eye = seated->eye;
+        if (!seated->aimed) {
+            seated->aimed = true;
+            const Vec3 l = seated->look;
+            camera.yaw = std::atan2(l.x, -l.z) * 180.0 / 3.14159265358979323846;
+            camera.pitch = std::asin(std::clamp(l.y, Real(-1), Real(1))) * 180.0 / 3.14159265358979323846;
+        }
+    }
 
     // A placed SceneCamera owns the view this frame; keep the eye pinned above
     // so returning to first person is seamless, but don't write over it.
@@ -386,7 +403,7 @@ void PlayerSystem::update(FrameContext& ctx) {
     float aspect = (ctx.framebufferHeight > 0)
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
-    if (thirdPerson) {
+    if (thirdPerson && !seated) {
         // Over the shoulder: mouse look still steers the player heading — the
         // fly controller owns yaw/pitch exactly as in first person (CameraSystem
         // feeds it look input); the shoulder rig just frames that heading from

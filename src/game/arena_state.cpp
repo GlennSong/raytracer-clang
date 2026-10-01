@@ -13,6 +13,7 @@
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
 #include "../engine/systems/elevator_system.h"
+#include "../engine/systems/interaction_system.h"
 #include "../engine/systems/beacon_light_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/residency_system.h"
@@ -223,6 +224,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
+    addSystem<InteractionSystem>();       // sit / lie on furniture (the furniture library, M1)
 #else
     addSystem<ResidencySystem>();
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
