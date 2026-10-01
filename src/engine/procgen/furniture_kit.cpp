@@ -25,6 +25,8 @@ struct Maker {
     static void paint(RenderMesh& mm, const Vec3& col) { for (Vertex& v : mm.vertices) v.color = col; }
     // A rounded box centred at c.
     void box(FurnMat k, const Vec3& c, const Vec3& size, double r, const Vec3& col, int segs = 2) {
+        // A bevel under 3 mm is invisible and costs ~100 triangles a box: those are sharp (12).
+        if (r < 0.003) r = 0;
         RenderMesh b = MeshBuilder::roundedBox(size, r, r > 0.012 ? segs : 1, 2.0);
         paint(b, col);
         MeshBuilder::transform(b, Mat4::translate(c.x, c.y, c.z));
@@ -486,6 +488,149 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Hard, {0.2, 1.35, 0.04}, {0.8, 0.012, 0.002}, 0.0, Vec3(0.6, 0.15, 0.15), 1);
             break;
         }
+        case Piece::ShopCounter: {
+            // The SHOP COUNTER: a panelled front, a worktop, the till and a card reader. Faces +z (the customer).
+            k.out.size = {1.8, 1.25, 0.7};
+            k.out.colliderH = 1.0;
+            k.box(F::Wood, {0, 0.48, 0.35}, {1.8, 0.96, 0.66}, 0.006, wood, 1);
+            k.box(F::Hard, {0, 1.0, 0.36}, {1.84, 0.04, 0.72}, 0.006, (style & 1u) ? kWhite : kBlack * 3.0, 1);
+            k.box(F::Hard, {0.4, 1.10, 0.25}, {0.36, 0.16, 0.30}, 0.01, kBlack, 1);        // the till
+            k.box(F::Hard, {0.4, 1.22, 0.22}, {0.32, 0.18, 0.03}, 0.004, kBlack, 1);
+            k.box(F::Hard, {-0.3, 1.05, 0.5}, {0.08, 0.06, 0.14}, 0.008, kBlack, 1);       // card reader
+            break;
+        }
+        case Piece::Gondola: {
+            // A GONDOLA: a double-sided run of shelves (the grocery aisle), four shelves a side of boxed and
+            // bottled goods. Runs along x; both faces (+z, -z) stocked.
+            k.out.size = {2.4, 1.6, 1.0};
+            k.box(F::Hard, {0, 0.06, 0.5}, {2.4, 0.12, 0.96}, 0.004, kBlack * 3.0, 1);       // base
+            k.box(F::Hard, {0, 0.85, 0.5}, {2.4, 1.5, 0.04}, 0.004, kWhite * 0.9, 1);        // spine
+            uint32_t r = variant * 2246822519u + 3u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            static const Vec3 kGoods[8] = {{0.85, 0.20, 0.15}, {0.95, 0.75, 0.15}, {0.20, 0.45, 0.80}, {0.25, 0.65, 0.30},
+                                           {0.90, 0.90, 0.88}, {0.55, 0.30, 0.65}, {0.95, 0.50, 0.15}, {0.30, 0.30, 0.32}};
+            for (int side = 0; side < 2; ++side) {
+                const Real s = side == 0 ? -1.0 : 1.0;
+                for (double y : {0.14, 0.50, 0.86, 1.22}) {
+                    k.box(F::Hard, {0, y, 0.5 + s * 0.24}, {2.36, 0.02, 0.44}, 0.002, kWhite * 0.9, 1);
+                    Real x = -1.15;
+                    while (x < 1.1) {
+                        const Real w = 0.10 + 0.22 * next(), hh = 0.14 + 0.16 * next();
+                        if (x + w > 1.15) break;
+                        k.box(F::Hard, {x + w * 0.5, y + 0.01 + hh * 0.5, 0.5 + s * 0.26}, {w - 0.01, hh, 0.32},
+                              0.0, kGoods[static_cast<int>(next() * 8) % 8], 1);
+                        x += w;
+                    }
+                }
+            }
+            break;
+        }
+        case Piece::WallShelf: {
+            // WALL SHELVING, one-sided against a wall: five shelves of stock.
+            k.out.size = {2.0, 2.1, 0.45};
+            k.box(F::Wood, {0, 1.05, 0.03}, {2.0, 2.1, 0.04}, 0.003, wood * 0.9, 1);
+            for (double x : {-0.98, 0.98}) k.box(F::Wood, {x, 1.05, 0.22}, {0.04, 2.1, 0.44}, 0.003, wood, 1);
+            uint32_t r = variant * 3266489917u + 5u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            for (double y : {0.10, 0.50, 0.90, 1.30, 1.70}) {
+                k.box(F::Wood, {0, y, 0.22}, {1.92, 0.025, 0.42}, 0.002, wood, 1);
+                Real x = -0.92;
+                while (x < 0.9) {
+                    const Real w = 0.08 + 0.18 * next(), hh = 0.12 + 0.2 * next();
+                    if (x + w > 0.94) break;
+                    k.box(F::Hard, {x + w * 0.5, y + 0.013 + hh * 0.5, 0.22}, {w - 0.01, hh, 0.30}, 0.0,
+                          kFabric[static_cast<int>(next() * 8) % 8] * 1.2, 1);
+                    x += w;
+                }
+            }
+            break;
+        }
+        case Piece::ClothesRack: {
+            // A boutique's CLOTHES RAIL: two uprights, a chrome rail, a dozen garments on hangers.
+            k.out.size = {1.6, 1.65, 0.6};
+            k.out.solid = false;
+            for (double x : {-0.75, 0.75}) {
+                k.rod(F::Metal, {x, 0.0, 0.3}, {x, 1.55, 0.3}, 0.014, kChrome, 10);
+                k.box(F::Metal, {x, 0.01, 0.3}, {0.06, 0.02, 0.55}, 0.004, kChrome, 1);
+            }
+            k.rod(F::Metal, {-0.75, 1.55, 0.3}, {0.75, 1.55, 0.3}, 0.012, kChrome, 10);
+            for (int g = 0; g < 12; ++g) {
+                const Real x = -0.66 + g * 0.12;
+                const Real len = 0.6 + 0.35 * (((variant + g * 7) % 5) / 4.0);
+                k.box(F::Fabric, {x, 1.50 - len * 0.5, 0.3}, {0.03, len, 0.46}, 0.012, kFabric[(variant + g * 3) % 8] * 1.1);
+            }
+            break;
+        }
+        case Piece::CafeTable: {
+            // A CAFE TABLE for two: a round top on a pedestal, two bentwood-ish chairs.
+            k.out.size = {1.5, 0.9, 1.5};
+            k.turned(F::Metal, {0, 0, 0.75}, {{0.24, 0.0}, {0.24, 0.02}, {0.03, 0.04}, {0.03, 0.72}, {0.0, 0.73}}, kBlack, 1.0, 14);
+            k.turned(F::Wood, {0, 0.72, 0.75}, {{0.0, 0.0}, {0.36, 0.0}, {0.36, 0.03}, {0.0, 0.03}}, wood, 1.0, 24);
+            for (int side = 0; side < 2; ++side) {
+                const Real z = side == 0 ? 0.18 : 1.32, s = side == 0 ? -1.0 : 1.0;
+                for (double x : {-0.18, 0.18})
+                    for (double dz : {-0.16, 0.16}) k.leg(F::Wood, {x, 0, z + dz}, 0.44, 0.03, wood * 0.85);
+                k.box(F::Wood, {0, 0.46, z}, {0.42, 0.04, 0.40}, 0.01, wood * 0.9, 1);
+                k.box(F::Wood, {0, 0.72, z + s * 0.19}, {0.40, 0.42, 0.03}, 0.01, wood * 0.9, 1);
+            }
+            break;
+        }
+        case Piece::DisplayCase: {
+            // A bakery / jeweller's DISPLAY CASE: a lit glass case on a cabinet, goods on two glass shelves.
+            k.out.size = {1.6, 1.25, 0.7};
+            k.box(F::Wood, {0, 0.42, 0.35}, {1.6, 0.84, 0.66}, 0.006, wood, 1);
+            k.box(F::Hard, {0, 1.24, 0.35}, {1.6, 0.03, 0.66}, 0.004, kWhite, 1);
+            for (double x : {-0.79, 0.79}) k.box(F::Metal, {x, 1.04, 0.35}, {0.02, 0.38, 0.64}, 0.0, kChrome, 1);
+            uint32_t r = variant * 668265263u + 11u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            static const Vec3 kTreats[4] = {{0.80, 0.55, 0.30}, {0.95, 0.85, 0.65}, {0.45, 0.25, 0.15}, {0.90, 0.40, 0.45}};
+            for (double y : {0.86, 1.04})
+                for (int i = 0; i < 7; ++i)
+                    k.turned(F::Hard, {-0.6 + i * 0.2, y, 0.25 + 0.2 * next()}, {{0.0, 0.0}, {0.06, 0.0}, {0.06, 0.03}, {0.0, 0.05}},
+                             kTreats[static_cast<int>(next() * 4) % 4], 1.0, 10);
+            break;
+        }
+        case Piece::DrinksFridge: {
+            // A DRINKS FRIDGE: a tall cabinet, a glass door, five shelves of bottles and cans.
+            k.out.size = {0.8, 2.0, 0.75};
+            k.box(F::Hard, {0, 1.0, 0.37}, {0.8, 2.0, 0.72}, 0.006, kWhite * 0.95, 1);
+            k.box(F::Hard, {0, 1.0, 0.72}, {0.70, 1.80, 0.02}, 0.0, Vec3(0.05, 0.06, 0.08), 1);   // the dark interior
+            uint32_t r = variant * 2654435761u + 13u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            static const Vec3 kCans[6] = {{0.85, 0.10, 0.10}, {0.10, 0.30, 0.80}, {0.95, 0.85, 0.20}, {0.20, 0.70, 0.30},
+                                          {0.90, 0.90, 0.90}, {0.55, 0.20, 0.10}};
+            for (int sh = 0; sh < 5; ++sh) {
+                const Real y = 0.25 + sh * 0.34;
+                for (int i = 0; i < 6; ++i)
+                    k.turned(F::Hard, {-0.27 + i * 0.108, y, 0.62}, {{0.0, 0.0}, {0.035, 0.0}, {0.035, 0.18}, {0.015, 0.24}, {0.0, 0.25}},
+                             kCans[static_cast<int>(next() * 6) % 6], 1.0, 8);
+            }
+            k.box(F::Metal, {0, 1.0, 0.745}, {0.74, 1.84, 0.01}, 0.0, Vec3(0.55, 0.62, 0.66), 1);   // the glass
+            k.rod(F::Metal, {0.32, 0.7, 0.77}, {0.32, 1.3, 0.77}, 0.01, kChrome, 8);
+            break;
+        }
+        case Piece::Bookcase: {
+            // A BOOKCASE: five shelves of books, spines in every colour, the odd one leaning.
+            k.out.size = {1.2, 2.0, 0.35};
+            k.box(F::Wood, {0, 1.0, 0.02}, {1.2, 2.0, 0.03}, 0.003, wood * 0.85, 1);
+            for (double x : {-0.585, 0.585}) k.box(F::Wood, {x, 1.0, 0.18}, {0.03, 2.0, 0.34}, 0.003, wood, 1);
+            uint32_t r = variant * 1597334677u + 7u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            static const Vec3 kSpines[8] = {{0.55, 0.12, 0.10}, {0.12, 0.20, 0.45}, {0.15, 0.40, 0.22}, {0.85, 0.80, 0.70},
+                                            {0.10, 0.10, 0.10}, {0.75, 0.55, 0.20}, {0.45, 0.30, 0.50}, {0.30, 0.50, 0.55}};
+            for (double y : {0.04, 0.42, 0.80, 1.18, 1.56}) {
+                k.box(F::Wood, {0, y, 0.18}, {1.14, 0.025, 0.32}, 0.002, wood, 1);
+                Real x = -0.55;
+                while (x < 0.53) {
+                    const Real w = 0.025 + 0.035 * next(), hh = 0.20 + 0.10 * next();
+                    if (x + w > 0.56) break;
+                    k.box(F::Hard, {x + w * 0.5, y + 0.013 + hh * 0.5, 0.17}, {w - 0.003, hh, 0.22}, 0.002,
+                          kSpines[static_cast<int>(next() * 8) % 8], 1);
+                    x += w;
+                }
+            }
+            break;
+        }
         case Piece::Rug: {
             k.out.size = {2.0, 0.04, 1.4};
             k.out.solid = false;
@@ -503,7 +648,8 @@ const char* const kPieceNames[kPieceCount] = {
     "desk", "office_chair", "monitor", "filing_cabinet", "bed", "nightstand", "wardrobe", "sofa", "coffee_table",
     "tv_unit", "kitchen_base", "kitchen_sink", "kitchen_hob", "kitchen_tall", "kitchen_wall", "dining_table",
     "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug",
-    "desk_pod", "cubicle", "meeting_table", "whiteboard"};
+    "desk_pod", "cubicle", "meeting_table", "whiteboard",
+    "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase"};
 
 }  // namespace
 

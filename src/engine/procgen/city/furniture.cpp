@@ -315,6 +315,57 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 }
                 break;
             }
+            case RoomKind::Shop: {
+                // A SHOP by its trade (Glenn: "these small shops"); side 0 is the shopfront.
+                auto along = [&](Piece pc, Real w, Real d, const std::vector<int>& sides, int count) {
+                    int n = 0;
+                    for (int c = 0; c < count; ++c)
+                        if (F.place(w, d, sides, p, true)) { F.put(p, pc, w * 0.5, 0.0); ++n; }
+                    return n;
+                };
+                auto counterAtBack = [&]() {
+                    if (F.place(1.8, 1.6, {2, 1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0, true);
+                };
+                switch (room.style % 7) {
+                    case 0:   // CAFE
+                        counterAtBack();
+                        along(Piece::DrinksFridge, 0.8, 0.75, {2, 1, 3}, 1);
+                        F.fill(Piece::CafeTable, 1.5, 1.5, 0.5, 0.5);
+                        break;
+                    case 1:   // GROCERY
+                        if (F.place(1.8, 1.4, {1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0);
+                        along(Piece::DrinksFridge, 0.8, 0.75, {2}, 4);
+                        F.fill(Piece::Gondola, 2.4, 1.0, 1.0, 1.4);
+                        break;
+                    case 2:   // BOUTIQUE
+                        along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 4);
+                        counterAtBack();
+                        F.fill(Piece::ClothesRack, 1.6, 0.6, 1.0, 1.2);
+                        break;
+                    case 3:   // BOOKSHOP
+                        along(Piece::Bookcase, 1.2, 0.35, {1, 3, 2}, 10);
+                        counterAtBack();
+                        if (F.place(1.4, 1.85, {0, 1, 3}, p)) F.put(p, Piece::DiningTable, 0.7, 0.5);
+                        break;
+                    case 4:   // ELECTRONICS
+                        along(Piece::TvUnit, 1.6, 0.42, {2}, 3);
+                        along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 2);
+                        counterAtBack();
+                        F.fill(Piece::DiningTable, 1.4, 0.85, 1.2, 1.4);
+                        break;
+                    case 5:   // PHARMACY
+                        along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 4);
+                        counterAtBack();
+                        F.fill(Piece::Gondola, 2.4, 1.0, 1.2, 1.6);
+                        break;
+                    default:  // BAKERY
+                        along(Piece::DisplayCase, 1.6, 0.7, {2}, 2);
+                        counterAtBack();
+                        F.fill(Piece::CafeTable, 1.5, 1.5, 0.6, 0.6);
+                        break;
+                }
+                break;
+            }
             case RoomKind::Closet: {
                 if (F.place(1.2, 0.5, longFirst, p, true)) F.put(p, Piece::Shelving, 0.6, 0.0);
                 break;

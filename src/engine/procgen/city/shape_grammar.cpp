@@ -876,8 +876,15 @@ struct BayOpening {
                               // so the springline is head - rise and the
                               // sill..head box is the arch's bounding box.
     bool entrance = false;    // this opening is the door
+    bool shopDoor = false;    // ...a SHOP's own street door (buildings: shops), not the building's entrance
 };
+// A SHOP on a storefront face (Glenn, 2026-10-01: "I'm still waiting to see these small shops"): bays b0..b1
+// (inclusive), its door in bay `door`, its trade.
+struct ShopUnit { int b0 = 0, b1 = 0, door = 0; uint8_t type = 0; };
+constexpr Real kShopHead = 3.45;   // a storefront's glazing head; its fascia sign sits just above
+constexpr int kShopTypes = 7;   // cafe, grocery, boutique, bookshop, electronics, pharmacy, bakery
 struct FacadeLayout {
+    std::vector<ShopUnit> shops;   // the storefront face's shops (empty elsewhere)
     int bays = 1;
     Real bw = 0;
     bool retailish = false;
@@ -927,16 +934,60 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                             p.window.head != OpeningStyle::Head::Flat;
         Real winW = std::min(arched ? Real(1.05) : Real(1.25),
                              std::max(Real(0.8), bw - 0.8));
+        // A STOREFRONT is glazed nearly bay to bay (slim piers), its head under the shop's fascia sign -- not a
+        // flat's portrait window: on a tall lobby storey those read as slits (Glenn's first look at the shops).
+        if (L.retailish) {
+            winW = std::max(Real(0.8), bw - 0.3);
+            head = std::min(fh - 0.4, kShopHead);
+        }
         margin = (bw - winW) * 0.5;
     }
     if (head <= sill) { head = fh * 0.75; sill = fh * 0.2; }
 
     const int centreBay = L.bays / 2;
     const int group = windowGroupOf(p, mode, L.retailish);
+    // THE SHOPS of a storefront face: its bays grouped into units of two or three, each with its own door, the
+    // building's entrance bay and its neighbours kept for the lobby. Seeded by the face's own corner, so the
+    // facade, its far tier and the interior read the same shops.
+    if (L.retailish && p.groundRetail && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid) {
+        uint32_t h = positionHash(fr.bl + Vec3(0.13, 0.0, 0.29)) ^ static_cast<uint32_t>(p.seed);
+        auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+        const int lobby = mode == FacadeMode::Entrance ? centreBay : -100;
+        auto inLobby = [&](int b) { return b >= lobby - 1 && b <= lobby + 1; };
+        int b = 0;
+        while (b < L.bays) {
+            if (inLobby(b)) { ++b; continue; }
+            int run = 0;
+            while (b + run < L.bays && !inLobby(b + run)) ++run;
+            // Cut this run into units of two or three bays (a single bay joins its neighbour).
+            int s = b;
+            while (s < b + run) {
+                const int left = b + run - s;
+                int g = left <= 3 ? left : 2 + static_cast<int>(next() % 2u);
+                if (left - g == 1) g = (g == 2 ? 3 : 2);
+                if (g < 2) {   // a lone bay: grow the previous unit over it, else leave it to the lobby
+                    if (!L.shops.empty() && L.shops.back().b1 == s - 1) L.shops.back().b1 = s;
+                    break;
+                }
+                ShopUnit u;
+                u.b0 = s; u.b1 = s + g - 1;
+                u.door = g == 3 ? s + 1 : s + static_cast<int>(next() % 2u);
+                u.type = static_cast<uint8_t>(next() % static_cast<uint32_t>(kShopTypes));
+                L.shops.push_back(u);
+                s += g;
+            }
+            b += run;
+        }
+    }
+    auto isShopDoor = [&](int b) {
+        for (const ShopUnit& u : L.shops) if (u.door == b) return true;
+        return false;
+    };
     for (int b = 0; b < L.bays; ++b) {
         BayOpening o;
         o.x0 = b * bw; o.x1 = (b + 1) * bw;
         o.entrance = (mode == FacadeMode::Entrance && b == centreBay);
+        if (isShopDoor(b)) { o.entrance = true; o.shopDoor = true; }
         o.wx0 = o.x0 + margin; o.wx1 = o.x1 - margin;       // window/opening span
         if (group > 1) {
             // GROUPED windows (M3): a slim mullion inside the group, a broad pier at its ends.
@@ -979,6 +1030,30 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
         L.open.push_back(o);
     }
     return L;
+}
+
+// THE GROUND STOREY'S MODE on edge `e` -- what the exterior draws there, and so where the shops and their doors
+// are: the entrance edge is the Entrance, a vehicle-bay front or the stair's wall carries no openings to speak of
+// (Solid), a storefront edge that does not face the street (retailStreetOnly) is a plain wall. One answer for the
+// exterior, its far tier, the interior's colliders and its shops.
+static FacadeMode groundModeFor(const Poly2& plan, const BuildingParams& params, std::size_t e,
+                                std::size_t entranceEdge) {
+    if (e == entranceEdge && params.groundBays > 0) return FacadeMode::Solid;
+    const FacadeMode base = params.solidFacade ? FacadeMode::Solid
+                          : params.groundRetail ? FacadeMode::Retail
+                                                : FacadeMode::Residential;
+    FacadeMode mode = (e == entranceEdge && params.walkableGround) ? FacadeMode::Entrance : base;
+    if (params.openDoorway && e != entranceEdge) {
+        const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
+        if (il.hasStair && e == il.edge) return FacadeMode::Solid;
+    }
+    if (mode == FacadeMode::Retail && params.retailStreetOnly) {
+        const Vec2 a = plan[e], b = plan[(e + 1) % plan.size()];
+        const Vec2 d = normalize(b - a);
+        const Vec2 nrm(d.y, -d.x);
+        if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z < 0.35) mode = FacadeMode::Residential;
+    }
+    return mode;
 }
 
 // The ARC of an arched head, left springer to right springer, in FACE space
@@ -1434,7 +1509,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // aperture: the lot layer turns it into a DoorSpec for colliders,
             // records and the leaf.
             out.attaches.push_back({fr.at((wx0 + wx1) * 0.5, 0), fr.n,
-                                    "entrance", wx1 - wx0, openHead});
+                                    bay.shopDoor ? "shopdoor" : "entrance", wx1 - wx0, openHead});
         } else {
             const Vec3 in = fr.n * (-p.windowInset);
             const Vec3 rev = wallColor * 0.82;
@@ -3636,6 +3711,114 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
     return out;
 }
 
+// THE SHOPS of the ground storey (Glenn, 2026-10-01: "I'm still waiting to see these small shops ... I'd also like
+// to see that with smaller buildings"): a room behind every shop unit of every storefront edge (facadeLayout's own
+// units, so the room sits behind its shopfront and door), from the facade back to a wall that stops short of the
+// core or the stair, party walls between. The lobby is whatever is left.
+static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge, Real y0,
+                             Real h, const CorePlan& core, const Poly2& well, const Vec2& stairFoot = Vec2(1e30, 1e30)) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = false;
+    rp.finish = interiorFinishFor(params);
+    if (!params.groundRetail || !params.walkableGround || planIn.size() < 3) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    const Real inset = interiorInset(params);
+    const Poly2 coreR = core.valid ? core.rect() : well;
+    std::vector<Poly2> taken;
+    for (std::size_t e = 0; e < n; ++e) {
+        const FacadeMode mode = groundModeFor(plan, params, e, entranceEdge);
+        if (mode != FacadeMode::Retail && mode != FacadeMode::Entrance) continue;
+        const FaceRect fr = planEdgeRect(plan, e, y0, h);
+        const FacadeLayout L = facadeLayout(fr, mode, params);
+        if (L.shops.empty()) continue;
+        const Vec2 a = plan[e], dv = plan[(e + 1) % n] - a;
+        const Real W = dv.length();
+        if (W < 1e-6) continue;
+        const Vec2 d = dv * (1.0 / W), nOut(d.y, -d.x);
+        // How deep: to 1.5 m short of the core or stair (only where it stands in front), else 45% of the plate.
+        Real across = 0;
+        for (const Vec2& v : plan) across = std::max(across, dot(a - v, nOut));
+        Real deep = std::min(Real(10.0), across * 0.45);
+        if (coreR.size() >= 3) {
+            Real t0 = 1e9, t1 = -1e9, dist = 1e9;
+            for (const Vec2& c : coreR) {
+                t0 = std::min(t0, dot(c - a, d)); t1 = std::max(t1, dot(c - a, d));
+                dist = std::min(dist, dot(a - c, nOut));
+            }
+            (void)t0; (void)t1;
+            deep = std::min(deep, dist - 1.5);
+        }
+        if (deep < inset + 3.0) continue;
+        auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
+        // The STAIR and its approach stay lobby: a shop that would cover them is cut short of them, or left out.
+        Poly2 stairZone;
+        if (well.size() >= 3) {
+            const Vec2 wc = centroid(well);
+            stairZone = well;
+            for (Vec2& v : stairZone) v = v + normalize(v - wc) * 2.5;
+        }
+        for (const ShopUnit& u : L.shops) {
+            const Real x0 = L.open[static_cast<std::size_t>(u.b0)].x0, x1 = L.open[static_cast<std::size_t>(u.b1)].x1;
+            Real dpt = deep;
+            if (stairZone.size() >= 3) {
+                for (int tries = 0; tries < 8; ++tries) {
+                    const Poly2 r0 = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
+                    bool hit = false;
+                    for (const Vec2& v : stairZone) if (pointInPolygon(r0, v)) hit = true;
+                    const Vec2 c0 = centroid(r0);
+                    for (const Vec2& v : r0) if (pointInPolygon(stairZone, v + (c0 - v) * 0.02)) hit = true;
+                    if (!hit) break;
+                    dpt -= 1.0;
+                }
+                if (dpt < inset + 3.0) continue;
+            }
+            Poly2 r = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
+            // A corner: the shop on the other edge got there first.
+            bool clash = false;
+            for (const Poly2& t : taken) {
+                const Vec2 c = centroid(r);
+                for (const Vec2& v : r) if (pointInPolygon(t, v + (c - v) * 0.02)) clash = true;
+                const Vec2 ct = centroid(t);
+                for (const Vec2& v : t) if (pointInPolygon(r, v + (ct - v) * 0.02)) clash = true;
+            }
+            if (clash) continue;
+            taken.push_back(r);
+            Room rm;
+            rm.edge = e;
+            rm.kind = RoomKind::Shop;
+            rm.style = u.type;
+            rm.rect = r;
+            rp.rooms.push_back(rm);
+            // Its walls: the back, and a party wall at each side (not where the side is the plan's own end).
+            RoomWall back; back.a = P(x1, dpt); back.b = P(x0, dpt);
+            rp.walls.push_back(back);
+            for (Real x : {x0, x1}) {
+                if (x < inset + 0.05 || x > W - inset - 0.05) continue;
+                RoomWall w; w.a = P(x, inset); w.b = P(x, dpt);
+                rp.walls.push_back(w);
+            }
+        }
+    }
+    // The LOBBY must still reach the stair from the building's entrance: walk it (the shops' walls only, a probe
+    // room at the stair's foot); a ground floor that would wall the stair off gets no shops.
+    if (!rp.rooms.empty() && stairFoot.x < 1e29 && entranceEdge < n) {
+        const Vec2 a = plan[entranceEdge], b = plan[(entranceEdge + 1) % n];
+        const Vec2 d = normalize(b - a), nOut(d.y, -d.x);
+        const Vec2 entry = (a + b) * 0.5 - nOut * (inset + 0.8);
+        RoomPlan probe;
+        probe.walls = rp.walls;
+        Room foot;
+        foot.rect = {stairFoot + Vec2(-0.3, -0.3), stairFoot + Vec2(0.3, -0.3), stairFoot + Vec2(0.3, 0.3),
+                     stairFoot + Vec2(-0.3, 0.3)};
+        probe.rooms.push_back(foot);
+        if (!floorIsWalkable(probe, plan, entry, well)) return RoomPlan{};
+    }
+    return rp;
+}
+
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
@@ -3772,12 +3955,12 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Poly2 innerPlan = offsetPolygonEdges(spk.plan, std::vector<Real>(spk.plan.size(), -inset));
             for (std::size_t e = 0; e < spk.plan.size(); ++e) {
                 const FaceRect fr = planEdgeRect(spk.plan, e, wy0, spk.h);
-                Real gap0 = -1, gap1 = -1;
-                if (k == 0 && e == entranceEdge && params.walkableGround) {
-                    const FacadeLayout L =
-                        facadeLayout(fr, FacadeMode::Entrance, params);
+                // The ground storey keeps a gap at EVERY door on the edge: the entrance and the shops' doors.
+                std::vector<std::pair<Real, Real>> gaps;
+                if (k == 0 && params.walkableGround) {
+                    const FacadeLayout L = facadeLayout(fr, groundModeFor(spk.plan, params, e, entranceEdge), params);
                     for (const BayOpening& o : L.open)
-                        if (o.entrance) { gap0 = o.wx0; gap1 = o.wx1; }
+                        if (o.entrance) gaps.push_back({o.wx0, o.wx1});
                 }
                 const Vec3 off = fr.n * -inset;
                 // Along the INSET edge (mitred ends), parametrised by the
@@ -3798,12 +3981,9 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                     emitQuad(*colliderOut, A, B, B + up, A + up, fr.n * -1.0, icol);
                     (void)ih;
                 };
-                if (gap0 >= 0) {
-                    wallQuad(0, gap0);
-                    wallQuad(gap1, fr.width);
-                } else {
-                    wallQuad(0, fr.width);
-                }
+                Real at = 0;
+                for (const auto& [g0, g1] : gaps) { wallQuad(at, g0); at = g1; }
+                wallQuad(at, fr.width);
             }
         }
     }
@@ -4018,10 +4198,16 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     for (int ki = kA; ki < kB; ++ki) {
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
         if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
-        const RoomPlan rp = roomPlan(spk.plan, params, core,
-                                     il.hasStair ? il.edge : static_cast<std::size_t>(-1),
-                                     interiorInset(params), ki,
-                                     il.hasStair ? il.well : Poly2{}, entranceEdge);
+        // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
+        RoomPlan rp = ki == 0 ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
+                                             il.hasStair ? il.well : Poly2{},
+                                             il.hasStair ? il.stairFoot : Vec2(1e30, 1e30))
+                              : RoomPlan{};
+        if (rp.rooms.empty())
+            rp = roomPlan(spk.plan, params, core,
+                          il.hasStair ? il.edge : static_cast<std::size_t>(-1),
+                          interiorInset(params), ki,
+                          il.hasStair ? il.well : Poly2{}, entranceEdge);
         if (rp.walls.empty()) continue;
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
@@ -4224,8 +4410,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
             continue;
         }
-        FacadeMode mode = (i == entranceEdge && params.walkableGround)
-                              ? FacadeMode::Entrance : groundMode;
+        FacadeMode mode = groundModeFor(plan, params, i, entranceEdge);
+        (void)groundMode;
         // The stairwell hugs one wall; ANY window there reads wrong from
         // both sides -- Solid mode's clerestory strip included (device:
         // "the wall along which the stairwell was still had windows"). The
@@ -4247,28 +4433,62 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
             continue;
         }
-        if (mode == FacadeMode::Retail && params.retailStreetOnly) {
-            Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
-            Vec2 d = normalize(b - a);
-            Vec2 nrm(d.y, -d.x);
-            if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z < 0.35)
-                mode = FacadeMode::Residential;
-        }
         // An enterable building's ground storey has CLEAR panes at Full
         // detail (the lobby shows from the street, the street from the lobby).
         const bool clearLobby = full && params.openDoorway;
-        if (params.curtainWall && mode != FacadeMode::Entrance)
+        // A glass tower's STOREFRONT edges are shopfronts (the shops' glazing and doors), its other ground edges
+        // its curtain wall.
+        if (params.curtainWall && mode != FacadeMode::Entrance && mode != FacadeMode::Retail)
             emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor, detail, clearLobby, curtainStyleOf(params));
         else if (full)
             emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor, clearLobby);
         else
             emitFlatFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
+        // THE SHOP SIGNS: over every shop on a storefront edge, a fascia board -- a dark backing, a lit face in
+        // the trade's colour (it glows at night), and a line of letter blocks up close.
+        if (mode == FacadeMode::Retail || mode == FacadeMode::Entrance) {
+            const FaceRect sfr = planEdgeRect(plan, i, y, gh);
+            const FacadeLayout SL = facadeLayout(sfr, mode, params);
+            static const Vec3 kTrade[7] = {{0.95, 0.70, 0.35}, {0.35, 0.85, 0.40}, {0.95, 0.45, 0.65}, {0.40, 0.65, 1.00},
+                                           {0.30, 0.85, 1.00}, {0.35, 1.00, 0.55}, {1.00, 0.85, 0.50}};
+            RenderMesh lit, letters;
+            for (const ShopUnit& u : SL.shops) {
+                const Real x0 = SL.open[static_cast<std::size_t>(u.b0)].x0 + 0.15;
+                const Real x1 = SL.open[static_cast<std::size_t>(u.b1)].x1 - 0.15;
+                // The fascia just above the storefront's glazing (kShopHead), below the uplight band at the
+                // storey's head on a tall lobby storey.
+                const Real yb = std::min(gh - 1.0, kShopHead + 0.12), yt = yb + 0.55, proud = 0.16;
+                if (x1 - x0 < 1.0 || yb < human::DOOR_HEIGHT + 0.05) continue;
+                const Vec3 X = normalize(sfr.h);
+                emitBox(out, Scope{sfr.at(x0, yb), {X, Vec3(0, 1, 0), sfr.n}, Vec3(x1 - x0, yt - yb, proud)},
+                        PartId::Trim, Vec3(0.10, 0.10, 0.11));
+                const Vec3 o = sfr.n * (proud + 0.005);
+                emitQuad(lit, sfr.at(x0 + 0.05, yb + 0.05) + o, sfr.at(x1 - 0.05, yb + 0.05) + o,
+                         sfr.at(x1 - 0.05, yt - 0.05) + o, sfr.at(x0 + 0.05, yt - 0.05) + o, sfr.n,
+                         kTrade[u.type % 7]);
+                if (full) {   // the name: letter blocks centred on the board
+                    const int nLetters = 4 + static_cast<int>((u.type * 3 + u.b0) % 5);
+                    const Real lw = 0.22, gap = 0.06, total = nLetters * lw + (nLetters - 1) * gap;
+                    const Real lx0 = (x0 + x1) * 0.5 - total * 0.5;
+                    const Vec3 lo = sfr.n * (proud + 0.02);
+                    for (int c = 0; c < nLetters && total < x1 - x0 - 0.3; ++c) {
+                        const Real lx = lx0 + c * (lw + gap);
+                        const Real lh = (c * 7 + u.type) % 3 == 0 ? 0.22 : 0.30;
+                        emitQuad(letters, sfr.at(lx, yb + 0.10) + lo, sfr.at(lx + lw, yb + 0.10) + lo,
+                                 sfr.at(lx + lw, yb + 0.10 + lh) + lo, sfr.at(lx, yb + 0.10 + lh) + lo, sfr.n,
+                                 Vec3(0.12, 0.10, 0.10));
+                    }
+                }
+            }
+            appendToPart(out, PartId::LitBand, lit);
+            appendToPart(out, PartId::Detail, letters);
+        }
         // Enterable buildings (ADR-0080): back the one-sided exterior skin
         // with an inner face at -wallThickness so the room reads as a room,
         // not as a view through to the sky.
         if (full && params.openDoorway) {
             const FaceRect ifr = planEdgeRect(plan, i, y, gh);
-            if (params.curtainWall && mode != FacadeMode::Entrance) {
+            if (params.curtainWall && mode != FacadeMode::Entrance && mode != FacadeMode::Retail) {
                 emitInsetSkin(out, plan, i, y, gh, interiorInset(params),
                               Vec3(1, 1, 1), false, PartId::GlassClear);
             } else {

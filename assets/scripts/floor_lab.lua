@@ -3,6 +3,7 @@
 -- what the streamed interior grows -- rooms, walls, floors, the furniture -- so this is the plan the city has.
 --   front: a condo tower's apartment floor | a podium tower's office floor
 --   back:  a walk-up's apartments off its stair | a house's floor
+--   back row: GROUND floors -- shops under a mixed-use building's flats | a podium tower's shops and lobby
 -- opts.seed rolls the buildings again; opts.storey picks the floor.
 local opts = args or {}
 local seed = opts.seed or 1
@@ -32,13 +33,15 @@ local FLOORS = {
   { recipe = "podium_tower", plan = rect(42, 32), x = 56, z = 0 },
   { recipe = "apartments", plan = rect(28, 15), x = 0, z = -34 },   -- a walk-up: apartments off the stair
   { recipe = "yard_house", plan = rect(12, 9), x = 40, z = -34 },   -- a house: one dwelling a floor
+  { recipe = "mixed_use", plan = rect(30, 14), x = 0, z = -60, storey = 0 },     -- shops under flats
+  { recipe = "podium_tower", plan = rect(42, 32), x = 56, z = -60, storey = 0 }, -- a tower's shops and lobby
 }
 for _, f in ipairs(FLOORS) do
   local parts = building.grow_floor{ recipe = f.recipe, seed = seed * 13 + 7, coreness = 1.0, plan = f.plan,
-                                     storey = storey, cutaway = 2.6 }
+                                     storey = f.storey or storey, cutaway = 2.6 }
   for _, e in ipairs(parts) do
     m:add(mesh.translate(e.mesh, {f.x, 0, f.z}), MATS[e.part] or MATS.default)
   end
-  print(string.format("[floor_lab] %s storey %d: %d parts", f.recipe, storey, #parts))
+  print(string.format("[floor_lab] %s storey %d: %d parts", f.recipe, f.storey or storey, #parts))
 end
 return m

@@ -173,3 +173,32 @@ TEST_CASE(a_walkup_floor_is_apartments_off_the_stair) {
         CHECK(floorIsWalkable(rp, plan, centroid(il.well), il.well));
     }
 }
+
+// SHOPS (Glenn, 2026-10-01: "I'm still waiting to see these small shops ... I'd also like to see that with smaller
+// buildings"): a four-storey building with a storefront on a 30 m street face. Its ground storey has shops: each
+// with its own street door (a "shopdoor" attach, after the building's "entrance"), a room behind the shopfront,
+// furnished for its trade -- a counter in every one.
+TEST_CASE(a_storefront_ground_floor_is_shops_with_their_own_doors) {
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
+    BuildingParams p;
+    p.floors = 3; p.groundRetail = true; p.walkableGround = true; p.openDoorway = true; p.seed = 12;
+    p.residential = true; p.core = 1;
+    const BuildingMesh ext = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
+    int entrances = 0, shopDoors = 0;
+    bool entranceFirst = false;
+    for (const AttachPoint& ap : ext.attaches) {
+        if (ap.tag == "entrance") { if (shopDoors == 0) entranceFirst = true; ++entrances; }
+        if (ap.tag == "shopdoor") ++shopDoors;
+    }
+    std::printf("    [shops] %d entrance, %d shop doors\n", entrances, shopDoors);
+    CHECK(entrances == 1);
+    CHECK(shopDoors >= 2);
+    (void)entranceFirst;
+    RenderMesh col;
+    const BuildingMesh in = growInterior(plan, p, 0.0, &col, 0, 1);
+    int counters = 0;
+    for (const PlacedPiece& pp : in.furniture)
+        if (pp.piece == static_cast<uint8_t>(Piece::ShopCounter)) ++counters;
+    std::printf("    [shops] ground floor: %zu pieces, %d counters\n", in.furniture.size(), counters);
+    CHECK(counters >= 2);
+}

@@ -1288,8 +1288,11 @@ TEST_CASE(some_towers_wear_podium_uplights) {
     low.floors = 4;
     low.seed = 3;
     const BuildingMesh bm = growPlanBuilding({{0, 0}, {20, 0}, {20, 16}, {0, 16}}, low);
+    // No night dressing on a low building -- above its ground storey: the SHOPS' fascia signs at street level are
+    // the street's own lighting (buildings: shops), not a crown.
     for (const RenderMesh& part : bm.parts)
-        CHECK(part.materialIndex != static_cast<int>(PartId::LitBand) || part.vertices.empty());
+        if (part.materialIndex == static_cast<int>(PartId::LitBand))
+            for (const Vertex& v : part.vertices) CHECK(v.position.y < low.groundHeight + 0.01);
 }
 
 TEST_CASE(lighting_spec_overrides_the_hash) {

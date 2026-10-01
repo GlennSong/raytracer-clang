@@ -1841,6 +1841,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             else if (ap.tag == "beacon")
                 u.beacons.push_back(ap.position);
         }
+        // The SHOPS' street doors after the building's own entrance: doors.front() stays the front door (the
+        // citysim's place entrance); every door gets its collider gap and its leaf.
+        for (const AttachPoint& ap : um.attaches)
+            if (ap.tag == "shopdoor")
+                u.doors.push_back({Vec2(ap.position.x, ap.position.z), Vec2(ap.normal.x, ap.normal.z), ap.width,
+                                   ap.height});
         // Enterable requires an ACTUAL collected door: recipes that never
         // take FacadeMode::Entrance (cylinders, pagodas, bay fronts) can
         // carry openDoorway without ever emitting an aperture. Evaluated
