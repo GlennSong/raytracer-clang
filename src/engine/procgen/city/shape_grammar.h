@@ -515,6 +515,9 @@ struct BuildingParams {
     // verticals = true.
     uint8_t windowGroup = 1;
     bool  verticals = false;
+    // WHAT IT IS FOR (buildings B): a residential building's typical floors are whole apartments off a corridor
+    // (room_plan.h, PlateTopology::Apartments); anything else keeps its office ring. Set from the recipe's use.
+    bool  residential = false;
 };
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.

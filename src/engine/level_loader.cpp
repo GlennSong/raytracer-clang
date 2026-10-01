@@ -215,7 +215,8 @@ static void bindSurfaceMaps(RenderMaterial& mat, const std::array<TextureHandle,
 // The surfaces that exist ONLY as baked maps on the mesh's own UVs (the furniture finishes, buildings M4b): the
 // shader has no analytic version, so a script part that names one must be bound its baked set.
 static bool surfaceIsBakedOnMeshUVs(RenderMaterial::Surface s) {
-    return s == RenderMaterial::Surface::WoodGrain || s == RenderMaterial::Surface::Fabric;
+    return s == RenderMaterial::Surface::WoodGrain || s == RenderMaterial::Surface::Fabric ||
+           s == RenderMaterial::Surface::Marble || s == RenderMaterial::Surface::Carpet;
 }
 
 // A named material library: the level's top-level "materials" table, so entities

@@ -75,3 +75,67 @@ TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {
     CHECK(col.indices.size() > 0);   // the desks and cabinets are solid
     std::printf("    [furnish] %zu rooms: %zu pieces, %d desks\n", rp.rooms.size(), placed.size(), desks);
 }
+
+// WHOLE-FLOOR APARTMENTS (buildings B; Glenn: "make entire apartments out of the floor ... then naturally there
+// would be hallway where the stairwell or elevators would be"). A masonry tower's typical floor: apartments, every
+// one a hall, a bath and a living room at least, the rooms inside the plate and clear of each other, the floor
+// walkable from the corridor -- and furnished: beds, closets with shelving, pictures on the walls.
+TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
+    for (const Poly2& plan : {Poly2{{0, 0}, {44, 0}, {44, 32}, {0, 32}}, Poly2{{0, 0}, {36, 0}, {36, 36}, {0, 36}}}) {
+        BuildingParams p;
+        p.floors = 24; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = 33;
+        p.residential = true;
+        const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+        CHECK(core.valid);
+        const Real inset = std::max(p.wallThickness, Real(0.55));
+        const RoomPlan rp = roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 6);
+        CHECK(rp.topology == PlateTopology::Apartments);
+        int halls = 0, baths = 0, livings = 0, beds = 0, closets = 0, kitchens = 0;
+        for (const Room& r : rp.rooms) {
+            switch (r.kind) {
+                case RoomKind::Hall: ++halls; break;
+                case RoomKind::Bath: ++baths; break;
+                case RoomKind::Living: ++livings; break;
+                case RoomKind::Bed: ++beds; break;
+                case RoomKind::Closet: ++closets; break;
+                case RoomKind::Kitchen: ++kitchens; break;
+                default: break;
+            }
+            for (const Vec2& v : r.rect) {
+                const Vec2 c = centroid(r.rect);
+                CHECK(pointInPolygon(plan, v + (c - v) * 0.01));
+            }
+        }
+        std::printf("    [apts] %zu rooms: %d apartments, %d bedrooms, %d kitchens, %d closets\n", rp.rooms.size(), halls,
+                    beds, kitchens, closets);
+        CHECK(halls >= 6);
+        CHECK(baths == halls);
+        CHECK(livings == halls);
+        CHECK(kitchens == halls);
+        CHECK(beds >= halls);
+        // No two rooms overlap (rectangles, 2 cm shrunk: touching is not overlapping).
+        for (std::size_t i = 0; i < rp.rooms.size(); ++i)
+            for (std::size_t j = i + 1; j < rp.rooms.size(); ++j) {
+                Real lo1 = 1e9, hi1 = -1e9, lo2 = 1e9, hi2 = -1e9, lo3 = 1e9, hi3 = -1e9, lo4 = 1e9, hi4 = -1e9;
+                for (const Vec2& v : rp.rooms[i].rect) { lo1 = std::min(lo1, v.x); hi1 = std::max(hi1, v.x); lo2 = std::min(lo2, v.y); hi2 = std::max(hi2, v.y); }
+                for (const Vec2& v : rp.rooms[j].rect) { lo3 = std::min(lo3, v.x); hi3 = std::max(hi3, v.x); lo4 = std::min(lo4, v.y); hi4 = std::max(hi4, v.y); }
+                const bool ov = lo1 < hi3 - 0.02 && lo3 < hi1 - 0.02 && lo2 < hi4 - 0.02 && lo4 < hi2 - 0.02;
+                CHECK(!ov);
+            }
+        CHECK(floorIsWalkable(rp, plan, core.frame.toWorld({core.length * 0.5, -1.1})));
+        std::vector<PlacedPiece> placed;
+        RenderMesh col;
+        emitFurniture(placed, &col, rp, 20.0, p.seed);
+        int pbeds = 0, shelves = 0, pictures = 0;
+        for (const PlacedPiece& pp : placed) {
+            if (pp.piece == static_cast<uint8_t>(Piece::Bed)) ++pbeds;
+            if (pp.piece == static_cast<uint8_t>(Piece::Shelving)) ++shelves;
+            if (pp.piece == static_cast<uint8_t>(Piece::Picture)) ++pictures;
+        }
+        std::printf("    [apts] furnished: %zu pieces, %d beds, %d closets shelved, %d pictures\n", placed.size(), pbeds,
+                    shelves, pictures);
+        CHECK(pbeds >= halls);
+        CHECK(shelves >= closets / 2);
+        CHECK(pictures >= halls);
+    }
+}

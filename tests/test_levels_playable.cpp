@@ -3731,6 +3731,19 @@ TEST_CASE(level_print_skyline_by_recipe) {
             const double m = r.params.groundHeight + r.params.floors * r.params.floorHeight;
             if (r.params.floors > t.tallest) { t.tallest = r.params.floors; t.metres = m; t.at = centroid(r.plan); }
         }
+        // RESIDENTIAL buildings with a lift core (the apartment floors, buildings B): how many, and the tallest.
+        {
+            int n = 0, tallest = 0;
+            Vec2 at(0, 0);
+            std::string rec;
+            for (const BuildingRecord& r : cb->records) {
+                if (!r.params.residential || r.params.floors < 6 || !r.enterable) continue;
+                ++n;
+                if (r.params.floors > tallest) { tallest = r.params.floors; at = centroid(r.plan); rec = r.recipe; }
+            }
+            std::printf("    [skyline] %-22s residential with a core: %d, tallest %d floors (%s)  ->  teleport %.0f %.0f\n",
+                        name, n, tallest, rec.c_str(), at.x, at.y);
+        }
         std::printf("    [skyline] %-22s towers of 15+ floors by recipe:\n", name);
         for (const auto& [k, t] : by)
             std::printf("      %-20s %4d (enterable %4d), tallest %2d floors %4.0f m, mean plate %5.0f m2  ->  teleport %.0f %.0f\n",

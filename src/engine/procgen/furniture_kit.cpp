@@ -350,6 +350,76 @@ FurniturePiece build(Piece p, uint32_t variant) {
             MeshBuilder::append(k.m(F::Fabric), leaves);
             break;
         }
+        case Piece::Picture: {
+            // WALL ART (Glenn: "the walls are bare"): a framed canvas hung at eye height -- an abstract of two to
+            // four colour fields on a ground, in one of three sizes and three frames, the palette by the variant.
+            static const Vec3 kSizes[3] = {{0.60, 0.80, 0}, {1.00, 0.70, 0}, {1.40, 0.90, 0}};
+            const Vec3 sz = kSizes[style % 3];
+            const Real W = sz.x, H = sz.y, cy = 1.55;
+            k.out.size = {W + 0.1, cy + H * 0.5 + 0.06, 0.05};
+            k.out.solid = false;
+            static const Vec3 kFrames[3] = {{0.07, 0.07, 0.08}, {0.92, 0.91, 0.88}, {0.0, 0.0, 0.0}};
+            const Vec3 frame = (style / 3) % 3 == 2 ? wood : kFrames[(style / 3) % 3];
+            const F fm = (style / 3) % 3 == 2 ? F::Wood : F::Hard;
+            const Real fw = 0.04;
+            k.box(fm, {0, cy + H * 0.5 + fw * 0.5, 0.02}, {W + 2 * fw, fw, 0.04}, 0.004, frame, 1);
+            k.box(fm, {0, cy - H * 0.5 - fw * 0.5, 0.02}, {W + 2 * fw, fw, 0.04}, 0.004, frame, 1);
+            k.box(fm, {-W * 0.5 - fw * 0.5, cy, 0.02}, {fw, H, 0.04}, 0.004, frame, 1);
+            k.box(fm, {W * 0.5 + fw * 0.5, cy, 0.02}, {fw, H, 0.04}, 0.004, frame, 1);
+            static const Vec3 kPal[6][4] = {
+                {{0.93, 0.90, 0.84}, {0.85, 0.36, 0.22}, {0.16, 0.24, 0.40}, {0.92, 0.72, 0.30}},
+                {{0.20, 0.22, 0.26}, {0.84, 0.80, 0.72}, {0.70, 0.30, 0.30}, {0.40, 0.56, 0.62}},
+                {{0.88, 0.86, 0.80}, {0.36, 0.52, 0.40}, {0.70, 0.62, 0.44}, {0.22, 0.30, 0.26}},
+                {{0.96, 0.94, 0.90}, {0.10, 0.10, 0.12}, {0.86, 0.20, 0.18}, {0.20, 0.36, 0.70}},
+                {{0.82, 0.74, 0.64}, {0.58, 0.38, 0.30}, {0.92, 0.84, 0.70}, {0.40, 0.30, 0.26}},
+                {{0.30, 0.40, 0.52}, {0.70, 0.80, 0.86}, {0.94, 0.86, 0.60}, {0.16, 0.20, 0.30}}};
+            const Vec3* pal = kPal[(variant ^ (style * 7)) % 6];
+            k.box(F::Hard, {0, cy, 0.022}, {W, H, 0.012}, 0.0, pal[0], 1);   // the ground
+            // The fields: seeded rectangles, kept inside the canvas.
+            uint32_t r = variant * 2654435761u + style * 40503u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            const int fields = 2 + static_cast<int>(next() * 3);
+            for (int f = 0; f < fields; ++f) {
+                const Real fwid = W * (0.18 + 0.45 * next()), fht = H * (0.15 + 0.5 * next());
+                const Real fx = (next() - 0.5) * (W - fwid), fyy = (next() - 0.5) * (H - fht);
+                k.box(F::Hard, {fx, cy + fyy, 0.029 + 0.001 * f}, {fwid, fht, 0.002}, 0.0, pal[1 + f % 3], 1);
+            }
+            break;
+        }
+        case Piece::Shelving: {
+            // A CLOSET's shelves: two white uprights, four shelves of folded clothes and boxes, a hanging rail of
+            // garments down one half.
+            k.out.size = {1.2, 2.0, 0.5};
+            for (double x : {-0.58, 0.58}) k.box(F::Hard, {x, 1.0, 0.25}, {0.03, 2.0, 0.48}, 0.003, kWhite, 1);
+            for (double y : {0.30, 0.80, 1.40, 1.90}) k.box(F::Hard, {0.29, y, 0.25}, {0.56, 0.025, 0.46}, 0.002, kWhite, 1);
+            k.box(F::Hard, {0, 1.98, 0.25}, {1.16, 0.025, 0.48}, 0.002, kWhite, 1);
+            uint32_t r = variant * 747796405u + 1u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            for (double y : {0.31, 0.81, 1.41}) {
+                Real x = 0.05;
+                while (x < 0.5) {
+                    const Real w = 0.14 + 0.12 * next(), hh = 0.10 + 0.18 * next();
+                    if (x + w > 0.54) break;
+                    k.box(F::Fabric, {x + w * 0.5, y + 0.013 + hh * 0.5, 0.24}, {w, hh, 0.34}, 0.02,
+                          kFabric[static_cast<int>(next() * 8) % 8], 1);
+                    x += w + 0.02;
+                }
+            }
+            k.rod(F::Metal, {-0.56, 1.75, 0.25}, {0.0, 1.75, 0.25}, 0.012, kChrome, 10);
+            for (int g = 0; g < 7; ++g) {
+                const Real x = -0.52 + g * 0.075;
+                k.box(F::Fabric, {x, 1.30, 0.25}, {0.018, 0.84, 0.42}, 0.008, kFabric[(variant + g * 3) % 8]);
+            }
+            break;
+        }
+        case Piece::Rug: {
+            k.out.size = {2.0, 0.04, 1.4};
+            k.out.solid = false;
+            k.box(F::Fabric, {0, 0.026, 0.7}, {2.0, 0.012, 1.4}, 0.005, fabric * 0.85, 1);   // lifted clear of the floor finish
+            k.box(F::Fabric, {0, 0.028, 0.7}, {1.76, 0.012, 1.16}, 0.004, kLinen * 0.9, 1);
+            k.box(F::Fabric, {0, 0.030, 0.7}, {1.5, 0.012, 0.9}, 0.004, fabric, 1);
+            break;
+        }
         default: break;
     }
     return k.out;
@@ -358,7 +428,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
 const char* const kPieceNames[kPieceCount] = {
     "desk", "office_chair", "monitor", "filing_cabinet", "bed", "nightstand", "wardrobe", "sofa", "coffee_table",
     "tv_unit", "kitchen_base", "kitchen_sink", "kitchen_hob", "kitchen_tall", "kitchen_wall", "dining_table",
-    "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter"};
+    "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug"};
 
 }  // namespace
 

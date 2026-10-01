@@ -55,6 +55,8 @@ struct Furnisher {
     Real y0;
     uint32_t variant;
     std::vector<Box2> taken;   // door swings and placed footprints
+    std::vector<Box2> doorways;   // the door swings alone (a picture keeps clear of them)
+    std::vector<Box2> tall;       // footprints of pieces that stand up the wall (no picture over them)
 
     // A kit piece in the footprint's frame: its centre `x` along the wall, `z` out, turned to face +z (into the
     // room) or, with `facing` false, back toward the wall (a chair at its desk).
@@ -96,7 +98,7 @@ struct Furnisher {
 
     // Find a spot against a wall for a w x d footprint: the preferred sides in order, each tried centred, then
     // at its ends and quarters. False when it fits nowhere.
-    bool place(Real w, Real d, const std::vector<int>& sides, Placement& p) {
+    bool place(Real w, Real d, const std::vector<int>& sides, Placement& p, bool isTall = false) {
         for (int s : sides) {
             const Real len = (s == 0 || s == 2) ? f.W : f.D;
             const Real depth = (s == 0 || s == 2) ? f.D : f.W;
@@ -111,6 +113,34 @@ struct Furnisher {
                 if (!clear) continue;
                 p = c;
                 taken.push_back(fp);
+                if (isTall) tall.push_back(fp);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // WALL ART (Glenn: "the walls are bare. So some pictures hanging on there would be nice"): a picture on the
+    // first of `sides` with a clear stretch -- not over a doorway or a tall piece (a wardrobe, a TV, a cupboard);
+    // over a sofa or a bed is where pictures go.
+    bool hang(const std::vector<int>& sides, uint32_t artVariant) {
+        const FurniturePiece& kit = furniturePiece(Piece::Picture, artVariant);
+        const Real w = kit.size.x;
+        for (int s : sides) {
+            const Real len = (s == 0 || s == 2) ? f.W : f.D;
+            if (w > len - 0.6) continue;
+            const Real free = len - w - 0.2;
+            for (Real k : {0.5, 0.3, 0.7}) {
+                Placement c{&f, s, 0.1 + free * k, w, 0.3};
+                const Box2 fp = c.footprint();
+                bool clear = true;
+                for (const Box2& b : doorways) if (overlaps(fp, b, 0.05)) clear = false;
+                for (const Box2& b : tall) if (overlaps(fp, b, 0.05)) clear = false;
+                if (!clear) continue;
+                const uint32_t keep = variant;
+                variant = artVariant;
+                put(c, Piece::Picture, w * 0.5, 0.0);
+                variant = keep;
                 return true;
             }
         }
@@ -144,6 +174,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
             const Vec2 l = F.f.local(dp);
             if (l.x < -0.4 || l.x > F.f.W + 0.4 || l.y < -0.4 || l.y > F.f.D + 0.4) continue;
             F.taken.push_back({l.x - 0.6, l.y - 0.6, l.x + 0.6, l.y + 0.6});
+            F.doorways.push_back(F.taken.back());
         }
         // Sides by preference: a ring room's window wall is side 0, its front (door) side 2; a house room goes
         // longest wall first.
@@ -160,7 +191,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     F.put(p, Piece::Monitor, 0.8, 0.12, true, 0.75);
                     F.put(p, Piece::OfficeChair, 0.8, 1.55, false);
                 }
-                if (F.place(0.46, 0.6, {1, 3, 2}, p)) F.put(p, Piece::FilingCabinet, 0.23, 0.0);
+                if (F.place(0.46, 0.6, {1, 3, 2}, p, true)) F.put(p, Piece::FilingCabinet, 0.23, 0.0);
                 if (F.f.W > 5.5 && F.place(0.9, 0.9, {2, 1, 3}, p)) F.put(p, Piece::Planter, 0.45, 0.0);
                 break;
             }
@@ -177,7 +208,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         F.put(p, Piece::Sofa, 1.08, 0.0);
                         F.put(p, Piece::CoffeeTable, 1.08, 1.15);
                     }
-                } else if (F.place(1.2, 0.6, {1, 3, 0, 2}, p)) {
+                } else if (F.place(1.2, 0.6, {1, 3, 0, 2}, p, true)) {
                     F.put(p, Piece::Wardrobe, 0.6, 0.0);
                 }
                 break;
@@ -186,9 +217,10 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 Placement sofa;
                 if (F.place(2.16, 1.75, longFirst, sofa)) {
                     F.put(sofa, Piece::Sofa, 1.08, 0.0);
+                    F.put(sofa, Piece::Rug, 1.08, 0.75);
                     F.put(sofa, Piece::CoffeeTable, 1.08, 1.15);
                     const int opp = (sofa.side + 2) % 4;
-                    if (F.place(1.6, 0.42, {opp}, p)) F.put(p, Piece::TvUnit, 0.8, 0.0);
+                    if (F.place(1.6, 0.42, {opp}, p, true)) F.put(p, Piece::TvUnit, 0.8, 0.0);
                 }
                 if (F.place(0.84, 0.84, {1, 3, 0, 2}, p)) F.put(p, Piece::LoungeChair, 0.42, 0.0);
                 break;
@@ -198,7 +230,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 // at one end, the sink and the hob among the base units, a wall cupboard over each base.
                 const Real wall = std::max(F.f.W, F.f.D);
                 const int mods = std::clamp(static_cast<int>((wall - 1.0) / 0.6), 2, 6);
-                if (F.place(mods * 0.6, 0.64, longFirst, p)) {
+                if (F.place(mods * 0.6, 0.64, longFirst, p, true)) {
                     for (int i = 0; i < mods; ++i) {
                         const Real x = 0.3 + i * 0.6;
                         Piece pc = Piece::KitchenBase;
@@ -216,12 +248,32 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 }
                 break;
             }
+            case RoomKind::Closet: {
+                if (F.place(1.2, 0.5, longFirst, p, true)) F.put(p, Piece::Shelving, 0.6, 0.0);
+                break;
+            }
             case RoomKind::Bath: {
                 if (F.place(1.7, 0.75, longFirst, p)) F.put(p, Piece::Bathtub, 0.85, 0.0);
                 if (F.place(0.4, 0.7, {1, 3, 0, 2}, p)) F.put(p, Piece::Toilet, 0.2, 0.0);
                 if (F.place(0.8, 0.5, {0, 1, 2, 3}, p)) F.put(p, Piece::Vanity, 0.4, 0.0);
                 break;
             }
+            default: break;
+        }
+        // The pictures: on the side walls (never the window wall of a room that has one), two in a long living
+        // room. The art varies picture to picture.
+        const uint32_t art = (hr >> 3) % 24u;   // 24 designs: each is one instanced mesh, so the variety is a draw-call budget
+        const bool windowed = ring || rp.topology == PlateTopology::Apartments;
+        const std::vector<int> artSides = windowed ? std::vector<int>{1, 3, 2} : std::vector<int>{1, 3, 0, 2};
+        switch (room.kind) {
+            case RoomKind::Living: {
+                const bool two = std::max(F.f.W, F.f.D) > 6.0;
+                if (F.hang(artSides, art << 5) && two) F.hang({3, 2, 1}, ((art + 7) % 24u) << 5);
+                break;
+            }
+            case RoomKind::Bed: case RoomKind::Flat: case RoomKind::Office: case RoomKind::Hall:
+                F.hang(artSides, art << 5);
+                break;
             default: break;
         }
     }

@@ -45,11 +45,12 @@ namespace engine {
 enum class PlateTopology : uint8_t {
     Ring,        // rooms around an open middle (offices, flats)
     WholeFloor,  // the whole plate is one dwelling (houses, rowhouse units)
+    Apartments,  // whole apartments off a corridor round the core (residential towers, buildings B)
 };
 
 // What a room is FOR. The ring names its rooms by use only; the whole floor
 // names them properly, which is what furniture and lighting read later.
-enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed };
+enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

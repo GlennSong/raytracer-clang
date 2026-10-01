@@ -1120,6 +1120,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     readTopField(L, idx, p);
     p.windowGroup = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "window_group", p.windowGroup)), 1, 3));
     p.verticals = optBoolField(L, idx, "verticals", p.verticals);
+    p.residential = optBoolField(L, idx, "residential", p.residential);   // apartments inside (buildings B)
     lua_getfield(L, idx, "mullions");
     if (lua_isstring(L, -1)) {
         static const char* names[5] = {"steel", "bronze", "black", "silver", "white"};
@@ -1217,9 +1218,40 @@ int l_building_grow_parts(lua_State* L) {
 // closed polygon — the lot's own shape — optionally inset by `setback`, grown
 // with the same elements as grow_parts and returned as named parts. Tiers via
 // setback_floors/setback_every give the base/shaft/capital stack.
-int l_building_grow_plan_parts(lua_State* L) {
-    BuildingParams p = readBuildingParams(L, 1);
-    Poly2 plan;
+// Push a building's parts to Lua as { {part = "glass", mesh = ...}, ... } (named by PartId).
+static int pushNamedParts(lua_State* L, const std::vector<RenderMesh>& partsIn) {
+    // Every part by name, in PartId order (materialIndexFor is the ordinal); a draped slot keeps its base name.
+    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
+                                       "ground", "detail", "brick", "concrete",
+                                       "stucco", "metal", "wood",
+                                       "siding", "path", "foliage", "vent", "utility", "fan", "shingle",
+                                       "glass_lit", "interior", "interior_floor", "interior_tile",
+                                       "interior_marble", "interior_carpet", "beacon", "beacon_glow",
+                                       "beacon_haze", "lit_band", "glass_clear", "furniture",
+                                       "furniture_wood", "furniture_fabric", "furniture_metal", "furniture_ceramic"};
+    lua_newtable(L);
+    int cnt = 0;
+    for (const RenderMesh& part : partsIn) {
+        if (part.vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(part));
+        lua_setfield(L, -2, "mesh");
+        const int mi = part.materialIndex;
+        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames) /
+                                                             sizeof(kPartNames[0])))
+                               ? kPartNames[mi] : "wall";
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++cnt);
+    }
+    return 1;
+}
+
+// The arguments grow_plan_parts and grow_floor share: the params, the `plan` polygon (optionally inset by
+// `setback`), and -- with recipe = "name" -- the architect's own recipe on that plan (seed, coreness), which sets
+// `grown_floors` on the argument table.
+static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
+    p = readBuildingParams(L, 1);
     // recipe = "name": the architect's own recipe (seed, coreness 0..1), grown as a lot at the city would grow
     // it on this plan -- a lineup shows exactly what the city builds (NYC variety, 2026-09-30).
     lua_getfield(L, 1, "recipe");
@@ -1248,39 +1280,74 @@ int l_building_grow_plan_parts(lua_State* L) {
         if (!architectRecipeByName(recipeName, static_cast<uint32_t>(optField(L, 1, "seed", 1.0)),
                                    static_cast<Real>(optField(L, 1, "coreness", 1.0)),
                                    2 * std::min(ob.half[0], ob.half[1]), area(plan), rc))
-            return luaL_error(L, "building.grow_plan_parts: unknown recipe '%s'", recipeName.c_str());
+        {
+            luaL_error(L, "building: unknown recipe '%s'", recipeName.c_str());   // raises; never returns
+            return;
+        }
         p = rc.params;
         p.openDoorway = true;
         readTopField(L, 1, p);   // a script may try another top on the recipe's tower
         lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
         lua_setfield(L, 1, "grown_floors");
     }
+}
+
+int l_building_grow_plan_parts(lua_State* L) {
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
     BuildingMesh bm = growPlanBuilding(plan, p);
-    // Every part by name, in PartId order (materialIndexFor is the ordinal); a draped slot keeps its base name.
-    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
-                                       "ground", "detail", "brick", "concrete",
-                                       "stucco", "metal", "wood",
-                                       "siding", "path", "foliage", "vent", "utility", "fan", "shingle",
-                                       "glass_lit", "interior", "interior_floor", "interior_tile",
-                                       "interior_marble", "interior_carpet", "beacon", "beacon_glow",
-                                       "beacon_haze", "lit_band", "glass_clear", "furniture",
-                                       "furniture_wood", "furniture_fabric", "furniture_metal", "furniture_ceramic"};
-    lua_newtable(L);
-    int cnt = 0;
-    for (const RenderMesh& part : bm.parts) {
-        if (part.vertices.empty()) continue;
-        lua_newtable(L);
-        pushMesh(L, std::make_shared<RenderMesh>(part));
-        lua_setfield(L, -2, "mesh");
-        const int mi = part.materialIndex;
-        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames) /
-                                                             sizeof(kPartNames[0])))
-                               ? kPartNames[mi] : "wall";
-        lua_pushstring(L, name);
-        lua_setfield(L, -2, "part");
-        lua_rawseti(L, -2, ++cnt);
+    return pushNamedParts(L, bm.parts);
+}
+
+// building.grow_floor{ plan = ..., recipe = "condo_tower" | params..., storey = k, cutaway = 2.6 } -> parts
+// ONE STOREY'S INTERIOR (buildings B, the floor lab): the rooms, walls, floors and the furniture (expanded from its
+// placements into the finish parts), the storey's floor at y = 0, everything above `cutaway` metres dropped so a
+// camera sees the plan from above. The review tool for the apartment and office plans.
+int l_building_grow_floor(lua_State* L) {
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.grow_floor: needs a plan");
+    const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+    const int k = std::clamp(static_cast<int>(optField(L, 1, "storey", 1.0)), 0, static_cast<int>(sps.size()) - 1);
+    const Real cut = static_cast<Real>(optField(L, 1, "cutaway", 2.6));
+    p.openDoorway = true;
+    BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, k, k + 1);
+    const Real y0 = sps[static_cast<std::size_t>(k)].y0;
+    // The furniture, into its finish parts.
+    static const PartId kFinish[kFurnMatCount] = {PartId::FurnitureWood, PartId::FurnitureFabric, PartId::Furniture,
+                                                  PartId::FurnitureMetal, PartId::FurnitureCeramic};
+    std::vector<RenderMesh> parts = bm.parts;
+    auto partFor = [&](PartId id) -> RenderMesh& {
+        for (RenderMesh& m : parts) if (m.materialIndex == static_cast<int>(id)) return m;
+        parts.emplace_back();
+        parts.back().materialIndex = static_cast<int>(id);
+        return parts.back();
+    };
+    for (const PlacedPiece& pp : bm.furniture) {
+        const FurniturePiece& kit = furniturePiece(static_cast<Piece>(pp.piece), pp.variant);
+        for (int f = 0; f < kFurnMatCount; ++f) {
+            const RenderMesh& m = kit.mesh[static_cast<std::size_t>(f)];
+            if (m.vertices.empty()) continue;
+            RenderMesh t = m;
+            MeshBuilder::transform(t, pp.xform);
+            MeshBuilder::append(partFor(kFinish[f]), t);
+        }
     }
-    return 1;
+    // Down to the storey's floor; drop what is above the cut.
+    for (RenderMesh& m : parts) {
+        for (Vertex& v : m.vertices) v.position.y -= y0;
+        std::vector<uint32_t> keep;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Real lo = std::min({m.vertices[m.indices[i]].position.y, m.vertices[m.indices[i + 1]].position.y,
+                                      m.vertices[m.indices[i + 2]].position.y});
+            if (lo > cut) continue;
+            keep.insert(keep.end(), {m.indices[i], m.indices[i + 1], m.indices[i + 2]});
+        }
+        m.indices.swap(keep);
+    }
+    return pushNamedParts(L, parts);
 }
 
 // building.height{...} -> number : the grown height in metres (no mesh). Cheap
@@ -3676,6 +3743,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"grow", l_building_grow},
         {"grow_parts", l_building_grow_parts},
         {"grow_plan_parts", l_building_grow_plan_parts},
+        {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},
     };

@@ -153,6 +153,7 @@ void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
     p.floors = std::min(p.floors, maxFloors);
 }
 void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
+    out.params.residential = out.placeType == "home";
     storeyHeightsByUse(out);
     capFloors(out.params, shortSide, slender);
     if (out.params.floors < 15) out.params.top = 0;   // a top is a tower's: the short ones keep the penthouse
