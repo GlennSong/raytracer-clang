@@ -1402,3 +1402,38 @@ TEST_CASE(parapets_run_only_along_exposed_roof_edges) {
         }
     }
 }
+
+// NO STICK-THIN WINDOWS (Glenn, 2026-09-30: "some windows are super skinny"). A face narrower than a window module
+// -- here a 0.57 m chamfer cut across a corner, on a masonry block and on a curtain wall -- carries no glass at all.
+// (A curtain wall's limit is a metre: one mullion bay of 1-1.6 m is a normal pane; masonry's is a window module.)
+TEST_CASE(a_face_too_narrow_for_a_window_is_solid) {
+    const Poly2 plan = {{0, 0}, {20, 0}, {20, 13.6}, {19.6, 14}, {0, 14}};   // the cut: 0.57 m across the corner
+    const Vec2 a(20, 13.6), b(19.6, 14);
+    const Vec2 d = normalize(b - a);
+    const Real L = (b - a).length();
+    for (bool curtain : {false, true}) {
+        BuildingParams p;
+        p.floors = 6; p.curtainWall = curtain; p.openDoorway = false;
+        const BuildingMesh bm = growPlanBuilding(plan, p);
+        int onCut = 0;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::Glass) &&
+                part.materialIndex != static_cast<int>(PartId::GlassLit)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vec3 m = (part.vertices[part.indices[i]].position + part.vertices[part.indices[i + 1]].position +
+                                part.vertices[part.indices[i + 2]].position) * (1.0 / 3.0);
+                const Vec2 q(m.x, m.z);
+                const Real t = dot(q - a, d), off = std::fabs(cross(d, q - a));
+                if (t > 0.05 && t < L - 0.05 && off < 0.3 && m.y > p.groundHeight) {
+                    // a pane on the cut face: only the curtain wall's opaque panel (the spandrel colour) may be here
+                    const Vec3 c = part.vertices[part.indices[i]].color;
+                    if (!curtain || part.materialIndex == static_cast<int>(PartId::GlassLit) || c.length() > 0.3) {
+                        ++onCut;
+                        if (onCut < 3) std::printf("    [narrow] curtain %d part %d at %.2f %.2f %.2f t %.2f off %.2f col %.2f\n", curtain ? 1 : 0, part.materialIndex, m.x, m.y, m.z, t, off, c.length());
+                    }
+                }
+            }
+        }
+        CHECK(onCut == 0);
+    }
+}

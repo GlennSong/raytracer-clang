@@ -131,10 +131,12 @@ FurniturePiece build(Piece p, uint32_t variant) {
         case Piece::Monitor: {
             k.out.size = {0.62, 0.48, 0.22};
             k.out.solid = false;
-            k.box(F::Hard, {0, 0.008, 0.12}, {0.24, 0.016, 0.18}, 0.008, kBlack, 1);
-            k.box(F::Hard, {0, 0.17, 0.10}, {0.05, 0.30, 0.025}, 0.008, kBlack, 1);
-            k.box(F::Hard, {0, 0.30, 0.08}, {0.60, 0.36, 0.025}, 0.006, kBlack, 1);
-            k.box(F::Metal, {0, 0.30, 0.0935}, {0.58, 0.34, 0.004}, 0.0, Vec3(0.02, 0.025, 0.03), 1);   // the glass
+            // The screen faces +z (the chair); the stand stands BEHIND it, toward the wall (Glenn: "the computer
+            // monitors are backwards" -- the neck was on the screen side).
+            k.box(F::Hard, {0, 0.008, 0.08}, {0.24, 0.016, 0.16}, 0.008, kBlack, 1);
+            k.box(F::Hard, {0, 0.17, 0.06}, {0.05, 0.30, 0.025}, 0.008, kBlack, 1);
+            k.box(F::Hard, {0, 0.30, 0.085}, {0.60, 0.36, 0.025}, 0.006, kBlack, 1);
+            k.box(F::Metal, {0, 0.30, 0.0985}, {0.58, 0.34, 0.004}, 0.0, Vec3(0.02, 0.025, 0.03), 1);   // the glass
             k.box(F::Hard, {0, 0.012, 0.19}, {0.44, 0.02, 0.13}, 0.006, kBlack, 1);   // keyboard
             break;
         }
@@ -155,10 +157,16 @@ FurniturePiece build(Piece p, uint32_t variant) {
             for (double x : {-0.76, 0.76})
                 for (double z : {0.08, 2.02}) k.leg(F::Wood, {x, 0, z}, 0.16, 0.06, wood * 0.9);
             k.box(F::Fabric, {0, 0.60, 0.05}, {1.66, 0.96, 0.10}, 0.04, fabric * 0.8);
-            k.box(F::Fabric, {0, 0.40, 1.08}, {1.56, 0.22, 2.0}, 0.06, kLinen);
-            k.box(F::Fabric, {0, 0.52, 1.38}, {1.62, 0.06, 1.42}, 0.03, fabric);
-            k.box(F::Fabric, {0, 0.52, 0.72}, {1.62, 0.055, 0.22}, 0.026, fabric * 1.08);   // the fold
-            for (double x : {-0.38, 0.38}) k.box(F::Fabric, {x, 0.57, 0.36}, {0.66, 0.13, 0.40}, 0.06, kLinen * 1.02);
+            // MADE (Glenn: "the beds don't have sheets on them"): the fitted sheet over the mattress, the duvet
+            // lying ON it and hanging down both sides and the foot, the top sheet turned back over the duvet's head,
+            // two pillows against the headboard.
+            k.box(F::Fabric, {0, 0.40, 1.08}, {1.56, 0.22, 2.0}, 0.06, kLinen);                    // sheeted mattress
+            k.box(F::Fabric, {0, 0.545, 1.37}, {1.70, 0.07, 1.48}, 0.03, fabric);                 // duvet, on top
+            for (double x : {-0.85, 0.85})
+                k.box(F::Fabric, {x, 0.43, 1.37}, {0.035, 0.30, 1.48}, 0.015, fabric * 0.94);     // hanging sides
+            k.box(F::Fabric, {0, 0.43, 2.105}, {1.70, 0.30, 0.035}, 0.015, fabric * 0.94);       // and foot
+            k.box(F::Fabric, {0, 0.59, 0.72}, {1.70, 0.05, 0.26}, 0.024, kLinen * 1.03);          // turned-down sheet
+            for (double x : {-0.38, 0.38}) k.box(F::Fabric, {x, 0.59, 0.33}, {0.66, 0.14, 0.40}, 0.06, kLinen * 1.02);
             break;
         }
         case Piece::Nightstand: {

@@ -465,3 +465,43 @@ TEST_CASE(lobby_desks_have_their_size_clear_the_core_and_stay_inside) {
     CHECK(flat == 0 && onCore == 0 && outside == 0);
     CHECK(dressed * 2 > lobbies);   // most lobbies still get their desk
 }
+
+// THE STAIRWELL FACES THE STAIRWELL (Glenn, 2026-09-30: "in the building stairwells the wall separating the stairs
+// seems to have inverted normals"). Every drywall and stair face whose centre lies inside a stair shaft must face
+// INTO the shaft: a probe a few cm along its normal stays inside the shaft's rectangle.
+TEST_CASE(stairwell_faces_point_into_the_stairwell) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(20, true);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    RenderMesh col;
+    const BuildingMesh bm = growInterior(plan, p, 0.0, &col, 3, 6);
+    int checked = 0, wrong = 0;
+    for (const CoreStair& st : core.stairs) {
+        const Poly2 r = st.shaft.rect();
+        Poly2 inner = r;   // 3 cm in from the shaft's edges: the skins themselves lie ON the edge
+        const Vec2 c = centroid(r);
+        for (Vec2& v : inner) v = v + normalize(c - v) * 0.03;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex == static_cast<int>(PartId::GlassClear)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vertex& A = part.vertices[part.indices[i]];
+                const Vertex& B = part.vertices[part.indices[i + 1]];
+                const Vertex& C = part.vertices[part.indices[i + 2]];
+                const Vec3 m = (A.position + B.position + C.position) * (1.0 / 3.0);
+                if (!pointInPolygon(inner, Vec2(m.x, m.z))) continue;
+                const Vec3 n = A.normal;
+                if (std::fabs(n.y) > 0.5) continue;   // treads, decks and soffits: not walls
+                ++checked;
+                const Vec3 probe = m + n * 0.02;
+                if (!pointInPolygon(r, Vec2(probe.x, probe.z))) {
+                    ++wrong;
+                    if (wrong <= 4) std::printf("    [stair] outward face at %.2f %.2f %.2f n %.2f %.2f\n", m.x, m.y, m.z, n.x, n.z);
+                }
+            }
+        }
+    }
+    std::printf("    [stair] %d wall faces inside the stair shafts, %d facing out\n", checked, wrong);
+    CHECK(checked > 0);
+    CHECK(wrong == 0);
+}

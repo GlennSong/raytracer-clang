@@ -73,6 +73,20 @@ std::vector<float> splash(double strength, uint32_t sampleRate = 48000, uint32_t
 // for underwater".
 std::vector<float> underwaterRiver(uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// ---- ELEVATORS (Glenn, 2026-09-30: "a ding when it reaches the floor, noise when it opens, clicking when
+// selecting a floor and then a noise showing that it's moving") ----------------------------------------------
+// The CAR-ARRIVAL chime: a struck bell -- a bright partial over the fundamental, a slow decay. `up` rings the
+// rising two-note signal (an up car), else the falling one. ~1.6 s, one-shot.
+std::vector<float> elevatorDing(bool up, uint32_t sampleRate = 48000, uint32_t seed = 1);
+// A floor-button press: a short plastic tick with a little spring, ~0.06 s.
+std::vector<float> elevatorButton(uint32_t sampleRate = 48000, uint32_t seed = 1);
+// The doors sliding: an operator motor's whir rising and falling over a rolling rumble, the leaves meeting with
+// a soft thunk at the end. ~1.3 s (the door travel), one-shot; played for opening and closing alike.
+std::vector<float> elevatorDoors(uint32_t sampleRate = 48000, uint32_t seed = 1);
+// The car MOVING, heard inside: a low traction-motor hum, a rush of shaft air, a faint rail whisper. A seamless
+// ~2 s loop; the caller fades it with the cab's speed.
+std::vector<float> elevatorHum(uint32_t sampleRate = 48000, uint32_t seed = 1);
+
 // The firing rate the clip is baked at: pitch 1.0 sounds like this many
 // combustion events per second (~1700 rpm on a four-cylinder four-stroke, two
 // firings per revolution). Callers multiply it; the mapping core owns the band.

@@ -6,6 +6,8 @@
 #include "../physics/physics_world.h"
 #include "../procgen/city/building_records.h"
 #include "../procgen/city/core_plan.h"
+#include "../audio/audio_engine.h"
+#include <array>
 #include <cstddef>
 #include <map>
 #include <unordered_map>
@@ -71,7 +73,12 @@ public:
         int floor = 0;      // the cab's storey (0 = ground)
         int selected = 0;   // the storey picked on the panel
         int floors = 0;     // storeys in the building
+        Real speed = 0;     // the rider's cab, m/s (the hum's level)
     };
+    // What happened this step, for the sound (fixedUpdate plays them; the headless step only records).
+    enum class Sfx : uint8_t { Button, Doors, DingUp, DingDown };
+    struct SfxEvent { Sfx kind; Vec3 at; };
+    const std::vector<SfxEvent>& sfxEvents() const { return sfx_; }
     const Status& status() const { return status_; }
     std::size_t bankCount() const { return banks_.size(); }
 
@@ -107,6 +114,15 @@ private:
         // two leaves on the cab front, index into `local`, sliding with the
         // hoistway leaves' doorT so a rider in a moving cab sees the cab.
         int doorLeft = -1, doorRight = -1;
+        // A HALL CALL this cab could not take yet (it was moving away): served when it comes to rest
+        // (Glenn: "when I stand in front of the elevator to call it it doesn't call that elevator").
+        int pending = -1;
+        int dir = 0;   // the way it is travelling (+1 up, -1 down), kept through the arrival for the chime
+    };
+    // A HALL LANTERN: the up and down lamps over a hoistway door, on the player's storey.
+    struct Lamp {
+        Entity entity;
+        MeshHandle mesh;
     };
     struct Leaf {
         Entity entity;
@@ -120,6 +136,7 @@ private:
         std::vector<Real> storeyY;   // slab tops, world
         std::vector<Cab> cabs;
         std::map<long long, Leaf> leaves;
+        std::vector<std::array<Lamp, 2>> lamps;   // per hoistway: [0] up, [1] down
         int selected = 0;
     };
     Bank& ensureBank(World& world, PhysicsWorld* phys, AssetManager& assets, const BuildingRecord& r,
@@ -129,12 +146,22 @@ private:
     void syncLeaves(World& world, PhysicsWorld* phys, AssetManager& assets, Bank& b, int playerStorey,
                     Real dt);
     static int storeyOf(const Bank& b, Real y, Real feetDrop = 0.7);
+    static Vec3 doorAt(const Bank& b, std::size_t i, int storey);
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<std::size_t, Bank> banks_;   // key: record index
     Status status_;
     bool callEdge_ = false;
     int floorDelta_ = 0;
+    // The FLOOR PICKER (Glenn: "I have to click the up and down arrow 56 times"): holding Up/Down repeats and
+    // speeds up, Shift steps ten floors, Left / Right jump to the ground / the top.
+    Real holdUp_ = -1, holdDown_ = -1, repeatAcc_ = 0;
+    std::vector<SfxEvent> sfx_;
+    // The sounds (procedural, engine/audio/sfx.h).
+    AudioClipHandle clipButton_, clipDoors_, clipDingUp_, clipDingDown_, clipHum_;
+    AudioVoiceHandle humVoice_;
+    bool audioReady_ = false;
+    void syncLamps(World& world, AssetManager& assets, Bank& b, int playerStorey);
 };
 
 }  // namespace engine

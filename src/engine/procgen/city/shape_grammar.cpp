@@ -765,6 +765,13 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     // reads as a frame the panes sit in, not a decal (device feedback).
     const Real glassIn = 0.10;                   // glass plane behind the grid
     Vec3 gin = fr.n * (-glassIn);
+    // A face too NARROW for a pane (a chamfer's first steps, a setback's sliver face): an opaque metal panel the
+    // storey's full height, not a stick-thin window (Glenn, 2026-09-30: "some windows are super skinny").
+    if (W < 1.0) {
+        emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin, fr.at(W, fh) + gin, fr.at(0, fh) + gin, fr.n, spandrelCol);
+        appendGlassParts(out, glass, glassLit, clearPanes);
+        return;
+    }
     emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin,
              fr.at(W, spandrelH) + gin, fr.at(0, spandrelH) + gin,
              fr.n, spandrelCol);                 // spandrel (floor-slab band)
@@ -941,6 +948,17 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
             Real dw = std::min(human::DOOR_WIDTH, bw - 0.4);
             Real cx = (o.x0 + o.x1) * 0.5;
             o.wx0 = cx - dw * 0.5; o.wx1 = cx + dw * 0.5;
+        }
+        // TOO NARROW TO BE A WINDOW (Glenn: "some windows are super skinny"): a face narrower than a window
+        // module, or an opening squeezed under 0.55 m, is BLANK -- solid wall. Encoded as a zero-height opening at
+        // mid-storey, so every reader (the facade, its far tier, the inner wall) fills the bay with wall unchanged.
+        if (!o.entrance && (fr.width < 1.2 || o.wx1 - o.wx0 < 0.55)) {
+            const Real mid = (o.x0 + o.x1) * 0.5;
+            o.wx0 = o.wx1 = mid;
+            o.sill = o.head = fh * 0.5;
+            o.rise = 0;
+            L.open.push_back(o);
+            continue;
         }
         // THE ARCH, decided here and nowhere else. It used to be worked out
         // inside the full facade emitter, so the inner wall and the flat
@@ -1195,6 +1213,7 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
     for (const BayOpening& o : facadeLayout(fr, mode, p).open) {
         // Same anchor as the full emitter's pane (fr.at(wx0, sill)), so a
         // window keeps its lit/dark choice across the LOD swap.
+        if (!o.entrance && o.head - o.sill < 1e-3) continue;   // a BLANK bay (facadeLayout): the wall quad has it
         const bool litPane = !o.entrance && litWindow(fr.at(o.wx0, o.sill));
         RenderMesh& dst = o.entrance ? door : (litPane ? glassLit : glass);
         const std::size_t pv0 = dst.vertices.size();
@@ -1342,6 +1361,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             }
         }
 
+        if (!entrance && openHead - openSill < 1e-3) continue;   // a BLANK bay: all wall (facadeLayout)
         if (entrance) {
             // The DOOR element: a recessed doorway. Closed like the windows —
             // jambs + lintel + threshold connect the wall opening back to the
