@@ -94,8 +94,13 @@ enum class PartId : uint8_t {
              // the lobby that ships with the exterior shows from the street
              // and the street shows from the lobby. Transparent, both faces,
              // no room behind it.
-    Furniture,    // FURNITURE (buildings M4): upholstery, laminate, ceramic, metal -- a neutral matte material
-             // whose colour is the vertex's, with the faint self-light drywall has (furniture.h).
+    Furniture,    // FURNITURE (buildings M4): painted / plastic pieces -- a neutral satin material whose colour
+             // is the vertex's, with a faint self-light (furniture.h). Its siblings carry the other finishes of
+             // the furniture kit (procgen/furniture_kit.h), one per FurnMat:
+    FurnitureWood,     // wood grain (Surface::WoodGrain), the species in the vertex colour
+    FurnitureFabric,   // woven upholstery (Surface::Fabric), the colour on the vertex
+    FurnitureMetal,    // brushed steel / chrome / black metal: metallic, the tint on the vertex
+    FurnitureCeramic,  // glazed porcelain and stone tops: glossy
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
@@ -191,8 +196,17 @@ struct AttachPoint {
     Real height = 0;    // opening height (entrance: head above the foot)
 };
 
+// A FURNITURE piece placed in a building (buildings M4b): which piece of the kit (procgen/furniture_kit.h, Piece),
+// in which variant, where -- drawn INSTANCED by the interior system, not merged into the parts.
+struct PlacedPiece {
+    uint8_t piece = 0;
+    uint32_t variant = 0;
+    Mat4 xform;   // piece space -> world
+};
+
 struct BuildingMesh {
     std::vector<RenderMesh> parts;     // one per non-empty PartId, materialIndex set
+    std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
     std::vector<AttachPoint> attaches;
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;

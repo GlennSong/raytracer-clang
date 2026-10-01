@@ -131,6 +131,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
     src/engine/procgen/city/furniture.cpp
+    src/engine/procgen/furniture_kit.cpp
     src/engine/procgen/city/patch_fabric.cpp
     src/engine/procgen/city/city_footprint.cpp
     src/engine/procgen/city/arterial_skeleton.cpp
@@ -798,6 +799,7 @@ add_executable(run_tests
     tests/test_site_plan.cpp
     tests/test_core_plan.cpp
     tests/test_room_plan.cpp
+    tests/test_furniture.cpp
     tests/test_alignment.cpp
     tests/test_surface_field.cpp
     tests/test_architect.cpp

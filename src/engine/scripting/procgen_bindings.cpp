@@ -13,6 +13,7 @@
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
@@ -1262,7 +1263,8 @@ int l_building_grow_plan_parts(lua_State* L) {
                                        "siding", "path", "foliage", "vent", "utility", "fan", "shingle",
                                        "glass_lit", "interior", "interior_floor", "interior_tile",
                                        "interior_marble", "interior_carpet", "beacon", "beacon_glow",
-                                       "beacon_haze", "lit_band", "glass_clear", "furniture"};
+                                       "beacon_haze", "lit_band", "glass_clear", "furniture",
+                                       "furniture_wood", "furniture_fabric", "furniture_metal", "furniture_ceramic"};
     lua_newtable(L);
     int cnt = 0;
     for (const RenderMesh& part : bm.parts) {
@@ -1306,6 +1308,46 @@ Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback) {
 
 // streetfurniture.lamp{ height=, pole_radius=, head_size={x,y,z},
 //   pole_color={r,g,b}, head_color={r,g,b} } -> mesh (built at the origin).
+// furniture.piece{ name = "office_chair", variant = 0 } -> { {part = "furniture_fabric", mesh = ...}, ...,
+// size = {w, h, d} }. THE FURNITURE KIT (buildings M4b, procgen/furniture_kit.h): a modelled piece by name, one
+// mesh per finish -- the part names a script maps to its materials. Piece space: x across, z out from the wall,
+// y up. furniture.pieces() lists the names.
+int l_furniture_piece(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const std::string name = optStrField(L, 1, "name", "desk");
+    Piece pc;
+    if (!furniturePieceByName(name, pc)) return luaL_error(L, "furniture.piece: unknown piece '%s'", name.c_str());
+    const uint32_t variant = static_cast<uint32_t>(optField(L, 1, "variant", 0.0));
+    const FurniturePiece& fp = furniturePiece(pc, variant);
+    static const char* kMatParts[kFurnMatCount] = {"furniture_wood", "furniture_fabric", "furniture",
+                                                   "furniture_metal", "furniture_ceramic"};
+    lua_newtable(L);
+    int n = 0;
+    for (int k = 0; k < kFurnMatCount; ++k) {
+        if (fp.mesh[static_cast<std::size_t>(k)].vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(fp.mesh[static_cast<std::size_t>(k)]));
+        lua_setfield(L, -2, "mesh");
+        lua_pushstring(L, kMatParts[k]);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++n);
+    }
+    lua_newtable(L);
+    lua_pushnumber(L, fp.size.x); lua_rawseti(L, -2, 1);
+    lua_pushnumber(L, fp.size.y); lua_rawseti(L, -2, 2);
+    lua_pushnumber(L, fp.size.z); lua_rawseti(L, -2, 3);
+    lua_setfield(L, -2, "size");
+    return 1;
+}
+int l_furniture_pieces(lua_State* L) {
+    lua_newtable(L);
+    for (int i = 0; i < kPieceCount; ++i) {
+        lua_pushstring(L, furniturePieceName(static_cast<Piece>(i)));
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
 int l_furniture_lamp(lua_State* L) {
     LampParams p;
     if (lua_istable(L, 1)) {
@@ -3647,6 +3689,14 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kFurnitureFns);
     lua_setglobal(L, "streetfurniture");
+
+    static const luaL_Reg kInteriorFurnitureFns[] = {
+        {"piece", l_furniture_piece},
+        {"pieces", l_furniture_pieces},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kInteriorFurnitureFns);
+    lua_setglobal(L, "furniture");
 
     static const luaL_Reg kModelFns[] = {
         {"new", l_model_new},

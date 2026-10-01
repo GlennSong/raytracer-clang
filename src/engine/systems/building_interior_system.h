@@ -88,6 +88,9 @@ private:
     // the streamed parts fell back to the in-shader procedural: the "second
     // floor texture is black / no bump / 45-degree diagonal" report.
     std::unordered_map<int, std::array<TextureHandle, 4>> surfTex_;
+    // The FURNITURE KIT's meshes on the GPU (buildings M4b): one per (piece, variant, finish), uploaded on first
+    // use and kept -- every resident building's instance groups draw from them.
+    std::unordered_map<uint64_t, MeshHandle> pieceMesh_;
     std::vector<MeshHandle> freeQueue_;
     std::uint64_t stepCount_ = 0;
     std::uint64_t lastFree_ = 0;

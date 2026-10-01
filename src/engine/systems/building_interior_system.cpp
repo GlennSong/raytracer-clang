@@ -7,6 +7,8 @@
 #include "../world.h"
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
+#include "../procgen/furniture_kit.h"   // the furniture kit (buildings M4b)
+#include <map>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -335,6 +337,64 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         // glowing sheet between you and the city was the old look.)
         res.entities.push_back(e);
         res.meshes.push_back(mh);
+    }
+
+    // FURNITURE (buildings M4b): the placed pieces, one INSTANCE GROUP per (piece, variant, finish) -- the kit's
+    // mesh uploaded once for every building, this building's placements as its transforms.
+    if (!bm.furniture.empty()) {
+        std::map<uint64_t, std::vector<Mat4>> byPiece;
+        for (const PlacedPiece& pp : bm.furniture)
+            byPiece[(static_cast<uint64_t>(pp.piece) << 32) | pp.variant].push_back(pp.xform);
+        static const PartId kFinishPart[kFurnMatCount] = {PartId::FurnitureWood, PartId::FurnitureFabric,
+                                                          PartId::Furniture, PartId::FurnitureMetal,
+                                                          PartId::FurnitureCeramic};
+        for (const auto& [key, xforms] : byPiece) {
+            const Piece pc = static_cast<Piece>(key >> 32);
+            const uint32_t variant = static_cast<uint32_t>(key & 0xffffffffu);
+            const FurniturePiece& kit = furniturePiece(pc, variant);
+            for (int f = 0; f < kFurnMatCount; ++f) {
+                const RenderMesh& pm = kit.mesh[static_cast<std::size_t>(f)];
+                if (pm.vertices.empty()) continue;
+                const uint64_t mk = (key << 4) | static_cast<uint64_t>(f);
+                auto mit = pieceMesh_.find(mk);
+                if (mit == pieceMesh_.end()) mit = pieceMesh_.emplace(mk, assets.acquireMesh(pm, "")).first;
+                InstanceGroup g;
+                g.mesh = mit->second;
+                g.material = materialFor(kFinishPart[f], r.params.wallColor);
+                const RenderMaterial::Surface surf = g.material.surface();
+                if (renderer && surf != RenderMaterial::Surface::None) {
+                    const int sid = static_cast<int>(surf);
+                    auto it = surfTex_.find(sid);
+                    if (it == surfTex_.end()) {
+                        SurfaceMaps mp = surfaceMaps(surf, 256, 1337u);
+                        auto up = [&](const TextureData& td) {
+                            return renderer->uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+                        };
+                        it = surfTex_.emplace(sid, std::array<TextureHandle, 4>{up(mp.albedo), up(mp.normal),
+                                                                                up(mp.mr), up(mp.ao)}).first;
+                    }
+                    g.material.albedoMap = it->second[0];
+                    g.material.normalMap = it->second[1];
+                    g.material.metallicRoughnessMap = it->second[2];
+                    g.material.aoMap = it->second[3];
+                }
+                g.transforms = xforms;
+                Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+                for (const Mat4& t : xforms) {
+                    const Vec3 o(t.m[0][3], t.m[1][3], t.m[2][3]);
+                    lo = Vec3(std::min(lo.x, o.x), std::min(lo.y, o.y), std::min(lo.z, o.z));
+                    hi = Vec3(std::max(hi.x, o.x), std::max(hi.y, o.y), std::max(hi.z, o.z));
+                }
+                g.boundsCenter = (lo + hi) * 0.5;
+                g.boundsRadius = (hi - lo).length() * 0.5 + 3.0;
+                g.drawDistance = 80.0;
+                g.drawClass = DrawClass::Structure;
+                Entity ge = world.create();
+                world.add<InstanceGroup>(ge, std::move(g));
+                res.entities.push_back(ge);
+                tris += pm.indices.size() / 3 * xforms.size();
+            }
+        }
     }
 
     const auto t1 = std::chrono::steady_clock::now();

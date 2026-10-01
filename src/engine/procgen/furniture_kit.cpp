@@ -1,0 +1,378 @@
+#include "furniture_kit.h"
+#include "../mesh_builder.h"
+#include <cmath>
+#include <map>
+#include <memory>
+#include <mutex>
+
+namespace engine {
+
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+
+// The swatch books. Wood: oak, walnut, birch, ebonised. Fabric: grey, navy, sage, rust, oat, charcoal, mustard, teal.
+const Vec3 kWood[4] = {{0.66, 0.50, 0.33}, {0.40, 0.27, 0.18}, {0.82, 0.72, 0.56}, {0.24, 0.18, 0.15}};
+const Vec3 kFabric[8] = {{0.48, 0.50, 0.53}, {0.20, 0.26, 0.40}, {0.45, 0.53, 0.42}, {0.62, 0.34, 0.24},
+                         {0.74, 0.68, 0.58}, {0.22, 0.22, 0.24}, {0.72, 0.56, 0.22}, {0.20, 0.42, 0.44}};
+const Vec3 kWhite(0.90, 0.90, 0.88), kBlack(0.07, 0.07, 0.08), kSteel(0.62, 0.64, 0.67), kChrome(0.85, 0.86, 0.88);
+const Vec3 kPorcelain(0.95, 0.95, 0.93), kLinen(0.93, 0.92, 0.88);
+
+// A piece under construction: the per-material meshes and the shape-kit words, placed in piece space.
+struct Maker {
+    FurniturePiece out;
+    RenderMesh& m(FurnMat k) { return out.mesh[static_cast<int>(k)]; }
+    static void paint(RenderMesh& mm, const Vec3& col) { for (Vertex& v : mm.vertices) v.color = col; }
+    // A rounded box centred at c.
+    void box(FurnMat k, const Vec3& c, const Vec3& size, double r, const Vec3& col, int segs = 2) {
+        RenderMesh b = MeshBuilder::roundedBox(size, r, r > 0.012 ? segs : 1, 2.0);
+        paint(b, col);
+        MeshBuilder::transform(b, Mat4::translate(c.x, c.y, c.z));
+        MeshBuilder::append(m(k), b);
+    }
+    // The same, turned `ang` radians about +x through its own centre (a reclined back cushion).
+    void boxTilted(FurnMat k, const Vec3& c, const Vec3& size, double r, double ang, const Vec3& col) {
+        RenderMesh b = MeshBuilder::roundedBox(size, r, 2, 2.0);
+        paint(b, col);
+        const double ca = std::cos(ang), sa = std::sin(ang);
+        for (Vertex& v : b.vertices) {
+            const Vec3 p = v.position, n = v.normal;
+            v.position = Vec3(p.x, p.y * ca - p.z * sa, p.y * sa + p.z * ca) + c;
+            v.normal = Vec3(n.x, n.y * ca - n.z * sa, n.y * sa + n.z * ca);
+        }
+        MeshBuilder::append(m(k), b);
+    }
+    // A straight round rod from a to b.
+    void rod(FurnMat k, const Vec3& a, const Vec3& b, double r, const Vec3& col, int sides = 10) {
+        RenderMesh t = MeshBuilder::tube({a, b}, {r, r}, sides);
+        paint(t, col);
+        MeshBuilder::append(m(k), t);
+        // Caps: a lathe disc at each end would be invisible at these radii; leave the ends open.
+    }
+    // A turned shape (profile (r, y)) standing at c, squashed in z by `sz` (an oval bowl).
+    void turned(FurnMat k, const Vec3& c, const std::vector<std::pair<double, double>>& prof, const Vec3& col,
+                double sz = 1.0, int segs = 20) {
+        RenderMesh t = MeshBuilder::lathe(prof, segs);
+        paint(t, col);
+        for (Vertex& v : t.vertices) {
+            v.position = Vec3(v.position.x, v.position.y, v.position.z * sz) + c;
+            v.normal = normalize(Vec3(v.normal.x * sz, v.normal.y * sz, v.normal.z));
+        }
+        MeshBuilder::append(m(k), t);
+    }
+    // A square-section leg, tapering from w0 at the floor... to w1 at the top.
+    void leg(FurnMat k, const Vec3& foot, double h, double w, const Vec3& col) {
+        box(k, foot + Vec3(0, h * 0.5, 0), Vec3(w, h, w), 0.006, col, 1);
+    }
+    // A drawer or door FRONT on a face at z = zFace: a slightly rounded panel proud 1 cm, and a bar handle.
+    void front(FurnMat k, double x0, double x1, double y0, double y1, double zFace, const Vec3& col, const Vec3& handle,
+               bool vertical = false) {
+        const double gap = 0.004;
+        box(k, Vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, zFace + 0.009), Vec3(x1 - x0 - gap, y1 - y0 - gap, 0.018), 0.004,
+            col, 1);
+        const double hz = zFace + 0.03;
+        if (vertical) {
+            const double hx = x0 + (x1 - x0) * 0.85, hy = (y0 + y1) * 0.5;
+            rod(FurnMat::Metal, Vec3(hx, hy - 0.12, hz), Vec3(hx, hy + 0.12, hz), 0.007, handle, 8);
+        } else {
+            const double hy = y1 - std::min(0.06, (y1 - y0) * 0.3), hx = (x0 + x1) * 0.5;
+            rod(FurnMat::Metal, Vec3(hx - 0.09, hy, hz), Vec3(hx + 0.09, hy, hz), 0.007, handle, 8);
+        }
+    }
+};
+
+FurniturePiece build(Piece p, uint32_t variant) {
+    Maker k;
+    const Vec3 wood = kWood[(variant >> 3) & 3u], fabric = kFabric[variant & 7u];
+    const uint32_t style = variant >> 5;
+    using F = FurnMat;
+    switch (p) {
+        case Piece::Desk: {
+            // 1.6 x 0.8 top on a pair of steel sled frames, a three-drawer pedestal under the right end.
+            k.out.size = {1.6, 0.75, 0.8};
+            k.box(F::Wood, {0, 0.73, 0.4}, {1.6, 0.03, 0.8}, 0.006, wood, 1);
+            for (double x : {-0.74, 0.74}) {
+                k.rod(F::Metal, {x, 0.02, 0.06}, {x, 0.02, 0.74}, 0.016, kBlack);   // foot
+                k.rod(F::Metal, {x, 0.70, 0.06}, {x, 0.70, 0.74}, 0.016, kBlack);   // top rail
+                k.rod(F::Metal, {x, 0.02, 0.10}, {x, 0.70, 0.10}, 0.016, kBlack);   // uprights
+                k.rod(F::Metal, {x, 0.02, 0.70}, {x, 0.70, 0.70}, 0.016, kBlack);
+            }
+            k.rod(F::Metal, {-0.74, 0.62, 0.08}, {0.74, 0.62, 0.08}, 0.012, kBlack);  // back stretcher
+            const double px0 = 0.22, px1 = 0.68;
+            k.box(F::Hard, {(px0 + px1) * 0.5, 0.36, 0.38}, {px1 - px0, 0.56, 0.62}, 0.006, kWhite, 1);
+            for (int d = 0; d < 3; ++d) {
+                const double y0 = 0.10 + d * 0.18;
+                k.front(F::Hard, px0, px1, y0, y0 + 0.18, 0.69, kWhite, kChrome);
+            }
+            break;
+        }
+        case Piece::OfficeChair: {
+            // Five-star base on casters, a gas lift, a moulded seat and a reclined mesh back, armrests.
+            k.out.size = {0.66, 1.05, 0.66};
+            k.out.solid = false;
+            const Vec3 c(0, 0, 0.33);
+            for (int i = 0; i < 5; ++i) {
+                const double a = 2 * kPi * i / 5 + 0.3;
+                const Vec3 tip = c + Vec3(0.30 * std::cos(a), 0.07, 0.30 * std::sin(a));
+                k.rod(F::Metal, c + Vec3(0, 0.10, 0), tip, 0.018, kBlack, 8);
+                k.turned(F::Hard, tip - Vec3(0, 0.07, 0), {{0.0, 0.0}, {0.028, 0.008}, {0.032, 0.03}, {0.028, 0.055},
+                                                           {0.0, 0.065}}, kBlack, 1.0, 10);   // caster
+            }
+            k.turned(F::Metal, c, {{0.04, 0.08}, {0.04, 0.14}, {0.024, 0.15}, {0.024, 0.42}, {0.03, 0.44}}, kChrome, 1.0, 16);
+            k.box(F::Fabric, c + Vec3(0, 0.48, 0.02), {0.50, 0.08, 0.48}, 0.035, fabric * 0.75);
+            k.boxTilted(F::Fabric, c + Vec3(0, 0.80, -0.22), {0.46, 0.52, 0.06}, 0.028, -0.18, fabric * 0.75);
+            k.rod(F::Metal, c + Vec3(0, 0.46, -0.20), c + Vec3(0, 0.62, -0.25), 0.015, kBlack, 8);
+            for (double x : {-0.27, 0.27}) {
+                k.rod(F::Metal, c + Vec3(x, 0.46, 0.0), c + Vec3(x, 0.64, 0.0), 0.012, kBlack, 8);
+                k.box(F::Hard, c + Vec3(x, 0.655, 0.02), {0.07, 0.03, 0.24}, 0.012, kBlack);
+            }
+            break;
+        }
+        case Piece::Monitor: {
+            k.out.size = {0.62, 0.48, 0.22};
+            k.out.solid = false;
+            k.box(F::Hard, {0, 0.008, 0.12}, {0.24, 0.016, 0.18}, 0.008, kBlack, 1);
+            k.box(F::Hard, {0, 0.17, 0.10}, {0.05, 0.30, 0.025}, 0.008, kBlack, 1);
+            k.box(F::Hard, {0, 0.30, 0.08}, {0.60, 0.36, 0.025}, 0.006, kBlack, 1);
+            k.box(F::Metal, {0, 0.30, 0.0935}, {0.58, 0.34, 0.004}, 0.0, Vec3(0.02, 0.025, 0.03), 1);   // the glass
+            k.box(F::Hard, {0, 0.012, 0.19}, {0.44, 0.02, 0.13}, 0.006, kBlack, 1);   // keyboard
+            break;
+        }
+        case Piece::FilingCabinet: {
+            k.out.size = {0.46, 1.05, 0.6};
+            k.box(F::Hard, {0, 0.525, 0.30}, {0.46, 1.05, 0.58}, 0.006, kSteel * 0.85, 1);
+            for (int d = 0; d < 3; ++d) {
+                const double y0 = 0.04 + d * 0.33;
+                k.front(F::Hard, -0.22, 0.22, y0, y0 + 0.33, 0.59, kSteel * 0.9, kChrome);
+            }
+            break;
+        }
+        case Piece::Bed: {
+            // A made double: a timber frame on legs, an upholstered headboard, the mattress, a turned-back
+            // duvet, two pillows.
+            k.out.size = {1.66, 1.05, 2.12};
+            k.box(F::Wood, {0, 0.22, 1.06}, {1.66, 0.14, 2.10}, 0.012, wood, 1);
+            for (double x : {-0.76, 0.76})
+                for (double z : {0.08, 2.02}) k.leg(F::Wood, {x, 0, z}, 0.16, 0.06, wood * 0.9);
+            k.box(F::Fabric, {0, 0.60, 0.05}, {1.66, 0.96, 0.10}, 0.04, fabric * 0.8);
+            k.box(F::Fabric, {0, 0.40, 1.08}, {1.56, 0.22, 2.0}, 0.06, kLinen);
+            k.box(F::Fabric, {0, 0.52, 1.38}, {1.62, 0.06, 1.42}, 0.03, fabric);
+            k.box(F::Fabric, {0, 0.52, 0.72}, {1.62, 0.055, 0.22}, 0.026, fabric * 1.08);   // the fold
+            for (double x : {-0.38, 0.38}) k.box(F::Fabric, {x, 0.57, 0.36}, {0.66, 0.13, 0.40}, 0.06, kLinen * 1.02);
+            break;
+        }
+        case Piece::Nightstand: {
+            k.out.size = {0.46, 0.95, 0.40};
+            k.box(F::Wood, {0, 0.30, 0.20}, {0.46, 0.44, 0.40}, 0.008, wood, 1);
+            for (double x : {-0.19, 0.19})
+                for (double z : {0.04, 0.36}) k.leg(F::Wood, {x, 0, z}, 0.08, 0.035, wood * 0.9);
+            k.front(F::Wood, -0.21, 0.21, 0.30, 0.50, 0.40, wood * 0.95, kChrome);
+            // The lamp: a turned base and a drum shade.
+            k.turned(F::Ceramic, {0.06, 0.52, 0.18}, {{0.0, 0.0}, {0.07, 0.0}, {0.075, 0.02}, {0.05, 0.12}, {0.06, 0.20},
+                                                     {0.015, 0.24}, {0.0, 0.25}}, kPorcelain * 0.92, 1.0, 18);
+            k.turned(F::Fabric, {0.06, 0.74, 0.18}, {{0.13, 0.0}, {0.13, 0.002}, {0.10, 0.17}, {0.098, 0.172}},
+                     kLinen, 1.0, 20);
+            break;
+        }
+        case Piece::Wardrobe: {
+            k.out.size = {1.2, 2.05, 0.6};
+            k.box(F::Wood, {0, 1.04, 0.30}, {1.2, 1.98, 0.58}, 0.008, wood, 1);
+            k.box(F::Wood, {0, 0.03, 0.29}, {1.16, 0.06, 0.54}, 0.004, wood * 0.7, 1);   // plinth
+            k.front(F::Wood, -0.59, 0.0, 0.08, 2.02, 0.59, wood * 1.04, kChrome, true);
+            k.front(F::Wood, 0.0, 0.59, 0.08, 2.02, 0.59, wood * 1.04, kChrome, true);
+            break;
+        }
+        case Piece::Sofa: {
+            // Three seat cushions, three reclined back cushions, two rolled arms, a base on short legs.
+            k.out.size = {2.16, 0.86, 0.94};
+            k.box(F::Fabric, {0, 0.24, 0.48}, {2.0, 0.22, 0.86}, 0.03, fabric * 0.9);
+            for (double x : {-1.0, 1.0}) k.box(F::Fabric, {x, 0.36, 0.47}, {0.18, 0.46, 0.92}, 0.07, fabric * 0.95);
+            for (int i = 0; i < 3; ++i) {
+                const double x = -0.62 + i * 0.62;
+                k.box(F::Fabric, {x, 0.42, 0.55}, {0.60, 0.15, 0.66}, 0.06, fabric);
+                k.boxTilted(F::Fabric, {x, 0.68, 0.18}, {0.60, 0.42, 0.18}, 0.07, -0.16, fabric * 1.03);
+            }
+            k.box(F::Fabric, {0, 0.56, 0.08}, {2.0, 0.42, 0.14}, 0.03, fabric * 0.9);   // the back frame
+            for (double x : {-0.98, 0.98})
+                for (double z : {0.08, 0.86}) k.leg(F::Wood, {x, 0, z}, 0.13, 0.05, wood * 0.8);
+            break;
+        }
+        case Piece::CoffeeTable: {
+            k.out.size = {1.1, 0.42, 0.6};
+            k.box(F::Wood, {0, 0.40, 0.30}, {1.1, 0.035, 0.6}, 0.012, wood, 1);
+            k.box(F::Wood, {0, 0.14, 0.30}, {1.0, 0.02, 0.5}, 0.004, wood * 0.9, 1);   // the lower shelf
+            for (double x : {-0.50, 0.50})
+                for (double z : {0.05, 0.55}) k.leg(F::Wood, {x, 0, z}, 0.385, 0.04, wood * 0.85);
+            break;
+        }
+        case Piece::TvUnit: {
+            k.out.size = {1.6, 1.25, 0.42};
+            k.box(F::Wood, {0, 0.30, 0.21}, {1.6, 0.42, 0.42}, 0.008, wood, 1);
+            for (double x : {-0.74, 0.74}) k.leg(F::Metal, {x, 0, 0.21}, 0.10, 0.03, kBlack);
+            k.front(F::Wood, -0.78, -0.26, 0.11, 0.49, 0.42, wood * 1.04, kBlack);
+            k.front(F::Wood, 0.26, 0.78, 0.11, 0.49, 0.42, wood * 1.04, kBlack);
+            k.box(F::Hard, {0, 0.53, 0.20}, {0.30, 0.02, 0.20}, 0.004, kBlack, 1);     // TV foot
+            k.box(F::Hard, {0, 0.58, 0.20}, {0.06, 0.10, 0.03}, 0.004, kBlack, 1);
+            k.box(F::Hard, {0, 0.93, 0.20}, {1.25, 0.72, 0.04}, 0.004, kBlack, 1);     // the set
+            k.box(F::Metal, {0, 0.93, 0.2205}, {1.22, 0.69, 0.002}, 0.0, Vec3(0.02, 0.02, 0.025), 1);
+            break;
+        }
+        case Piece::KitchenBase:
+        case Piece::KitchenSink:
+        case Piece::KitchenHob: {
+            // One 0.6 m module of a counter run: the carcass on its kick plinth, a door (or drawers), a slice of
+            // worktop -- and in it the sink (a stainless bowl and a tap) or the hob (black glass, four rings).
+            k.out.size = {0.6, p == Piece::KitchenSink ? 1.18 : 0.92, 0.62};   // the sink's tap stands tall
+            const Vec3 door = (style & 1u) ? kWhite : fabric * 0.75 + Vec3(0.12, 0.12, 0.12);
+            k.box(F::Hard, {0, 0.05, 0.27}, {0.6, 0.10, 0.52}, 0.0, kBlack * 2.0, 1);
+            k.box(F::Hard, {0, 0.48, 0.29}, {0.6, 0.76, 0.58}, 0.0, kWhite * 0.95, 1);
+            if (p == Piece::KitchenHob) {
+                for (int d = 0; d < 3; ++d) k.front(F::Hard, -0.3, 0.3, 0.10 + d * 0.253, 0.10 + (d + 1) * 0.253, 0.58, door, kChrome);
+            } else {
+                k.front(F::Hard, -0.3, 0.3, 0.10, 0.86, 0.58, door, kChrome, true);
+            }
+            const Vec3 top = (style & 2u) ? Vec3(0.20, 0.20, 0.21) : wood * 1.05;
+            k.box((style & 2u) ? F::Ceramic : F::Wood, {0, 0.88, 0.31}, {0.6, 0.04, 0.62}, 0.003, top, 1);
+            if (p == Piece::KitchenSink) {
+                k.box(F::Metal, {0, 0.896, 0.33}, {0.46, 0.004, 0.40}, 0.0, kChrome, 1);
+                k.box(F::Metal, {0, 0.81, 0.33}, {0.40, 0.16, 0.34}, 0.02, kSteel * 0.6, 2);   // the bowl's floor
+                k.turned(F::Metal, {0, 0.90, 0.10}, {{0.025, 0.0}, {0.022, 0.03}, {0.012, 0.04}, {0.012, 0.26}, {0.0, 0.27}},
+                         kChrome, 1.0, 12);
+                k.rod(F::Metal, {0, 1.15, 0.10}, {0, 1.12, 0.26}, 0.012, kChrome, 10);
+            } else if (p == Piece::KitchenHob) {
+                k.box(F::Metal, {0, 0.902, 0.32}, {0.56, 0.006, 0.50}, 0.004, Vec3(0.03, 0.03, 0.035), 1);
+                for (double x : {-0.13, 0.13})
+                    for (double z : {0.20, 0.44})
+                        k.turned(F::Hard, {x, 0.905, z}, {{0.0, 0.0}, {0.085, 0.0}, {0.085, 0.002}, {0.0, 0.002}},
+                                 Vec3(0.18, 0.18, 0.19), 1.0, 20);
+            }
+            break;
+        }
+        case Piece::KitchenTall: {
+            // The fridge tower: full height, a long handle.
+            k.out.size = {0.6, 2.0, 0.64};
+            k.box(F::Hard, {0, 1.0, 0.31}, {0.6, 2.0, 0.62}, 0.004, kWhite * 0.95, 1);
+            k.front(F::Hard, -0.3, 0.3, 0.80, 1.98, 0.62, kSteel, kChrome, true);
+            k.front(F::Hard, -0.3, 0.3, 0.10, 0.80, 0.62, kSteel, kChrome, true);
+            break;
+        }
+        case Piece::KitchenWall: {
+            // A wall cupboard, hung at 1.45 m.
+            k.out.size = {0.6, 2.15, 0.35};
+            k.out.solid = false;
+            k.box(F::Hard, {0, 1.80, 0.17}, {0.6, 0.70, 0.34}, 0.0, kWhite * 0.95, 1);
+            const Vec3 door = (style & 1u) ? kWhite : fabric * 0.75 + Vec3(0.12, 0.12, 0.12);
+            k.front(F::Hard, -0.3, 0.3, 1.45, 2.15, 0.34, door, kChrome, true);
+            break;
+        }
+        case Piece::DiningTable: {
+            k.out.size = {1.4, 0.76, 0.85};
+            k.box(F::Wood, {0, 0.74, 0.425}, {1.4, 0.04, 0.85}, 0.012, wood, 1);
+            k.box(F::Wood, {0, 0.68, 0.425}, {1.26, 0.08, 0.72}, 0.0, wood * 0.9, 1);   // the apron
+            for (double x : {-0.64, 0.64})
+                for (double z : {0.07, 0.78}) k.leg(F::Wood, {x, 0, z}, 0.72, 0.055, wood * 0.95);
+            break;
+        }
+        case Piece::DiningChair: {
+            k.out.size = {0.46, 0.88, 0.50};
+            k.out.solid = false;
+            k.box(F::Fabric, {0, 0.46, 0.27}, {0.44, 0.05, 0.42}, 0.02, fabric);
+            for (double x : {-0.19, 0.19}) {
+                k.leg(F::Wood, {x, 0, 0.45}, 0.44, 0.035, wood);
+                k.leg(F::Wood, {x, 0, 0.06}, 0.88, 0.035, wood);
+            }
+            for (double y : {0.62, 0.80}) k.box(F::Wood, {0, y, 0.06}, {0.36, 0.06, 0.02}, 0.006, wood, 1);
+            break;
+        }
+        case Piece::Bathtub: {
+            // A built-in tub: four rounded walls round a sunken floor, a chrome mixer at the wall end.
+            k.out.size = {1.70, 0.70, 0.75};   // to the mixer's top
+            const double W = 1.70, D = 0.75, H = 0.56, t = 0.07;
+            k.box(F::Ceramic, {0, H * 0.5, t * 0.5}, {W, H, t}, 0.02, kPorcelain);
+            k.box(F::Ceramic, {0, H * 0.5, D - t * 0.5}, {W, H, t}, 0.02, kPorcelain);
+            k.box(F::Ceramic, {-W * 0.5 + t * 0.5, H * 0.5, D * 0.5}, {t, H, D - 2 * t + 0.01}, 0.02, kPorcelain);
+            k.box(F::Ceramic, {W * 0.5 - t * 0.5, H * 0.5, D * 0.5}, {t, H, D - 2 * t + 0.01}, 0.02, kPorcelain);
+            k.box(F::Ceramic, {0, 0.10, D * 0.5}, {W - 2 * t + 0.01, 0.20, D - 2 * t + 0.01}, 0.04, kPorcelain * 0.97);
+            k.turned(F::Metal, {-W * 0.5 + 0.12, H, D * 0.5}, {{0.02, 0.0}, {0.018, 0.12}, {0.0, 0.13}}, kChrome, 1.0, 12);
+            k.rod(F::Metal, {-W * 0.5 + 0.12, H + 0.11, D * 0.5}, {-W * 0.5 + 0.26, H + 0.10, D * 0.5}, 0.011, kChrome, 10);
+            break;
+        }
+        case Piece::Toilet: {
+            k.out.size = {0.40, 0.80, 0.70};
+            k.out.solid = false;
+            k.box(F::Ceramic, {0, 0.60, 0.10}, {0.38, 0.36, 0.17}, 0.025, kPorcelain);            // cistern
+            k.turned(F::Ceramic, {0, 0, 0.42}, {{0.12, 0.0}, {0.13, 0.05}, {0.15, 0.22}, {0.18, 0.38}, {0.17, 0.40},
+                                                {0.0, 0.40}}, kPorcelain, 1.3, 24);              // pedestal + bowl
+            k.turned(F::Hard, {0, 0.40, 0.42}, {{0.17, 0.0}, {0.175, 0.012}, {0.16, 0.025}, {0.0, 0.025}}, kWhite, 1.3, 24);
+            k.box(F::Metal, {0.12, 0.79, 0.10}, {0.06, 0.01, 0.03}, 0.003, kChrome, 1);           // flush button
+            break;
+        }
+        case Piece::Vanity: {
+            k.out.size = {0.80, 1.95, 0.50};
+            k.box(F::Wood, {0, 0.47, 0.24}, {0.80, 0.56, 0.48}, 0.006, wood, 1);
+            k.front(F::Wood, -0.4, 0.4, 0.20, 0.74, 0.48, wood * 1.04, kChrome);
+            k.box(F::Ceramic, {0, 0.765, 0.25}, {0.80, 0.03, 0.50}, 0.006, kPorcelain, 1);
+            k.turned(F::Ceramic, {0, 0.78, 0.27}, {{0.0, 0.0}, {0.18, 0.0}, {0.20, 0.09}, {0.19, 0.10}, {0.15, 0.03},
+                                                   {0.0, 0.03}}, kPorcelain, 0.8, 24);            // vessel basin
+            k.turned(F::Metal, {0, 0.78, 0.05}, {{0.022, 0.0}, {0.018, 0.20}, {0.0, 0.21}}, kChrome, 1.0, 12);
+            k.rod(F::Metal, {0, 0.98, 0.05}, {0, 0.96, 0.17}, 0.011, kChrome, 10);
+            k.box(F::Metal, {0, 1.45, 0.012}, {0.72, 0.90, 0.012}, 0.006, kChrome, 1);             // the mirror
+            break;
+        }
+        case Piece::LoungeChair: {
+            k.out.size = {0.84, 0.80, 0.84};
+            k.box(F::Fabric, {0, 0.30, 0.44}, {0.84, 0.24, 0.80}, 0.04, fabric);
+            k.box(F::Fabric, {0, 0.46, 0.50}, {0.56, 0.12, 0.62}, 0.05, fabric * 1.04);
+            k.boxTilted(F::Fabric, {0, 0.58, 0.12}, {0.84, 0.48, 0.16}, 0.06, -0.12, fabric * 0.96);
+            for (double x : {-0.36, 0.36}) k.box(F::Fabric, {x, 0.50, 0.46}, {0.13, 0.24, 0.74}, 0.05, fabric * 0.96);
+            for (double x : {-0.36, 0.36})
+                for (double z : {0.10, 0.78}) k.leg(F::Wood, {x, 0, z}, 0.18, 0.04, wood);
+            break;
+        }
+        case Piece::Planter: {
+            k.out.size = {0.9, 1.3, 0.9};
+            k.turned(F::Ceramic, {0, 0, 0.45}, {{0.0, 0.0}, {0.22, 0.0}, {0.28, 0.42}, {0.29, 0.45}, {0.0, 0.45}},
+                     Vec3(0.30, 0.30, 0.31), 1.0, 20);
+            RenderMesh leaves = MeshBuilder::icosphere(2);
+            MeshBuilder::displaceNoise(leaves, Vec3(0, 0, 0), 0.25, 3.0, 7u);
+            for (Vertex& v : leaves.vertices) {
+                v.position = Vec3(v.position.x * 0.36, v.position.y * 0.45 + 0.85, v.position.z * 0.36 + 0.45);
+                v.color = Vec3(0.20, 0.36, 0.16);
+            }
+            MeshBuilder::append(k.m(F::Fabric), leaves);
+            break;
+        }
+        default: break;
+    }
+    return k.out;
+}
+
+const char* const kPieceNames[kPieceCount] = {
+    "desk", "office_chair", "monitor", "filing_cabinet", "bed", "nightstand", "wardrobe", "sofa", "coffee_table",
+    "tv_unit", "kitchen_base", "kitchen_sink", "kitchen_hob", "kitchen_tall", "kitchen_wall", "dining_table",
+    "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter"};
+
+}  // namespace
+
+const FurniturePiece& furniturePiece(Piece p, uint32_t variant) {
+    static std::mutex mu;
+    static std::map<uint64_t, std::unique_ptr<FurniturePiece>> cache;
+    const uint64_t key = (static_cast<uint64_t>(p) << 32) | variant;
+    std::lock_guard<std::mutex> lock(mu);
+    auto it = cache.find(key);
+    if (it == cache.end()) it = cache.emplace(key, std::make_unique<FurniturePiece>(build(p, variant))).first;
+    return *it->second;
+}
+
+const char* furniturePieceName(Piece p) {
+    const int i = static_cast<int>(p);
+    return i >= 0 && i < kPieceCount ? kPieceNames[i] : "?";
+}
+
+bool furniturePieceByName(const std::string& name, Piece& out) {
+    for (int i = 0; i < kPieceCount; ++i)
+        if (name == kPieceNames[i]) { out = static_cast<Piece>(i); return true; }
+    return false;
+}
+
+}  // namespace engine

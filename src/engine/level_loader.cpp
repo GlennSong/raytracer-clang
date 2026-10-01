@@ -212,6 +212,12 @@ static void bindSurfaceMaps(RenderMaterial& mat, const std::array<TextureHandle,
     mat.aoMap = h[3];
 }
 
+// The surfaces that exist ONLY as baked maps on the mesh's own UVs (the furniture finishes, buildings M4b): the
+// shader has no analytic version, so a script part that names one must be bound its baked set.
+static bool surfaceIsBakedOnMeshUVs(RenderMaterial::Surface s) {
+    return s == RenderMaterial::Surface::WoodGrain || s == RenderMaterial::Surface::Fabric;
+}
+
 // A named material library: the level's top-level "materials" table, so entities
 // can reference a shared material by name ("material": "brickWall") instead of
 // repeating an inline block (ADR-0039).
@@ -1065,6 +1071,7 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
     // fixed eye) instead of enclosing it. Parts are the render path; recipes that
     // also emit instances/colliders would need the same offset (none do today).
     Vec3 spawnOffset = ent.contains("position") ? parseVec3(ent["position"]) : Vec3(0, 0, 0);
+    SurfaceTexCache scriptSurfTex;   // the baked sets this model's parts bind (one bake per surface)
 
     for (std::size_t i = 0; i < model.parts.size(); ++i) {
         const ProcPart& part = model.parts[i];
@@ -1088,6 +1095,8 @@ static void loadScriptEntity(const json& ent, const std::string& levelDir,
         // so it rides whether or not the part is `textured`.
         if (part.material.surface != 0)
             r.material.setSurface(static_cast<RenderMaterial::Surface>(part.material.surface));
+        if (!part.material.textured && surfaceIsBakedOnMeshUVs(r.material.surface()))
+            bindSurfaceMaps(r.material, bakeSurfaceTextures(renderer, r.material.surface(), scriptSurfTex));
         if (part.material.textured) {
             RenderMesh tiled = part.mesh;
             double tile = part.material.tile > 1e-6 ? part.material.tile : 1.0;

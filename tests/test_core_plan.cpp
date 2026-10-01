@@ -367,10 +367,9 @@ TEST_CASE(core_window_grow_cost_is_bounded) {
     // 10380 once arched openings and wall finishes landed. That is 86% of
     // the cap — the next storey of content needs a real budget, not a
     // bigger number here.
-    // The next storey of content came (buildings M4, 2026-09-30): FURNITURE, a desk, chair, monitor and
-    // cabinet in every office -- measured 19 340 tris / 4.1 MB for this window, ~12k of it furniture (five-faced
-    // boxes, ~50 tris an office). The budget is the furnished floor's: 24 000.
-    CHECK(tris < 24000);
+    // FURNITURE (buildings M4b) does not count here: the kit's pieces are drawn INSTANCED (PlacedPiece), so a
+    // furnished floor adds transforms, not merged triangles -- re-measured 10 940 with every office furnished.
+    CHECK(tris < 12000);
     CHECK(col.indices.size() / 3 < 10000);
     (void)ms;   // printed, not asserted: wall-clock on a shared desktop is not a gate
 }

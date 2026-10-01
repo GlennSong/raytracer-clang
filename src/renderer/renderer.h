@@ -205,6 +205,10 @@ struct RenderMaterial {
         // the banks, foam at the banks and where it runs fast, ripples scrolling downstream along
         // the tangent. Lakes are the same surface at speed 0 (u = 0.5).
         River,
+        // FURNITURE finishes (buildings M4b): baked like the facade surfaces, sampled on the mesh's own UVs (the
+        // shape kit authors them in metres). WoodGrain: fine long grain with the odd ray fleck, satin; Fabric: a
+        // plain weave, matte. Both pale and neutral -- the piece's colour is its vertex tint.
+        WoodGrain, Fabric,
     };
     static constexpr uint32_t SURFACE_SHIFT = 8;
     static constexpr uint32_t SURFACE_MASK = 0xFF00u;
@@ -252,6 +256,8 @@ inline RenderMaterial::Surface surfaceFromName(const std::string& s) {
     if (s == "terrain" || s == "ground" || s == "terrainground") return S::TerrainGround;
     if (s == "marble") return S::Marble;
     if (s == "carpet") return S::Carpet;
+    if (s == "woodgrain" || s == "wood_grain") return S::WoodGrain;
+    if (s == "fabric") return S::Fabric;
     return S::None;
 }
 
@@ -278,6 +284,8 @@ inline const char* surfaceName(RenderMaterial::Surface s) {
         case S::TerrainGround:   return "terrain";
         case S::Marble:          return "marble";
         case S::Carpet:          return "carpet";
+        case S::WoodGrain:       return "woodgrain";
+        case S::Fabric:          return "fabric";
         default:                 return "";
     }
 }
