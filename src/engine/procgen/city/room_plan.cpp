@@ -1,6 +1,7 @@
 #include "room_plan.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <utility>
 #include <cstdint>
@@ -406,6 +407,158 @@ namespace {
 constexpr Real kCorridor = 2.2;   // core_plan.cpp's kCorridor: the ring kept clear round the core
 }
 
+// ONE APARTMENT (buildings B): the unit x0..x1 along a band, from the window wall (depth vIn) to its front on the
+// corridor (vFront, the band's depth D), its front door at xd -- laid out into rooms and walls. P maps (along the
+// band, depth in from the window wall) to the plan. Shared by the tower floor and the walk-up.
+static void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
+                            Real vIn, Real vFront, Real D, Real xd, bool partyWallRight) {
+    const Real kHall = 1.6, kBath = 2.3, kCloset = std::max(Real(1.4), kRoomDoorW + 0.7), kBedW = 3.4, kLivingMin = 4.2;
+    const Real UW = x1 - x0;
+        // The zones: the back strip along the corridor and the window side.
+        const Real bz = std::clamp(D * 0.32, Real(2.3), Real(2.8));
+        const Real vb = vFront - bz;
+        // BACK STRIP: the hall at the door, the bath beside it on the roomier side, the closet on the other,
+        // the kitchen in the largest remainder (else it joins the living room on the window side).
+        const Real hx0 = std::clamp(xd - kHall * 0.5, x0, x1 - kHall), hx1 = hx0 + kHall;
+        struct Seg { Real x0, x1; RoomKind kind; };
+        std::vector<Seg> back;
+        back.push_back({hx0, hx1, RoomKind::Hall});
+        const Real leftW = hx0 - x0, rightW = x1 - hx1;
+        const bool bathLeft = leftW >= rightW;
+        Real l = hx0, r = hx1;   // the frontier on each side
+        auto take = [&](bool left, Real w, RoomKind kind) {
+            if (left) { if (l - x0 < w - 1e-6) return false; back.push_back({l - w, l, kind}); l -= w; }
+            else { if (x1 - r < w - 1e-6) return false; back.push_back({r, r + w, kind}); r += w; }
+            return true;
+        };
+        // The bath beside the hall on the roomier side; the KITCHEN beside the hall on the other (open to it,
+        // so it is always reached), else it moves to the window side; the closet after whichever has room
+        // (beside the hall it opens onto the hall, else onto the room in front of it).
+        const bool bathOnLeft = take(bathLeft, kBath, RoomKind::Bath) ? bathLeft
+                                : (take(!bathLeft, kBath, RoomKind::Bath), !bathLeft);
+        bool kitchenBack = false;
+        {
+            const bool kLeft = !bathOnLeft;
+            const Real room = kLeft ? l - x0 : x1 - r;
+            if (room >= 2.4) {
+                const Real kw = std::min(room, Real(3.4));
+                take(kLeft, kw, RoomKind::Kitchen);
+                kitchenBack = true;
+            }
+        }
+        take(!bathOnLeft, kCloset, RoomKind::Closet) || take(bathOnLeft, kCloset, RoomKind::Closet);
+        // A leftover sliver joins its neighbour: grow the room next to it.
+        for (Seg& s : back) {
+            if (l > x0 + 1e-6 && std::fabs(s.x0 - l) < 1e-6) s.x0 = x0;
+            if (r < x1 - 1e-6 && std::fabs(s.x1 - r) < 1e-6) s.x1 = x1;
+        }
+        // WINDOW SIDE: bedrooms at the ends away from the hall, the living room between.
+        int beds = UW >= 10.5 ? 2 : (UW >= 7.0 ? 1 : 0);
+        // A kitchen before a second bedroom: one that could not sit in the back strip needs the window side.
+        const Real kitchenFront = kitchenBack ? 0.0 : 2.6;
+        while (beds > 0 && UW - beds * kBedW - kitchenFront < kLivingMin) --beds;
+        std::vector<Seg> front;
+        Real f0 = x0, f1 = x1;
+        const bool hallNearLeft = (xd - x0) < (x1 - xd);
+        if (beds == 2) { front.push_back({x0, x0 + kBedW, RoomKind::Bed}); front.push_back({x1 - kBedW, x1, RoomKind::Bed}); f0 += kBedW; f1 -= kBedW; }
+        else if (beds == 1) {
+            if (hallNearLeft) { front.push_back({x1 - kBedW, x1, RoomKind::Bed}); f1 -= kBedW; }
+            else { front.push_back({x0, x0 + kBedW, RoomKind::Bed}); f0 += kBedW; }
+        }
+        if (!kitchenBack && f1 - f0 >= kLivingMin + 2.6) {   // the kitchen takes the living room's far end
+            if (hallNearLeft) { front.push_back({f1 - 2.6, f1, RoomKind::Kitchen}); f1 -= 2.6; }
+            else { front.push_back({f0, f0 + 2.6, RoomKind::Kitchen}); f0 += 2.6; }
+        }
+        front.push_back({f0, f1, RoomKind::Living});
+        // The rooms.
+        for (const Seg& s : front) {
+            Room rm; rm.edge = e; rm.kind = s.kind;
+            rm.rect = {P(s.x0, vIn), P(s.x1, vIn), P(s.x1, vb), P(s.x0, vb)};
+            rp.rooms.push_back(rm);
+        }
+        for (const Seg& s : back) {
+            Room rm; rm.edge = e; rm.kind = s.kind;
+            rm.rect = {P(s.x0, vb), P(s.x1, vb), P(s.x1, vFront), P(s.x0, vFront)};
+            rp.rooms.push_back(rm);
+        }
+        // THE WALLS. The front, with the entry door.
+        {
+            RoomWall w; w.a = P(x0, vFront); w.b = P(x1, vFront);
+            w.doorAt = (xd - x0) / UW;
+            rp.walls.push_back(w);
+        }
+        // The party wall at this unit's right end (the band's own ends are the exterior or the band's front).
+        if (partyWallRight) {
+            RoomWall w; w.a = P(x1, vIn); w.b = P(x1, vFront);
+            rp.walls.push_back(w);
+        }
+        // Back-strip partitions: a door from the hall into the bath and the closet, solid between the rest; open
+        // between the hall and the kitchen.
+        std::sort(back.begin(), back.end(), [](const Seg& a2, const Seg& b2) { return a2.x0 < b2.x0; });
+        for (std::size_t i = 0; i + 1 < back.size(); ++i) {
+            const Seg& s = back[i];
+            const Seg& t = back[i + 1];
+            const bool hallSide = s.kind == RoomKind::Hall || t.kind == RoomKind::Hall;
+            const RoomKind other = s.kind == RoomKind::Hall ? t.kind : s.kind;
+            if (hallSide && other == RoomKind::Kitchen) continue;   // open
+            RoomWall w; w.a = P(s.x1, vb); w.b = P(s.x1, vFront);
+            if (hallSide && (other == RoomKind::Bath || other == RoomKind::Closet)) w.doorAt = 0.5;
+            rp.walls.push_back(w);
+        }
+        // Window-side partitions: a bedroom's wall to the living room (or kitchen) carries its door near the
+        // back; between two rooms that are not bedrooms the plan stays open.
+        std::sort(front.begin(), front.end(), [](const Seg& a2, const Seg& b2) { return a2.x0 < b2.x0; });
+        for (std::size_t i = 0; i + 1 < front.size(); ++i) {
+            const Seg& s = front[i];
+            const Seg& t = front[i + 1];
+            const bool bedS = s.kind == RoomKind::Bed, bedT = t.kind == RoomKind::Bed;
+            if (!bedS && !bedT) continue;
+            RoomWall w; w.a = P(s.x1, vIn); w.b = P(s.x1, vb);
+            if (bedS != bedT) w.doorAt = 0.78;
+            rp.walls.push_back(w);
+        }
+        // The divider between the zones: solid wherever either side is private (a bedroom, the bath, the
+        // closet), open between the hall, the kitchen and the living room.
+        std::vector<Real> xs = {x0, x1};
+        for (const Seg& s : front) { xs.push_back(s.x0); xs.push_back(s.x1); }
+        for (const Seg& s : back) { xs.push_back(s.x0); xs.push_back(s.x1); }
+        std::sort(xs.begin(), xs.end());
+        auto kindAt = [](const std::vector<Seg>& v, Real x) {
+            for (const Seg& s : v) if (x > s.x0 && x < s.x1) return s.kind;
+            return RoomKind::Living;
+        };
+        Real runA = -1;
+        auto flush = [&](Real upto) {
+            if (runA >= 0 && upto - runA > 0.05) { RoomWall w; w.a = P(runA, vb); w.b = P(upto, vb); rp.walls.push_back(w); }
+            runA = -1;
+        };
+        // A closet that is not beside the hall opens onto the room in front of it instead: a walk-in closet
+        // off a bedroom, a coat closet off the living room.
+        auto besideHall = [&](const Seg& c) {
+            for (const Seg& t : back)
+                if (t.kind == RoomKind::Hall && (std::fabs(t.x0 - c.x1) < 1e-6 || std::fabs(t.x1 - c.x0) < 1e-6)) return true;
+            return false;
+        };
+        for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
+            if (xs[i + 1] - xs[i] < 1e-6) continue;
+            const Real xm = (xs[i] + xs[i + 1]) * 0.5;
+            const RoomKind fk = kindAt(front, xm), bk = kindAt(back, xm);
+            const Seg* closet = nullptr;
+            for (const Seg& c : back) if (c.kind == RoomKind::Closet && xm > c.x0 && xm < c.x1) closet = &c;
+            if (closet && !besideHall(*closet)) {
+                flush(xs[i]);
+                RoomWall w; w.a = P(xs[i], vb); w.b = P(xs[i + 1], vb);
+                if (xs[i + 1] - xs[i] > kRoomDoorW + 0.6) w.doorAt = 0.5;
+                rp.walls.push_back(w);
+                continue;
+            }
+            const bool solid = fk == RoomKind::Bed || bk == RoomKind::Bath || bk == RoomKind::Closet;
+            if (solid) { if (runA < 0) runA = xs[i]; }
+            else flush(xs[i]);
+        }
+        flush(x1);
+}
+
 static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
                               int storey) {
     RoomPlan rp;
@@ -446,7 +599,6 @@ static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params,
             b.s1 = b.W - inset - (q.rooms ? q.D : 0);
         }
     }
-    const Real kHall = 1.6, kBath = 2.3, kCloset = std::max(Real(1.4), kRoomDoorW + 0.7), kBedW = 3.4, kLivingMin = 4.2;
     for (std::size_t e = 0; e < n; ++e) {
         const Band& b = B[e];
         if (!b.rooms || b.s1 - b.s0 < 6.8) continue;
@@ -478,153 +630,87 @@ static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params,
         }
         if (units < 1) continue;
         for (int k = 0; k < units; ++k) {
-            const Real x0 = cuts[k], x1 = cuts[k + 1], UW = x1 - x0;
+            const Real x0 = cuts[k], x1 = cuts[k + 1];
             // The front door, on the corridor.
             const Real dLo = std::max(x0, c0) + 0.9, dHi = std::min(x1, c1) - 0.9;
             const Real xd = dLo <= dHi ? std::clamp((x0 + x1) * 0.5, dLo, dHi) : (std::max(x0, c0) + std::min(x1, c1)) * 0.5;
-            // The zones: the back strip along the corridor and the window side.
-            const Real bz = std::clamp(b.D * 0.32, Real(2.3), Real(2.8));
-            const Real vb = vFront - bz;
-            // BACK STRIP: the hall at the door, the bath beside it on the roomier side, the closet on the other,
-            // the kitchen in the largest remainder (else it joins the living room on the window side).
-            const Real hx0 = std::clamp(xd - kHall * 0.5, x0, x1 - kHall), hx1 = hx0 + kHall;
-            struct Seg { Real x0, x1; RoomKind kind; };
-            std::vector<Seg> back;
-            back.push_back({hx0, hx1, RoomKind::Hall});
-            const Real leftW = hx0 - x0, rightW = x1 - hx1;
-            const bool bathLeft = leftW >= rightW;
-            Real l = hx0, r = hx1;   // the frontier on each side
-            auto take = [&](bool left, Real w, RoomKind kind) {
-                if (left) { if (l - x0 < w - 1e-6) return false; back.push_back({l - w, l, kind}); l -= w; }
-                else { if (x1 - r < w - 1e-6) return false; back.push_back({r, r + w, kind}); r += w; }
-                return true;
-            };
-            // The bath beside the hall on the roomier side; the KITCHEN beside the hall on the other (open to it,
-            // so it is always reached), else it moves to the window side; the closet after whichever has room
-            // (beside the hall it opens onto the hall, else onto the room in front of it).
-            const bool bathOnLeft = take(bathLeft, kBath, RoomKind::Bath) ? bathLeft
-                                    : (take(!bathLeft, kBath, RoomKind::Bath), !bathLeft);
-            bool kitchenBack = false;
-            {
-                const bool kLeft = !bathOnLeft;
-                const Real room = kLeft ? l - x0 : x1 - r;
-                if (room >= 2.4) {
-                    const Real kw = std::min(room, Real(3.4));
-                    take(kLeft, kw, RoomKind::Kitchen);
-                    kitchenBack = true;
-                }
+            layoutApartment(rp, e, P, x0, x1, vIn, vFront, b.D, xd, k + 1 < units);
+        }
+    }
+    return rp;
+}
+
+// THE WALK-UP (Glenn, 2026-10-01: "I didn't see the apartments ... some of them look like dorms"): a residential
+// building without a lift core. A corridor runs the long axis from the stair, apartments either side of it
+// (double-loaded) -- or, on a plate too narrow for two, one row off a corridor along the back facade. The stair's
+// hall is cut out of the band it stands in, facade to corridor, so the stair opens onto the corridor.
+static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
+                           int storey) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Apartments;
+    rp.office = false;
+    if (storey < 1 || planIn.size() != 4 || well.size() < 3) return rp;
+    const OBB2 ob = orientedBoundingBox(planIn);
+    const int la = ob.longAxis();
+    const Vec2 ua = ob.axis[la];
+    const Vec2 va(ua.y, -ua.x);   // the outward normal of a band running along +ua (ringPlan's convention)
+    const Real hl = ob.half[la], hw = ob.half[1 - la];
+    const Vec2 o = ob.center;
+    const Real kCorr = 1.6;
+    const bool twoSides = 2 * hw >= 2 * (inset + 5.4) + kCorr;
+    // The stair hall in OBB coordinates (s along, t across), widened for the landing.
+    Real s0 = 1e9, s1 = -1e9, t0 = 1e9, t1 = -1e9;
+    for (const Vec2& q : well) {
+        const Vec2 d = q - o;
+        s0 = std::min(s0, dot(d, ua)); s1 = std::max(s1, dot(d, ua));
+        t0 = std::min(t0, dot(d, va)); t1 = std::max(t1, dot(d, va));
+    }
+    s0 -= 1.0; s1 += 1.0;
+    // The bands: {P, depth from the window wall to the corridor front}. Band 0 faces +va and runs along +ua (its
+    // x = s + hl); band 1 faces -va and runs along -ua (x = hl - s).
+    struct Band { std::function<Vec2(Real, Real)> P; Real vFront; Real t0, t1; bool alongPlus; };
+    std::vector<Band> bands;
+    auto plusBand = [=](Real front, Real tLo) {
+        return Band{[=](Real x, Real v) { return o - ua * hl + va * hw + ua * x - va * v; }, front, tLo, hw, true};
+    };
+    auto minusBand = [=](Real front, Real tHi) {
+        return Band{[=](Real x, Real v) { return o + ua * hl - va * hw - ua * x + va * v; }, front, -hw, tHi, false};
+    };
+    if (twoSides) {
+        bands.push_back(plusBand(hw - kCorr * 0.5, kCorr * 0.5));
+        bands.push_back(minusBand(hw - kCorr * 0.5, -kCorr * 0.5));
+    } else if ((t0 + t1) * 0.5 >= 0) {
+        // One row: the apartments on the stair's side, the corridor along the facade OPPOSITE (the stair would
+        // block a corridor beside it); the stair hall is cut through the row to reach it.
+        bands.push_back(plusBand(2 * hw - inset - kCorr, -hw + inset + kCorr));
+    } else {
+        bands.push_back(minusBand(2 * hw - inset - kCorr, hw - inset - kCorr));
+    }
+    for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+        const Band& b = bands[bi];
+        const Real vIn = inset, D = b.vFront - vIn;
+        if (D < 5.0) continue;
+        // The band's run along, less the stair hall where the stair stands in it. Band 0 runs along +ua (x = s +
+        // hl), band 1 along -ua (x = hl - s).
+        std::vector<std::pair<Real, Real>> runs = {{inset, 2 * hl - inset}};
+        if (t1 > b.t0 && t0 < b.t1) {
+            const Real a = b.alongPlus ? s0 + hl : hl - s1, c = b.alongPlus ? s1 + hl : hl - s0;
+            runs = {{inset, a}, {c, 2 * hl - inset}};
+        }
+        for (const auto& [r0, r1] : runs) {
+            if (r1 - r0 < 6.8) continue;
+            int units = std::max(1, static_cast<int>((r1 - r0) / (7.0 + 2.0 * (((params.seed >> (bi * 3)) & 7u) / 7.0))));
+            while (units > 1 && (r1 - r0) / units < 6.8) --units;
+            for (int k = 0; k < units; ++k) {
+                const Real x0 = r0 + (r1 - r0) * k / units, x1 = r0 + (r1 - r0) * (k + 1) / units;
+                layoutApartment(rp, bi, b.P, x0, x1, vIn, b.vFront, D, (x0 + x1) * 0.5, k + 1 < units);
             }
-            take(!bathOnLeft, kCloset, RoomKind::Closet) || take(bathOnLeft, kCloset, RoomKind::Closet);
-            // A leftover sliver joins its neighbour: grow the room next to it.
-            for (Seg& s : back) {
-                if (l > x0 + 1e-6 && std::fabs(s.x0 - l) < 1e-6) s.x0 = x0;
-                if (r < x1 - 1e-6 && std::fabs(s.x1 - r) < 1e-6) s.x1 = x1;
-            }
-            // WINDOW SIDE: bedrooms at the ends away from the hall, the living room between.
-            int beds = UW >= 10.5 ? 2 : (UW >= 7.0 ? 1 : 0);
-            // A kitchen before a second bedroom: one that could not sit in the back strip needs the window side.
-            const Real kitchenFront = kitchenBack ? 0.0 : 2.6;
-            while (beds > 0 && UW - beds * kBedW - kitchenFront < kLivingMin) --beds;
-            std::vector<Seg> front;
-            Real f0 = x0, f1 = x1;
-            const bool hallNearLeft = (xd - x0) < (x1 - xd);
-            if (beds == 2) { front.push_back({x0, x0 + kBedW, RoomKind::Bed}); front.push_back({x1 - kBedW, x1, RoomKind::Bed}); f0 += kBedW; f1 -= kBedW; }
-            else if (beds == 1) {
-                if (hallNearLeft) { front.push_back({x1 - kBedW, x1, RoomKind::Bed}); f1 -= kBedW; }
-                else { front.push_back({x0, x0 + kBedW, RoomKind::Bed}); f0 += kBedW; }
-            }
-            if (!kitchenBack && f1 - f0 >= kLivingMin + 2.6) {   // the kitchen takes the living room's far end
-                if (hallNearLeft) { front.push_back({f1 - 2.6, f1, RoomKind::Kitchen}); f1 -= 2.6; }
-                else { front.push_back({f0, f0 + 2.6, RoomKind::Kitchen}); f0 += 2.6; }
-            }
-            front.push_back({f0, f1, RoomKind::Living});
-            // The rooms.
-            for (const Seg& s : front) {
-                Room rm; rm.edge = e; rm.kind = s.kind;
-                rm.rect = {P(s.x0, vIn), P(s.x1, vIn), P(s.x1, vb), P(s.x0, vb)};
-                rp.rooms.push_back(rm);
-            }
-            for (const Seg& s : back) {
-                Room rm; rm.edge = e; rm.kind = s.kind;
-                rm.rect = {P(s.x0, vb), P(s.x1, vb), P(s.x1, vFront), P(s.x0, vFront)};
-                rp.rooms.push_back(rm);
-            }
-            // THE WALLS. The front, with the entry door.
-            {
-                RoomWall w; w.a = P(x0, vFront); w.b = P(x1, vFront);
-                w.doorAt = (xd - x0) / UW;
+            // The walls closing the run where it meets the stair hall (the plan's own ends are its facade).
+            for (Real x : {r0, r1}) {
+                if (x <= inset + 1e-6 || x >= 2 * hl - inset - 1e-6) continue;
+                RoomWall w; w.a = b.P(x, vIn); w.b = b.P(x, b.vFront);
                 rp.walls.push_back(w);
             }
-            // The party wall at this unit's right end (the band's own ends are the exterior or the band's front).
-            if (k + 1 < units) {
-                RoomWall w; w.a = P(x1, vIn); w.b = P(x1, vFront);
-                rp.walls.push_back(w);
-            }
-            // Back-strip partitions: a door from the hall into the bath and the closet, solid between the rest; open
-            // between the hall and the kitchen.
-            std::sort(back.begin(), back.end(), [](const Seg& a2, const Seg& b2) { return a2.x0 < b2.x0; });
-            for (std::size_t i = 0; i + 1 < back.size(); ++i) {
-                const Seg& s = back[i];
-                const Seg& t = back[i + 1];
-                const bool hallSide = s.kind == RoomKind::Hall || t.kind == RoomKind::Hall;
-                const RoomKind other = s.kind == RoomKind::Hall ? t.kind : s.kind;
-                if (hallSide && other == RoomKind::Kitchen) continue;   // open
-                RoomWall w; w.a = P(s.x1, vb); w.b = P(s.x1, vFront);
-                if (hallSide && (other == RoomKind::Bath || other == RoomKind::Closet)) w.doorAt = 0.5;
-                rp.walls.push_back(w);
-            }
-            // Window-side partitions: a bedroom's wall to the living room (or kitchen) carries its door near the
-            // back; between two rooms that are not bedrooms the plan stays open.
-            std::sort(front.begin(), front.end(), [](const Seg& a2, const Seg& b2) { return a2.x0 < b2.x0; });
-            for (std::size_t i = 0; i + 1 < front.size(); ++i) {
-                const Seg& s = front[i];
-                const Seg& t = front[i + 1];
-                const bool bedS = s.kind == RoomKind::Bed, bedT = t.kind == RoomKind::Bed;
-                if (!bedS && !bedT) continue;
-                RoomWall w; w.a = P(s.x1, vIn); w.b = P(s.x1, vb);
-                if (bedS != bedT) w.doorAt = 0.78;
-                rp.walls.push_back(w);
-            }
-            // The divider between the zones: solid wherever either side is private (a bedroom, the bath, the
-            // closet), open between the hall, the kitchen and the living room.
-            std::vector<Real> xs = {x0, x1};
-            for (const Seg& s : front) { xs.push_back(s.x0); xs.push_back(s.x1); }
-            for (const Seg& s : back) { xs.push_back(s.x0); xs.push_back(s.x1); }
-            std::sort(xs.begin(), xs.end());
-            auto kindAt = [](const std::vector<Seg>& v, Real x) {
-                for (const Seg& s : v) if (x > s.x0 && x < s.x1) return s.kind;
-                return RoomKind::Living;
-            };
-            Real runA = -1;
-            auto flush = [&](Real upto) {
-                if (runA >= 0 && upto - runA > 0.05) { RoomWall w; w.a = P(runA, vb); w.b = P(upto, vb); rp.walls.push_back(w); }
-                runA = -1;
-            };
-            // A closet that is not beside the hall opens onto the room in front of it instead: a walk-in closet
-            // off a bedroom, a coat closet off the living room.
-            auto besideHall = [&](const Seg& c) {
-                for (const Seg& t : back)
-                    if (t.kind == RoomKind::Hall && (std::fabs(t.x0 - c.x1) < 1e-6 || std::fabs(t.x1 - c.x0) < 1e-6)) return true;
-                return false;
-            };
-            for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
-                if (xs[i + 1] - xs[i] < 1e-6) continue;
-                const Real xm = (xs[i] + xs[i + 1]) * 0.5;
-                const RoomKind fk = kindAt(front, xm), bk = kindAt(back, xm);
-                const Seg* closet = nullptr;
-                for (const Seg& c : back) if (c.kind == RoomKind::Closet && xm > c.x0 && xm < c.x1) closet = &c;
-                if (closet && !besideHall(*closet)) {
-                    flush(xs[i]);
-                    RoomWall w; w.a = P(xs[i], vb); w.b = P(xs[i + 1], vb);
-                    if (xs[i + 1] - xs[i] > kRoomDoorW + 0.6) w.doorAt = 0.5;
-                    rp.walls.push_back(w);
-                    continue;
-                }
-                const bool solid = fk == RoomKind::Bed || bk == RoomKind::Bath || bk == RoomKind::Closet;
-                if (solid) { if (runA < 0) runA = xs[i]; }
-                else flush(xs[i]);
-            }
-            flush(x1);
         }
     }
     return rp;
@@ -918,6 +1004,16 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         RoomPlan rg = ringPlan(planIn, params, core, blankEdge, inset, storey);
         rg.finish = interiorFinishFor(params);
         return rg;
+    }
+    const OBB2 plateBox = orientedBoundingBox(planIn);
+    const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
+    const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
+    if (walkupShape && params.residential && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
+        // A WALK-UP's floor: apartments off a corridor from the stair, walked from the stair's foot. A narrow plate
+        // (one dwelling a floor) that is long enough for two takes a single-loaded corridor instead.
+        RoomPlan wu = walkupPlan(planIn, params, stairWell, inset, storey);
+        wu.finish = interiorFinishFor(params);
+        if (!wu.rooms.empty() && floorIsWalkable(wu, planIn, centroid(stairWell), stairWell)) return wu;
     }
     if (topo == PlateTopology::Ring && params.curtainWall && core.valid && planIn.size() == 4) {
         // An OFFICE floor: open plan with corner offices, meeting rooms and a kitchenette (buildings C).

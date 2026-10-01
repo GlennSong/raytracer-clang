@@ -1,7 +1,8 @@
 -- floor_lab.lua -- ONE STOREY of a building's interior, cut away at head height and laid out to be seen from above
 -- (buildings B; Glenn, 2026-09-30: "make entire apartments out of the floor"). building.grow_floor grows exactly
 -- what the streamed interior grows -- rooms, walls, floors, the furniture -- so this is the plan the city has.
---   left:  a condo tower's apartment floor        right: a podium tower's office floor
+--   front: a condo tower's apartment floor | a podium tower's office floor
+--   back:  a walk-up's apartments off its stair | a house's floor
 -- opts.seed rolls the buildings again; opts.storey picks the floor.
 local opts = args or {}
 local seed = opts.seed or 1
@@ -27,14 +28,16 @@ local MATS = {
 local function rect(w, d) return {{-w/2, -d/2}, {w/2, -d/2}, {w/2, d/2}, {-w/2, d/2}} end
 
 local FLOORS = {
-  { recipe = "condo_tower", plan = rect(44, 32), x = 0 },
-  { recipe = "podium_tower", plan = rect(42, 32), x = 56 },
+  { recipe = "condo_tower", plan = rect(44, 32), x = 0, z = 0 },
+  { recipe = "podium_tower", plan = rect(42, 32), x = 56, z = 0 },
+  { recipe = "apartments", plan = rect(28, 15), x = 0, z = -34 },   -- a walk-up: apartments off the stair
+  { recipe = "yard_house", plan = rect(12, 9), x = 40, z = -34 },   -- a house: one dwelling a floor
 }
 for _, f in ipairs(FLOORS) do
   local parts = building.grow_floor{ recipe = f.recipe, seed = seed * 13 + 7, coreness = 1.0, plan = f.plan,
                                      storey = storey, cutaway = 2.6 }
   for _, e in ipairs(parts) do
-    m:add(mesh.translate(e.mesh, {f.x, 0, 0}), MATS[e.part] or MATS.default)
+    m:add(mesh.translate(e.mesh, {f.x, 0, f.z}), MATS[e.part] or MATS.default)
   end
   print(string.format("[floor_lab] %s storey %d: %d parts", f.recipe, storey, #parts))
 end

@@ -153,7 +153,11 @@ void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
     p.floors = std::min(p.floors, maxFloors);
 }
 void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
+    // Homes, and the buildings that are flats over a shop (their upper floors are apartments). A hotel keeps its
+    // ring of rooms -- that is a hotel.
+    static const char* kFlatsOverShops[] = {"mixed_use", "oldtown_house", "oldtown_grand", "brick_shop", "corner_shop"};
     out.params.residential = out.placeType == "home";
+    for (const char* n : kFlatsOverShops) if (out.name == n) out.params.residential = true;
     storeyHeightsByUse(out);
     capFloors(out.params, shortSide, slender);
     if (out.params.floors < 15) out.params.top = 0;   // a top is a tower's: the short ones keep the penthouse

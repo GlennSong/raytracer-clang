@@ -141,3 +141,35 @@ TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
         CHECK(pictures >= halls);
     }
 }
+
+// THE WALK-UP (Glenn, 2026-10-01: "I didn't see the apartments ... some of them look like dorms"): a five-storey
+// residential building with no lift core. Its floor is apartments off a corridor from the stair, every one a hall,
+// a bath, a kitchen and a living room, walkable from the stair.
+TEST_CASE(a_walkup_floor_is_apartments_off_the_stair) {
+    for (const Poly2& plan : {Poly2{{0, 0}, {26, 0}, {26, 15}, {0, 15}}, Poly2{{0, 0}, {30, 0}, {30, 10.5}, {0, 10.5}}}) {
+        BuildingParams p;
+        p.floors = 5; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = 7;
+        p.residential = true; p.core = 1;   // no lift: a stair
+        const std::size_t entrance = entranceEdgeFor(plan, p);
+        const InteriorLayout il = interiorLayout(plan, p, entrance);
+        CHECK(il.hasStair);
+        const CorePlan core = coreFor(plan, p, entrance);
+        CHECK(!core.valid);
+        const Real inset = std::max(p.wallThickness, Real(0.55));
+        const RoomPlan rp = roomPlan(plan, p, core, il.edge, inset, 2, il.well, entrance);
+        int halls = 0, baths = 0, kitchens = 0, livings = 0;
+        for (const Room& r : rp.rooms) {
+            if (r.kind == RoomKind::Hall) ++halls;
+            if (r.kind == RoomKind::Bath) ++baths;
+            if (r.kind == RoomKind::Kitchen) ++kitchens;
+            if (r.kind == RoomKind::Living) ++livings;
+        }
+        std::printf("    [walkup] %.0f x %.0f: %d apartments, %zu rooms\n", plan[1].x, plan[2].y, halls, rp.rooms.size());
+        CHECK(rp.topology == PlateTopology::Apartments);
+        CHECK(halls >= 2);
+        CHECK(baths == halls);
+        CHECK(kitchens == halls);
+        CHECK(livings == halls);
+        CHECK(floorIsWalkable(rp, plan, centroid(il.well), il.well));
+    }
+}
