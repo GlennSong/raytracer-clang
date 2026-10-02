@@ -60,27 +60,32 @@ struct Recipe {
     // grains: discrete micro-impacts (gravel, snow crystals, grass stems) at `grainRate` per second
     // over `grainSpan`, each a tiny ringing click in the band
     double grainLevel = 0, grainRate = 0, grainSpan = 0, grainLo = 2000, grainHi = 8000;
+    // dull: a steep extra low-pass (Hz, three poles) on the click and texture -- a one-pole band leaks too much top
+    // for a soft sole; the toe also gets its own share of the thump
+    double dull = 0;
 };
 
 Recipe recipeFor(Ground g) {
     Recipe r;
     switch (g) {
-        // A PERSON'S WEIGHT, not a click-clack (#98, Glenn: "spindly sounding ... like some weird creature
-        // walking on spindly long legs like a spider"). Two bright ticks per step -- a 1-10 kHz heel click and
-        // a toe click 90 ms later at 60% -- with almost no low end read as many small legs. The step is now
-        // carried by the THUMP (the body's weight arriving), with a duller, lower heel, a soft toe roll just
-        // behind it, and a little shoe scuff; asphalt a touch darker and grittier than the sidewalk.
-        case Ground::Asphalt:   // a heavy, dull footfall with a little grit under the sole
-            r.length = 0.24; r.clickLevel = 0.65; r.clickLo = 450; r.clickHi = 3000; r.clickDecay = 0.004;
-            r.ringLevel = 0.10; r.ringHz = 480; r.ringDecay = 0.006; r.toeDelay = 0.09; r.toeLevel = 0.62;
-            r.thumpLevel = 0.6; r.thumpHz = 66; r.thumpDecay = 0.02;
-            r.texLevel = 0.06; r.texLo = 600; r.texHi = 3200; r.texAttack = 0.003; r.texDecay = 0.022;
-            r.grainLevel = 0.11; r.grainRate = 480; r.grainSpan = 0.028; r.grainLo = 1800; r.grainHi = 6000; break;
-        case Ground::Concrete:  // a firm pavement step: weight, a clean but low heel, a short scuff
-            r.length = 0.22; r.clickLevel = 0.85; r.clickLo = 1100; r.clickHi = 6000; r.clickDecay = 0.003;
-            r.ringLevel = 0.32; r.ringHz = 1150; r.ringHz2 = 2100; r.ringDecay = 0.005; r.toeDelay = 0.082; r.toeLevel = 0.45;
-            r.thumpLevel = 0.42; r.thumpHz = 88; r.thumpDecay = 0.02;
-            r.texLevel = 0.03; r.texLo = 1200; r.texHi = 5000; r.texAttack = 0.003; r.texDecay = 0.025; break;
+        // A SHOE ON PAVEMENT IS A LOW THUD (#98 round 2, Glenn: "walking on the sidewalk still sounds like I'm walking
+        // on spindly legs"). Measured against a CC0 recording of shoes on concrete (Kenney "Impact Sounds",
+        // footstep_concrete_000-004; see CREDITS.md -- used to measure, not shipped): one impact ~20 ms long, the energy at
+        // 160-640 Hz, centroid 160-360 Hz, almost nothing over 1.2 kHz. Ours centred at 2.7-4.8 kHz and rang for 85 ms:
+        // four octaves too bright, which is what read as small hard legs. Now: a rubber-soled slap in the low mids
+        // (the click band low and steepened by `dull`), a thump an octave up from before so small speakers carry it,
+        // no ring, and the toe the same slap again, softer. Asphalt a little darker with a trace of grit.
+        case Ground::Asphalt:   // a heavy, dull footfall, then the grit under the sole rolling a moment longer
+            r.length = 0.18; r.clickLevel = 0.9; r.clickLo = 90; r.clickHi = 400; r.clickDecay = 0.007; r.dull = 700;
+            r.toeDelay = 0.09; r.toeLevel = 0.8;
+            r.thumpLevel = 0.55; r.thumpHz = 125; r.thumpDecay = 0.011;
+            r.texLevel = 0.03; r.texLo = 300; r.texHi = 1200; r.texAttack = 0.003; r.texDecay = 0.02;
+            r.grainLevel = 0.10; r.grainRate = 420; r.grainSpan = 0.07; r.grainLo = 500; r.grainHi = 1600; break;
+        case Ground::Concrete:  // a firm pavement step: a clean low slap
+            r.length = 0.16; r.clickLevel = 0.9; r.clickLo = 170; r.clickHi = 800; r.clickDecay = 0.005; r.dull = 1150;
+            r.toeDelay = 0.082; r.toeLevel = 0.8;
+            r.thumpLevel = 0.45; r.thumpHz = 170; r.thumpDecay = 0.008;
+            r.texLevel = 0.03; r.texLo = 500; r.texHi = 1600; r.texAttack = 0.003; r.texDecay = 0.012; break;
         case Ground::Rock:      // a hard knock on stone, a little loose grit scattering
             r.length = 0.24; r.clickLevel = 0.9; r.clickLo = 1500; r.clickHi = 8000; r.clickDecay = 0.0025;
             r.ringLevel = 0.5; r.ringHz = 2300; r.ringHz2 = 3700; r.ringDecay = 0.004; r.toeDelay = 0.095; r.toeLevel = 0.5;
@@ -141,6 +146,8 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
     BandPass click(r.clickLo * pj, r.clickHi * pj, rate);
     BandPass scrapeBand(r.clickLo * pj, r.clickHi * pj, rate);
     BandPass tex(r.texLo * pj, r.texHi * pj, rate);
+    const double dullHz = r.dull > 0 ? r.dull * pj : rate;
+    LowPass dc1(dullHz, rate), dc2(dullHz, rate), dc3(dullHz, rate), dt1(dullHz, rate), dt2(dullHz, rate), dt3(dullHz, rate);
     const double thumpHz = r.thumpHz * pj * thumpDrop;
     const double ringHz = r.ringHz * pj, ringHz2 = r.ringHz2 * pj;
     const double toeAt = r.toeDelay * toeDelayScale * jit(rng);
@@ -177,12 +184,16 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
     };
     for (size_t i = 0; i < count; ++i) {
         const double t = static_cast<double>(i) / rate;
-        const double cn = click(uni(rng));
+        const double cn = r.dull > 0 ? dc3(dc2(dc1(click(uni(rng))))) * 2.2 : click(uni(rng));
         double v = contact(t, 0.0, 1.0, cn);
         if (r.toeDelay > 0) v += contact(t, toeAt, toeGain, cn);
         v += weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * t) * std::exp(-t / (r.thumpDecay * std::sqrt(scale)));
+        if (r.dull > 0 && r.toeDelay > 0 && t >= toeAt)
+            v += 0.6 * toeGain * weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * 1.15 * (t - toeAt)) *
+                 std::exp(-(t - toeAt) / (r.thumpDecay * std::sqrt(scale)));
         const double att = std::min(1.0, t / std::max(1e-4, r.texAttack));
-        v += texBoost * r.texLevel * 3.0 * tex(uni(rng)) * att * std::exp(-t / (r.texDecay * scale));
+        const double tn = r.dull > 0 ? dt3(dt2(dt1(tex(uni(rng))))) * 1.5 : tex(uni(rng));
+        v += texBoost * r.texLevel * 3.0 * tn * att * std::exp(-t / (r.texDecay * scale));
         v += r.grainLevel * 4.0 * grainBand(uni(rng)) * grainEnv[i];
         if (scrape > 0) v += scrape * 2.5 * scrapeBand(uni(rng)) * std::min(1.0, t / 0.004) * std::exp(-t / 0.035);
         // fade the last 8 ms so no clip ends on a step

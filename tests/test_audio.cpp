@@ -635,6 +635,30 @@ TEST_CASE(footsteps_sound_different_on_every_ground) {
     CHECK(closest > 0.15);   // no two grounds sound alike
 }
 
+TEST_CASE(a_pavement_step_is_a_low_thud) {
+    // #98 round 2 ("still sounds like I'm walking on spindly legs"): measured against a CC0 recording of shoes on
+    // concrete (Kenney Impact Sounds, footstep_concrete_000-004): centroid 160-360 Hz, energy 160-640 Hz, ~2% over
+    // 1.25 kHz. Ours had its centroid at 2.7-4.8 kHz. Gate: sidewalk and asphalt steps centred under 600 Hz with
+    // under 8% of the energy over 1.25 kHz.
+    const uint32_t rate = 48000;
+    for (sfx::Ground g : {sfx::Ground::Asphalt, sfx::Ground::Concrete}) {
+        for (uint32_t seed : {1u, 2u, 3u, 4u}) {
+            const auto f = sfx::footstep(g, rate, seed);
+            // centroid by zero-crossing-free means: energy-weighted band split with one-pole low-passes
+            double lo = 0, hi = 0, total = 0, yl = 0, yh = 0;
+            const double al = 1 - std::exp(-6.283185307 * 600.0 / rate), ah = 1 - std::exp(-6.283185307 * 1250.0 / rate);
+            for (float x : f) {
+                yl += al * (x - yl); yh += ah * (x - yh);
+                lo += yl * yl; hi += (x - yh) * (x - yh); total += double(x) * x;
+            }
+            std::printf("    [pavement] %-8s seed %u  under 600 Hz %.0f%%  over 1.25 kHz %.1f%%\n", sfx::groundName(g), seed,
+                        100 * lo / total, 100 * hi / total);
+            CHECK(lo / total > 0.6);
+            CHECK(hi / total < 0.08);
+        }
+    }
+}
+
 TEST_CASE(a_drop_lands_heavier_and_lower_than_a_hop) {
     // #63's gate: "a 1 m hop and a 5 m drop sound different; landing on grass vs rock differs".
     const uint32_t rate = 48000;

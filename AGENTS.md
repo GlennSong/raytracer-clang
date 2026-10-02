@@ -324,6 +324,14 @@ follow along and review.
   Never end a visual change with only "verified, suite green" — end it with
   "open X, look at Y, you'll see Z."
 
+## Credits (Agent Rule)
+
+Anything made by someone else that enters the repo, the build or a calibration gets a line in
+[CREDITS.md](CREDITS.md) in the same commit, with what it is, what it's for, its author or source,
+and its licence. That includes libraries, fonts, data files, CC0 assets, and recordings, photos or
+datasets used only to measure against. CC0 is no exception: it doesn't require attribution, but we
+record it anyway.
+
 ## Branches and Worktrees (Agent Rule)
 
 **Glenn, 2026-09-20: "If we close a branch, even if we haven't deleted it yet, it should
