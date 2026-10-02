@@ -292,7 +292,11 @@ void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s
         // normal map now, per texel, instead of four corner normals smoothed across the card
         const Vec3 plane = normalize(cross(side, Vec3(0, 1, 0)));
         const Vec3 n[4] = {plane, plane, plane, plane};
-        const double uv[4][2] = {{s.u0, s.v1}, {s.u1, s.v1}, {s.u1, s.v0}, {s.u0, s.v0}};
+        // the crossed card shows the tree TURNED a quarter (Glenn, 2026-10-02: "the tree cards in the distance are
+        // still pretty visibly tree cards"): one picture on both cards repeated the same silhouette twice
+        const bool second = k == 1 && s.sv0 >= 0.0;
+        const double va = second ? s.sv0 : s.v0, vb = second ? s.sv1 : s.v1;
+        const double uv[4][2] = {{s.u0, vb}, {s.u1, vb}, {s.u1, va}, {s.u0, va}};
         quad(p, n, side, uv);
     }
     // the top card, at the crown's broadest, facing up (x -> u, z -> v, turned by the yaw)

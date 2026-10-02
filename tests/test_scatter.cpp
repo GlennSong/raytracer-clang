@@ -383,8 +383,24 @@ TEST_CASE(quay_wall_has_a_top_and_a_back_and_faces_the_way_it_is_wound) {
     engine::HydroParams hp;
     hp.half = 600; hp.cell = 8; hp.seaLevel = 0; hp.riverArea = 60000;
     auto hy = engine::Hydrology::build(ground, hp);
-    const engine::RenderMesh q = hy->quayMesh([](double, double) { return true; }, ground, 0.8);
+    engine::RenderMesh coping;
+    const engine::RenderMesh q = hy->quayMesh([](double, double) { return true; }, ground, 0.8, &coping);
     CHECK(!q.indices.empty());
+    CHECK(!coping.indices.empty());
+    // RECTILINEAR (Glenn: "brick texture but then sloped tops ... It should be rectilinear"): every top face is level
+    // -- the coping's top and the wall's own top are horizontal, whatever the bank does
+    int slopedTops = 0, copeTops = 0;
+    for (const engine::RenderMesh* m : {&q, static_cast<const engine::RenderMesh*>(&coping)})
+        for (std::size_t i = 0; i + 2 < m->indices.size(); i += 3) {
+            const engine::Vertex& A = m->vertices[m->indices[i]];
+            if (A.normal.y < 0.9) continue;
+            const double y0 = A.position.y, y1 = m->vertices[m->indices[i + 1]].position.y, y2 = m->vertices[m->indices[i + 2]].position.y;
+            if (std::fabs(y0 - y1) > 1e-6 || std::fabs(y0 - y2) > 1e-6) ++slopedTops;
+            if (m == &coping) ++copeTops;
+        }
+    std::printf("    quay: %d coping tops, %d sloped tops\n", copeTops, slopedTops);
+    CHECK(copeTops > 0);
+    CHECK(slopedTops == 0);
     int up = 0, front = 0, back = 0, misWound = 0, tris = 0;
     for (std::size_t i = 0; i + 2 < q.indices.size(); i += 3) {
         const engine::Vertex& A = q.vertices[q.indices[i]];

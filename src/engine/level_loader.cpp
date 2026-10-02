@@ -1899,9 +1899,21 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             var.leaves = assets.acquireMesh(var.tree.foliage, key + ":leaves");
         }
     }
-    // THE IMPOSTOR ATLAS: a column per variant, the side picture over the top picture
+    // THE IMPOSTOR ATLAS: a column per variant, two side pictures (the second the tree turned a quarter, for the
+    // crossed card) over the top picture
     const int cw = 128, sh = 256, th = 128, colourScale = 3;
-    const int aw = cw * nVar, ah = sh + th;
+    const int aw = cw * nVar, ah = 2 * sh + th;
+    // the tree turned 90 deg about +y, (x, z) -> (z, -x): its side picture is the view the crossed card faces
+    auto turned = [](const RealTree& t) {
+        RealTree r = t;
+        for (RenderMesh* m : {&r.bark, &r.foliage})
+            for (Vertex& v : m->vertices) {
+                v.position = Vec3(v.position.z, v.position.y, -v.position.x);
+                v.normal = Vec3(v.normal.z, v.normal.y, -v.normal.x);
+                v.tangent = Vec3(v.tangent.z, v.tangent.y, -v.tangent.x);
+            }
+        return r;
+    };
     std::vector<uint8_t> atlas(static_cast<std::size_t>(aw) * ah * 4, 0);
     std::vector<uint8_t> normalAtlas(static_cast<std::size_t>(aw) * ah * 4, 0);   // #93: the crowns' normals
     for (std::size_t q = 0; q < normalAtlas.size(); q += 4) { normalAtlas[q] = 128; normalAtlas[q + 1] = 128; normalAtlas[q + 2] = 255; normalAtlas[q + 3] = 255; }
@@ -1912,9 +1924,11 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         uint8_t* col = atlas.data() + static_cast<std::size_t>(i) * cw * 4;
         uint8_t* nrm = normalAtlas.data() + static_cast<std::size_t>(i) * cw * 4;
         renderImpostor(var.tree, folData[var.species], false, cw, sh, colourScale, col, aw * 4, nrm);
+        const std::size_t row2 = static_cast<std::size_t>(sh) * aw * 4, rowTop = static_cast<std::size_t>(2 * sh) * aw * 4;
+        renderImpostor(turned(var.tree), folData[var.species], false, cw, sh, colourScale, col + row2, aw * 4, nrm + row2);
         const bool topNormals = !(normalsMode && std::string(normalsMode) == "side");
-        renderImpostor(var.tree, folData[var.species], true, cw, th, colourScale, col + static_cast<std::size_t>(sh) * aw * 4, aw * 4,
-                       topNormals ? nrm + static_cast<std::size_t>(sh) * aw * 4 : nullptr);
+        renderImpostor(var.tree, folData[var.species], true, cw, th, colourScale, col + rowTop, aw * 4,
+                       topNormals ? nrm + rowTop : nullptr);
         ImpostorSlot& sl = var.slot;
         const double half = var.tree.crownRadius * 1.18 + 0.5;   // renderImpostor's framing
         sl.halfW = half;
@@ -1923,8 +1937,9 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         const double eps = 0.5;
         sl.u0 = (i * cw + eps) / aw; sl.u1 = ((i + 1) * cw - eps) / aw;
         sl.v0 = eps / ah; sl.v1 = (sh - eps) / ah;
+        sl.sv0 = (sh + eps) / ah; sl.sv1 = (2 * sh - eps) / ah;
         sl.tu0 = sl.u0; sl.tu1 = sl.u1;
-        sl.tv0 = (sh + eps) / ah; sl.tv1 = (sh + th - eps) / ah;
+        sl.tv0 = (2 * sh + eps) / ah; sl.tv1 = (2 * sh + th - eps) / ah;
     }
     const TextureHandle atlasTex = renderer.uploadTexture(aw, ah, 4, atlas.data());
     const TextureHandle normalAtlasTex = renderer.uploadTexture(aw, ah, 4, normalAtlas.data());
@@ -4449,7 +4464,10 @@ bool LevelLoader::load(const std::string& path,
                 for (const engine::Poly2& bl : g_lanes.blocks) rings.push_back(bl);
                 const engine::roads::lanes::PreparedSet city(
                     engine::roads::lanes::offsetSet(engine::roads::lanes::unionRings(rings), 35.0));
-                RenderMesh qm = hy.quayMesh([&city](double x, double z) { return city.contains(Vec2(x, z)); }, levelGround);
+                RenderMesh coping;
+                // a 0.9 m parapet: at 0.6 the character's 0.55 m step-up walked straight over it into the water
+                RenderMesh qm = hy.quayMesh([&city](double x, double z) { return city.contains(Vec2(x, z)); }, levelGround,
+                                            0.9, &coping);
                 if (!qm.vertices.empty()) {
                     RenderMaterial qmat;
                     qmat.albedo = Vec3(1, 1, 1);
@@ -4468,14 +4486,46 @@ bool LevelLoader::load(const std::string& path,
                     qr.material = qmat;
                     qr.mesh = assets.acquireMesh(qm, "hydro:quays");
                     world.add<Renderable>(qe, qr);
+                    // THE COPING (Glenn: "some kind of lining of bricks on the top to make it look finished"): the same
+                    // masonry at a third of the scale -- bricks on edge, about 0.27 x 0.13 m -- a shade lighter.
+                    if (!coping.vertices.empty()) {
+                        RenderMaterial cmat = qmat;
+                        cmat.triplanarScale = 0.8f;
+                        cmat.albedo = Vec3(1.12, 1.08, 1.02);
+                        cmat.roughness = 0.8f;
+                        cmat.variation = 0.2f;
+                        const Entity ce = world.create();
+                        world.add<Transform>(ce, Transform{});
+                        world.add<PrevTransform>(ce, PrevTransform{Transform{}});
+                        Renderable cr;
+                        cr.material = cmat;
+                        cr.mesh = assets.acquireMesh(coping, "hydro:quay_coping");
+                        world.add<Renderable>(ce, cr);
+                    }
+                    // COLLISION (Glenn: "there's no collision and I slid right through into the lake"): the wall and its
+                    // coping as one static mesh, as the road retaining walls have
+                    {
+                        MeshCollider mc;
+                        mc.vertices.reserve(qm.vertices.size() + coping.vertices.size());
+                        for (const Vertex& v : qm.vertices) mc.vertices.push_back(v.position);
+                        mc.indices = qm.indices;
+                        const uint32_t off = static_cast<uint32_t>(qm.vertices.size());
+                        for (const Vertex& v : coping.vertices) mc.vertices.push_back(v.position);
+                        for (uint32_t ix : coping.indices) mc.indices.push_back(ix + off);
+                        mc.friction = 0.9;
+                        mc.surface = ColliderSurface::Concrete;   // dressed stone underfoot: the pavement step
+                        world.add<MeshCollider>(qe, mc);
+                    }
                     // and where to go and look: the quay point nearest the player's start
                     Vec3 from(0, 0, 0);
                     if (g_levelRoot.contains("player") && g_levelRoot["player"].contains("position")) {
                         const auto& pp = g_levelRoot["player"]["position"];
                         if (pp.is_array() && pp.size() >= 3) from = Vec3(pp[0].get<double>(), pp[1].get<double>(), pp[2].get<double>());
                     }
-                    Vec3 near = qm.vertices.front().position;
-                    for (const Vertex& v : qm.vertices)
+                    // (the coping's vertices: the wall's top, so the point named is one you can see)
+                    const RenderMesh& look = coping.vertices.empty() ? qm : coping;
+                    Vec3 near = look.vertices.front().position;
+                    for (const Vertex& v : look.vertices)
                         if ((v.position - from).lengthSquared() < (near - from).lengthSquared()) near = v.position;
                     std::fprintf(stderr, "[hydrology] quays: %zu verts; nearest the player's start at (%.0f, %.1f, %.0f)\n",
                                  qm.vertices.size(), near.x, near.y, near.z);
@@ -6194,7 +6244,7 @@ bool LevelLoader::load(const std::string& path,
                 // COMMIT takes the chunk already uploaded: in place (spawnChunk) or converted on a
                 // residency worker and only copied here (the streamed cells, ADR-0096).
                 std::function<Entity(std::size_t, MeshHandle, const Vec3&, double, double, bool)> commitChunk =
-                    [protoFor, worldP](
+                    [protoFor, worldP, renderCell](
                         std::size_t slot, MeshHandle mesh, const Vec3& centroid, double minDist, double drawDist, bool scaleSmallParts) -> Entity {
                     World& world = *worldP;
                     const std::size_t pi = engine::baseSlot(slot);
@@ -6202,6 +6252,7 @@ bool LevelLoader::load(const std::string& path,
                     Renderable r = pp.proto;
                     if (drawDist > 0) r.drawDistance = drawDist * pp.ddScale;
                     r.minDistance = minDist;
+                    r.lodCell = renderCell > 0 ? renderCell : 250.0;   // every part of the cell swaps together
                     r.drawClass = engine::DrawClass::Structure;
                     r.mesh = mesh;   // world-space, unkeyed
                     Entity e = world.create();
@@ -6460,6 +6511,7 @@ bool LevelLoader::load(const std::string& path,
                     r.material.metallic = 0.0f;
                     r.material.emissiveMap = litWindows;
                     r.minDistance = dd;
+                    r.lodCell = cell;   // swaps with the cell's facades (render_system lockstep)
                     r.mesh = assets.acquireMesh(pmesh, "");
                     Entity e = world.create();
                     Transform t;

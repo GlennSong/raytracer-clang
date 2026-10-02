@@ -142,6 +142,12 @@ struct Renderable {
     // detail chunk fades. 0 = defer to DrawPolicy via drawClass below.
     Real drawDistance = 0;
     Real minDistance = 0;
+    // LOCKSTEP TIERS (Glenn, 2026-10-02: "parts of buildings disappear ... then pop in later when I move closer").
+    // lodCell > 0: the distance tests above measure to the centre of the lodCell-square the bounds centre falls in
+    // (and vertically to the bounds' height span), so every part of a city cell -- walls, glass, trim, crowns, the
+    // flat facades, the mass-box proxy -- swaps tiers at the same moment. Measured to each chunk's own centre,
+    // a part's detail chunk could be past detailDistance while its flat chunk was still inside it: neither drew.
+    Real lodCell = 0;
     // Content class. An explicit drawDistance above still wins (the HLOD chunks
     // compute theirs); this is what everything else resolves through.
     DrawClass drawClass = DrawClass::Unset;

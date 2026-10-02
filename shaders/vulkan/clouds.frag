@@ -63,8 +63,14 @@ float clLayerHeight(vec3 p) {
 // the base texture's perlin-worley R at ~140x the billow scale — formations
 // and true gaps, with the tile period beyond the march distance. Fixed
 // mid-slice: the field must not swim as the ray climbs the slab.
+// THE WIND moves the WHOLE field (#59, Glenn: "the clouds still wobble"): only the billow noise used to drift,
+// through a coverage map pinned to the ground, so every cloud stood still while its insides churned through it --
+// clouds that boil and wobble in place. Now the weather map, the shape and the detail all ride the same wind:
+// a cloud drifts across the sky as one body; the detail runs a little ahead, so its edges still evolve, slowly.
+vec3 clWind() { return vec3(u.params.w * u.skyAmbient.w, 0.0, 0.0); }
+
 float clWeather(vec2 xz) {
-    vec2 q = xz * (u.params.z * 0.035);
+    vec2 q = (xz + clWind().xz) * (u.params.z * 0.035);
     return texture(baseNoise, vec3(q.x, 0.37, q.y)).r;
 }
 
@@ -86,7 +92,7 @@ float clDensity(vec3 p, float detailFade) {
     float hf = clLayerHeight(p);
     if (hf <= 0.0 || hf >= 1.0) return 0.0;
     float profile = smoothstep(0.0, 0.15, hf) * smoothstep(1.0, 0.55, hf);
-    vec3 wind = vec3(u.params.w * u.skyAmbient.w, 0.0, 0.0);
+    vec3 wind = clWind();
     vec3 q = (p + wind) * u.params.z;
     // Base shape: R = perlin-worley, GBA = worley fBm at rising frequency.
     vec4 nse = texture(baseNoise, q * 0.25);
@@ -96,7 +102,7 @@ float clDensity(vec3 p, float detailFade) {
     float d = clamp((base - (1.0 - cov)) / max(1e-3, cov), 0.0, 1.0);
     // Edge erosion: subtract high-frequency worley scaled by (1 - d), so
     // interiors stay solid and edges wisp away.
-    vec3 det = texture(detailNoise, q * 2.0).rgb;
+    vec3 det = texture(detailNoise, (q + wind * (0.08 * u.params.z) + vec3(0.0, 0.002 * u.skyAmbient.w * u.params.z, 0.0)) * 2.0).rgb;
     float detailFbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
     d = clamp(d - detailFbm * u.detail.x * detailFade * (1.0 - d), 0.0, 1.0);
     return d * profile * u.params.y;

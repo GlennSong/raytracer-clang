@@ -911,6 +911,13 @@ void main() {
         // (and tree cards, FLAG_LOD_BAND: a far crown's needles average away the same way)
         if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19))) != 0u)
             cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
+        // an impostor's TOP card seen edge-on is a bright dash through the crown (Glenn: "the tree cards in the
+        // distance are still pretty visibly tree cards" -- a far forest striped with them): it thins away as
+        // the view grazes it, gone under ~7 deg, whole from ~25 deg up; the side cards carry the crown there
+        if ((pc.surfaceFlags.y & (1u << 19)) != 0u && (texFlags & 4u) != 0u && abs(inWorldNormal.y) > 0.9) {
+            const float s = abs(normalize(g.cameraPosition.xyz - inWorldPos).y);
+            cut *= smoothstep(0.12, 0.42, s);
+        }
         if ((pc.surfaceFlags.y & 2u) != 0u && cut < 0.5) discard;
         if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;
     }
@@ -928,10 +935,18 @@ void main() {
     // off"): a card lit by its own flat normal shows its orientation -- each blade or leaf plane a different shade,
     // its back face dark. Face the normal at the viewer, then BEND it: grass mostly to the sky (a meadow shades as
     // one soft surface, like the ground it grows on), tree cards part way (a crown keeps some shape).
+    // A tree card WITH a normal picture (the far impostors) is not flipped here: its picture is decoded in the card's
+    // own frame below, then mirrored through the card when seen from behind (the old flip-first frame turned the
+    // picture's "up" DOWN on every back face -- half the cards on screen lit upside down).
+    bool impostorCard = false, cardBack = false;
+    vec3 cardN = N;
     {
         const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u;
         const bool leafCard = (pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u);
-        if (grassCard || leafCard) {
+        if (leafCard && (texFlags & 4u) != 0u) {
+            impostorCard = true;
+            cardBack = dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0;
+        } else if (grassCard || leafCard) {
             if (dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) N = -N;
             N = normalize(mix(N, vec3(0.0, 1.0, 0.0), grassCard ? 0.7 : 0.45));
         }
@@ -986,6 +1001,10 @@ void main() {
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
         N = normalize(T * tsN.x + B * tsN.y + N * tsN.z);
+        if (impostorCard) {
+            if (cardBack) N -= 2.0 * dot(N, cardN) * cardN;   // the crown from behind: sides still out, top still up
+            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.2));   // a little sky, as the near crowns get
+        }
     }
 
     // TOP LAYER (material feature): moss / snow / dust on faces that look up, broken by noise and

@@ -110,6 +110,7 @@ Seat seatOnGround(const std::function<double(double, double)>& ground, double x,
 // One tree variant's impostor slot in the atlas, and the tree's measures (unit scale).
 struct ImpostorSlot {
     double u0 = 0, v0 = 0, u1 = 1, v1 = 1;     // side picture
+    double sv0 = -1, sv1 = -1;                  // the SECOND side picture's rows (the tree turned 90 deg); < 0: none
     double tu0 = 0, tv0 = 0, tu1 = 1, tv1 = 1; // top picture
     double halfW = 1.0, height = 1.0, crownBase = 0.0;
 };

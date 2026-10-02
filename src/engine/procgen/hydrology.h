@@ -98,9 +98,11 @@ public:
     std::vector<std::vector<Vec2>> corridorRings(double margin) const;
     // QUAYS (ADR-0104): a stone wall along the rivers' edges where `where` says (a city's blocks),
     // from under the water up to a parapet `parapet` above the bank (`ground`, the drawn ground):
-    // one two-sided strip per stretch, u along the wall (m), v up. Lakes get none.
+    // one two-sided strip per stretch, u along the wall (m), v up. Lakes get none. The top is LEVEL, stepping between
+    // stretches, under a coping course written to `coping` when given (its own stone), else into the wall's mesh.
     RenderMesh quayMesh(const std::function<bool(double, double)>& where,
-                        const std::function<double(double, double)>& ground, double parapet = 0.6) const;
+                        const std::function<double(double, double)>& ground, double parapet = 0.6,
+                        RenderMesh* coping = nullptr) const;
 
     const std::vector<River>& rivers() const { return rivers_; }
     const std::vector<Lake>& lakes() const { return lakes_; }

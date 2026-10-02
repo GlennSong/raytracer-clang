@@ -321,7 +321,13 @@ void RenderSystem::render(FrameContext& ctx) {
             // measured to the bounds centre so the pair swaps in lockstep.
             const Real drawDist = resolveDistance(r.drawDistance, r.drawClass);
             if (drawDist > 0 || r.minDistance > 0) {
-                const Vec3 c = (worldMin + worldMax) * 0.5;
+                Vec3 c = (worldMin + worldMax) * 0.5;
+                if (r.lodCell > 0) {
+                    // the cell's centre, the camera's own height clamped into the chunk's span
+                    c.x = (std::floor(c.x / r.lodCell) + 0.5) * r.lodCell;
+                    c.z = (std::floor(c.z / r.lodCell) + 0.5) * r.lodCell;
+                    c.y = std::clamp(cam.position.y, worldMin.y, worldMax.y);
+                }
                 const Real dist = (c - cam.position).length();
                 if (drawDist > 0 && dist > drawDist) return;
                 if (r.minDistance > 0 && dist <= r.minDistance) return;
