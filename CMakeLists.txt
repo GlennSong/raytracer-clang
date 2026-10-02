@@ -134,6 +134,7 @@ add_library(engine_core STATIC
     src/engine/procgen/furniture_kit.cpp
     src/engine/procgen/furniture_library.cpp
     src/engine/interaction.cpp
+    src/engine/interact_broker.cpp
     src/engine/procgen/city/patch_fabric.cpp
     src/engine/procgen/city/city_footprint.cpp
     src/engine/procgen/city/arterial_skeleton.cpp
@@ -226,6 +227,7 @@ add_library(engine_core STATIC
     src/engine/systems/door_system.cpp
     src/engine/systems/elevator_system.cpp
     src/engine/systems/interaction_system.cpp
+    src/engine/systems/interact_broker_system.cpp
     src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp

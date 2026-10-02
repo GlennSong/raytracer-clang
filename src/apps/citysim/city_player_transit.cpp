@@ -1,4 +1,5 @@
 #include "city_player_transit.h"
+#include "../../engine/interact_broker.h"
 
 #include "bus_stop_props.h"   // routeColour / routeColourName
 #include "city_render.h"
@@ -74,8 +75,9 @@ void CityPlayerTransitSystem::onStart(engine::FrameContext& ctx) {
     // E) is unaffected: a hoistway is indoors and a bus is not, and the two are
     // never both in range. A separate key would have been safer and worse --
     // "press E at the thing" is the convention the level already teaches.
-    ctx.actions.bindButton("transit_board", engine::KeyCode::E);
-    ctx.actions.setActionContext("transit_board", engine::InputContext::OnFoot);
+    // E is the interaction broker's now (engine/interact_broker.h): transit OFFERS boarding / the saloon's verb and
+    // acts on the broker's command, so one press can never also call a lift or sit on a bench.
+    (void)ctx;
 }
 
 void CityPlayerTransitSystem::fixedUpdate(engine::FrameContext& ctx) {
@@ -354,7 +356,75 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
 }
 
 void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
-    if (ctx.actions.pressed("transit_board")) boardEdge_ = true;
+    {
+        Entity player;
+        ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) {
+            if (!player.valid()) player = e;
+        });
+        engine::InteractCommand cmd;
+        if (player.valid() && engine::takeInteractCommand(ctx.world, player, "transit", cmd)) boardEdge_ = true;
+        if (player.valid() && !ctx.world.has<engine::InVehicle>(player)) {
+            const Transform* pt = ctx.world.get<Transform>(player);
+            const CitySim& sim0 = city_.sim();
+            engine::InteractOffer o;
+            o.provider = "transit";
+            o.needsSight = false;
+            if (riding_ >= 0 && sim0.isBus(riding_)) {
+                // ON THE BUS: the saloon's verb (sit down, stand up, get off), where you stand.
+                const std::string pr = busPrompt_;
+                if (pr.rfind("E: ", 0) == 0 && pt) {
+                    o.tap = pr.substr(3);
+                    o.name = "bus";
+                    o.inVolume = true;
+                    o.exclusive = true;
+                    o.anchor = pt->position;
+                    engine::offerInteraction(ctx.world, player, o);
+                }
+            } else if (riding_ >= 0) {
+                o.tap = "get out";
+                o.name = "cab";
+                o.exclusive = true;
+                o.anchor = pt ? pt->position : engine::Vec3(0, 0, 0);
+                engine::offerInteraction(ctx.world, player, o);
+            } else if (pt) {
+                // ON FOOT: the nearest stopped bus or cab within reach, from outdoors.
+                boardScanT_ -= ctx.frameDelta;
+                if (boardScanT_ <= 0) {
+                    boardScanT_ = 0.25;
+                    boardAgent_ = -1;
+                    bool indoors = false;
+                    ctx.world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& cb) {
+                        if (!indoors && cb.recordAt(Vec2(pt->position.x, pt->position.z), pt->position.y)) indoors = true;
+                    });
+                    if (!indoors) {
+                        const std::vector<Agent>& ag = sim0.agents();
+                        Real bestD = kBoardRadius;
+                        for (std::size_t i = 0; i < ag.size(); ++i) {
+                            const int ai = static_cast<int>(i);
+                            if (!(sim0.isBus(ai) || sim0.isTaxi(ai)) || ag[i].speed > 2.0) continue;
+                            const Real dx = ag[i].pos.x - pt->position.x, dz = ag[i].pos.y - pt->position.z;
+                            const Real d = std::sqrt(dx * dx + dz * dz);
+                            if (d < bestD) {
+                                bestD = d;
+                                boardAgent_ = ai;
+                                boardAt_ = engine::Vec3(ag[i].pos.x, city_.groundHeightAt(ag[i].pos.x, ag[i].pos.y) + 1.6,
+                                                        ag[i].pos.y);
+                            }
+                        }
+                    }
+                }
+                if (boardAgent_ >= 0) {
+                    const bool bus = sim0.isBus(boardAgent_);
+                    o.tap = bus ? "board the bus" : "get in the cab";
+                    o.name = bus ? "bus" : "cab";
+                    o.key = static_cast<uint64_t>(boardAgent_);
+                    o.anchor = boardAt_;
+                    o.reach = kBoardRadius;
+                    engine::offerInteraction(ctx.world, player, o);
+                }
+            }
+        }
+    }
     city_.setPlayerRidingAgent(riding_);
     hud_ = Hud{};
     const CitySim& sim = city_.sim();

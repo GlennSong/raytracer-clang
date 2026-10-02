@@ -74,6 +74,7 @@ public:
         int selected = 0;   // the storey picked on the panel
         int floors = 0;     // storeys in the building
         Real speed = 0;     // the rider's cab, m/s (the hum's level)
+        Vec3 anchor{0, 0, 0};   // where the interaction marker goes: the door you stand at, or your cab's door
     };
     // What happened this step, for the sound (fixedUpdate plays them; the headless step only records).
     enum class Sfx : uint8_t { Button, Doors, DingUp, DingDown };

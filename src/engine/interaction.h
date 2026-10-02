@@ -68,6 +68,12 @@ InteractChoice findInteraction(const std::vector<std::pair<Entity, const Interac
                                const FurnitureLibrary& lib, const Vec3& feet, const Vec3& forward,
                                Real reach = 1.8);
 
+// ONE piece's verbs from where someone stands: the primary (nearest free use of the entry's first verb kind) and the
+// secondary (nearest free use of any other kind) within `reach`, and `anchor` -- where the tap's verb puts the
+// body, in the world (the hold's if there is no tap). False when nothing on it is in reach and free.
+bool pieceVerbs(const Interactables& set, uint32_t pi, const FurnitureLibrary& lib, const Vec3& feet, Real reach,
+                int& primary, int& secondary, Vec3& anchor, Real& distance);
+
 // Take verb `vi` on piece `pi` of `set` for a user: marks its spots and fills `out`. False if taken meanwhile.
 bool takeInteraction(Interactables& set, Entity setEntity, uint32_t pi, int vi, const FurnitureLibrary& lib,
                      Seated& out);

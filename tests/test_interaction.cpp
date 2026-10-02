@@ -4,8 +4,10 @@
 #include "test_framework.h"
 
 #include "../src/engine/interaction.h"
+#include "../src/engine/interact_broker.h"
 #include "../src/engine/procgen/furniture_kit.h"
 #include "../src/engine/procgen/furniture_library.h"
+#include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/scripting/furniture_library_lua.h"
 #include <cmath>
 #include <cstdio>
@@ -111,4 +113,94 @@ TEST_CASE(a_malformed_furniture_library_is_refused) {
     CHECK(!loadFurnitureLibrarySource(
         "furniture_library = { sofa = { spots = { { id = 'a', at = {0,0.5,0.5} } }, verbs = { { verb = 'dance', spots = { 'a' } } } } }",
         lib, &err));
+}
+
+// THE BROKER'S CHOICE (Glenn, 2026-10-01: "E sounds like it's a universal interaction button ... highlight things
+// close to you or if you're in a volume"): of the offers in reach, the one you look at wins over a nearer one beside
+// you; a volume you stand in needs no look; an exclusive offer hides the rest; a wall hides what is behind it.
+TEST_CASE(the_interaction_broker_focuses_what_you_look_at) {
+    const Vec3 feet(0, 0, 0), eye(0, 1.6, 0);
+    auto offer = [](const char* name, Vec3 at) {
+        InteractOffer o;
+        o.provider = "test";
+        o.name = name;
+        o.tap = "use";
+        o.anchor = at;
+        return o;
+    };
+    std::vector<InteractOffer> offers = {offer("near_left", Vec3(-0.9, 0.6, -0.4)), offer("ahead", Vec3(0, 0.6, -1.6)),
+                                         offer("behind", Vec3(0, 0.6, 1.5)), offer("far", Vec3(0, 0.6, -6))};
+    std::vector<RankedOffer> r = rankInteractions(offers, feet, eye, Vec3(0, -0.4, -1));
+    CHECK(r.size() == 1);   // behind you, out of reach, and 66 degrees off to the side are not candidates
+    CHECK(offers[r[0].index].name == std::string("ahead"));
+    r = rankInteractions(offers, feet, eye, Vec3(-1, -0.6, -0.3));
+    CHECK(!r.empty() && offers[r[0].index].name == std::string("near_left"));
+    // BEHIND and below, looking a little down: a 3D cone would take it (the seat sits far below the eye); facing
+    // does not (the live shot that focused a sofa behind the player)
+    {
+        const std::vector<InteractOffer> behind = {offer("behind_low", Vec3(0.7, 0.55, 0.65))};
+        CHECK(rankInteractions(behind, feet, eye, Vec3(0, -0.45, -1)).empty());
+    }
+    // a volume you stand in: no look needed, and it outranks a point beside it
+    InteractOffer lift = offer("lift", Vec3(0, 1.4, 3));
+    lift.inVolume = true;
+    offers.push_back(lift);
+    r = rankInteractions(offers, feet, eye, Vec3(1, 0, 0));
+    CHECK(!r.empty() && offers[r[0].index].name == std::string("lift"));
+    // exclusive: only it
+    InteractOffer stand = offer("stand", eye);
+    stand.exclusive = true;
+    offers.push_back(stand);
+    r = rankInteractions(offers, feet, eye, Vec3(0, 0, -1));
+    CHECK(r.size() == 1 && offers[r[0].index].name == std::string("stand"));
+    offers.pop_back();
+    // a wall: whatever lies past z = -1 is hidden
+    auto wall = [](const Vec3& e, const Vec3& a, void*) { return e.z > -1.0 && a.z < -1.0; };
+    r = rankInteractions(offers, feet, eye, Vec3(0, -0.4, -1), wall, nullptr);
+    for (const RankedOffer& k : r) CHECK(offers[k.index].name != std::string("ahead"));
+}
+
+TEST_CASE(the_interaction_marker_projects_onto_the_screen) {
+    Real sx = 0, sy = 0;
+    // straight ahead: the centre
+    CHECK(projectToScreen(Vec3(0, 0, -5), Vec3(0, 0, 0), Vec3(0, 0, -1), Vec3(0, 1, 0), 60, 16.0 / 9.0, 1600, 900, sx, sy));
+    CHECK(std::fabs(sx - 800) < 1e-6 && std::fabs(sy - 450) < 1e-6);
+    // up and to the right: right of centre, above it
+    CHECK(projectToScreen(Vec3(1, 1, -5), Vec3(0, 0, 0), Vec3(0, 0, -1), Vec3(0, 1, 0), 60, 16.0 / 9.0, 1600, 900, sx, sy));
+    CHECK(sx > 800 && sy < 450);
+    // behind: not on screen
+    CHECK(!projectToScreen(Vec3(0, 0, 5), Vec3(0, 0, 0), Vec3(0, 0, -1), Vec3(0, 1, 0), 60, 16.0 / 9.0, 1600, 900, sx, sy));
+}
+
+// THE TOILET (Glenn: "Don't forget the toilet. Lol you should be able to sit on that"). A real apartment floor, grown
+// as the city grows it: every bathroom's toilet is in the floor's interactive set, and standing in front of one,
+// looking at it, the offer is to sit.
+TEST_CASE(you_can_sit_on_the_toilet) {
+    const FurnitureLibrary lib = shippedLibrary();
+    const Poly2 plan = {{0, 0}, {44, 0}, {44, 32}, {0, 32}};
+    BuildingParams p;
+    p.floors = 24; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = 33;
+    p.residential = true;
+    const BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, 6, 7);
+    Interactables set;
+    for (const PlacedPiece& pp : bm.furniture)
+        if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+    set.refreshBounds();
+    int toilets = 0, offered = 0;
+    for (std::size_t i = 0; i < set.pieces.size(); ++i) {
+        if (set.pieces[i].piece != static_cast<uint8_t>(Piece::Toilet)) continue;
+        ++toilets;
+        const Mat4& m = set.pieces[i].xform;
+        // standing in front of the bowl, on its floor
+        const Vec3 front = piecePoint(m, Vec3(0, 0, 1.2));
+        int prim = -1, sec = -1;
+        Vec3 at;
+        Real d = 0;
+        if (pieceVerbs(set, static_cast<uint32_t>(i), lib, front, 1.8, prim, sec, at, d) && prim >= 0 &&
+            lib.find(Piece::Toilet)->verbs[static_cast<std::size_t>(prim)].verb == Verb::Sit)
+            ++offered;
+    }
+    std::printf("    [toilet] %d toilets on the floor, %d offer a seat\n", toilets, offered);
+    CHECK(toilets > 0);
+    CHECK(offered == toilets);
 }

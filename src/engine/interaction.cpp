@@ -39,6 +39,32 @@ Vec3 verbCentre(const FurnitureAsset& a, const FurnVerb& v) {
 
 }  // namespace
 
+bool pieceVerbs(const Interactables& set, uint32_t pi, const FurnitureLibrary& lib, const Vec3& feet, Real reach,
+                int& primary, int& secondary, Vec3& anchor, Real& distance) {
+    primary = secondary = -1;
+    if (pi >= set.pieces.size()) return false;
+    const InteractPiece& ip = set.pieces[pi];
+    const FurnitureAsset* a = lib.find(static_cast<Piece>(ip.piece));
+    if (!a || a->verbs.empty()) return false;
+    const Vec3 o(ip.xform.m[0][3], ip.xform.m[1][3], ip.xform.m[2][3]);
+    if (std::fabs(o.y - feet.y) > 1.2) return false;   // another floor
+    Real primD = 1e30, secD = 1e30;
+    Vec3 primAt, secAt;
+    for (std::size_t vi = 0; vi < a->verbs.size(); ++vi) {
+        const FurnVerb& v = a->verbs[vi];
+        if (!verbFree(v, ip.taken)) continue;
+        const Vec3 c = piecePoint(ip.xform, verbCentre(*a, v));
+        const Real d = Vec3(c.x - feet.x, 0, c.z - feet.z).length();
+        if (d > reach) continue;
+        if (v.verb == a->verbs[0].verb) { if (d < primD) { primD = d; primary = static_cast<int>(vi); primAt = c; } }
+        else if (d < secD) { secD = d; secondary = static_cast<int>(vi); secAt = c; }
+    }
+    if (primary < 0 && secondary < 0) return false;
+    anchor = primary >= 0 ? primAt : secAt;
+    distance = std::min(primD, secD);
+    return true;
+}
+
 InteractChoice findInteraction(const std::vector<std::pair<Entity, const Interactables*>>& sets,
                                const FurnitureLibrary& lib, const Vec3& feet, const Vec3& forward, Real reach) {
     InteractChoice best;
@@ -53,35 +79,22 @@ InteractChoice findInteraction(const std::vector<std::pair<Entity, const Interac
             feet.z > set->hi.z + pad || feet.y < set->lo.y - 3.0 || feet.y > set->hi.y + 3.0)
             continue;
         for (std::size_t pi = 0; pi < set->pieces.size(); ++pi) {
-            const InteractPiece& ip = set->pieces[pi];
-            const FurnitureAsset* a = lib.find(static_cast<Piece>(ip.piece));
-            if (!a || a->verbs.empty()) continue;
-            const Vec3 o(ip.xform.m[0][3], ip.xform.m[1][3], ip.xform.m[2][3]);
-            if (std::fabs(o.y - feet.y) > 1.2 || (Vec3(o.x - feet.x, 0, o.z - feet.z)).length() > reach + 2.5) continue;
             int prim = -1, sec = -1;
-            Real primD = 1e30, secD = 1e30, pieceScore = 1e30, pieceD = 1e30;
-            for (std::size_t vi = 0; vi < a->verbs.size(); ++vi) {
-                const FurnVerb& v = a->verbs[vi];
-                if (!verbFree(v, ip.taken)) continue;
-                const Vec3 c = piecePoint(ip.xform, verbCentre(*a, v));
-                Vec3 to(c.x - feet.x, 0, c.z - feet.z);
-                const Real d = to.length();
-                if (d > reach) continue;
-                const Real facing = d > 1e-6 ? (to.x * fw.x + to.z * fw.z) / d : 1.0;
-                if (d > 0.7 && facing < 0.25) continue;   // behind you: not what you're reaching for
-                const Real score = d - 0.5 * facing;
-                if (v.verb == a->verbs[0].verb) { if (d < primD) { primD = d; prim = static_cast<int>(vi); } }
-                else if (d < secD) { secD = d; sec = static_cast<int>(vi); }
-                if (score < pieceScore) { pieceScore = score; pieceD = d; }
-            }
-            if ((prim >= 0 || sec >= 0) && pieceScore < bestScore) {
-                bestScore = pieceScore;
+            Vec3 at;
+            Real d = 0;
+            if (!pieceVerbs(*set, static_cast<uint32_t>(pi), lib, feet, reach, prim, sec, at, d)) continue;
+            Vec3 to(at.x - feet.x, 0, at.z - feet.z);
+            const Real facing = d > 1e-6 ? (to.x * fw.x + to.z * fw.z) / std::max(Real(1e-6), to.length()) : 1.0;
+            if (d > 0.7 && facing < 0.25) continue;   // behind you: not what you're reaching for
+            const Real score = d - 0.5 * facing;
+            if (score < bestScore) {
+                bestScore = score;
                 best.set = ent;
                 best.setPtr = set;
                 best.piece = static_cast<uint32_t>(pi);
                 best.primary = prim;
                 best.secondary = sec;
-                best.distance = pieceD;
+                best.distance = d;
             }
         }
     }

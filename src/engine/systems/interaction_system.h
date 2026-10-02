@@ -3,29 +3,23 @@
 
 #include "../interaction.h"
 #include "../system.h"
-#include <string>
 
 namespace engine {
 
-// THE PLAYER'S INTERACTIONS with furniture (the furniture library, M1; engine/interaction.h). Each frame, on foot,
-// the best piece within reach that the camera faces (findInteraction over every Interactables set) and a prompt --
-// "E  sit   ·   hold E  lie down". TAP the interact key for the primary verb, HOLD it for the secondary. While the
-// player is Seated, PlayerSystem pins the camera to the pose's eye; any move key or E stands them up where they were.
+// FURNITURE as an interaction PROVIDER (the furniture library, M1; engine/interaction.h, interact_broker.h). Each
+// frame, on foot, every piece within reach with a free verb is OFFERED to the broker -- its anchor where the body
+// would go, the tap verb and the hold verb; the broker decides which one the player means. On the broker's command
+// the player sits or lies (Seated). While Seated the only offer is "stand up" (exclusive), and any move key stands
+// them up too, where they stood.
 class InteractionSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
-    void render(FrameContext& ctx) override;
 
-    static constexpr double HOLD_S = 0.4;   // hold this long for the secondary verb
+    static constexpr double REACH = 1.8;
 
 private:
     void standUp(FrameContext& ctx, Entity player);
-    InteractChoice choice_;
-    double holdT_ = 0;
-    bool holding_ = false;
-    bool holdFired_ = false;
-    std::string prompt_;
 };
 
 }  // namespace engine

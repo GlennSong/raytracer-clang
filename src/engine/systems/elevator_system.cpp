@@ -1,4 +1,5 @@
 #include "elevator_system.h"
+#include "../interact_broker.h"
 
 #include "physics_system.h"
 #include "../components.h"
@@ -67,8 +68,7 @@ RenderMaterial cabWall() {
 }  // namespace
 
 void ElevatorSystem::onStart(FrameContext& ctx) {
-    ctx.actions.bindButton("elevator_call", KeyCode::E);
-    ctx.actions.setActionContext("elevator_call", engine::InputContext::OnFoot);
+    // E is the interaction broker's (interact_broker.h): the lift OFFERS its call / go, and acts on the command.
     ctx.actions.bindButton("elevator_floor_up", KeyCode::Up);
     ctx.actions.bindButton("elevator_floor_down", KeyCode::Down);
     ctx.actions.bindButton("elevator_floor_ground", KeyCode::Left);
@@ -88,8 +88,29 @@ void ElevatorSystem::onStart(FrameContext& ctx) {
 }
 
 void ElevatorSystem::update(FrameContext& ctx) {
-    // Edges are frame-rate events; fixedUpdate consumes them.
-    if (ctx.actions.pressed("elevator_call")) callEdge_ = true;
+    // THE BROKER'S COMMAND (E at the lift) and this frame's OFFER: at a hoistway door, call that cab; in a cab,
+    // go to the floor picked (or open the doors at this one). Edges latch for fixedUpdate.
+    {
+        Entity player;
+        ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform&, ControlledBy&) { if (!player.valid()) player = e; });
+        InteractCommand cmd;
+        if (player.valid() && takeInteractCommand(ctx.world, player, "elevator", cmd)) callEdge_ = true;
+        if (player.valid() && !ctx.world.has<InVehicle>(player) && (status_.inCab || status_.atDoor)) {
+            InteractOffer o;
+            o.provider = "elevator";
+            o.name = "elevator";
+            o.anchor = status_.anchor;
+            o.inVolume = true;
+            o.needsSight = false;
+            if (status_.inCab)
+                o.tap = status_.moving ? std::string() : status_.selected != status_.floor
+                                                              ? "go to floor " + std::to_string(status_.selected)
+                                                              : "open the doors";
+            else
+                o.tap = "call the lift";
+            if (!o.tap.empty()) offerInteraction(ctx.world, player, o);
+        }
+    }
     // THE FLOOR PICKER: a press steps one floor (ten with Shift); held, it repeats after 0.35 s and speeds up
     // to ~30 floors a second; Left / Right go straight to the ground / the top.
     const int stepN = ctx.actions.held("elevator_fast") ? 10 : 1;
@@ -609,6 +630,12 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
 
     status_.inCab = inCab >= 0;
     status_.atDoor = atDoor >= 0;
+    if (inCab >= 0) {
+        status_.anchor = doorAt(b, static_cast<std::size_t>(inCab), 0);
+        status_.anchor.y = b.cabs[static_cast<std::size_t>(inCab)].y + 1.4;   // the door, riding with the cab
+    } else if (atDoor >= 0) {
+        status_.anchor = doorAt(b, static_cast<std::size_t>(atDoor), f);    // the door, 1.4 m up
+    }
     status_.floors = n;
     status_.selected = b.selected;
     if (inCab >= 0) {
@@ -634,11 +661,11 @@ void ElevatorSystem::render(FrameContext& ctx) {
         ImGui::Text("ELEVATOR   floor %d of %d", status_.floor, status_.floors - 1);
         if (status_.moving) ImGui::Text("moving to %d", status_.selected);
         else {
-            ImGui::Text("floor %d      E: go", status_.selected);
+            ImGui::Text("floor %d", status_.selected);
             ImGui::Text("Up / Down: pick (hold to run, Shift: 10)   Left / Right: ground / top");
         }
     } else {
-        ImGui::Text("ELEVATOR   floor %d      E: call", status_.floor);
+        ImGui::Text("ELEVATOR   floor %d", status_.floor);
     }
     ImGui::End();
 #else

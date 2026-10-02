@@ -14,6 +14,7 @@
 #include "../engine/systems/door_system.h"
 #include "../engine/systems/elevator_system.h"
 #include "../engine/systems/interaction_system.h"
+#include "../engine/systems/interact_broker_system.h"
 #include "../engine/systems/beacon_light_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/residency_system.h"
@@ -225,6 +226,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
     addSystem<InteractionSystem>();       // sit / lie on furniture (the furniture library, M1)
+    // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
+    // all in when it picks the focus (engine/interact_broker.h).
+    addSystem<InteractBrokerSystem>(&physSys);
 #else
     addSystem<ResidencySystem>();
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)

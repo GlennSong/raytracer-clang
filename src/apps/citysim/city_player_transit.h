@@ -111,6 +111,11 @@ private:
     bool seated_ = false;          // seat_ is meaningful
     Hud hud_;
     bool boardEdge_ = false;   // E pressed since the last fixed step
+    // The interaction broker's offer on foot (engine/interact_broker.h): the nearest stopped bus or cab in reach,
+    // found four times a second, not every frame (the agent list is long).
+    int boardAgent_ = -1;
+    engine::Vec3 boardAt_{0, 0, 0};
+    engine::Real boardScanT_ = 0;
 };
 
 }  // namespace citysim

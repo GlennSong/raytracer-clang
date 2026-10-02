@@ -902,10 +902,10 @@ std::string Application::handleControlCommand(const std::string& line) {
     }
 
     // FURNITURE INTERACTIONS (InteractionSystem): `interact` taps the interact key, `interact hold` holds it,
-    // `interact stand` stands up; `interact?` reports the prompt or the pose.
+    // `interact stand` stands up, `interact next` moves the focus (Tab); `interact?` reports the focus.
     if (cmd.name == "interact") {
         const std::string a = cmd.args.empty() ? "" : cmd.args[0];
-        settingsStore.setDouble("interact.request", a == "hold" ? 2.0 : a == "stand" ? 3.0 : 1.0);
+        settingsStore.setDouble("interact.request", a == "hold" ? 2.0 : a == "stand" ? 3.0 : a == "next" ? 4.0 : 1.0);
         return "ok staged";
     }
     if (cmd.name == "interact?") return "ok " + settingsStore.getString("interact.status", "none");
