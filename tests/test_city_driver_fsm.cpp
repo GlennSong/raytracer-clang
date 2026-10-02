@@ -83,6 +83,63 @@ TEST_CASE(driver_yields_to_a_person_in_its_path) {
     CHECK(yielded);
 }
 
+TEST_CASE(a_car_stops_behind_the_players_stopped_car_not_into_it) {
+    // Glenn, 2026-10-02: "If my car stops the car behind me just rams me." The player's car reached the sim as a
+    // PERSON: seen only inside an 18 m cone (too late from 50 km/h) and held short by a person's 4 m measured to the
+    // car's CENTRE -- the follower's nose ended inside it. A vehicle obstacle is now seen down the lane far enough
+    // to stop, and held short by both bodies' lengths.
+    NavGraph nav = straightRoad(600.0);
+    CitySim sim;
+    sim.build(nav, 1, 0, 3);
+    const Real half = 2.2;   // the player's car
+    bool placed = false;
+    Vec2 stopped(0, 0);
+    Real topSpeed = 0, closest = 1e9, ownHalf = 0;
+    for (int i = 0; i < 6000; ++i) {
+        const Agent& car = sim.agents().front();
+        if (!placed && car.moving && car.speed > 7.0) {
+            // the player's car, stopped dead in this lane 40 m ahead
+            stopped = Vec2(car.pos.x + car.heading.x * 40.0, car.pos.y + car.heading.y * 40.0);
+            placed = true;
+            ownHalf = sim.fleetBody(car.vehicle).length * 0.5;
+        }
+        if (placed) sim.setExternalObstacles({ stopped }, { half });
+        sim.step(0.05, 0.5);
+        const Agent& c = sim.agents().front();
+        topSpeed = std::max(topSpeed, c.speed);
+        if (placed) closest = std::min(closest, (c.pos - stopped).length());
+    }
+    std::printf("    [rear-end] top %.1f m/s, closest centre-to-centre %.2f m (bodies %.2f m)\n", topSpeed, closest,
+                ownHalf + half);
+    CHECK(placed);
+    CHECK(closest > ownHalf + half + 0.5);   // bumper to bumper, never into it
+    CHECK(closest < ownHalf + half + 4.0);   // and it did pull up behind, not stop a block away
+
+    // A car in the NEXT lane over (4 m across) is passed, not braked for
+    CitySim sim2;
+    sim2.build(nav, 1, 0, 3);
+    bool placed2 = false;
+    Vec2 beside(0, 0), dir0(0, 0);
+    Real slowestAlongside = 1e9;
+    for (int i = 0; i < 6000; ++i) {
+        const Agent& car = sim2.agents().front();
+        if (!placed2 && car.moving && car.speed > 7.0) {
+            const Vec2 side(-car.heading.y, car.heading.x);
+            beside = Vec2(car.pos.x + car.heading.x * 40.0 + side.x * 4.0, car.pos.y + car.heading.y * 40.0 + side.y * 4.0);
+            dir0 = car.heading;
+            placed2 = true;
+        }
+        if (placed2) sim2.setExternalObstacles({ beside }, { half });
+        sim2.step(0.05, 0.5);
+        const Agent& c = sim2.agents().front();
+        // the first pass only: back from the road's end it drives in THAT lane, and should stop
+        if (placed2 && c.heading.x * dir0.x + c.heading.y * dir0.y > 0.5 && (c.pos - beside).length() < 8.0)
+            slowestAlongside = std::min(slowestAlongside, c.speed);
+    }
+    std::printf("    [next lane] slowest passing it %.1f m/s\n", slowestAlongside);
+    CHECK(slowestAlongside > 5.0 && slowestAlongside < 1e8);
+}
+
 TEST_CASE(busy_traffic_shows_following_turning_and_waiting) {
     NavGraph nav = cross4(60.0);
     CitySim sim;

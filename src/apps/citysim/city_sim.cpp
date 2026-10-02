@@ -100,6 +100,8 @@ constexpr Real kPlayerClearance = 1.1;     // ...and this far from the PLAYER (a
                                            // so a near miss is a step-around, not a brush)
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
+constexpr Real kCarBuffer = 2.0;        // bumper to bumper behind a stopped (player's) car
+constexpr Real kLaneHalfCorridor = 2.0; // a car this far off our line is in another lane
 // The zebra band is painted 0.5..3.6 m past the junction MOUTH (road-texture
 // shaders, ADR-0062); a car held at a red must stop with its BUMPER short of
 // that band — not at the node, which put a legally-waiting car visually in the
@@ -3423,6 +3425,17 @@ Real CitySim::senseAhead(Agent& a) {
     cone.range = 18.0;
     cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
                                  // not someone standing on the far sidewalk
+    // A CAR is looked for down the LANE, as far as it takes to stop from this speed plus both bodies: the 18 m
+    // person cone saw a stopped car only once it was too late to stop from 50 km/h, and its 26 deg width at range
+    // would brake for the next lane. A corridor a lane wide, straight along where we are going.
+    const Vec2 dir = cone.forward;
+    const Real ownHalf = a.vehicle >= 0 ? fleetBody(a.vehicle).length * 0.5 : Real(2.2);
+    const Real carRange = std::max(Real(18), a.speed * a.speed / (2 * Real(4.5)) + ownHalf + 12);
+    auto inLaneAhead = [&](const Vec2& p) {
+        const Real dx = p.x - a.pos.x, dz = p.y - a.pos.y;
+        const Real fwd = dx * dir.x + dz * dir.y, lat = std::fabs(dx * dir.y - dz * dir.x);
+        return fwd > 0 && fwd < carRange && lat < kLaneHalfCorridor;
+    };
     if (brainUnit(a) <= a.reliability) {
         engine::SensorVolume sensor;
         sensor.cone = cone;
@@ -3441,7 +3454,7 @@ Real CitySim::senseAhead(Agent& a) {
         // host — skip the height gate rather than invent one for them.
         for (const SensedGhost& g : sensed_) {
             if (g.id >= 0) continue;   // agent ghosts handled via the grid above
-            if (engine::sees(sensor, g.pos, 0.0))
+            if (externalHalfOf(g.id) > 0 ? inLaneAhead(g.pos) : engine::sees(sensor, g.pos, 0.0))
                 a.memory.observe(g.id, g.pos, simSeconds_);
         }
     } else {
@@ -3450,6 +3463,17 @@ Real CitySim::senseAhead(Agent& a) {
     a.memory.update(simSeconds_);
     for (const engine::TrackedBody& t : a.memory.tracks()) {
         if (t.confidence < kMemoryActConfidence) continue;
+        // A CAR ahead (the player's): in the lane corridor, held short by both bodies, not a person's clearance
+        const Real oh = externalHalfOf(t.id);
+        if (oh > 0) {
+            if (!inLaneAhead(t.pos)) continue;
+            const Real extra = ownHalf + oh + kCarBuffer - kPedClearance;
+            Real fd = (t.pos.x - a.pos.x) * dir.x + (t.pos.y - a.pos.y) * dir.y;
+            seenAhead = std::min(seenAhead, std::max(Real(0), fd - extra));
+            Real ttc = engine::timeToCollision(a.pos, a.heading * a.speed, t.pos, t.vel, ownHalf + oh);
+            if (ttc < kTtcHorizon) seenAhead = std::min(seenAhead, std::max(Real(0), a.speed * ttc - extra));
+            continue;
+        }
         // Where memory says the body IS (extrapolated while unseen): yield
         // if that estimate sits in the corridor ahead.
         if (engine::sees(cone, t.pos)) {

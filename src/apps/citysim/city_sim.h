@@ -1205,8 +1205,14 @@ public:
     // World-space (XZ) points that cars must yield to in addition to the sim's own
     // pedestrians — chiefly the live player (on foot or in a car), injected by the
     // host each step so AI cars brake for and hold short of the player.
-    void setExternalObstacles(std::vector<engine::Vec2> obstacles) {
+    // `halfLengths` (parallel, optional): > 0 marks a VEHICLE that long (half, m) -- the player's car, a taken car.
+    // A car is not a person: it is seen down the lane far enough to stop from speed, and held short of by both
+    // bodies' lengths, not by a person's clearance measured to its centre (Glenn, 2026-10-02: "If my car stops the
+    // car behind me just rams me").
+    void setExternalObstacles(std::vector<engine::Vec2> obstacles, std::vector<Real> halfLengths = {}) {
         externalObstacles_ = std::move(obstacles);
+        externalHalf_ = std::move(halfLengths);
+        externalHalf_.resize(externalObstacles_.size(), Real(0));
     }
 
     // World-space (XZ) static obstacles pedestrians steer around and never stand
@@ -1328,6 +1334,11 @@ private:
     JunctionAhead junctionAhead(const Agent& a, Real horizon) const;
     Real stopLineBack(const Agent& a, const JunctionAhead& ja) const;   // line, metres short of ja.node
     Real senseAhead(Agent& a);   // perception/memory/TTC: distance to a body ahead
+    // An injected body's half length when it is a vehicle (sensed id -(1+k)), else 0
+    Real externalHalfOf(int id) const {
+        const int k = -id - 1;
+        return id < 0 && k < static_cast<int>(externalHalf_.size()) ? externalHalf_[static_cast<std::size_t>(k)] : Real(0);
+    }
     void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain, park, or rest
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
     void computeGaps();
@@ -1423,6 +1434,7 @@ private:
     std::vector<int> sensedIndex_;      // per agent: its slot in sensed_, -1 = absent
                                         // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
+    std::vector<Real> externalHalf_;                // parallel: a vehicle's half length, 0 = a person
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width (+ pad)

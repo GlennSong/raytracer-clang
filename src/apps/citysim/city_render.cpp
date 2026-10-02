@@ -3073,11 +3073,13 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // cars — driven OR abandoned): a promoted car has no planner ghost, so
     // without this ambient traffic plans straight through a car parked across
     // the lane and the kinematic proxies bulldoze the dynamic body.
+    std::vector<Real> halves(obstacles.size(), Real(0));   // the player on foot: a person
     ctx.world.each<engine::Transform, engine::Vehicle>(
-        [&](engine::Entity, engine::Transform& t, engine::Vehicle&) {
+        [&](engine::Entity, engine::Transform& t, engine::Vehicle& v) {
             obstacles.push_back(Vec2(t.position.x, t.position.z));
+            halves.push_back(std::max(Real(1.5), v.config.chassisHalfExtent.z));   // a CAR: held short by its length
         });
-    sim_.setExternalObstacles(std::move(obstacles));
+    sim_.setExternalObstacles(std::move(obstacles), std::move(halves));
 
     // The pose bake exists for the RENDERER. When the clock runs several fixed
     // steps in one frame (catching up), only the last bake is ever drawn — the
