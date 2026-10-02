@@ -140,6 +140,57 @@ TEST_CASE(a_car_stops_behind_the_players_stopped_car_not_into_it) {
     CHECK(slowestAlongside > 5.0 && slowestAlongside < 1e8);
 }
 
+TEST_CASE(lane_changes_ease_turn_into_the_change_and_never_overlap) {
+    // Glenn, 2026-10-02: "Lane changing for simulated cars is wonky." The glide was a constant-rate slide with the
+    // nose pointing straight down the lane (a crab), and the changer left its old lane's follow chain the instant it
+    // decided. Now: the sideways rate eases in from zero, the heading turns into the change, and a car mid-change is
+    // in both lanes' chains -- so no two same-way cars ever share space.
+    RoadGraph g;   // an arterial: two lanes each way (lanes come from the class, not the width)
+    g.nodes = { {Vec2(0, 0)}, {Vec2(900, 0)} };
+    g.edges = { RoadEdge{0, 1, 16, RoadClass::Arterial, 0} };
+    NavGraph nav = buildNavGraph(g);
+    CHECK(nav.links[0].lanes >= 2);
+    CitySim sim;
+    sim.build(nav, 24, 0, 41);
+    int changes = 0, yawed = 0, overlaps = 0;
+    Real worstJerk = 0;   // the largest one-step jump in sideways rate (lanes/s)
+    std::vector<Real> lastVel(sim.agents().size(), 0.0);
+    std::vector<int> lastLane(sim.agents().size(), -1);
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.05, 0.5);
+        const auto& ag = sim.agents();
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            const Agent& a = ag[k];
+            if (a.mode != Agent::Mode::Driver || !a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            if (lastLane[k] >= 0 && a.lane != lastLane[k]) ++changes;
+            lastLane[k] = a.lane;
+            worstJerk = std::max(worstJerk, std::fabs(a.laneVel - lastVel[k]));
+            lastVel[k] = a.laneVel;
+            if (std::fabs(a.laneVel) > 0.3 && a.speed > 3.0) {
+                const Vec2 d = nav.direction(a.route.links[a.leg]);
+                const Real sinA = d.x * a.heading.y - d.y * a.heading.x;
+                if (std::fabs(sinA) > std::sin(1.0 * 3.14159265 / 180.0)) ++yawed;
+            }
+            for (std::size_t j = k + 1; j < ag.size(); ++j) {
+                const Agent& b = ag[j];
+                if (b.mode != Agent::Mode::Driver || !b.moving) continue;
+                if (a.heading.x * b.heading.x + a.heading.y * b.heading.y < 0.7) continue;
+                const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+                const Real along = std::fabs(a.heading.x * dx + a.heading.y * dy);
+                const Real lat = std::fabs(a.heading.y * dx - a.heading.x * dy);
+                const Real reach = 0.5 * (sim.fleetBody(a.vehicle).length + sim.fleetBody(b.vehicle).length) - 0.3;
+                if (lat < 1.5 && along < reach) ++overlaps;
+            }
+        }
+    }
+    std::printf("    [lanes] %d changes, %d steps yawed into a change, worst sideways-rate step %.3f lanes/s, %d overlaps\n",
+                changes, yawed, worstJerk, overlaps);
+    CHECK(changes > 0);
+    CHECK(yawed > 0);              // the nose turns into the change
+    CHECK(worstJerk < 0.2);        // eased: the rate builds over steps (the old slide jumped 0 -> 0.55 in one)
+    CHECK(overlaps == 0);
+}
+
 TEST_CASE(busy_traffic_shows_following_turning_and_waiting) {
     NavGraph nav = cross4(60.0);
     CitySim sim;

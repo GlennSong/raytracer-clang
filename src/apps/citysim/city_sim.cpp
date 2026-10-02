@@ -3151,6 +3151,15 @@ void CitySim::steer(Agent& a, Real dt) {
     // heading at all (like a real car) — it holds until it rolls, which also means
     // a car halted at a light never snaps its heading. Trip start seeds the initial
     // heading directly (startTrip), so a just-launched car is already aligned.
+    // CHANGING LANES the nose points where the car is going, the lane's way plus the sideways glide -- it used to
+    // point straight down the lane and slide across it like a crab
+    if (std::fabs(a.laneVel) > 1e-3 && a.speed > 1.0) {
+        const Real lat = a.laneVel * laneSpacingFor(a.route.links[a.leg]);   // m/s, + = rightward
+        const Vec2 right(desired.y, -desired.x);
+        Vec2 d = desired * a.speed + right * lat;
+        const Real dlen = std::sqrt(d.x * d.x + d.y * d.y);
+        if (dlen > 1e-6) desired = d * (1.0 / dlen);
+    }
     Real rate = a.speed / kCarMinTurnRadius;
     a.heading = rotateToward(a.heading, desired, rate * dt);
 }
@@ -3506,9 +3515,21 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // the change is a visible glide the lamp bake can indicate; a paced
         // discretionary change picks a neighbouring lane now and then on any
         // multi-lane link. Deterministic: agent-keyed hash, sim-clock paced.
-        const Real ease = dt * 0.55;
+        // THE GLIDE (Glenn, 2026-10-02: "Lane changing for simulated cars is wonky"): a critically damped spring,
+        // not a constant-rate slide -- the old glide started and stopped sideways at full rate, a kink at each
+        // end. ~2.6 s a lane, peak ~0.55 lanes/s; steer() turns the nose into it.
+        {
+            constexpr Real w = 1.8, kMaxRate = 0.6;
+            const Real e = Real(a.lane) - a.laneF;
+            a.laneVel += (w * w * e - 2 * w * a.laneVel) * dt;
+            a.laneVel = std::max(-kMaxRate, std::min(kMaxRate, a.laneVel));
+            a.laneF += a.laneVel * dt;
+            if (std::fabs(Real(a.lane) - a.laneF) < 0.002 && std::fabs(a.laneVel) < 0.01) {
+                a.laneF = Real(a.lane);
+                a.laneVel = 0;
+            }
+        }
         const Real dl = Real(a.lane) - a.laneF;
-        a.laneF += std::max(-ease, std::min(ease, dl));
         a.laneTimer -= dt;
         if (a.laneTimer <= 0) {
             const engine::NavLink& LL = nav_->links[li];
@@ -3550,12 +3571,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                     bool room = true;
                     const Real spacing = laneSpacingFor(li);
                     const Real shift = (Real(want) - a.laneF) * spacing;   // + = rightward
-                    grid_.query(a.pos, 26.0, queryScratch_);
+                    grid_.query(a.pos, 60.0, queryScratch_);
                     for (int bi : queryScratch_) {
                         const Agent& b = agents_[bi];
+                        // (a STOPPED car counts: merging into a queue is merging into bodies)
                         if (&b == &a || b.mode != Agent::Mode::Driver ||
-                            b.far() ||
-                            !b.moving || b.leg >= (int)b.route.links.size())
+                            b.far() || b.leg >= (int)b.route.links.size())
                             continue;
                         if (b.heading.x * a.heading.x + b.heading.y * a.heading.y < 0.7)
                             continue;   // not travelling my way
@@ -3563,7 +3584,11 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                         const Real along = a.heading.x * dx + a.heading.y * dy;
                         const Real right = a.heading.y * dx - a.heading.x * dy;
                         if (std::fabs(right - shift) > spacing * 0.6) continue;
-                        if (std::fabs(along) < 13.0) {
+                        // room ahead and behind, plus what the speed difference closes in ~3 s: a car coming up
+                        // fast in the target lane is not "room" just because it is 20 m back
+                        const Real need = along >= 0 ? 13.0 + std::max(Real(0), a.speed - b.speed) * 2.0
+                                                     : 13.0 + std::max(Real(0), b.speed - a.speed) * 3.0;
+                        if (std::fabs(along) < need) {
                             room = false;
                             break;
                         }
@@ -4385,7 +4410,17 @@ void CitySim::computeGaps() {
         const Agent& a = agents_[i];
         if (a.far()) continue;   // far tier: not on the road
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
-        lanes[laneKeyOf(a, a.route.links[a.leg])].push_back({a.distOnLeg, i});
+        const int li = a.route.links[a.leg];
+        const long long key = laneKeyOf(a, li);
+        lanes[key].push_back({a.distOnLeg, i});
+        // MID-CHANGE a car is in BOTH lanes: the one it is leaving keeps it as a leader (its followers there
+        // used to lose it the instant it decided, and drove into its tail), and it follows both lanes' leaders
+        if (a.mode == Agent::Mode::Driver && std::fabs(Real(a.lane) - a.laneF) > 0.15) {
+            // the lane it is leaving: laneF rounded back toward where it came from
+            const int from = std::max(0, static_cast<int>(std::lround(a.laneF - (a.lane > a.laneF ? 0.35 : -0.35))));
+            const long long old = static_cast<long long>(li) * 4096 + std::min(from, std::max(1, nav_->links[li].lanes) - 1);
+            if (old != key) lanes[old].push_back({a.distOnLeg, i});
+        }
     }
     // (link,lane) -> the car nearest the entry {distOnLeg, agentIndex}, so a
     // follower crossing a node can pick up the leader on its next link AND that
@@ -4399,7 +4434,10 @@ void CitySim::computeGaps() {
         });
         minEntry[kv.first] = { v.front().first, v.front().second };
         for (std::size_t k = 0; k + 1 < v.size(); ++k) {
-            gaps_[v[k].second] = std::max(Real(0), v[k + 1].first - agents_[v[k + 1].second].bodyLag - v[k].first);
+            // the nearer leader wins: a changing car sits in two lanes' chains
+            const Real g = std::max(Real(0), v[k + 1].first - agents_[v[k + 1].second].bodyLag - v[k].first);
+            if (g >= gaps_[v[k].second]) continue;
+            gaps_[v[k].second] = g;
             minGaps_[v[k].second] = pairMinGap(v[k].second, v[k + 1].second);
             leaderSpeeds_[v[k].second] = agents_[v[k + 1].second].speed;
         }

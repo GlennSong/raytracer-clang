@@ -296,6 +296,7 @@ struct Agent {
     // reads the gap to blink the correct indicator. laneTimer paces the next
     // discretionary change.
     Real laneF = 0;
+    Real laneVel = 0;   // d(laneF)/dt, lanes/s: the glide is a damped spring, so it eases in and out (S-curve)
     Real laneTimer = 5.0;
     // Tether (ADR-0062): while set, this planner ghost may not LEAD `tetherAnchor`
     // (its physical car) by more than `tetherLead` metres — it waits instead. The
