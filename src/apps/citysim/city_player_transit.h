@@ -91,6 +91,11 @@ private:
     void rideBus(engine::World& world, engine::Real dt, const RideInput& in,
                  engine::Entity player, engine::Transform& t,
                  engine::CharacterController& cc, const engine::Mat4& pose, bool interact);
+    // A RIDE IN SOMEONE'S CAR (Glenn, 2026-10-02: "a way to ... be a passenger (backseat, frontseat passenger) or
+    // the driver"): seated at carSeat_ in the agent car's own frame, the view turning with it; E gets out once the
+    // car slows to a walk (a press while it is moving waits for that).
+    void rideCar(engine::World& world, engine::Entity player, engine::Transform& t,
+                 engine::CharacterController& cc, bool interact);
     void pin(engine::World& world, engine::Entity player, engine::Transform& t,
              engine::CharacterController& cc, const engine::Vec3& pos);
     void leave(engine::World& world, engine::Entity player, const engine::Vec3& where);
@@ -122,6 +127,13 @@ private:
     int chosenKind_ = -1, chosenIdx_ = -1;
     engine::Vec3 boardAt_{0, 0, 0};
     engine::Real boardScanT_ = 0;
+    // On foot beside an ambient car: its passenger seats are offers (key kCarSeatKey + seat); the broker's pick
+    // comes back as pendingCarSeat_. Aboard: the seat we hold, and an exit asked for while the car was moving.
+    int rideCarAgent_ = -1;
+    std::vector<engine::Vec3> rideCarSeats_;   // world, offer anchors (seat 1.. ; 0 is the driver's: VehicleSystem's)
+    int pendingCarSeat_ = -1;
+    int carSeat_ = -1;
+    bool exitWhenSlow_ = false;
 };
 
 }  // namespace citysim

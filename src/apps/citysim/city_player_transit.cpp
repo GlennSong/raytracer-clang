@@ -48,6 +48,9 @@ constexpr Real kAisleHalf = 0.30;
 constexpr Real kAisleWalk = 1.6;
 constexpr Real kStandingEye = 1.62;
 constexpr Real kSeatedEye = 0.74;
+constexpr uint64_t kCarSeatKey = 2000000;   // + seat: an ambient car's passenger seat, the broker's key
+constexpr Real kCarRideReach = 4.0;          // the same reach as getting in to drive
+constexpr Real kCarExitSpeed = 3.0;          // m/s: you get out once it has slowed to a walk
 constexpr Real kEyeAboveTransform = 0.7;
 
 // "ahead left", "behind" ... from the view direction to a target, both in XZ.
@@ -138,9 +141,10 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
     double req = in.request;
     // E on foot boards; in a cab it gets out; ON A BUS it is the saloon's own
     // verb -- sit, stand, or step off at a door -- handled in rideBus.
-    bool busInteract = false;
+    bool busInteract = false, carInteract = false;
     if (in.interact) {
         if (riding_ < 0) req = 3.0;
+        else if (carSeat_ >= 0) carInteract = true;
         else if (!sim.isBus(riding_)) req = 0.0;
         else busInteract = true;
     }
@@ -170,6 +174,23 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
         LOG_INFO << "[transit] not from indoors -- step outside to board";
         req = -1.0;
     }
+    // A PASSENGER SEAT the broker picked in an ambient car (update()): in at that seat, the driver driving on.
+    if (riding_ < 0 && in.interact && pendingCarSeat_ >= 0 && !indoors) {
+        engine::Mat4 pose;
+        std::vector<Vec3> seats;
+        if (rideCarAgent_ >= 0 && city_.carSeatsOf(rideCarAgent_, &pose, &seats) &&
+            pendingCarSeat_ < static_cast<int>(seats.size())) {
+            riding_ = rideCarAgent_;
+            carSeat_ = pendingCarSeat_;
+            exitWhenSlow_ = false;
+            haveBusYaw_ = false;
+            if (!world.has<engine::Passenger>(player)) world.add<engine::Passenger>(player);
+            LOG_INFO << "[transit] you got in agent " << riding_ << "'s car, seat " << carSeat_;
+        }
+        pendingCarSeat_ = -1;
+        req = -1.0;
+    }
+    pendingCarSeat_ = -1;
     if (riding_ < 0 && req >= 1.0) {
         const bool wantBus = (req == 1.0 || req == 3.0);
         const bool wantTaxi = (req == 2.0 || req == 3.0);
@@ -213,11 +234,60 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
         rideBus(world, dt, in, player, *pt, *cc, pose, busInteract);
         return;
     }
+    if (carSeat_ >= 0) {
+        rideCar(world, player, *pt, *cc, carInteract);
+        return;
+    }
 
     // A cab (no saloon to walk in): pinned over its pose, as a passenger.
     const Agent& veh = agents[static_cast<std::size_t>(riding_)];
     const Real gy = city_.groundHeightAt(veh.pos.x, veh.pos.y);
     pin(world, player, *pt, *cc, Vec3(veh.pos.x, gy + veh.elevation + kSeatLift, veh.pos.y));
+}
+
+void CityPlayerTransitSystem::rideCar(World& world, Entity player, Transform& t, engine::CharacterController& cc,
+                                      bool interact) {
+    engine::Mat4 pose;
+    std::vector<Vec3> seats;
+    // the car parked, was taken, or left the sim: out where we sat
+    if (!city_.carSeatsOf(riding_, &pose, &seats) || carSeat_ >= static_cast<int>(seats.size())) {
+        const Vec3 here = t.position;
+        leave(world, player, Vec3(here.x + kStepOffDistance, city_.groundHeightAt(here.x, here.z) + 1.2, here.z));
+        return;
+    }
+    auto flat = [](Vec3 v) {
+        v.y = 0;
+        const Real l = std::sqrt(v.x * v.x + v.z * v.z);
+        return l > 1e-6 ? v * (1 / l) : Vec3(0, 0, 1);
+    };
+    const Vec3 fwdAxis = flat(Vec3(pose.m[0][2], 0, pose.m[2][2]));
+    const Vec3 rightAxis = flat(Vec3(pose.m[0][0], 0, pose.m[2][0]));
+    // the view turns WITH the car, as on the bus
+    const Real yaw = std::atan2(fwdAxis.x, -fwdAxis.z) * Real(57.29577951308232);
+    if (haveBusYaw_) {
+        Real d = yaw - lastBusYaw_;
+        while (d > 180) d -= 360;
+        while (d < -180) d += 360;
+        fly_.yaw += d;
+    }
+    lastBusYaw_ = yaw;
+    haveBusYaw_ = true;
+    const Vec3 seat = seats[static_cast<std::size_t>(carSeat_)];
+    if (interact) exitWhenSlow_ = true;
+    const Real speed = city_.sim().agents()[static_cast<std::size_t>(riding_)].speed;
+    if (exitWhenSlow_ && speed <= kCarExitSpeed) {
+        // out on the seat's own side, clear of the door
+        const Vec3 w = pose.transformPoint(seat);
+        const Real side = seat.x >= 0 ? Real(1) : Real(-1);
+        Vec3 out = w + rightAxis * (side * Real(1.6));
+        out.y = city_.groundHeightAt(out.x, out.z) + Real(1.2);
+        carSeat_ = -1;
+        exitWhenSlow_ = false;
+        leave(world, player, out);
+        return;
+    }
+    const Vec3 w = pose.transformPoint(seat);
+    pin(world, player, t, cc, Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
 }
 
 // Put the player at `pos` for this step: transform, no interpolation streak,
@@ -244,6 +314,8 @@ void CityPlayerTransitSystem::leave(World& world, Entity player, const Vec3& whe
     if (world.has<engine::Passenger>(player)) world.remove<engine::Passenger>(player);
     city_.setPlayerSeat(-1, -1);
     riding_ = -1;
+    carSeat_ = -1;
+    exitWhenSlow_ = false;
     seated_ = false;
     seatIdx_ = -1;
     LOG_INFO << "[transit] you got off at (" << where.x << ", " << where.z << ")";
@@ -387,7 +459,9 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
         engine::InteractCommand cmd;
         if (player.valid() && engine::takeInteractCommand(ctx.world, player, "transit", cmd)) {
             boardEdge_ = true;
-            if (cmd.key >= 1000000) {   // a bus seat or door the broker focused
+            if (cmd.key >= kCarSeatKey) {   // an ambient car's passenger seat
+                pendingCarSeat_ = static_cast<int>(cmd.key - kCarSeatKey);
+            } else if (cmd.key >= 1000000) {   // a bus seat or door the broker focused
                 chosenKind_ = static_cast<int>((cmd.key - 1000000) / 1000);
                 chosenIdx_ = static_cast<int>((cmd.key - 1000000) % 1000);
             }
@@ -420,6 +494,13 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                         if (!so.tap.empty()) engine::offerInteraction(ctx.world, player, so);
                     }
                 }
+            } else if (riding_ >= 0 && carSeat_ >= 0) {
+                const bool slow = sim0.agents()[static_cast<std::size_t>(riding_)].speed <= kCarExitSpeed;
+                o.tap = exitWhenSlow_ ? "getting out when it stops" : slow ? "get out" : "get out at the next stop";
+                o.name = carSeat_ == 1 ? "front seat" : "back seat";
+                o.exclusive = true;
+                o.anchor = pt ? pt->position : engine::Vec3(0, 0, 0);
+                engine::offerInteraction(ctx.world, player, o);
             } else if (riding_ >= 0) {
                 o.tap = "get out";
                 o.name = "cab";
@@ -429,7 +510,8 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
             } else if (pt) {
                 // ON FOOT: the nearest stopped bus or cab within reach, from outdoors.
                 boardScanT_ -= ctx.frameDelta;
-                if (boardScanT_ <= 0) {
+                const bool scan = boardScanT_ <= 0;
+                if (scan) {
                     boardScanT_ = 0.25;
                     boardAgent_ = -1;
                     bool indoors = false;
@@ -452,6 +534,42 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                             }
                         }
                     }
+                }
+                // ...and the nearest ambient car's PASSENGER seats, each its own offer at the seat, so the one you
+                // look at is the one you get (the driver's seat is VehicleSystem's: taking the car)
+                if (scan) {
+                    rideCarAgent_ = -1;
+                    const std::vector<Agent>& ag = sim0.agents();
+                    Real bestD = kCarRideReach + 1.0;
+                    int best = -1;
+                    for (std::size_t i = 0; i < ag.size(); ++i) {
+                        const Agent& a = ag[i];
+                        const int ai = static_cast<int>(i);
+                        if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || a.playerControlled) continue;
+                        if (sim0.isBus(ai) || sim0.isTaxi(ai)) continue;
+                        const Real dx = a.pos.x - pt->position.x, dz = a.pos.y - pt->position.z;
+                        const Real d = std::sqrt(dx * dx + dz * dz);
+                        if (d < bestD) { bestD = d; best = ai; }
+                    }
+                    rideCarAgent_ = best;
+                }
+                // the seats where the car is THIS frame; you get in while it stands (at a light, a junction)
+                rideCarSeats_.clear();
+                {
+                    engine::Mat4 pose;
+                    std::vector<engine::Vec3> seats;
+                    if (rideCarAgent_ >= 0 && sim0.agents()[static_cast<std::size_t>(rideCarAgent_)].speed <= kCarExitSpeed &&
+                        city_.carSeatsOf(rideCarAgent_, &pose, &seats))
+                        for (const engine::Vec3& s : seats) rideCarSeats_.push_back(pose.transformPoint(s) + engine::Vec3(0, 0.35, 0));
+                }
+                for (std::size_t si = 1; si < rideCarSeats_.size(); ++si) {
+                    engine::InteractOffer so = o;
+                    so.key = kCarSeatKey + si;
+                    so.anchor = rideCarSeats_[si];
+                    so.reach = kCarRideReach;
+                    so.name = si == 1 ? "front seat" : "back seat";
+                    so.tap = "ride along";
+                    engine::offerInteraction(ctx.world, player, so);
                 }
                 if (boardAgent_ >= 0) {
                     const bool bus = sim0.isBus(boardAgent_);
@@ -633,6 +751,9 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
             // What E does where you stand: sit, stand, or step off at a door.
             ImGui::Text("%s%s%s", seatIdx_ >= 0 ? "seated" : "walk: move keys",
                         busPrompt_[0] ? "      " : "", busPrompt_);
+        } else if (carSeat_ >= 0) {
+            ImGui::Text("RIDING ALONG (%s)      %s", carSeat_ == 1 ? "front seat" : "back seat",
+                        exitWhenSlow_ ? "getting out when it stops" : "E: get out");
         } else {
             ImGui::Text("IN A CAB      E: get off");
         }

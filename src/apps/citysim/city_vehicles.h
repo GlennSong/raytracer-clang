@@ -86,6 +86,7 @@ private:
     std::vector<PromotedCar> promoted_;
     // the ambient car offered to the interaction broker (rescanned four times a second)
     engine::Real scanT_ = 0;
+    int ambientAgent_ = -1;   // the nearest ambient car in reach, rescanned four times a second
     bool haveAmbient_ = false;
     engine::Vec3 ambientAt_{0, 0, 0};
 };

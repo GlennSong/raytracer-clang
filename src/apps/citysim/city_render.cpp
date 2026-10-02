@@ -932,8 +932,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             // opaque (traffic at large), and the cabin a near car shows through it.
             {
                 Entity ge{}, go{}, gi{};
+                MeshHandle glassH{}, cabinH{};
                 if (assets && !glassMesh.vertices.empty()) {
                     const MeshHandle gh = assets->acquireMesh(glassMesh, "city:carglass" + std::to_string(v));
+                    glassH = gh;
                     ge = world.create();
                     InstanceGroup gg;
                     gg.mesh = gh;
@@ -966,6 +968,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     gi = world.create();
                     InstanceGroup ig;
                     ig.mesh = assets->acquireMesh(interiorMesh, "city:carcabin" + std::to_string(v));
+                    cabinH = ig.mesh;
                     engine::RenderMaterial im;
                     im.albedo = Vec3(1, 1, 1);
                     im.metallic = 0.0f;
@@ -978,6 +981,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carGlassGroups_.push_back(ge);
                 carGlassOpaqueGroups_.push_back(go);
                 carInteriorGroups_.push_back(gi);
+                carGlassMesh_.push_back(glassH);   // for a commandeered car (city_vehicles.cpp): its own glass + cabin
+                carCabinMesh_.push_back(cabinH);   // invalid for a see-into body, whose cabin is in its chassis
                 carSeeInto_.push_back(seeInto ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
@@ -2258,6 +2263,8 @@ void CityRenderSystem::syncGroups(World& world) {
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
+                // the car the player RIDES in: its drawn matrix, every step, so the passenger sits still in it
+                if (ai == playerRidingAgent_) busDrawnPose_[ai] = cars[v]->transforms[k];
                 if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
@@ -3119,6 +3126,32 @@ int CityRenderSystem::riderSeat(int agent, int j, int n) {
     for (int c : {7, 5, 11, 13, 3})
         if (std::gcd(c, n) == 1) { stride = c; break; }
     return ((j * stride + agent * 3) % n + n) % n;
+}
+
+bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seats) const {
+    const auto& ag = sim_.agents();
+    if (agent < 0 || agent >= static_cast<int>(ag.size()) || sim_.isBus(agent)) return false;
+    const Agent& a = ag[static_cast<std::size_t>(agent)];
+    if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || carDriverSeat_.empty()) return false;
+    const int n = static_cast<int>(carDriverSeat_.size());
+    const std::size_t v = static_cast<std::size_t>(((a.vehicle % n) + n) % n);
+    if (!carHasDriver_[v]) return false;
+    if (pose) {
+        const auto it = busDrawnPose_.find(agent);
+        *pose = it != busDrawnPose_.end() ? it->second : agentPose(a, agent);
+    }
+    if (seats) {
+        const Vec3 d = carDriverSeat_[v];
+        seats->clear();
+        seats->push_back(d);
+        seats->push_back(Vec3(-d.x, d.y, d.z));
+        // a rear bench needs ~0.85 m behind the front seats: a two-seater (under ~3.9 m) has none
+        if (sim_.fleetBody(a.vehicle).length >= 3.9) {
+            seats->push_back(Vec3(d.x, d.y, d.z - 0.85));
+            seats->push_back(Vec3(-d.x, d.y, d.z - 0.85));
+        }
+    }
+    return true;
 }
 
 bool CityRenderSystem::busFrame(int agent, Mat4* pose) const {
