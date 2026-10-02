@@ -35,7 +35,7 @@ void InteractBrokerSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("interact", GamepadButton::X);
     ctx.actions.setActionContext("interact", InputContext::OnFoot);
     ctx.actions.bindButton("interact_cycle", KeyCode::Tab);
-    ctx.actions.bindButton("interact_cycle", GamepadButton::DpadRight);
+    ctx.actions.bindButton("interact_cycle", GamepadButton::Y);
     ctx.actions.setActionContext("interact_cycle", InputContext::OnFoot);
 }
 
@@ -120,9 +120,12 @@ void InteractBrokerSystem::update(FrameContext& ctx) {
     anchor_ = f.anchor;
     name_ = f.name;
     others_ = static_cast<int>(ranked.size()) - 1;
+    // THE BUTTON, on the device in use: E on the keyboard, X on a controller (InputMap::gamepadInUse).
+    pad_ = ctx.actions.gamepadInUse();
+    const std::string key = pad_ ? "(X)" : "E";
     prompt_.clear();
-    if (!f.tap.empty()) prompt_ = "E  " + f.tap;
-    if (!f.hold.empty()) prompt_ += (prompt_.empty() ? "" : "      ") + std::string("hold E  ") + f.hold;
+    if (!f.tap.empty()) prompt_ = key + "  " + f.tap;
+    if (!f.hold.empty()) prompt_ += (prompt_.empty() ? "" : "      ") + std::string("hold ") + key + "  " + f.hold;
     {
         char at[96];
         std::snprintf(at, sizeof at, "  at %.2f %.2f %.2f", f.anchor.x, f.anchor.y, f.anchor.z);
@@ -177,7 +180,7 @@ void InteractBrokerSystem::render(FrameContext& ctx) {
     std::string nm = name_;
     for (char& c : nm) if (c == '_') c = ' ';
     std::string text = nm.empty() ? prompt_ : nm + "\n" + prompt_;
-    if (others_ > 0) text += "\n+" + std::to_string(others_) + " nearby   Tab / wheel";
+    if (others_ > 0) text += "\n+" + std::to_string(others_) + (pad_ ? " nearby   (Y) next" : " nearby   Tab / wheel");
     ImFont* font = ImGui::GetFont();
     const float fs = ImGui::GetFontSize() * 1.4f;   // readable at a glance, over a busy room
     const ImVec2 ts = font->CalcTextSizeA(fs, 1e9f, 0.0f, text.c_str());

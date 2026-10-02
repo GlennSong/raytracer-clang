@@ -20,7 +20,8 @@
 
 namespace engine {
 
-enum class FurnMat : uint8_t { Wood, Fabric, Hard, Metal, Ceramic, Count };
+// Light: a lamp's lit face -- emissive, always on (a ceiling panel's diffuser).
+enum class FurnMat : uint8_t { Wood, Fabric, Hard, Metal, Ceramic, Light, Count };
 constexpr int kFurnMatCount = static_cast<int>(FurnMat::Count);
 
 enum class Piece : uint8_t {
@@ -36,6 +37,7 @@ enum class Piece : uint8_t {
     ShopCounter, Gondola, WallShelf, ClothesRack, CafeTable, DisplayCase, DrinksFridge, Bookcase,   // shops
     PalletRack, Checkout,   // big-box stores
     Bench, PlazaBench, BistroTable, BistroChair,   // outdoor seating (the furniture library, M2)
+    CeilingLight,   // the room's light: a recessed panel, or (style bit 5) a round flush fitting
     Count
 };
 constexpr int kPieceCount = static_cast<int>(Piece::Count);

@@ -924,6 +924,18 @@ void main() {
 
     vec3 N = normalize(inWorldNormal);
     if (featNormal) N = featN;
+    // FOLIAGE CARDS (Glenn, 2026-10-02: "grass and tree cards are noticeable as cards ... the lighting on them is
+    // off"): a card lit by its own flat normal shows its orientation -- each blade or leaf plane a different shade,
+    // its back face dark. Face the normal at the viewer, then BEND it: grass mostly to the sky (a meadow shades as
+    // one soft surface, like the ground it grows on), tree cards part way (a crown keeps some shape).
+    {
+        const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u;
+        const bool leafCard = (pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u);
+        if (grassCard || leafCard) {
+            if (dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) N = -N;
+            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), grassCard ? 0.7 : 0.45));
+        }
+    }
     // CRAGS (ADR-0120): the mesh's triangles are the only relief a distant mountain had ("the mountains
     // look lowpoly"). Rock gets a per-pixel normal from two octaves of noise (~22 m and ~6 m), projected
     // on the plane the face mostly lies in, each octave faded out once a pixel covers too much of it

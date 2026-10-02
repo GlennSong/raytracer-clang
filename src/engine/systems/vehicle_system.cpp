@@ -1,4 +1,6 @@
 #include "vehicle_system.h"
+#include "../interact_broker.h"
+#include "../interaction.h"   // Seated
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
 #endif
@@ -52,14 +54,13 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("drive_handbrake", KeyCode::LeftControl);
     ctx.actions.setActionContext("drive_handbrake", engine::InputContext::InVehicle);
 
-    ctx.actions.bindButton("enter_vehicle", KeyCode::G);
-    ctx.actions.bindButton("enter_vehicle", GamepadButton::DpadUp);
-    // The conventional get-in/out face button (Y on Xbox, Triangle on PS) —
-    // D-pad Up alone was undiscoverable (Glenn asked for "a button to get in
-    // and out" twice while one existed).
-    ctx.actions.bindButton("enter_vehicle", GamepadButton::Y);
-    // enter_vehicle stays ALWAYS: the same key gets you OUT (handleEnterExit
-    // branches on InVehicle), so an on-foot tag would lock you in the car.
+    // GETTING IN is the interaction broker's E like everything else (Glenn, 2026-10-02: "move getting into the
+    // car to 'e' like everything else"): this system OFFERS the car in reach and, on the broker's command, presses
+    // enter_vehicle (injected, so CityVehicleSystem promotes an ambient car the same frame this one seats you).
+    // GETTING OUT is E / pad X again, read here while in the car (the broker stands down in a vehicle).
+    ctx.actions.bindButton("vehicle_exit", KeyCode::E);
+    ctx.actions.bindButton("vehicle_exit", GamepadButton::X);
+    ctx.actions.setActionContext("vehicle_exit", engine::InputContext::InVehicle);
 
     // Recover a rolled car (keep heading, level it, lift it).
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
@@ -516,7 +517,40 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
 }
 
 void VehicleSystem::handleEnterExit(FrameContext& ctx) {
-    if (!ctx.actions.pressed("enter_vehicle")) return;
+    // The broker's command: a car was focused and E pressed -> press enter_vehicle for next frame.
+    {
+        Entity p;
+        ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform&, ControlledBy&) { if (!p.valid()) p = e; });
+        InteractCommand cmd;
+        if (p.valid() && takeInteractCommand(ctx.world, p, "vehicle", cmd)) {
+            ctx.actions.injectPress("enter_vehicle");
+            LOG_INFO << "[vehicle] E: getting in";
+        }
+        // The OFFER: the nearest unoccupied car in reach (an ambient city car is CityVehicleSystem's offer).
+        if (p.valid() && !ctx.world.has<InVehicle>(p) && !ctx.world.has<Seated>(p)) {
+            const Vec3 pp = ctx.world.get<Transform>(p)->position;
+            Entity best;
+            Vec3 at;
+            Real bestD2 = enterRadius * enterRadius;
+            ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
+                if (v.driver.valid()) return;
+                const Real dx = t.position.x - pp.x, dz = t.position.z - pp.z;
+                if (dx * dx + dz * dz <= bestD2) { bestD2 = dx * dx + dz * dz; best = e; at = t.position; }
+            });
+            if (best.valid()) {
+                InteractOffer o;
+                o.provider = "vehicle";
+                o.entity = best;
+                o.name = "car";
+                o.tap = "get in";
+                o.anchor = at;   // the chassis centre: within a floor of the feet (the broker drops other floors)
+                o.reach = enterRadius;
+                o.needsSight = false;
+                offerInteraction(ctx.world, p, o);
+            }
+        }
+    }
+    if (!ctx.actions.pressed("enter_vehicle") && !ctx.actions.pressed("vehicle_exit")) return;
 
     // The (first) player entity.
     Entity player;
@@ -623,7 +657,10 @@ void VehicleSystem::update(FrameContext& ctx) {
         }
     }
     // Drop the picked car in front of the player.
-    if (ctx.actions.pressed("spawn_vehicle")) spawnInFront(ctx);
+    if (ctx.actions.pressed("spawn_vehicle") || ctx.settings.getDouble("vehicle.spawn", 0.0) > 0) {
+        ctx.settings.setDouble("vehicle.spawn", 0.0);
+        spawnInFront(ctx);
+    }
 
     // The player's car for the control channel's `vehicle?`.
     std::string telem = "none";

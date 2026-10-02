@@ -1,5 +1,6 @@
 #include "../../log.h"
 #include "city_walkers.h"
+#include <cstdio>
 
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
@@ -348,9 +349,24 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 desired = Vec3();
             }
         }
+        const Vec2 before(pos.x, pos.z);
         pw.moveCharacter(cc->characterId, desired, dt);   // zero intent still settles
         pos = pw.characterPosition(cc->characterId);
         posXZ = Vec2(pos.x, pos.z);
+        // JITTER TELEMETRY (`walkers?`; Glenn, 2026-10-02: "npcs jittering about at superspeed"): the body's real
+        // speed this step, and whether it reversed against the last one -- a twitching body flips every step.
+        {
+            const Vec2 v = (posXZ - before) * (1.0 / std::max(dt, Real(1e-6)));
+            const Real sp = v.length();
+            if (sp > tel_.maxSpeed) { tel_.maxSpeed = sp; tel_.maxAt = posXZ; tel_.maxAgent = w.agentId; }
+            if (w.haveLast && sp > 0.8 && w.lastStep.length() > 0.8 && dot(v, w.lastStep) < 0) {
+                ++tel_.reversals;
+                tel_.revAt = posXZ;
+            }
+            w.lastStep = v;
+            w.haveLast = true;
+            ++tel_.steps;
+        }
 
         // Face the actual travel direction once really moving.
         Vec3 vel = pw.characterVelocity(cc->characterId);
@@ -446,6 +462,16 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
     spawnWalkers(ctx);
     driveWalkers(ctx);
+    // Publish the jitter telemetry every 2 s of sim, then start a fresh window.
+    tel_.window += ctx.clock.fixedStep();
+    if (tel_.window >= 2.0) {
+        char b[256];
+        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f)",
+                      walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
+                      tel_.steps, tel_.revAt.x, tel_.revAt.y);
+        ctx.settings.setString("walkers.telemetry", b);
+        tel_ = Telemetry{};
+    }
 }
 
 void CityWalkerSystem::onStop(engine::FrameContext&) {

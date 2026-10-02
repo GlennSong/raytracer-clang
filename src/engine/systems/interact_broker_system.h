@@ -38,6 +38,7 @@ private:
     Vec3 anchor_{0, 0, 0};
     std::string prompt_, name_;
     int others_ = 0;
+    bool pad_ = false;   // the controller is the device in use: its buttons in the prompt
     double pulse_ = 0;
 };
 

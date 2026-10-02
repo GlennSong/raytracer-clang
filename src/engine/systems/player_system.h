@@ -140,6 +140,7 @@ private:
     // is unchanged — shoulders don't narrow), and the pace penalty.
     static constexpr Real kCrouchHalfScale = 0.35;
     static constexpr Real kCrouchSpeedScale = 0.4;
+    static constexpr Real kRunSpeedScale = 1.9;   // Shift / L3 held
     // Snap the character back to spawn (shared by the automatic safety net and
     // the manual R key; both must reset the fall tracker the same way).
     void respawn(CharacterId characterId, bool manual);

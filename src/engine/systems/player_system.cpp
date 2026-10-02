@@ -44,6 +44,11 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("player_jump", GamepadButton::A);
     ctx.actions.setActionContext("player_jump", engine::InputContext::OnFoot);
     ctx.actions.bindButton("player_crouch", KeyCode::LeftControl);
+    ctx.actions.bindButton("player_crouch", GamepadButton::B);
+    // RUN (Glenn, 2026-10-02: "I thought shift was run"): Shift held, or L3 (the pad convention).
+    ctx.actions.bindButton("player_run", KeyCode::LeftShift);
+    ctx.actions.bindButton("player_run", GamepadButton::LeftThumb);
+    ctx.actions.setActionContext("player_run", engine::InputContext::OnFoot);
     ctx.actions.setActionContext("player_crouch", engine::InputContext::OnFoot);
 }
 
@@ -160,7 +165,7 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 Real len = moveDir.length();
                 if (len > 1.0) moveDir = moveDir / len;
                 desired = moveDir * moveSpeed *
-                          (crouched ? kCrouchSpeedScale : Real(1));
+                          (crouched ? kCrouchSpeedScale : ctx.actions.held("player_run") ? kRunSpeedScale : Real(1));
             }
 
             if (swim_.swimming) {

@@ -349,3 +349,34 @@ TEST_CASE(input_list_bindings_names_every_source_sorted_by_input) {
             break;
         }
 }
+
+// THE CONTROLLER PARITY round (Glenn, 2026-10-02): a trigger works as a button (fire on RT), a press made by code
+// (LB / RB stepping the tools) reads as pressed for the whole next frame, and the map knows which device is in
+// use so prompts show its buttons.
+TEST_CASE(input_triggers_injected_presses_and_the_device_in_use) {
+    InputMap map;
+    map.bindButton("fire", GamepadAxis::RightTrigger);
+    GamepadState s = pad();
+    s.axes[static_cast<std::size_t>(GamepadAxis::RightTrigger)] = 0.9f;
+    map.beginFrame();
+    map.updateGamepad(s);
+    CHECK(map.pressed("fire"));
+    CHECK(map.gamepadInUse());
+    map.beginFrame();
+    map.updateGamepad(s);
+    CHECK(!map.pressed("fire") && map.held("fire"));
+    s.axes[static_cast<std::size_t>(GamepadAxis::RightTrigger)] = 0.1f;
+    map.beginFrame();
+    map.updateGamepad(s);
+    CHECK(map.released("fire"));
+
+    map.injectPress("slot_3");
+    CHECK(!map.pressed("slot_3"));   // not until the next frame
+    map.beginFrame();
+    CHECK(map.pressed("slot_3"));
+    map.beginFrame();
+    CHECK(!map.pressed("slot_3"));   // one frame only
+
+    map.processEvent(keyDown(KeyCode::W));
+    CHECK(!map.gamepadInUse());
+}

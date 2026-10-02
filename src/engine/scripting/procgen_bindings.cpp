@@ -1355,7 +1355,7 @@ int l_building_grow_floor(lua_State* L) {
     const Real y0 = sps[static_cast<std::size_t>(k)].y0;
     // The furniture, into its finish parts.
     static const PartId kFinish[kFurnMatCount] = {PartId::FurnitureWood, PartId::FurnitureFabric, PartId::Furniture,
-                                                  PartId::FurnitureMetal, PartId::FurnitureCeramic};
+                                                  PartId::FurnitureMetal, PartId::FurnitureCeramic, PartId::LitBand};
     std::vector<RenderMesh> parts = bm.parts;
     auto partFor = [&](PartId id) -> RenderMesh& {
         for (RenderMesh& m : parts) if (m.materialIndex == static_cast<int>(id)) return m;
@@ -1425,7 +1425,7 @@ int l_furniture_piece(lua_State* L) {
     const uint32_t variant = static_cast<uint32_t>(optField(L, 1, "variant", 0.0));
     const FurniturePiece& fp = furniturePiece(pc, variant);
     static const char* kMatParts[kFurnMatCount] = {"furniture_wood", "furniture_fabric", "furniture",
-                                                   "furniture_metal", "furniture_ceramic"};
+                                                   "furniture_metal", "furniture_ceramic", "lit_band"};
     lua_newtable(L);
     int n = 0;
     for (int k = 0; k < kFurnMatCount; ++k) {

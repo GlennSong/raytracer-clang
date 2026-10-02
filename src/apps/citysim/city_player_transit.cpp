@@ -304,6 +304,29 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
         if (d < seatD) { seatD = d; nearSeat = static_cast<int>(i); }
     }
 
+    // The CANDIDATES for the broker: free seats within a couple of metres, doors in reach (world positions).
+    busCands_.clear();
+    if (seatIdx_ < 0) {
+        for (std::size_t i = 0; i < seats.size(); ++i) {
+            if (city_.busSeatTaken(riding_, static_cast<int>(i))) continue;
+            if (dist2d(local_, seats[i]) > Real(2.2)) continue;
+            busCands_.push_back({0, static_cast<int>(i), pose.transformPoint(seats[i]) + Vec3(0, 0.55, 0)});
+        }
+        for (std::size_t i = 0; i < doors.size(); ++i)
+            if (dist2d(local_, doors[i]) < kDoorReach)
+                busCands_.push_back({1, static_cast<int>(i), pose.transformPoint(doors[i]) + Vec3(0, 1.2, 0)});
+    }
+    // The broker's pick, if it named one: that seat, that door.
+    if (interact && seatIdx_ < 0 && chosenKind_ >= 0) {
+        if (chosenKind_ == 0 && chosenIdx_ < static_cast<int>(seats.size()) && !city_.busSeatTaken(riding_, chosenIdx_)) {
+            nearSeat = chosenIdx_;
+            nearDoor = -1;
+        } else if (chosenKind_ == 1 && chosenIdx_ < static_cast<int>(doors.size())) {
+            nearDoor = chosenIdx_;
+        }
+    }
+    chosenKind_ = chosenIdx_ = -1;
+
     if (interact) {
         if (seatIdx_ >= 0) {                                   // stand up
             local_ = Vec3(0, floorY, seats[static_cast<std::size_t>(seatIdx_)].z);
@@ -362,7 +385,13 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
             if (!player.valid()) player = e;
         });
         engine::InteractCommand cmd;
-        if (player.valid() && engine::takeInteractCommand(ctx.world, player, "transit", cmd)) boardEdge_ = true;
+        if (player.valid() && engine::takeInteractCommand(ctx.world, player, "transit", cmd)) {
+            boardEdge_ = true;
+            if (cmd.key >= 1000000) {   // a bus seat or door the broker focused
+                chosenKind_ = static_cast<int>((cmd.key - 1000000) / 1000);
+                chosenIdx_ = static_cast<int>((cmd.key - 1000000) % 1000);
+            }
+        }
         if (player.valid() && !ctx.world.has<engine::InVehicle>(player)) {
             const Transform* pt = ctx.world.get<Transform>(player);
             const CitySim& sim0 = city_.sim();
@@ -370,15 +399,26 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
             o.provider = "transit";
             o.needsSight = false;
             if (riding_ >= 0 && sim0.isBus(riding_)) {
-                // ON THE BUS: the saloon's verb (sit down, stand up, get off), where you stand.
-                const std::string pr = busPrompt_;
-                if (pr.rfind("E: ", 0) == 0 && pt) {
-                    o.tap = pr.substr(3);
-                    o.name = "bus";
-                    o.inVolume = true;
+                // ON THE BUS: seated, the only verb is standing up; standing, every free seat and door in reach is
+                // its own offer -- look at the one you want, the marker sits on it.
+                if (seatIdx_ >= 0 && pt) {
+                    o.tap = "stand up";
+                    o.name = "bus seat";
                     o.exclusive = true;
                     o.anchor = pt->position;
                     engine::offerInteraction(ctx.world, player, o);
+                } else {
+                    const bool stopped = sim0.agents()[static_cast<std::size_t>(riding_)].speed <= 2.0;
+                    for (const BusCand& c : busCands_) {
+                        engine::InteractOffer so = o;
+                        so.key = 1000000 + static_cast<uint64_t>(c.kind) * 1000 + static_cast<uint64_t>(c.index);
+                        so.anchor = c.at;
+                        so.reach = 2.4;
+                        so.name = c.kind == 0 ? "seat" : "door";
+                        so.tap = c.kind == 0 ? "sit down" : stopped ? "get off" : std::string();
+                        if (c.kind == 1 && !stopped) so.hold.clear();
+                        if (!so.tap.empty()) engine::offerInteraction(ctx.world, player, so);
+                    }
                 }
             } else if (riding_ >= 0) {
                 o.tap = "get out";

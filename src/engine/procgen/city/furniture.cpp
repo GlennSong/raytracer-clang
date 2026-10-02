@@ -180,7 +180,8 @@ struct Furnisher {
 
 }  // namespace
 
-void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const RoomPlan& rp, Real y0, uint32_t seed) {
+void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const RoomPlan& rp, Real y0, uint32_t seed,
+                   Real ceilingY) {
     std::vector<Vec2> doors;
     for (const RoomWall& w : rp.walls)
         if (w.doorAt >= 0) doors.push_back(w.a + (w.b - w.a) * w.doorAt);
@@ -453,6 +454,45 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 break;
             }
             default: break;
+        }
+        // THE LIGHTS (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes from"):
+        // a working room -- office, open plan, meeting room, kitchenette, shop -- a grid of panels every 2.4 m
+        // along its long side; a home's room, a round fitting in its middle (a long hall, one every 4 m).
+        if (ceilingY > y0 + 2.0) {
+            auto hangAt = [&](Real a, Real b, bool panel) {
+                const bool alongV = F.f.D > F.f.W;
+                const Vec2 Zd = alongV ? F.f.v : F.f.u;
+                const Vec2 Xd(Zd.y, -Zd.x);
+                const Real half = panel ? 0.61 : 0.21, h = panel ? 0.05 : 0.08;
+                const Vec2 c = F.f.world(a, b) - Zd * half;
+                PlacedPiece pp;
+                pp.piece = static_cast<uint8_t>(Piece::CeilingLight);
+                pp.variant = panel ? 0u : 32u;
+                Mat4& M = pp.xform;
+                // right-handed: X = Z x up
+                Vec3 X(Xd.x, 0, Xd.y), Z(Zd.x, 0, Zd.y);
+                if (dot(cross(X, Vec3(0, 1, 0)), Z) < 0) X = X * -1.0;
+                M.m[0][0] = X.x; M.m[1][0] = 0; M.m[2][0] = X.z;
+                M.m[0][1] = 0;   M.m[1][1] = 1; M.m[2][1] = 0;
+                M.m[0][2] = Z.x; M.m[1][2] = 0; M.m[2][2] = Z.z;
+                M.m[0][3] = c.x; M.m[1][3] = ceilingY - h; M.m[2][3] = c.y;
+                out.push_back(pp);
+            };
+            const bool working = room.kind == RoomKind::Office || room.kind == RoomKind::OpenPlan ||
+                                 room.kind == RoomKind::Meeting || room.kind == RoomKind::Kitchenette ||
+                                 room.kind == RoomKind::Shop;
+            if (working) {
+                const int nx = std::max(1, static_cast<int>(F.f.W / 2.4)), nz = std::max(1, static_cast<int>(F.f.D / 2.4));
+                for (int i = 0; i < nx; ++i)
+                    for (int j = 0; j < nz; ++j)
+                        hangAt(F.f.W * (i + 0.5) / nx, F.f.D * (j + 0.5) / nz, true);
+            } else {
+                const Real L = std::max(F.f.W, F.f.D);
+                const int n = L > 6.0 ? static_cast<int>(L / 4.0) : 1;
+                for (int i = 0; i < n; ++i)
+                    hangAt(F.f.W >= F.f.D ? F.f.W * (i + 0.5) / n : F.f.W * 0.5,
+                           F.f.W >= F.f.D ? F.f.D * 0.5 : F.f.D * (i + 0.5) / n, false);
+            }
         }
         // The pictures: on the side walls (never the window wall of a room that has one), two in a long living
         // room. The art varies picture to picture.

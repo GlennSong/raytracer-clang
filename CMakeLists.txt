@@ -229,6 +229,7 @@ add_library(engine_core STATIC
     src/engine/systems/elevator_system.cpp
     src/engine/systems/interaction_system.cpp
     src/engine/systems/interact_broker_system.cpp
+    src/engine/systems/tool_cycle_system.cpp
     src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp

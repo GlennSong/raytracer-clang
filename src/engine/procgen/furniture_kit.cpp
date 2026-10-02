@@ -734,6 +734,23 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.boxTilted(F::Wood, {0, 0.76, 0.035}, {0.34, 0.10, 0.025}, 0.01, -0.08, wood * 0.9);
             break;
         }
+        case Piece::CeilingLight: {
+            // THE ROOM'S LIGHT (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes
+            // from"): hung by its TOP at y = size.y (placed so that is the ceiling). An office's recessed 600 x 1200
+            // panel -- a white frame round a lit diffuser -- or, with style bit 5, a home's round flush fitting.
+            k.out.solid = false;
+            if (variant & 32u) {
+                k.out.size = {0.42, 0.08, 0.42};
+                k.turned(F::Hard, {0, 0.06, 0.21}, {{0.0, 0.0}, {0.20, 0.0}, {0.21, 0.02}, {0.0, 0.02}}, kWhite, 1.0, 24);
+                k.turned(F::Light, {0, 0.0, 0.21}, {{0.0, 0.0}, {0.18, 0.0}, {0.19, 0.03}, {0.17, 0.06}, {0.0, 0.06}},
+                         Vec3(1.0, 0.95, 0.85), 1.0, 24);
+            } else {
+                k.out.size = {0.62, 0.05, 1.22};
+                k.box(F::Hard, {0, 0.035, 0.61}, {0.62, 0.03, 1.22}, 0.0, kWhite, 1);   // the frame
+                k.box(F::Light, {0, 0.012, 0.61}, {0.56, 0.02, 1.16}, 0.0, Vec3(1.0, 0.98, 0.94), 1);   // the diffuser
+            }
+            break;
+        }
         case Piece::Rug: {
             k.out.size = {2.0, 0.04, 1.4};
             k.out.solid = false;
@@ -753,7 +770,7 @@ const char* const kPieceNames[kPieceCount] = {
     "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug",
     "desk_pod", "cubicle", "meeting_table", "whiteboard",
     "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase",
-    "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair"};
+    "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair", "ceiling_light"};
 
 }  // namespace
 

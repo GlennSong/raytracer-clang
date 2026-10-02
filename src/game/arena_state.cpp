@@ -15,6 +15,7 @@
 #include "../engine/systems/elevator_system.h"
 #include "../engine/systems/interaction_system.h"
 #include "../engine/systems/interact_broker_system.h"
+#include "../engine/systems/tool_cycle_system.h"
 #include "../engine/systems/beacon_light_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/residency_system.h"
@@ -229,6 +230,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
     // all in when it picks the focus (engine/interact_broker.h).
     addSystem<InteractBrokerSystem>(&physSys);
+    addSystem<ToolCycleSystem>();   // LB / RB step through the tools (slot_1..4)
 #else
     addSystem<ResidencySystem>();
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
@@ -378,7 +380,7 @@ void ArenaState::onEnter(FrameContext& ctx) {
     // ControlledBy). Collected first, then tagged, so we never add a component
     // mid-iteration (World::each contract, ADR-0006).
     ctx.actions.bindButton("fire", MouseButton::Left);
-    ctx.actions.bindButton("fire", GamepadButton::RightBumper);
+    ctx.actions.bindButton("fire", GamepadAxis::RightTrigger);   // RT: LB / RB cycle the tools
     ctx.actions.bindButton("slot_1", KeyCode::Num1);   // bare hands (start here)
     ctx.actions.bindButton("slot_2", KeyCode::Num2);   // draw the gun
     {

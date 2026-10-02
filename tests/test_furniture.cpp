@@ -242,7 +242,7 @@ TEST_CASE(a_big_box_store_has_its_sign_checkouts_and_stock) {
             if (pp.piece == static_cast<uint8_t>(Piece::Checkout)) ++checkouts;
             if (pp.piece == static_cast<uint8_t>(own) && at.y > -16 && at.y < 18) ++stock;
             if (pp.piece == static_cast<uint8_t>(Piece::PalletRack) && at.y < -16) ++racks;
-            if ((at - door).length() < 3.0) ++inDoorway;
+            if ((at - door).length() < 3.0 && pp.piece != static_cast<uint8_t>(Piece::CeilingLight)) ++inDoorway;   // lights hang overhead
         }
         std::printf("    [big box] chain %d: %zu pieces, %d checkouts, %d of its stock, %d stockroom racks\n", chain,
                     in.furniture.size(), checkouts, stock, racks);

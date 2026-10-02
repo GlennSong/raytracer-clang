@@ -292,8 +292,10 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::GlassClear:
             // Clear glass: a faint blue, a sharp fresnel, most of what is
             // behind it coming through (the transparent pass), both faces.
-            m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.0f; m.roughness = 0.06f;
-            m.opacity = 0.18f; break;
+            // REFLECTIVE (Glenn, 2026-10-02): a little metal and a mirror-smooth face, so a pane catches the room
+            // and the sky instead of vanishing -- still mostly see-through.
+            m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.35f; m.roughness = 0.03f;
+            m.opacity = 0.24f; break;
         case PartId::BeaconHaze:
             // The bulb's corona: larger, fainter, the soft red halo.
             m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
@@ -4452,7 +4454,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         appendToPart(out, PartId::GlassClear, rm.glass);
         appendToPart(out, rp.finish.part, rm.accent);   // brick, concrete or timber
         // FURNITURE (buildings M4b): every named room gets the kit's pieces, placed for instanced drawing.
-        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed);
+        // the ceiling's underside: the next storey's floor slab is 0.25 m deep
+        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25);
     }
 
     // --- the core (M5): shaft walls with doors, the dog-leg flights and

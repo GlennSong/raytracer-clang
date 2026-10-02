@@ -1109,7 +1109,8 @@ void wallRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real 
 
 // A glass front: one clear pane on the centre line (both faces shade; the
 // GlassClear material is two-sided), the doorway cut, a collider behind it.
-void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real y0, Real h, Real doorAt) {
+void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real y0, Real h, Real doorAt,
+              RenderMesh* frost = nullptr) {
     const Vec2 dv = b - a;
     const Real L = dv.length();
     if (L < 0.05) return;
@@ -1124,10 +1125,19 @@ void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real
         d0 = c - kRoomDoorW * 0.5;
         d1 = c + kRoomDoorW * 0.5;
     }
-    const Vec3 white(1, 1, 1);
+    // TINTED (Glenn, 2026-10-02: "in the offices the glass should probably be reflective ... and maybe tint a bit
+    // so that it stands out"): a cool green-blue over GlassClear's own colour, and a FROSTED STRIP at eye height on
+    // both faces -- the manifestation band real office glass carries so nobody walks into it.
+    const Vec3 white(0.70, 0.90, 0.92);
     auto piece = [&](Real x0, Real x1, Real yb, Real ytop) {
         if (x1 - x0 < 1e-4 || ytop - yb < 1e-4) return;
         quad(m, col, W(x0, yb), W(x1, yb), W(x1, ytop), W(x0, ytop), nrm, white);
+        if (frost && ytop > y0 + 1.6 && yb < y0 + 1.4) {
+            const Real s0 = y0 + 1.40, s1 = y0 + 1.52;
+            const Vec3 off = nrm * 0.004, fc(0.93, 0.95, 0.96);
+            quad(*frost, nullptr, W(x0, s0) + off, W(x1, s0) + off, W(x1, s1) + off, W(x0, s1) + off, nrm, fc);
+            quad(*frost, nullptr, W(x1, s0) - off, W(x0, s0) - off, W(x0, s1) - off, W(x1, s1) - off, nrm * -1.0, fc);
+        }
     };
     if (d0 < 0) { piece(0, L, y0, yt); return; }
     piece(0, d0, y0, yt);
@@ -1229,7 +1239,7 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
     int strongLeft = rp.topology == PlateTopology::WholeFloor ? 1 : 2;
     for (const RoomWall& w : rp.walls) {
         if (w.glass) {
-            glassRun(out.glass, colliderOut, w.a, w.b, y0, h, w.doorAt);
+            glassRun(out.glass, colliderOut, w.a, w.b, y0, h, w.doorAt, &out.drywall);
             continue;
         }
         // The wall itself: the field colour, or the finish where the finish

@@ -114,6 +114,12 @@ private:
     // The interaction broker's offer on foot (engine/interact_broker.h): the nearest stopped bus or cab in reach,
     // found four times a second, not every frame (the agent list is long).
     int boardAgent_ = -1;
+    // ABOARD A BUS: each free seat and door in reach is its own offer, so the marker shows WHICH seat E takes
+    // (Glenn, 2026-10-02: "some small indicator so I can say select which seat to sit on"). Filled in rideBus
+    // (the bus pose is known there), offered in update(); the broker's pick comes back as chosenKind_/chosenIdx_.
+    struct BusCand { int kind = 0; int index = 0; engine::Vec3 at{0, 0, 0}; };   // kind 0 seat, 1 door
+    std::vector<BusCand> busCands_;
+    int chosenKind_ = -1, chosenIdx_ = -1;
     engine::Vec3 boardAt_{0, 0, 0};
     engine::Real boardScanT_ = 0;
 };

@@ -74,6 +74,13 @@ void ElevatorSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("elevator_floor_ground", KeyCode::Left);
     ctx.actions.bindButton("elevator_floor_top", KeyCode::Right);
     ctx.actions.bindButton("elevator_fast", KeyCode::LeftShift);
+    // ...and on a controller (Glenn, 2026-10-02: "use the arrow keys on the dpad to select floors"): the D-pad
+    // picks, left trigger held for ten at a time.
+    ctx.actions.bindButton("elevator_floor_up", GamepadButton::DpadUp);
+    ctx.actions.bindButton("elevator_floor_down", GamepadButton::DpadDown);
+    ctx.actions.bindButton("elevator_floor_ground", GamepadButton::DpadLeft);
+    ctx.actions.bindButton("elevator_floor_top", GamepadButton::DpadRight);
+    ctx.actions.bindButton("elevator_fast", GamepadAxis::LeftTrigger);
     // The sounds, made once (engine/audio/sfx.h).
     audioReady_ = ctx.audio.ready();
     if (audioReady_) {
@@ -662,7 +669,10 @@ void ElevatorSystem::render(FrameContext& ctx) {
         if (status_.moving) ImGui::Text("moving to %d", status_.selected);
         else {
             ImGui::Text("floor %d", status_.selected);
-            ImGui::Text("Up / Down: pick (hold to run, Shift: 10)   Left / Right: ground / top");
+            if (ctx.actions.gamepadInUse())
+                ImGui::Text("D-pad Up / Down: pick (hold to run, LT: 10)   Left / Right: ground / top");
+            else
+                ImGui::Text("Up / Down: pick (hold to run, Shift: 10)   Left / Right: ground / top");
         }
     } else {
         ImGui::Text("ELEVATOR   floor %d", status_.floor);

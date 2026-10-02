@@ -25,7 +25,9 @@
 namespace engine {
 
 // Furnish every room of one storey whose floor is at y0. `seed` picks the building's wood, fabric and kitchen style.
-void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const RoomPlan& rp, Real y0, uint32_t seed);
+// `ceilingY` > 0: the rooms' ceiling height (world) -- each room gets its light fixtures there.
+void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const RoomPlan& rp, Real y0, uint32_t seed,
+                   Real ceilingY = 0);
 
 }  // namespace engine
 

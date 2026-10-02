@@ -17,7 +17,7 @@ std::size_t spawnFurnitureGroups(World& world, AssetManager& assets, Renderer* r
         byPiece[(static_cast<uint64_t>(pp.piece) << 32) | pp.variant].push_back(pp.xform);
     static const PartId kFinishPart[kFurnMatCount] = {PartId::FurnitureWood, PartId::FurnitureFabric,
                                                       PartId::Furniture, PartId::FurnitureMetal,
-                                                      PartId::FurnitureCeramic};
+                                                      PartId::FurnitureCeramic, PartId::Furniture};
     for (const auto& [key, xforms] : byPiece) {
         const Piece pc = static_cast<Piece>(key >> 32);
         const uint32_t variant = static_cast<uint32_t>(key & 0xffffffffu);
@@ -31,6 +31,11 @@ std::size_t spawnFurnitureGroups(World& world, AssetManager& assets, Renderer* r
             InstanceGroup g;
             g.mesh = mit->second;
             g.material = materialFor(kFinishPart[f], tint);
+            if (f == static_cast<int>(FurnMat::Light)) {   // a lamp's lit face: always on, its tint on the vertex
+                g.material.albedo = {1.0, 1.0, 1.0};
+                g.material.emission = {2.2, 2.1, 1.9};
+                g.material.roughness = 0.9f;
+            }
             const RenderMaterial::Surface surf = g.material.surface();
             if (renderer && surf != RenderMaterial::Surface::None) {
                 const int sid = static_cast<int>(surf);

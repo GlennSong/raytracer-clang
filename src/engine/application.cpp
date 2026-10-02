@@ -894,6 +894,10 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setString("input.hold", cmd.args[0] + " " + cmd.args[1]);
         return "ok hold " + cmd.args[0] + " staged";
     }
+    if (cmd.name == "vehicle_spawn") {   // drop a car in front of the player (the N key)
+        settingsStore.setDouble("vehicle.spawn", 1.0);
+        return "ok staged";
+    }
     if (cmd.name == "vehicle?") {
         // The player's car: speed km/h, rpm, gear, drive mode, position, sim speed
         // (VehicleSystem publishes it each frame).
@@ -908,6 +912,7 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setDouble("interact.request", a == "hold" ? 2.0 : a == "stand" ? 3.0 : a == "next" ? 4.0 : 1.0);
         return "ok staged";
     }
+    if (cmd.name == "walkers?") return "ok " + settingsStore.getString("walkers.telemetry", "none");
     if (cmd.name == "interact?") return "ok " + settingsStore.getString("interact.status", "none");
 
     if (cmd.name == "keys?") {

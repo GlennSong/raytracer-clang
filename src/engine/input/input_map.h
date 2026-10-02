@@ -47,6 +47,8 @@ public:
     void bindButton(const std::string& action, MouseButton button);
     void bindButton(const std::string& action, GamepadButton button);
     void bindButton(const std::string& action, XrButton button);  // pinch etc.
+    // A TRIGGER as a button (pressed past half way): fire on RT, the controller's convention.
+    void bindButton(const std::string& action, GamepadAxis trigger);
     void bindAxis(const std::string& axis, KeyCode key, Real scale);
     // Bind an analog gamepad axis (stick/trigger) to a named axis. Bindings are
     // device-relative ("left stick X"); the player layer routes a hardware pad
@@ -106,6 +108,13 @@ public:
     // values. Pass a disconnected state to clear (e.g. on unassign).
     void updateGamepad(const GamepadState& pad);
 
+    // A press made by code (a tool cycle stepping to the next slot): `action` reads as pressed for the whole NEXT
+    // frame, whatever order the systems run in.
+    void injectPress(const std::string& action) { injectedNext_.insert(action); }
+    // WHICH DEVICE the player is using: the last one that pressed something (or moved a stick past half way).
+    // Prompts show its buttons -- "E" on the keyboard, "X" on a controller.
+    bool gamepadInUse() const { return gamepadLast_; }
+
     // --- Queries ---
     bool held(const std::string& action) const;      // currently down
     bool pressed(const std::string& action) const;   // went down this frame
@@ -155,6 +164,9 @@ private:
     std::unordered_set<int> releasedSources;
 
     std::array<bool, GAMEPAD_BUTTON_COUNT> prevGamepadButtons{};
+    std::array<bool, 2> prevTriggers{};
+    std::unordered_set<std::string> injectedNext_, injectedNow_;
+    bool gamepadLast_ = false;
     std::array<Real, GAMEPAD_AXIS_COUNT> gamepadAxisValues{};
     Real deadzone = 0.15;
 };
