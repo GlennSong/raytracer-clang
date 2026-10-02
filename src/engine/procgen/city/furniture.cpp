@@ -1,4 +1,5 @@
 #include "furniture.h"
+#include "../furniture_library.h"   // descriptions: anchors to dress, clearances to keep (M3)
 #include "../furniture_kit.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
@@ -78,6 +79,7 @@ struct Furnisher {
         M.m[0][2] = Z.x; M.m[1][2] = 0; M.m[2][2] = Z.z;
         M.m[0][3] = a.x; M.m[1][3] = y0 + yOff; M.m[2][3] = a.y;
         out.push_back(pp);
+        dress(pc, M);
         const FurniturePiece& kit = furniturePiece(pc, variant);
         if (!kit.solid || !collider) return;
         // The footprint box, the piece's height.
@@ -97,23 +99,71 @@ struct Furnisher {
         q(V(0, yb), V(1, yb), V(2, yb), V(3, yb));
     }
 
+    // THE DRESSING (the furniture library, M3): every anchor the placed piece's description carries -- a desk's
+    // corner, a nightstand's top -- may take one of the goods it accepts (a lamp, a plant, a stack of books),
+    // chosen and turned by a hash of where it stands. Goods are pieces too: instanced, never solid.
+    void dress(Piece pc, const Mat4& M) {
+        const FurnitureLibrary& lib = FurnitureLibrary::global();
+        const FurnitureAsset* a = lib.find(pc);
+        if (!a || a->anchors.empty()) return;
+        uint32_t h = static_cast<uint32_t>(std::lround(M.m[0][3] * 31.0)) * 73856093u ^
+                     static_cast<uint32_t>(std::lround(M.m[2][3] * 17.0)) * 19349663u ^ static_cast<uint32_t>(M.m[1][3] * 7.0);
+        for (const FurnAnchor& an : a->anchors) {
+            h = h * 1664525u + 1013904223u;
+            if ((h >> 8) % 1000u >= static_cast<uint32_t>(an.chance * 1000.0)) continue;
+            std::vector<Piece> fits;
+            for (Piece g : lib.goodsFor(an.accepts)) {
+                const Vec3 sz = furniturePiece(g, 0).size;
+                if (sz.x <= an.w + 0.05 && sz.z <= an.d + 0.05) fits.push_back(g);
+            }
+            if (fits.empty()) continue;
+            h = h * 1664525u + 1013904223u;
+            const Piece g = fits[(h >> 9) % fits.size()];
+            const uint32_t gv = (h >> 13) & 63u;
+            const Vec3 sz = furniturePiece(g, gv).size;
+            // the good, centred on the anchor, turned a little (nothing on a real desk is square to it)
+            const Real turn = an.yaw + (static_cast<Real>((h >> 19) % 61u) - 30.0) * 0.01;
+            const Real c = std::cos(turn), sn = std::sin(turn);
+            Mat4 L;   // good -> piece: rotate about y, then move its footprint's centre onto the anchor
+            L.m[0][0] = c;   L.m[0][2] = sn;
+            L.m[2][0] = -sn; L.m[2][2] = c;
+            // its footprint's centre (0, 0, size.z / 2) turned lands at (sn, 0, c) * size.z / 2; move that onto the anchor
+            L.m[0][3] = an.at.x - sn * sz.z * 0.5;
+            L.m[1][3] = an.at.y;
+            L.m[2][3] = an.at.z - c * sz.z * 0.5;
+            PlacedPiece gp;
+            gp.piece = static_cast<uint8_t>(g);
+            gp.variant = gv;
+            gp.xform = M * L;
+            out.push_back(gp);
+        }
+    }
+    // The clearance a piece's description keeps in front of it (`fallback` with no library loaded).
+    static Real clearOf(Piece pc, Real fallback) {
+        const FurnitureAsset* a = FurnitureLibrary::global().find(pc);
+        return a && a->clearFront > 0 ? a->clearFront : fallback;
+    }
+
     // Find a spot against a wall for a w x d footprint: the preferred sides in order, each tried centred, then
-    // at its ends and quarters. False when it fits nowhere.
-    bool place(Real w, Real d, const std::vector<int>& sides, Placement& p, bool isTall = false) {
+    // at its ends and quarters. False when it fits nowhere. `clear`: floor to keep free in front of it too (the
+    // piece's CLEARANCE: a wardrobe's doors, a counter's standing room) -- reserved, never furnished.
+    bool place(Real w, Real d, const std::vector<int>& sides, Placement& p, bool isTall = false, Real clear = 0) {
         for (int s : sides) {
             const Real len = (s == 0 || s == 2) ? f.W : f.D;
             const Real depth = (s == 0 || s == 2) ? f.D : f.W;
             if (w > len - 0.1 || d > depth - 0.7) continue;
+            const Real reach = std::min(d + clear, depth - 0.5);   // the piece and the floor in front of it
             const Real free = len - w - 0.1;
             for (Real k : {0.5, 0.0, 1.0, 0.25, 0.75}) {
                 Placement c{&f, s, 0.05 + free * k, w, d};
-                const Box2 fp = c.footprint();
-                bool clear = true;
+                Placement zone{&f, s, 0.05 + free * k, w, reach};
+                const Box2 fp = c.footprint(), zp = zone.footprint();
+                bool clearOk = true;
                 for (const Box2& b : taken)
-                    if (overlaps(fp, b, 0.08)) { clear = false; break; }
-                if (!clear) continue;
+                    if (overlaps(zp, b, 0.08)) { clearOk = false; break; }
+                if (!clearOk) continue;
                 p = c;
-                taken.push_back(fp);
+                taken.push_back(zp);
                 if (isTall) tall.push_back(fp);
                 return true;
             }
@@ -235,7 +285,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     F.put(p, Piece::Monitor, 0.8, 0.12, true, 0.75);
                     F.put(p, Piece::OfficeChair, 0.8, 1.55, false);
                 }
-                if (F.place(0.46, 0.6, {1, 3, 2}, p, true)) F.put(p, Piece::FilingCabinet, 0.23, 0.0);
+                if (F.place(0.46, 0.6, {1, 3, 2}, p, true, Furnisher::clearOf(Piece::FilingCabinet, 0.6))) F.put(p, Piece::FilingCabinet, 0.23, 0.0);
                 if (F.f.W > 5.5 && F.place(0.9, 0.9, {2, 1, 3}, p)) F.put(p, Piece::Planter, 0.45, 0.0);
                 break;
             }
@@ -252,7 +302,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         F.put(p, Piece::Sofa, 1.08, 0.0);
                         F.put(p, Piece::CoffeeTable, 1.08, 1.15);
                     }
-                } else if (F.place(1.2, 0.6, {1, 3, 0, 2}, p, true)) {
+                } else if (F.place(1.2, 0.6, {1, 3, 0, 2}, p, true, Furnisher::clearOf(Piece::Wardrobe, 0.7))) {
                     F.put(p, Piece::Wardrobe, 0.6, 0.0);
                 }
                 break;
@@ -264,7 +314,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     F.put(sofa, Piece::Rug, 1.08, 0.75);
                     F.put(sofa, Piece::CoffeeTable, 1.08, 1.15);
                     const int opp = (sofa.side + 2) % 4;
-                    if (F.place(1.6, 0.42, {opp}, p, true)) F.put(p, Piece::TvUnit, 0.8, 0.0);
+                    if (F.place(1.6, 0.42, {opp}, p, true, Furnisher::clearOf(Piece::TvUnit, 0.8))) F.put(p, Piece::TvUnit, 0.8, 0.0);
                 }
                 if (F.place(0.84, 0.84, {1, 3, 0, 2}, p)) F.put(p, Piece::LoungeChair, 0.42, 0.0);
                 break;
@@ -274,7 +324,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 // at one end, the sink and the hob among the base units, a wall cupboard over each base.
                 const Real wall = std::max(F.f.W, F.f.D);
                 const int mods = std::clamp(static_cast<int>((wall - 1.0) / 0.6), 2, 6);
-                if (F.place(mods * 0.6, 0.64, longFirst, p, true)) {
+                if (F.place(mods * 0.6, 0.64, longFirst, p, true, Furnisher::clearOf(Piece::KitchenBase, 0.9))) {
                     for (int i = 0; i < mods; ++i) {
                         const Real x = 0.3 + i * 0.6;
                         Piece pc = Piece::KitchenBase;
@@ -448,9 +498,9 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 break;
             }
             case RoomKind::Bath: {
-                if (F.place(1.7, 0.75, longFirst, p)) F.put(p, Piece::Bathtub, 0.85, 0.0);
-                if (F.place(0.4, 0.7, {1, 3, 0, 2}, p)) F.put(p, Piece::Toilet, 0.2, 0.0);
-                if (F.place(0.8, 0.5, {0, 1, 2, 3}, p)) F.put(p, Piece::Vanity, 0.4, 0.0);
+                if (F.place(1.7, 0.75, longFirst, p, false, 0.6)) F.put(p, Piece::Bathtub, 0.85, 0.0);
+                if (F.place(0.4, 0.7, {1, 3, 0, 2}, p, false, 0.6)) F.put(p, Piece::Toilet, 0.2, 0.0);
+                if (F.place(0.8, 0.5, {0, 1, 2, 3}, p, false, 0.6)) F.put(p, Piece::Vanity, 0.4, 0.0);
                 break;
             }
             default: break;

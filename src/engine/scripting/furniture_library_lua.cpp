@@ -60,6 +60,43 @@ bool readFurnitureLibrary(ScriptVM& vm, FurnitureLibrary& out, std::string* err)
         }
         lua_pop(L, 1);
         if (a.spots.size() > 32) { lua_settop(L, base); return fail(err, name + ": more than 32 spots"); }
+        lua_getfield(L, t, "clearance");   // {front = m, side = m}
+        if (lua_istable(L, -1)) {
+            a.clearFront = numField(L, lua_gettop(L), "front", 0.0);
+            a.clearSide = numField(L, lua_gettop(L), "side", 0.0);
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, t, "anchors");
+        if (lua_istable(L, -1)) {
+            const int at = lua_gettop(L), n = static_cast<int>(luaL_len(L, at));
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, at, i);
+                if (lua_istable(L, -1)) {
+                    const int e = lua_gettop(L);
+                    FurnAnchor an;
+                    an.id = strField(L, e, "id");
+                    an.at = vec3Field(L, e, "at", an.at);
+                    an.w = numField(L, e, "w", an.w);
+                    an.d = numField(L, e, "d", an.d);
+                    an.chance = numField(L, e, "chance", 1.0);
+                    an.yaw = numField(L, e, "yaw", 0.0);
+                    lua_getfield(L, e, "accepts");
+                    if (lua_istable(L, -1)) {
+                        const int k = static_cast<int>(luaL_len(L, -1));
+                        for (int j = 1; j <= k; ++j) {
+                            lua_rawgeti(L, -1, j);
+                            if (lua_isstring(L, -1)) an.accepts.push_back(lua_tostring(L, -1));
+                            lua_pop(L, 1);
+                        }
+                    }
+                    lua_pop(L, 1);
+                    if (an.accepts.empty()) { lua_settop(L, base); return fail(err, name + ": anchor '" + an.id + "' accepts nothing"); }
+                    a.anchors.push_back(an);
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
         lua_getfield(L, t, "verbs");
         if (lua_istable(L, -1)) {
             const int vt = lua_gettop(L), n = static_cast<int>(luaL_len(L, vt));

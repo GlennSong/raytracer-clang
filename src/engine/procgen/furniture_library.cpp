@@ -34,6 +34,20 @@ const FurnitureAsset* FurnitureLibrary::find(Piece p) const {
     return &assets_[static_cast<std::size_t>(i)];
 }
 
+std::vector<Piece> FurnitureLibrary::goodsFor(const std::vector<std::string>& tags) const {
+    std::vector<Piece> out;
+    for (int i = 0; i < kPieceCount; ++i) {
+        if (!has_[static_cast<std::size_t>(i)]) continue;
+        const FurnitureAsset& a = assets_[static_cast<std::size_t>(i)];
+        if (a.family != "goods") continue;
+        bool hit = false;
+        for (const std::string& t : a.tags)
+            for (const std::string& want : tags) hit = hit || t == want;
+        if (hit) out.push_back(static_cast<Piece>(i));
+    }
+    return out;
+}
+
 std::size_t FurnitureLibrary::size() const {
     std::size_t n = 0;
     for (bool h : has_) n += h ? 1 : 0;

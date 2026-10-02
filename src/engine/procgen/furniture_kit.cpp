@@ -734,6 +734,90 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.boxTilted(F::Wood, {0, 0.76, 0.035}, {0.34, 0.10, 0.025}, 0.01, -0.08, wood * 0.9);
             break;
         }
+        // ---- GOODS (the furniture library, M3): small things the dressing pass stands on anchors. Each sits on
+        // y = 0 (the surface), centred on x = 0, z = size.z / 2. The variant's style bits pick the colourway.
+        case Piece::DeskLamp: {
+            k.out.size = {0.22, 0.46, 0.22};
+            k.out.solid = false;
+            const Vec3 shade = (variant & 32u) ? kBlack * 2.0 : Vec3(0.75, 0.22, 0.18);
+            k.turned(F::Metal, {0, 0, 0.11}, {{0.0, 0.0}, {0.09, 0.0}, {0.09, 0.02}, {0.02, 0.03}, {0.0, 0.03}}, kBlack * 2.0, 1.0, 16);
+            k.rod(F::Metal, {0, 0.02, 0.11}, {0.0, 0.30, 0.13}, 0.008, kChrome, 8);
+            k.rod(F::Metal, {0, 0.30, 0.13}, {0.0, 0.40, 0.04}, 0.008, kChrome, 8);
+            k.turned(F::Hard, {0, 0.34, 0.04}, {{0.0, 0.12}, {0.02, 0.12}, {0.06, 0.04}, {0.07, 0.0}}, shade, 1.0, 16);
+            break;
+        }
+        case Piece::PottedPlant: {
+            // a terracotta / white pot and a mound of leaves
+            k.out.size = {0.26, 0.42, 0.26};
+            k.out.solid = false;
+            const Vec3 pot = (variant & 32u) ? kWhite : Vec3(0.66, 0.36, 0.24);
+            k.turned(F::Ceramic, {0, 0, 0.13}, {{0.0, 0.0}, {0.08, 0.0}, {0.11, 0.17}, {0.115, 0.18}, {0.0, 0.18}}, pot, 1.0, 16);
+            const Vec3 leaf(0.18, 0.40, 0.17);
+            for (int i = 0; i < 6; ++i) {
+                const double a = i * 1.047 + (variant % 7) * 0.3;
+                k.boxTilted(F::Fabric, {0.05 * std::cos(a), 0.29, 0.13 + 0.05 * std::sin(a)}, {0.06, 0.22, 0.015}, 0.007,
+                            0.35 * ((i % 2) ? 1 : -1), leaf * (0.85 + 0.05 * i));
+            }
+            k.turned(F::Fabric, {0, 0.17, 0.13}, {{0.0, 0.0}, {0.10, 0.02}, {0.09, 0.10}, {0.0, 0.14}}, leaf * 0.9, 1.0, 10);
+            break;
+        }
+        case Piece::BookStack: {
+            // three or four books lying flat, each a little askew
+            k.out.size = {0.30, 0.16, 0.24};
+            k.out.solid = false;
+            static const Vec3 kCovers[6] = {{0.55, 0.12, 0.10}, {0.12, 0.20, 0.45}, {0.15, 0.40, 0.22}, {0.85, 0.80, 0.70},
+                                            {0.10, 0.10, 0.10}, {0.75, 0.55, 0.20}};
+            const int n = 3 + static_cast<int>(variant % 2u);
+            double y = 0;
+            for (int i = 0; i < n; ++i) {
+                const double h = 0.028 + 0.012 * ((variant + i) % 3), w = 0.24 - 0.02 * (i % 2), d = 0.17 + 0.015 * (i % 3);
+                k.boxTilted(F::Hard, {0.01 * (static_cast<int>((i * 3 + variant) % 5u) - 2), y + h * 0.5, 0.12}, {w, h, d}, 0.003, 0.0,
+                            kCovers[(variant / 2 + i) % 6]);
+                y += h;
+            }
+            break;
+        }
+        case Piece::Kettle: {
+            k.out.size = {0.24, 0.26, 0.20};
+            k.out.solid = false;
+            const Vec3 body = (variant & 32u) ? kWhite : kSteel;
+            k.turned(F::Metal, {0, 0, 0.10}, {{0.0, 0.0}, {0.085, 0.0}, {0.09, 0.03}, {0.08, 0.18}, {0.05, 0.21}, {0.0, 0.215}},
+                     body, 1.0, 20);
+            k.box(F::Hard, {0.10, 0.12, 0.10}, {0.025, 0.16, 0.03}, 0.01, kBlack, 1);   // the handle
+            k.rod(F::Metal, {-0.07, 0.10, 0.10}, {-0.12, 0.17, 0.10}, 0.012, body, 8); // the spout
+            break;
+        }
+        case Piece::FruitBowl: {
+            k.out.size = {0.30, 0.14, 0.30};
+            k.out.solid = false;
+            k.turned(F::Ceramic, {0, 0, 0.15}, {{0.0, 0.0}, {0.06, 0.0}, {0.14, 0.07}, {0.145, 0.075}, {0.0, 0.03}}, kPorcelain, 1.0, 20);
+            static const Vec3 kFruit[4] = {{0.85, 0.15, 0.10}, {0.95, 0.70, 0.10}, {0.40, 0.65, 0.15}, {0.90, 0.45, 0.10}};
+            for (int i = 0; i < 5; ++i) {
+                const double a = i * 1.257, r = i == 4 ? 0.0 : 0.06;
+                k.turned(F::Hard, {r * std::cos(a), 0.05 + (i == 4 ? 0.04 : 0.0), 0.15 + r * std::sin(a)},
+                         {{0.0, 0.0}, {0.03, 0.01}, {0.038, 0.035}, {0.03, 0.06}, {0.0, 0.07}}, kFruit[(variant + i) % 4], 1.0, 10);
+            }
+            break;
+        }
+        case Piece::Vase: {
+            k.out.size = {0.16, 0.48, 0.16};
+            k.out.solid = false;
+            static const Vec3 kGlaze[3] = {{0.20, 0.35, 0.55}, {0.85, 0.82, 0.75}, {0.55, 0.25, 0.20}};
+            k.turned(F::Ceramic, {0, 0, 0.08}, {{0.0, 0.0}, {0.05, 0.0}, {0.075, 0.10}, {0.05, 0.22}, {0.035, 0.26}, {0.045, 0.28}, {0.0, 0.28}},
+                     kGlaze[variant % 3], 1.0, 18);
+            for (int i = 0; i < 5; ++i)   // stems
+                k.rod(F::Wood, {0.0, 0.26, 0.08}, {0.04 * std::cos(i * 1.3), 0.42 + 0.04 * (i % 2), 0.08 + 0.04 * std::sin(i * 1.3)}, 0.004,
+                      Vec3(0.25, 0.40, 0.18), 6);
+            break;
+        }
+        case Piece::Mug: {
+            k.out.size = {0.12, 0.10, 0.09};
+            k.out.solid = false;
+            static const Vec3 kMug[4] = {{0.95, 0.95, 0.93}, {0.20, 0.30, 0.55}, {0.75, 0.20, 0.18}, {0.20, 0.20, 0.22}};
+            k.turned(F::Ceramic, {0, 0, 0.045}, {{0.0, 0.0}, {0.04, 0.0}, {0.042, 0.095}, {0.0, 0.095}}, kMug[variant % 4], 1.0, 16);
+            k.box(F::Ceramic, {0.05, 0.05, 0.045}, {0.015, 0.06, 0.012}, 0.005, kMug[variant % 4], 1);
+            break;
+        }
         case Piece::CeilingLight: {
             // THE ROOM'S LIGHT (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes
             // from"): hung by its TOP at y = size.y (placed so that is the ceiling). An office's recessed 600 x 1200
@@ -770,7 +854,8 @@ const char* const kPieceNames[kPieceCount] = {
     "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug",
     "desk_pod", "cubicle", "meeting_table", "whiteboard",
     "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase",
-    "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair", "ceiling_light"};
+    "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair", "ceiling_light",
+    "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug"};
 
 }  // namespace
 

@@ -225,3 +225,38 @@ TEST_CASE(an_outdoor_piece_faces_where_it_was_placed) {
         CHECK((seat.x - 10) * face.x + (seat.z - 20) * face.y > 0.3);   // in front of its back
     }
 }
+
+// THE DRESSING (M3): with the library loaded, a grown apartment floor's surfaces carry goods -- each standing on
+// one of its host's anchors (its height the anchor's), never floating or sunk -- and the clearance rule leaves
+// every wardrobe its door space.
+TEST_CASE(furniture_surfaces_are_dressed_with_goods_on_their_anchors) {
+    FurnitureLibrary& lib = FurnitureLibrary::global();
+    const FurnitureLibrary keep = lib;
+    lib = shippedLibrary();
+    const Poly2 plan = {{0, 0}, {44, 0}, {44, 32}, {0, 32}};
+    BuildingParams p;
+    p.floors = 24; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = 33;
+    p.residential = true;
+    const BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, 6, 7);
+    int goods = 0, onAnchor = 0;
+    for (const PlacedPiece& g : bm.furniture) {
+        const FurnitureAsset* ga = lib.find(static_cast<Piece>(g.piece));
+        if (!ga || ga->family != "goods") continue;
+        ++goods;
+        const Vec3 gp(g.xform.m[0][3], g.xform.m[1][3], g.xform.m[2][3]);
+        for (const PlacedPiece& h : bm.furniture) {
+            const FurnitureAsset* ha = lib.find(static_cast<Piece>(h.piece));
+            if (!ha) continue;
+            bool hit = false;
+            for (const FurnAnchor& an : ha->anchors) {
+                const Vec3 at = piecePoint(h.xform, an.at);
+                if (std::fabs(at.y - gp.y) < 1e-6 && Vec3(at.x - gp.x, 0, at.z - gp.z).length() < 0.4) hit = true;
+            }
+            if (hit) { ++onAnchor; break; }
+        }
+    }
+    std::printf("    [dressing] %d goods on the floor, %d on an anchor\n", goods, onAnchor);
+    CHECK(goods >= 10);
+    CHECK(onAnchor == goods);
+    lib = keep;
+}

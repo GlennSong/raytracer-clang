@@ -101,6 +101,56 @@ furniture_library = {
     spots = { { id = "seat", at = seat(0, 0.48, 0.26) } },
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.19, 0.20 }, look = { 0, -0.08, 1 }, exit = { 0, 0, 0.9 } } },
   },
+  -- SURFACES AND STORAGE (M3): what they hold (anchors: a surface's centre, its footprint, what goods it takes) and
+  -- the floor kept free in front of them (clearance: front, side) -- a desk's chair, a wardrobe's doors.
+  desk = {
+    family = "surface", tags = { "office", "study" },
+    clearance = { front = 0.9 },
+    anchors = {
+      { id = "left", at = { -0.58, 0.745, 0.22 }, w = 0.3, d = 0.3, accepts = { "desk", "plant", "books" }, chance = 0.8 },
+      { id = "right", at = { 0.58, 0.745, 0.55 }, w = 0.2, d = 0.2, accepts = { "drink" }, chance = 0.6 },
+    },
+  },
+  nightstand = {
+    family = "storage", tags = { "bedroom" },
+    anchors = { { id = "top", at = { -0.12, 0.52, 0.18 }, w = 0.18, d = 0.3, accepts = { "books", "drink" }, chance = 0.6 } },
+  },
+  coffee_table = {
+    family = "surface", tags = { "living" },
+    clearance = { front = 0.5 },
+    anchors = {
+      { id = "a", at = { -0.28, 0.415, 0.30 }, w = 0.3, d = 0.3, accepts = { "books", "drink" }, chance = 0.8 },
+      { id = "b", at = { 0.28, 0.415, 0.30 }, w = 0.3, d = 0.3, accepts = { "plant", "bowl", "vase" }, chance = 0.7 },
+    },
+  },
+  dining_table = {
+    family = "surface", tags = { "kitchen", "dining" },
+    anchors = { { id = "centre", at = { 0.0, 0.76, 0.425 }, w = 0.35, d = 0.35, accepts = { "bowl", "vase" }, chance = 0.8 } },
+  },
+  tv_unit = {
+    family = "storage", tags = { "living" },
+    clearance = { front = 0.8 },
+    anchors = {
+      { id = "l", at = { -0.62, 0.51, 0.21 }, w = 0.28, d = 0.3, accepts = { "plant", "books", "vase" }, chance = 0.6 },
+      { id = "r", at = { 0.62, 0.51, 0.21 }, w = 0.28, d = 0.3, accepts = { "plant", "books" }, chance = 0.5 },
+    },
+  },
+  kitchen_base = {
+    family = "storage", tags = { "kitchen" },
+    clearance = { front = 0.9 },
+    anchors = { { id = "worktop", at = { 0.0, 0.90, 0.32 }, w = 0.45, d = 0.4, accepts = { "kitchen", "bowl", "plant" }, chance = 0.35 } },
+  },
+  wardrobe = { family = "storage", tags = { "bedroom" }, clearance = { front = 0.7 } },
+  kitchen_tall = { family = "storage", tags = { "kitchen" }, clearance = { front = 0.9 } },
+  filing_cabinet = { family = "storage", tags = { "office" }, clearance = { front = 0.6 } },
+  -- THE GOODS: small things the dressing pass stands on anchors, by their tags
+  desk_lamp = { family = "goods", tags = { "desk", "lamp" } },
+  potted_plant = { family = "goods", tags = { "plant" } },
+  book_stack = { family = "goods", tags = { "books" } },
+  kettle = { family = "goods", tags = { "kitchen" } },
+  fruit_bowl = { family = "goods", tags = { "bowl", "kitchen" } },
+  vase = { family = "goods", tags = { "vase" } },
+  mug = { family = "goods", tags = { "drink" } },
   toilet = {
     family = "fixture", tags = { "bathroom" },
     spots = { { id = "seat", at = seat(0, 0.42, 0.42) } },
