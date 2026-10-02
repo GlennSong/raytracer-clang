@@ -4,6 +4,7 @@
 #include "../src/apps/citysim/city_goals.h"
 #include "../src/apps/citysim/city_sim.h"
 
+#include <cstdio>
 #include <vector>
 
 using namespace engine;
@@ -187,5 +188,62 @@ TEST_CASE(custom_goal_table_runs_errands_with_a_two_hour_dwell) {
     for (std::size_t k = 0; k < sim.agents().size(); ++k) {
         CHECK(restBouts[k] >= 2);              // the loop really cycles
         CHECK(sim.agents()[k].trips >= 3);     // ...trip after trip
+    }
+}
+
+// PEOPLE SIT ON THE BENCHES (the furniture library, M5): an outing may be a sit -- a free seat reserved, the walk
+// off the path to it, a sit of a few minutes facing the way the seat faces, the walk back -- and a seat is only
+// ever one person's.
+TEST_CASE(outings_sometimes_sit_on_a_bench_and_get_up_again) {
+    GoalTable out;
+    out.addState("Out", GoalAction::GoTo, GoalTarget::Outing, Activity::Outing);
+    out.addState("Pause", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.05);
+    CHECK(out.addTransition("Out", GoalEvent::Arrived, "Pause"));
+    CHECK(out.addTransition("Out", GoalEvent::NoRoute, "Pause"));
+    CHECK(out.addTransition("Pause", GoalEvent::DwellDone, "Out"));
+    CHECK(out.setEntry("Pause"));
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, 12, 21);
+    sim.setGoalTables(out, out);
+    std::vector<CitySim::SeatSpot> seats;
+    for (int i = 0; i < nav.nodeCount(); i += 3) {
+        CitySim::SeatSpot s;
+        s.pos = nav.nodes[static_cast<std::size_t>(i)] + Vec2(7.0, 4.0);
+        s.face = Vec2(0, 1);
+        s.hip = 0.47;
+        seats.push_back(s);
+    }
+    sim.setSeats(seats);
+    CHECK(!sim.seats().empty());
+    int sat = 0, satDone = 0, shared = 0, off = 0;
+    std::vector<uint8_t> was(sim.agents().size(), 0);
+    for (int i = 0; i < 60000; ++i) {
+        sim.step(0.1, 0.25);
+        const auto& ag = sim.agents();
+        std::vector<int> owner(sim.seats().size(), -1);
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            const CitySim::SeatSpot* st = sim.seatedOn(static_cast<int>(k));
+            if (st) {
+                if ((ag[k].pos - st->pos).length() > 1e-6) ++off;
+                const std::size_t si = static_cast<std::size_t>(st - sim.seats().data());
+                if (owner[si] >= 0) ++shared;
+                owner[si] = static_cast<int>(k);
+            }
+            const uint8_t now = ag[k].seatPhase;
+            if (now == 2 && was[k] != 2) ++sat;
+            if (now == 0 && was[k] == 3) ++satDone;
+            was[k] = now;
+        }
+    }
+    std::printf("    [seats] %zu seats; %d sits begun, %d finished; shared %d, off-seat %d\n", sim.seats().size(), sat, satDone,
+                shared, off);
+    CHECK(sat >= 5);
+    CHECK(satDone >= 3);
+    CHECK(shared == 0);
+    CHECK(off == 0);
+    for (const CitySim::SeatSpot& s : sim.seats()) {   // every seat held is held by someone sitting there or on the way
+        if (s.occupant < 0) continue;
+        CHECK(sim.agents()[static_cast<std::size_t>(s.occupant)].tripSeat == static_cast<int>(&s - sim.seats().data()));
     }
 }

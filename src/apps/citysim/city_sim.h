@@ -212,6 +212,11 @@ struct Agent {
     Real restDwell = 0;
     // The venue (CitySim::venues_) this trip is heading for, -1 for none.
     int tripVenue = -1;
+    // A SEAT this trip is for (CitySim::seats_, reserved by this agent), -1 for none; and where the agent is in
+    // using it: 0 not, 1 walking from the path to it, 2 sitting, 3 walking back to `seatBack` (the path).
+    int tripSeat = -1;
+    uint8_t seatPhase = 0;
+    engine::Vec2 seatBack{0, 0};
     // Where the current outing/lunch trip is going, kept until arrival: a leg
     // by BUS sets the walker down at a stop and the trip resumes from there,
     // and it must resume to the same place, not re-pick one.
@@ -1110,6 +1115,20 @@ public:
         }
     };
     const std::vector<Venue>& venues() const { return venues_; }
+    // SEATS out in the city (the furniture library, M5; Glenn: benches you can sit on -- and so can everyone
+    // else): one per place a body sits, its floor point, the way it faces, its seat height, the path node it is
+    // reached from (setSeats finds it) and who has it. A stroller's outing may be a sit on one.
+    struct SeatSpot {
+        engine::Vec2 pos, face{0, 1};
+        Real hip = 0.45;
+        int node = -1;
+        int occupant = -1;
+    };
+    void setSeats(std::vector<SeatSpot> seats);
+    const std::vector<SeatSpot>& seats() const { return seats_; }
+    // The agent's seat while it is SITTING on it (seatPhase 2), else nullptr: the renderer and the walker
+    // system draw a seated body there.
+    const SeatSpot* seatedOn(int agentIndex) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0
     // once it has merged into its lane (see Agent::pullOffset).
     // `pullS`: how far into the pull the DRAWN car is (interpolated through
@@ -1456,6 +1475,10 @@ private:
     GoalTable goalPed_ = defaultScheduleGoals();
     GoalTable strollerTable_ = strollerGoals();
     std::vector<Venue> venues_;
+    std::vector<SeatSpot> seats_;
+    void releaseSeat(Agent& a);
+    int pickSeat(Agent& a, engine::Vec2 here);   // a free seat to walk to, reserved; -1 none
+    void stepSeats(Real dt);                     // the walk off the path to a seat and back
     GoalTable goalDriver_ = defaultScheduleGoals();
     RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     long faultCount_ = 0;

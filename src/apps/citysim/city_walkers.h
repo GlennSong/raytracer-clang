@@ -108,6 +108,7 @@ private:
     // a handful of pre-built limb-swing poses the walkers hop between by phase.
     engine::MeshHandle poseMesh(engine::AssetManager& assets, int outfit, int pose);
     std::unordered_map<int, engine::MeshHandle> poseMeshes_;
+    std::unordered_map<int, engine::MeshHandle> seatedMeshes_;   // by outfit: the walker sitting (M5)
     std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
 };
 

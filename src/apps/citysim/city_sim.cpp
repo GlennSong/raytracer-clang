@@ -2051,6 +2051,14 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     }
     // Rest: the dwell clock runs on in-world hours, like the schedule windows.
     a.goalHours += dtHours;
+    // ON A SEAT (M5): walking to or from it, nothing fires; sitting, the end of the dwell gets up and walks
+    // back to the path first -- the next trip starts from there, not from the bench.
+    if (a.seatPhase == 1 || a.seatPhase == 3) return;
+    if (a.seatPhase == 2) {
+        const Real sitFor = a.restDwell > 0 ? a.restDwell : s.dwellHours;   // a sit is short: the day's windows wait for it
+        if (a.goalHours >= sitFor) a.seatPhase = 3;
+        return;
+    }
     // The stop's own length when it set one (a coffee, a browse), else the
     // state's.
     const Real dwell = a.restDwell > 0 ? a.restDwell : s.dwellHours;
@@ -2229,9 +2237,16 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
 int CitySim::pickOuting(Agent& a, int origin) {
     const int prev = a.tripVenue;
     a.tripVenue = -1;
+    releaseSeat(a);
     if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
     const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
     const Real h = clockHours_;
+    // A SIT on a bench (M5): now and then the outing is a seat out in the open -- a park bench, a café's
+    // terrace chair -- and the walk to it.
+    if (!seats_.empty() && rnd() % 100u < 30u) {
+        const int s = pickSeat(a, here);
+        if (s >= 0) { a.tripSeat = s; return seats_[static_cast<std::size_t>(s)].node; }
+    }
     // Now and then, somewhere ACROSS TOWN: a park, a civic building, a
     // restaurant 1.2-3 km off -- the trip a bus is for (the rider plans it in
     // startGoalTrip like any other). Local stops are walks.
@@ -4236,7 +4251,20 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         auto jitter = [&](Real lo, Real hi) {
             return lo + (hi - lo) * static_cast<Real>(tripRnd(a) % 1000u) / 999.0;
         };
-        if (a.tripVenue >= 0 && a.tripVenue < static_cast<int>(venues_.size()) &&
+        bool seated = false;
+        if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
+            seats_[static_cast<std::size_t>(a.tripSeat)].node == node &&
+            seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a) && a.mode == Agent::Mode::Pedestrian) {
+            // AT THE SEAT'S PATH: off it to the seat, a sit of five to fifteen minutes, back (stepSeats).
+            a.restDwell = jitter(0.08, 0.25);
+            a.seatPhase = 1;
+            a.seatBack = a.pos;
+            seated = true;
+        } else if (a.tripSeat >= 0) {
+            releaseSeat(a);
+        }
+        if (seated) {
+        } else if (a.tripVenue >= 0 && a.tripVenue < static_cast<int>(venues_.size()) &&
             venues_[static_cast<std::size_t>(a.tripVenue)].node == node) {
             // An OUTING or LUNCH stop: in through the door, for as long as
             // that kind of place keeps people -- or, at a park, outside.
@@ -4271,8 +4299,9 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         a.outingTo = -1;   // arrived: the next outing chooses afresh
         // Outside: a spot of its own, not the sidewalk point everyone arriving
         // along this street ends on.
-        if (!a.indoors && a.mode == Agent::Mode::Pedestrian)
+        if (!a.indoors && a.mode == Agent::Mode::Pedestrian && a.seatPhase == 0)
             a.pos = freeStandingSpot(a, a.pos, nav_->direction(lastLink));
+        if (a.seatPhase == 1) a.seatBack = a.pos;
     }
     if (next >= 0) {
         a.goal = next;
@@ -4534,7 +4563,96 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     stepTick(simDt, hoursPerSecond);
 }
 
+// ---- SEATS (the furniture library, M5) ------------------------------------------------------------------------
+void CitySim::setSeats(std::vector<SeatSpot> seats) {
+    seats_.clear();
+    if (!nav_) return;
+    // the nearest node a walker can leave by, within 60 m: where a sit starts and ends
+    const int n = nav_->nodeCount();
+    for (SeatSpot& s : seats) {
+        Real best = 60.0 * 60.0;
+        s.node = -1;
+        for (int i = 0; i < n; ++i) {
+            const Vec2 d = nav_->nodes[static_cast<std::size_t>(i)] - s.pos;
+            const Real d2 = d.x * d.x + d.y * d.y;
+            if (d2 >= best) continue;
+            bool walk = false;
+            for (int ol : nav_->outLinks[static_cast<std::size_t>(i)]) walk = walk || nav_->links[static_cast<std::size_t>(ol)].walkable;
+            if (!walk) continue;
+            best = d2;
+            s.node = i;
+        }
+        s.occupant = -1;
+        if (s.node >= 0) seats_.push_back(s);
+    }
+}
+
+const CitySim::SeatSpot* CitySim::seatedOn(int i) const {
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return nullptr;
+    const Agent& a = agents_[static_cast<std::size_t>(i)];
+    if (a.seatPhase != 2 || a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) return nullptr;
+    return &seats_[static_cast<std::size_t>(a.tripSeat)];
+}
+
+void CitySim::releaseSeat(Agent& a) {
+    if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
+        seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a))
+        seats_[static_cast<std::size_t>(a.tripSeat)].occupant = -1;
+    a.tripSeat = -1;
+    a.seatPhase = 0;
+}
+
+int CitySim::pickSeat(Agent& a, Vec2 here) {
+    // a free seat 30-500 m off, one of the nearest four (so neighbours do not all take the same bench)
+    std::vector<std::pair<Real, int>> c;
+    for (int i = 0; i < static_cast<int>(seats_.size()); ++i) {
+        const SeatSpot& s = seats_[static_cast<std::size_t>(i)];
+        if (s.occupant >= 0) continue;
+        const Vec2 d = s.pos - here;
+        const Real d2 = d.x * d.x + d.y * d.y;
+        if (d2 < 30.0 * 30.0 || d2 > 500.0 * 500.0) continue;
+        c.push_back({d2, i});
+    }
+    if (c.empty()) return -1;
+    const std::size_t k = std::min<std::size_t>(4, c.size());
+    std::partial_sort(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(k), c.end());
+    const int pick = c[rnd() % static_cast<uint32_t>(k)].second;
+    seats_[static_cast<std::size_t>(pick)].occupant = indexOf(a);
+    return pick;
+}
+
+void CitySim::stepSeats(Real dt) {
+    constexpr Real kWalk = 1.2;   // an amble across the grass
+    for (Agent& a : agents_) {
+        if (a.seatPhase != 1 && a.seatPhase != 3) continue;
+        if (a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) { a.seatPhase = 0; continue; }
+        const SeatSpot& s = seats_[static_cast<std::size_t>(a.tripSeat)];
+        // to the seat, stopping in front of it; back to where it left the path
+        const Vec2 target = a.seatPhase == 1 ? s.pos + s.face * 0.35 : a.seatBack;
+        const Vec2 d = target - a.pos;
+        const Real L = d.length(), step = kWalk * dt;
+        if (L <= step) {
+            a.pos = target;
+            a.speed = 0;
+            if (a.seatPhase == 1) {
+                a.seatPhase = 2;
+                a.pos = s.pos;
+                a.heading = s.face;
+                a.goalHours = 0;   // the sit's own clock starts now, not on the walk over
+            } else {
+                releaseSeat(a);
+            }
+        } else {
+            a.pos = a.pos + d * (step / L);
+            a.heading = d * (1.0 / L);
+            a.speed = kWalk;
+        }
+        grid_.place(indexOf(a), a.pos);
+    }
+}
+
 void CitySim::stepTick(Real dt, Real hoursPerSecond) {
+    stepSeats(dt);
     RT_PROFILE_ZONE_NAMED("CitySim step");
     if (!nav_ || agents_.empty()) return;
     // Print-only phase timing (CitySim::PhaseTimes): whole-population passes

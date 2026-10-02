@@ -1,4 +1,6 @@
 #include "city_render.h"
+#include "../../engine/interaction.h"           // Interactables: the outdoor seats (M5)
+#include "../../engine/procgen/furniture_library.h"
 
 #include "bus_stop_props.h"
 
@@ -519,6 +521,38 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE SEATS out in the city (the furniture library, M5): every sit spot of the outdoor furniture the loader
+    // laid -- park benches, plaza benches, café chairs -- for the strollers to use. Interiors are not out yet (they
+    // stream in), and nobody walks into one to sit anyway.
+    {
+        const engine::FurnitureLibrary& flib = engine::FurnitureLibrary::global();
+        std::vector<CitySim::SeatSpot> seats;
+        world.each<engine::Interactables>([&](Entity, engine::Interactables& set) {
+            for (const engine::InteractPiece& ip : set.pieces) {
+                const engine::FurnitureAsset* fa = flib.find(static_cast<engine::Piece>(ip.piece));
+                if (!fa) continue;
+                bool outdoor = false;
+                for (const std::string& tg : fa->tags) outdoor = outdoor || tg == "outdoor";
+                if (!outdoor) continue;
+                for (const engine::FurnVerb& v : fa->verbs) {
+                    if (v.verb != engine::Verb::Sit) continue;
+                    for (std::size_t k = 0; k < fa->spots.size(); ++k) {
+                        if (!(v.spots & (1u << k))) continue;
+                        const Vec3 at = engine::piecePoint(ip.xform, fa->spots[k].at);
+                        const Vec3 f = engine::pieceDir(ip.xform, Vec3(0, 0, 1));
+                        CitySim::SeatSpot s;
+                        s.pos = Vec2(at.x, at.z);
+                        s.face = normalize(Vec2(f.x, f.z));
+                        s.hip = at.y;
+                        seats.push_back(s);
+                    }
+                }
+            }
+        });
+        const std::size_t offered = seats.size();
+        sim_.setSeats(std::move(seats));
+        if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
+    }
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
     // Three-tier traffic (P4): the level's opt-in. The bubble only engages
@@ -1025,6 +1059,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
       g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
       world.add<InstanceGroup>(pedGroup_, g); }
+    if (assets) {
+        pedSeatedGroup_ = world.create();
+        InstanceGroup g; g.mesh = assets->acquireMesh(buildSeatedPersonMesh(0), "city:ped_seated"); g.material = pedMaterial();
+        g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
+        world.add<InstanceGroup>(pedSeatedGroup_, g);
+    }
     for (int s = 0; s < 3; ++s) {
         signalGroups_[s] = world.create();
         InstanceGroup g;
@@ -1981,6 +2021,8 @@ void CityRenderSystem::syncGroups(World& world) {
     cars.reserve(carGroups_.size());
     for (Entity e : carGroups_) cars.push_back(world.get<InstanceGroup>(e));
     InstanceGroup* ped = world.get<InstanceGroup>(pedGroup_);
+    InstanceGroup* pedSeated = pedSeatedGroup_.valid() ? world.get<InstanceGroup>(pedSeatedGroup_) : nullptr;
+    if (pedSeated) pedSeated->transforms.clear();
     InstanceGroup* sig[3];
     for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
@@ -2025,6 +2067,12 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
+            if (const CitySim::SeatSpot* st = sim_.seatedOn(static_cast<int>(ai))) {   // sitting (M5)
+                if (pedSeated)
+                    pedSeated->transforms.push_back(Mat4::translate(st->pos.x, st->hip, st->pos.y) *
+                                                    Mat4::rotateY(std::atan2(st->face.x, st->face.y)));
+                continue;
+            }
             ped->transforms.push_back(agentPose(a));
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }

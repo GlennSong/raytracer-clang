@@ -473,6 +473,7 @@ private:
     int loadStreak_ = 0;
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
+    engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)

@@ -25,6 +25,10 @@ engine::RenderMesh buildPersonMesh(engine::Real swing, int outfit);
 // (playerOutfit()) — so walkers dealing `hash % personOutfitCount()` can never
 // dress like the player.
 int personOutfitCount();
+// The same person SITTING (the furniture library, M5): the SAE manikin the bus riders use, posed for a bench or a
+// chair -- seat height 0.45, upright back, hands in the lap -- in `outfit`'s colours. ORIGIN IS THE HIP, facing
+// +Z: put the hip on the seat.
+engine::RenderMesh buildSeatedPersonMesh(int outfit);
 int playerOutfit();
 
 // --- the shared walk cycle ---------------------------------------------------
