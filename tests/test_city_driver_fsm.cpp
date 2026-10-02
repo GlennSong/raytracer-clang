@@ -191,6 +191,93 @@ TEST_CASE(lane_changes_ease_turn_into_the_change_and_never_overlap) {
     CHECK(overlaps == 0);
 }
 
+namespace {
+RoadGraph arterialCross(Real arm) {
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(0, arm)}, {Vec2(0, -arm)}, {Vec2(arm, 0)}, {Vec2(-arm, 0)} };
+    for (int k = 1; k <= 4; ++k) g.edges.push_back(RoadEdge{0, k, 16, RoadClass::Arterial, 0});
+    return g;
+}
+}  // namespace
+
+TEST_CASE(traffic_keeps_left_except_to_overtake) {
+    // Glenn, 2026-10-02: "Should we mimic road rules? Faster cars are in the furthest lane?" ... "our cars and roads
+    // are left lane like the uk or japan. And I want to keep it that way." Keep left (the kerb lane, the last index)
+    // except to overtake: a car held up by a slower one pulls out to the offside lane and comes back after.
+    RoadGraph g;
+    g.nodes = { {Vec2(0, 0)}, {Vec2(1200, 0)} };
+    g.edges = { RoadEdge{0, 1, 16, RoadClass::Arterial, 0} };
+    NavGraph nav = buildNavGraph(g);
+    const int lanes = nav.links[0].lanes;
+    CHECK(lanes >= 2);
+    CitySim sim;
+    sim.build(nav, 20, 0, 77);
+    long kerbSteps = 0, steps = 0;
+    int pulledOut = 0, cameBack = 0;
+    std::vector<int> last(sim.agents().size(), -1);
+    for (int i = 0; i < 8000; ++i) {
+        sim.step(0.05, 0.5);
+        const auto& ag = sim.agents();
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            const Agent& a = ag[k];
+            if (a.mode != Agent::Mode::Driver || !a.moving || a.speed < 3.0) continue;
+            ++steps;
+            if (a.lane == lanes - 1) ++kerbSteps;
+            if (last[k] >= 0 && a.lane < last[k]) ++pulledOut;
+            if (last[k] >= 0 && a.lane > last[k]) ++cameBack;
+            last[k] = a.lane;
+        }
+    }
+    const double kerbShare = steps ? double(kerbSteps) / double(steps) : 0;
+    std::printf("    [keep left] %.0f%% of driving in the kerb lane, %d pulled out to overtake, %d came back\n",
+                kerbShare * 100, pulledOut, cameBack);
+    CHECK(kerbShare > 0.6);       // the kerb lane is home
+    CHECK(pulledOut > 0);         // overtaking happens
+    CHECK(cameBack >= pulledOut / 2);   // and they go back (some are still out when the run ends)
+}
+
+TEST_CASE(cars_take_the_turning_lane_before_a_junction) {
+    // Driving on the LEFT: a left turn (to the kerb side) from the kerb lane, a right turn (across the oncoming
+    // traffic) from the offside lane. Checked as each car crosses into the junction.
+    NavGraph nav = buildNavGraph(arterialCross(400.0));
+    CitySim sim;
+    sim.build(nav, 40, 0, 5);
+    int left = 0, leftOk = 0, right = 0, rightOk = 0;
+    std::vector<int> lastLeg(sim.agents().size(), -1);
+    std::vector<int> laneBefore(sim.agents().size(), -1);
+    for (int i = 0; i < 12000; ++i) {
+        // the lane each car holds just before it reaches the centre node
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            if (a.mode != Agent::Mode::Driver || !a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            const engine::NavLink& L = nav.links[a.route.links[a.leg]];
+            if (L.to == 0 && L.length - a.distOnLeg < 25.0) laneBefore[k] = a.lane;
+        }
+        sim.step(0.05, 0.5);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            if (a.mode != Agent::Mode::Driver || a.leg >= static_cast<int>(a.route.links.size())) { lastLeg[k] = -1; continue; }
+            if (lastLeg[k] >= 0 && a.leg == lastLeg[k] + 1 && a.leg >= 1 && laneBefore[k] >= 0) {
+                const int c0 = a.route.links[a.leg - 1], c1 = a.route.links[a.leg];
+                if (nav.links[c0].to == 0) {
+                    const Vec2 d0 = nav.direction(c0), d1 = nav.direction(c1);
+                    const Real side = d1.x * d0.y - d1.y * d0.x;   // + = toward the kerb (the driver's left)
+                    const int lanes = nav.links[c0].lanes;
+                    if (side > 0.4) { ++left; if (laneBefore[k] == lanes - 1) ++leftOk; }
+                    if (side < -0.4) { ++right; if (laneBefore[k] == 0) ++rightOk; }
+                    laneBefore[k] = -1;
+                }
+            }
+            lastLeg[k] = a.leg;
+        }
+    }
+    std::printf("    [turn lanes] left turns %d/%d from the kerb lane, right turns %d/%d from the offside lane\n",
+                leftOk, left, rightOk, right);
+    CHECK(left > 3 && right > 3);
+    CHECK(leftOk >= left * 8 / 10);
+    CHECK(rightOk >= right * 7 / 10);   // a car boxed in can miss its lane (it still turns, from where it is)
+}
+
 TEST_CASE(busy_traffic_shows_following_turning_and_waiting) {
     NavGraph nav = cross4(60.0);
     CitySim sim;

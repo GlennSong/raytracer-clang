@@ -3154,7 +3154,7 @@ void CitySim::steer(Agent& a, Real dt) {
     // CHANGING LANES the nose points where the car is going, the lane's way plus the sideways glide -- it used to
     // point straight down the lane and slide across it like a crab
     if (std::fabs(a.laneVel) > 1e-3 && a.speed > 1.0) {
-        const Real lat = a.laneVel * laneSpacingFor(a.route.links[a.leg]);   // m/s, + = rightward
+        const Real lat = a.laneVel * laneSpacingFor(a.route.links[a.leg]);   // m/s, + = toward the kerb
         const Vec2 right(desired.y, -desired.x);
         Vec2 d = desired * a.speed + right * lat;
         const Real dlen = std::sqrt(d.x * d.x + d.y * d.y);
@@ -3537,27 +3537,50 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             uint32_t h = static_cast<uint32_t>(a.home * 73 + a.work * 131 +
                                                a.trips * 17 + a.leg) *
                          2654435761u;
-            a.laneTimer = 4.5 + (h >> 8) % 7;
-            if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05) {
-                // PURPOSEFUL lane choice (§9.6 device rules): fast drivers
-                // work toward the median (lane 0), slow ones stay right; an
-                // exit on the route within ~380 m pulls to the SLOW lane.
-                // One ADJACENT step at a time, and only when there is room.
-                int preferred = lanes - 1 -
-                    std::min(lanes - 1,
-                             std::max(0, static_cast<int>(
-                                             (a.speedFactor - 0.97) * 25)));
+            a.laneTimer = 1.0 + static_cast<Real>((h >> 8) % 10) * 0.1;   // a decision every 1-2 s
+            // ROAD RULES (Glenn, 2026-10-02: "Should we mimic road rules? Faster cars are in the furthest lane?" --
+            // "our cars and roads are left lane like the uk or japan. And I want to keep it that way"). Traffic
+            // drives on the LEFT: lane 0 lies next to the centre line (the OFFSIDE, overtaking lane) and the last
+            // lane is the NEARSIDE, the kerb. (NavGraph::rightOf is the kerb side: in world x/z it points left.)
+            // Not at a junction: nobody changes lane in the box or on its threshold.
+            if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05 && !nearJunction(a.pos, 6.0)) {
+                const int kerb = lanes - 1;
                 const int legCount = static_cast<int>(a.route.links.size());
+                // 1. THE NEXT TURN within ~90 m decides first: a LEFT turn (to the nearside) from the kerb lane, a
+                // RIGHT turn (across the oncoming traffic) from the offside lane, an exit from the kerb lane;
+                // straight on through a junction leaves the lane free
+                int turnLane = -1;
                 Real ahead = LL.length - a.distOnLeg;
-                for (int lg = a.leg + 1; lg < legCount && ahead < 380.0; ++lg) {
-                    const engine::NavLink& NL = nav_->links[a.route.links[lg]];
-                    if (NL.klass == engine::RoadClass::Ramp) {
-                        preferred = lanes - 1;   // exit ahead: work right
+                for (int lg = a.leg; lg + 1 < legCount && ahead < 90.0; ++lg) {
+                    const int c0 = a.route.links[lg], c1 = a.route.links[lg + 1];
+                    const engine::NavLink& cur = nav_->links[c0];
+                    const engine::NavLink& nxt = nav_->links[c1];
+                    if (cur.klass == engine::RoadClass::Freeway && nxt.klass == engine::RoadClass::Ramp) { turnLane = kerb; break; }
+                    if (nav_->isJunction(cur.to)) {
+                        const Vec2 d0 = nav_->direction(c0), d1 = nav_->direction(c1);
+                        const Vec2 nearside(d0.y, -d0.x);
+                        const Real side = d1.x * nearside.x + d1.y * nearside.y;
+                        if (side > 0.4) turnLane = kerb;
+                        else if (side < -0.4) turnLane = 0;
                         break;
                     }
-                    if (NL.klass != engine::RoadClass::Freeway) break;
-                    ahead += NL.length;
+                    ahead += nxt.length;
                 }
+                // 2. KEEP LEFT EXCEPT TO OVERTAKE: held up by a slower car close ahead, pull out one lane toward the
+                // offside; otherwise drift back to the nearside, one lane at a time, once there is room
+                int preferred = a.lane;
+                if (turnLane >= 0) {
+                    preferred = turnLane;
+                } else {
+                    const int ai = indexOf(a);
+                    const Real gap = gaps_[static_cast<std::size_t>(ai)];
+                    const Real leader = leaderSpeeds_[static_cast<std::size_t>(ai)];
+                    const Real cruise = engine::classSpeed(LL.klass) * a.speedFactor;
+                    const bool heldUp = gap < a.speed * 3.0 + 12.0 && leader < cruise * 0.85;
+                    if (heldUp && a.lane > 0) preferred = a.lane - 1;
+                    else if (!heldUp && a.lane < kerb) preferred = a.lane + 1;
+                }
+                const bool returning = preferred > a.lane && turnLane < 0;
                 const int dir = (preferred > a.lane) - (preferred < a.lane);
                 if (dir != 0) {
                     const int want = a.lane + dir;
@@ -3570,7 +3593,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                     // own link, and cars merged into bodies one link ahead.
                     bool room = true;
                     const Real spacing = laneSpacingFor(li);
-                    const Real shift = (Real(want) - a.laneF) * spacing;   // + = rightward
+                    const Real shift = (Real(want) - a.laneF) * spacing;   // + = toward the kerb (nearside)
                     grid_.query(a.pos, 60.0, queryScratch_);
                     for (int bi : queryScratch_) {
                         const Agent& b = agents_[bi];
@@ -3586,8 +3609,11 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                         if (std::fabs(right - shift) > spacing * 0.6) continue;
                         // room ahead and behind, plus what the speed difference closes in ~3 s: a car coming up
                         // fast in the target lane is not "room" just because it is 20 m back
-                        const Real need = along >= 0 ? 13.0 + std::max(Real(0), a.speed - b.speed) * 2.0
-                                                     : 13.0 + std::max(Real(0), b.speed - a.speed) * 3.0;
+                        Real need = along >= 0 ? 13.0 + std::max(Real(0), a.speed - b.speed) * 2.0
+                                               : 13.0 + std::max(Real(0), b.speed - a.speed) * 3.0;
+                        // back to the nearside only past the slower traffic: not into a gap behind a car you'd be
+                        // stuck behind again at once (that was the weave)
+                        if (returning && along >= 0 && b.speed < a.speed - 1.0) need = std::max(need, Real(40));
                         if (std::fabs(along) < need) {
                             room = false;
                             break;
