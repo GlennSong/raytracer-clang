@@ -148,7 +148,11 @@ double DeckHeight::blendTo(double z, const std::vector<int>& partners, const Vec
     // partner: full pull within kSeam of it, the level fade beyond.
     const double zp = deck(best, p), gap = std::fabs(zp - z), lo = g_.rules.sameLevelDz, hi = std::max(lo + 0.5, g_.rules.bridgeH);
     double f = gap <= lo ? 1.0 : gap >= hi ? 0.0 : 1.0 - (gap - lo) / (hi - lo); f = f * f * (3 - 2 * f);
-    constexpr double kSeam = 3.0; const double nearSeam = bd >= kSeam ? 0.0 : 1.0 - bd / kSeam;
+    // ...but only a seam the two can actually share: a road BRIDGING its partner (Glenn, 2026-10-02, Third and
+    // Dogwood: pass8 partners the street where they meet at grade, then crosses 8 m over it -- and within 3 m of
+    // the street in plan the seam rule dragged the bridge down to it, a vertical wall of asphalt) is
+    // grade-separated there, not a seam. Past bridge_h of separation the seam rule stands down.
+    constexpr double kSeam = 3.0; const double nearSeam = bd >= kSeam || gap >= hi ? 0.0 : 1.0 - bd / kSeam;
     const double pull = (1 - w) * std::max(f, nearSeam);
     return pull * zp + (1 - pull) * z;
 }

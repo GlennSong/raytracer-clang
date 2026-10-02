@@ -233,6 +233,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
         for (size_t si = 0; si + 1 < lines[li].pts.size(); ++si)
             cellsOf(lines[li].pts[si], lines[li].pts[si + 1], [&](long long k) { cells[k].push_back({static_cast<int>(li), static_cast<int>(si)}); });
     }
+    int bridgedCrossings = 0;   // street lines crossing over one another, left unjoined
     for (size_t li = 0; li < lines.size(); ++li) {
         if (lines[li].deck) continue;
         for (size_t si = 0; si + 1 < lines[li].pts.size(); ++si) {
@@ -244,7 +245,19 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                 if (o.line < static_cast<int>(li)) continue;                                    // each pair once
                 const Vec2 &a = lines[static_cast<size_t>(o.line)].pts[static_cast<size_t>(o.seg)], &b = lines[static_cast<size_t>(o.line)].pts[static_cast<size_t>(o.seg) + 1];
                 double t, u;
+                // A BRIDGE IS NOT A JUNCTION, whatever its class (Glenn, 2026-10-02, Third and Dogwood: a mountain
+                // road bridging a street 8 m up was planarised into a signalled crossing). Two lines crossing at
+                // heights further apart than bridge_h pass over each other: no node.
+                const Line& LO = lines[static_cast<size_t>(o.line)];
+                auto zAt = [](const Line& Ln, size_t seg, double tt) {
+                    return Ln.z.size() > seg + 1 ? Ln.z[seg] + (Ln.z[seg + 1] - Ln.z[seg]) * tt : 0.0;
+                };
                 if (lineParams(p, q, a, b, t, u) && t > eps && t < 1 - eps && u > eps && u < 1 - eps) {   // a proper crossing
+                    // (the LOT twin keeps every crossing: its faces are the blocks, and a bridge still divides them in plan)
+                    if (!forLots && std::fabs(zAt(lines[li], si, t) - zAt(LO, static_cast<size_t>(o.seg), u)) >= r.graph.rules.bridgeH) {
+                        ++bridgedCrossings;
+                        continue;
+                    }
                     splits[li][si].push_back(t); splits[static_cast<size_t>(o.line)][static_cast<size_t>(o.seg)].push_back(u); continue;
                 }
                 double d;
@@ -264,6 +277,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
             }
         }
     }
+    if (bridgedCrossings > 0) LOG_INFO << "[lanes twin] " << bridgedCrossings << " street crossings are bridges (no junction)";
     // RAMPS MEET THE ROAD THEY MERGE INTO. Deck lines stay out of the planariser above — a
     // freeway or ramp crossing a street is a BRIDGE, not a junction — and that also kept every
     // elevated ramp end from ever meeting the carriageway it merges into: the gore lies mid-way
