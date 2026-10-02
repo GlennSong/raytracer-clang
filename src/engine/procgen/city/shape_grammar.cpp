@@ -3777,6 +3777,34 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
 // front), behind them the sales floor in the chain's own stock (furniture.cpp: pallet racks, gondolas, televisions,
 // racks of clothes), and across the back the STOCKROOM behind a wall with two doors. Rooms carry the trade:
 // Shop styles 7-10 the chain's floor (7 + chain - 1), 11 the checkouts, 12 the stockroom.
+std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& params) {
+    std::vector<ShopFront> out;
+    Poly2 plan = planIn;
+    if (plan.size() < 3 || !params.groundRetail || !params.walkableGround) return out;
+    ensureCCW(plan);
+    const std::size_t entranceEdge = entranceEdgeFor(plan, params);
+    for (std::size_t e = 0; e < plan.size(); ++e) {
+        const FacadeMode mode = groundModeFor(plan, params, e, entranceEdge);
+        if (mode != FacadeMode::Retail && mode != FacadeMode::Entrance) continue;
+        const FaceRect fr = planEdgeRect(plan, e, 0.0, params.groundHeight);
+        const FacadeLayout L = facadeLayout(fr, mode, params);
+        const Vec2 a = plan[e], d = normalize(plan[(e + 1) % plan.size()] - a), n(d.y, -d.x);
+        for (const ShopUnit& u : L.shops) {
+            const BayOpening& o0 = L.open[static_cast<std::size_t>(u.b0)];
+            const BayOpening& o1 = L.open[static_cast<std::size_t>(u.b1)];
+            const BayOpening& od = L.open[static_cast<std::size_t>(u.door)];
+            ShopFront f;
+            f.a = a + d * o0.x0;
+            f.b = a + d * o1.x1;
+            f.n = n;
+            f.door = a + d * ((od.wx0 + od.wx1) * 0.5);
+            f.trade = u.type;
+            out.push_back(f);
+        }
+    }
+    return out;
+}
+
 static RoomPlan bigBoxRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
     RoomPlan rp;
     rp.topology = PlateTopology::Ring;

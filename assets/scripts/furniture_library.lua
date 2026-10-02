@@ -65,6 +65,42 @@ furniture_library = {
         exit = { 1.3, 0, 1.25 } },
     },
   },
+  -- OUTDOOR SEATING (M2): parks, plazas, forecourts, café terraces
+  bench = {
+    family = "seating", tags = { "outdoor", "public", "park" },
+    spots = {
+      { id = "l", at = seat(-0.55, 0.47, 0.35) },
+      { id = "m", at = seat(0.0, 0.47, 0.35) },
+      { id = "r", at = seat(0.55, 0.47, 0.35) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "l" }, eye = { -0.55, 1.17, 0.27 }, look = { 0, -0.05, 1 }, exit = { -0.55, 0, 1.1 } },
+      { verb = "sit", spots = { "m" }, eye = { 0.0, 1.17, 0.27 }, look = { 0, -0.05, 1 }, exit = { 0.0, 0, 1.1 } },
+      { verb = "sit", spots = { "r" }, eye = { 0.55, 1.17, 0.27 }, look = { 0, -0.05, 1 }, exit = { 0.55, 0, 1.1 } },
+      { verb = "lie", label = "lie down", spots = { "l", "m", "r" }, eye = { -0.68, 0.70, 0.33 }, look = { 1, 1.4, 0 },
+        exit = { 0, 0, 1.1 } },
+    },
+  },
+  plaza_bench = {
+    family = "seating", tags = { "outdoor", "public", "plaza" },
+    spots = {
+      { id = "l", at = seat(-0.55, 0.46, 0.27) },
+      { id = "m", at = seat(0.0, 0.46, 0.27) },
+      { id = "r", at = seat(0.55, 0.46, 0.27) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "l" }, eye = { -0.55, 1.16, 0.22 }, look = { 0, -0.05, 1 }, exit = { -0.55, 0, 1.0 } },
+      { verb = "sit", spots = { "m" }, eye = { 0.0, 1.16, 0.22 }, look = { 0, -0.05, 1 }, exit = { 0.0, 0, 1.0 } },
+      { verb = "sit", spots = { "r" }, eye = { 0.55, 1.16, 0.22 }, look = { 0, -0.05, 1 }, exit = { 0.55, 0, 1.0 } },
+      { verb = "lie", label = "lie down", spots = { "l", "m", "r" }, eye = { -0.75, 0.66, 0.27 }, look = { 1, 1.4, 0 },
+        exit = { 0, 0, 1.0 } },
+    },
+  },
+  bistro_chair = {
+    family = "seating", tags = { "outdoor", "cafe", "kitchen" },
+    spots = { { id = "seat", at = seat(0, 0.48, 0.26) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.19, 0.20 }, look = { 0, -0.08, 1 }, exit = { 0, 0, 0.9 } } },
+  },
   toilet = {
     family = "fixture", tags = { "bathroom" },
     spots = { { id = "seat", at = seat(0, 0.42, 0.42) } },

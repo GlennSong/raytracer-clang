@@ -535,6 +535,15 @@ struct BuildingParams {
     uint8_t bigBox = 0;
 };
 
+// THE SHOPFRONTS of a building's ground storey (buildings: shops; the facade's own ShopUnits): each shop's stretch
+// of wall (world XZ, a -> b along the facade), the facade's outward normal, its door's centre and its trade (0 cafe,
+// 1 grocery, 2 boutique, 3 bookshop, 4 electronics, 5 pharmacy, 6 bakery). The lot pass lays café terraces in front.
+struct ShopFront {
+    Vec2 a, b, n, door;
+    uint8_t trade = 0;
+};
+std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& params);
+
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;

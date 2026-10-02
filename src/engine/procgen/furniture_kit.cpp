@@ -688,6 +688,52 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Hard, {0.38, 2.2, 0.1}, {0.3, 0.22, 0.12}, 0.01, Vec3(0.95, 0.85, 0.25), 1);   // its lamp
             break;
         }
+        case Piece::Bench: {
+            // A PARK BENCH: timber slats on two cast-iron ends with armrests, a slatted back, seats three. Its back at
+            // z = 0, the seat facing +z.
+            k.out.size = {1.80, 0.86, 0.66};
+            k.out.colliderH = 0.46;   // the seat: you walk round the back, not through it
+            const Vec3 iron(0.14, 0.15, 0.16);
+            for (double x : {-0.84, 0.84}) {
+                k.box(F::Metal, {x, 0.22, 0.10}, {0.06, 0.44, 0.06}, 0.01, iron, 1);       // back leg
+                k.box(F::Metal, {x, 0.22, 0.56}, {0.06, 0.44, 0.06}, 0.01, iron, 1);       // front leg
+                k.box(F::Metal, {x, 0.42, 0.33}, {0.06, 0.05, 0.56}, 0.01, iron, 1);       // seat rail
+                k.boxTilted(F::Metal, {x, 0.66, 0.08}, {0.06, 0.48, 0.05}, 0.01, -0.22, iron); // back rail
+                k.box(F::Metal, {x, 0.64, 0.42}, {0.07, 0.04, 0.40}, 0.01, iron, 1);       // armrest
+                k.box(F::Metal, {x, 0.53, 0.60}, {0.05, 0.22, 0.04}, 0.01, iron, 1);
+            }
+            for (int i = 0; i < 5; ++i)   // seat slats
+                k.box(F::Wood, {0, 0.455, 0.14 + i * 0.095}, {1.74, 0.03, 0.075}, 0.006, wood, 1);
+            for (int i = 0; i < 3; ++i)   // back slats, leaning back
+                k.boxTilted(F::Wood, {0, 0.56 + i * 0.11, 0.095 - i * 0.025}, {1.74, 0.075, 0.03}, 0.006, -0.22, wood);
+            break;
+        }
+        case Piece::PlazaBench: {
+            // A PLAZA BENCH: backless, a thick timber top on two stone plinths; sat on from either side (+z is "front").
+            k.out.size = {1.80, 0.46, 0.55};
+            const Vec3 stone(0.66, 0.64, 0.60);
+            for (double x : {-0.70, 0.70}) k.box(F::Hard, {x, 0.20, 0.275}, {0.30, 0.40, 0.50}, 0.015, stone, 1);
+            k.box(F::Wood, {0, 0.43, 0.275}, {1.80, 0.06, 0.55}, 0.01, wood, 1);
+            break;
+        }
+        case Piece::BistroTable: {
+            // A BISTRO TABLE: a round top on a cast pedestal (café terraces, café floors; its chairs are their own).
+            k.out.size = {0.70, 0.74, 0.70};
+            k.turned(F::Metal, {0, 0, 0.35}, {{0.22, 0.0}, {0.22, 0.02}, {0.03, 0.05}, {0.03, 0.71}, {0.0, 0.72}}, kBlack, 1.0, 14);
+            k.turned(F::Wood, {0, 0.71, 0.35}, {{0.0, 0.0}, {0.35, 0.0}, {0.35, 0.03}, {0.0, 0.03}}, wood, 1.0, 24);
+            break;
+        }
+        case Piece::BistroChair: {
+            // A BISTRO CHAIR: a bentwood-style seat and hooped back on four legs. Back at z = 0, facing +z.
+            k.out.size = {0.44, 0.84, 0.48};
+            k.out.solid = false;
+            for (double x : {-0.17, 0.17})
+                for (double z : {0.06, 0.42}) k.leg(F::Wood, {x, 0, z}, 0.45, 0.028, wood * 0.85);
+            k.turned(F::Wood, {0, 0.45, 0.25}, {{0.0, 0.0}, {0.21, 0.0}, {0.21, 0.035}, {0.0, 0.035}}, wood * 0.9, 1.0, 20);
+            for (double x : {-0.17, 0.17}) k.rod(F::Wood, {x, 0.47, 0.06}, {x * 0.8, 0.84, 0.03}, 0.014, wood * 0.85, 8);
+            k.boxTilted(F::Wood, {0, 0.76, 0.035}, {0.34, 0.10, 0.025}, 0.01, -0.08, wood * 0.9);
+            break;
+        }
         case Piece::Rug: {
             k.out.size = {2.0, 0.04, 1.4};
             k.out.solid = false;
@@ -707,7 +753,7 @@ const char* const kPieceNames[kPieceCount] = {
     "dining_chair", "bathtub", "toilet", "vanity", "lounge_chair", "planter", "picture", "shelving", "rug",
     "desk_pod", "cubicle", "meeting_table", "whiteboard",
     "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase",
-    "pallet_rack", "checkout"};
+    "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair"};
 
 }  // namespace
 

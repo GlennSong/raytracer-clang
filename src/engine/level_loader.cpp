@@ -1,4 +1,9 @@
 #include "level_loader.h"
+#ifdef RT_ENABLE_SCRIPTING
+#include "scripting/furniture_library_lua.h"
+#endif
+#include "interaction.h"
+#include "furniture_draw.h"
 
 #include "../profile.h"
 #include "level_params.h"   // shared level-JSON -> params readers (both loaders)
@@ -5684,6 +5689,52 @@ bool LevelLoader::load(const std::string& path,
             // TREES IN THE ROAD (Glenn: "one lot being built in the middle of a
             // street which is placing trees in the road"). Counted, not assumed.
             int treesOnPad = 0, treesOffPad = 0, treesNoPad = 0;
+            // OUTDOOR FURNITURE (the furniture library, M2; Glenn, 2026-10-01: benches you can sit or lie on): every
+            // lot's placed library pieces, their floors resolved (a park's on the finished ground), drawn instanced in
+            // 160 m cells -- one InstanceGroup per piece and finish a cell -- and each cell ONE Interactables set the
+            // interaction system offers from.
+            {
+#ifdef RT_ENABLE_SCRIPTING
+                engine::ensureFurnitureLibraryLoaded();
+#endif
+                const engine::FurnitureLibrary& flib = engine::FurnitureLibrary::global();
+                std::map<std::pair<long, long>, std::vector<engine::PlacedPiece>> cells;
+                for (const engine::LotBuilding& lb : grown.lots)
+                    for (const engine::OutdoorPiece& op : lb.furniture) {
+                        const Real fy = op.draped ? (dressingGround ? dressingGround(op.at.x, op.at.y) : Real(0)) + op.y : op.y;
+                        engine::PlacedPiece pp;
+                        pp.piece = op.piece;
+                        pp.variant = op.variant;
+                        pp.xform = engine::outdoorPieceXform(op, fy);
+                        cells[{static_cast<long>(std::floor(op.at.x / 160.0)), static_cast<long>(std::floor(op.at.y / 160.0))}]
+                            .push_back(pp);
+                    }
+                engine::FurnitureDrawCache outdoorDraw;
+                std::size_t pieces = 0, seats = 0;
+                for (const auto& [cell, list] : cells) {
+                    std::vector<Entity> made;
+                    engine::spawnFurnitureGroups(world, assets, &renderer, outdoorDraw, list, Vec3(0.80, 0.78, 0.75), 150.0, made);
+                    engine::Interactables set;
+                    for (const engine::PlacedPiece& pp : list)
+                        if (flib.interactive(static_cast<engine::Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+                    if (!set.pieces.empty()) {
+                        set.refreshBounds();
+                        seats += set.pieces.size();
+                        Entity ie = world.create();
+                        world.add<engine::Interactables>(ie, std::move(set));
+                    }
+                    pieces += list.size();
+                }
+                if (pieces > 0) {
+                    Mat4 m0 = cells.begin()->second.front().xform;
+                    for (const auto& [cell, list] : cells)   // a café terrace if there is one: the newest kind
+                        for (const engine::PlacedPiece& pp : list)
+                            if (pp.piece == static_cast<uint8_t>(engine::Piece::BistroTable)) m0 = pp.xform;
+                    LOG_INFO << "[furniture] outdoor: " << pieces << " pieces (" << seats << " to sit on) in "
+                             << cells.size() << " cells; one at " << static_cast<int>(m0.m[0][3]) << " "
+                             << static_cast<int>(m0.m[1][3]) << " " << static_cast<int>(m0.m[2][3]);
+                }
+            }
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 // Park FENCES + TREE TRUNKS are solid (drive feedback: "Parks

@@ -325,6 +325,24 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         if (F.place(w, d, sides, p, true)) { F.put(p, pc, w * 0.5, 0.0); ++n; }
                     return n;
                 };
+                // BISTRO SETS (the furniture library, M2): a table and two chairs facing across it, in a grid of
+                // 1.5 x 1.7 m cells clear of the counter and the doors -- each chair a seat of its own.
+                auto bistro = [&](Real aisle) {
+                    const Real cw = 1.5, cd = 1.7;
+                    for (Real z = 0.6; z + cd <= F.f.D - 0.8 + 1e-6; z += cd + aisle)
+                        for (Real x = 0.6; x + cw <= F.f.W - 0.6 + 1e-6; x += cw + aisle) {
+                            Placement c{&F.f, 0, x, cw, cd, z};
+                            const Box2 fp = c.footprint();
+                            bool clear = true;
+                            for (const Box2& b : F.taken)
+                                if (overlaps(fp, b, 0.1)) { clear = false; break; }
+                            if (!clear) continue;
+                            F.taken.push_back(fp);
+                            F.put(c, Piece::BistroChair, cw * 0.5, 0.0);           // facing the table (+z)
+                            F.put(c, Piece::BistroTable, cw * 0.5, 0.5);
+                            F.put(c, Piece::BistroChair, cw * 0.5, cd, false);     // the far side, facing back
+                        }
+                };
                 auto counterAtBack = [&]() {
                     if (F.place(1.8, 1.6, {2, 1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0, true);
                 };
@@ -388,7 +406,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     case 0:   // CAFE
                         counterAtBack();
                         along(Piece::DrinksFridge, 0.8, 0.75, {2, 1, 3}, 1);
-                        F.fill(Piece::CafeTable, 1.5, 1.5, 0.5, 0.5);
+                        bistro(0.5);
                         break;
                     case 1:   // GROCERY
                         if (F.place(1.8, 1.4, {1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0);
@@ -419,7 +437,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     default:  // BAKERY
                         along(Piece::DisplayCase, 1.6, 0.7, {2}, 2);
                         counterAtBack();
-                        F.fill(Piece::CafeTable, 1.5, 1.5, 0.6, 0.6);
+                        bistro(0.6);
                         break;
                 }
                 break;

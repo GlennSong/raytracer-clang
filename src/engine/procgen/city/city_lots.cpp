@@ -13,6 +13,7 @@
 #include "block_grade.h"     // gradeBlocks (in-pass block terracing)
 #include "site_plan.h"       // siteFrame + largestAlignedRect: the rectilinear buildable
 #include "core_plan.h"       // coreFor: which tall buildings open (M5)
+#include "../furniture_kit.h"   // Piece: outdoor library furniture (M2)
 #include "../../../log.h"    // plaza site report (find them on the map)
 #include "../../mesh_builder.h"   // MeshBuilder::append (merge parts by PartId)
 #include <algorithm>
@@ -60,6 +61,27 @@ Real distToSeg(const Vec2& p, const Vec2& a, const Vec2& b) {
     t = t < 0 ? 0 : (t > 1 ? 1 : t);
     return (p - Vec2(a.x + ab.x * t, a.y + ab.y * t)).length();
 }
+
+
+namespace {
+// A stable hash of a point (an outdoor piece's variant, without drawing from a pass's own dice).
+uint32_t posHash(const Vec2& p) {
+    uint32_t h = static_cast<uint32_t>(std::lround(p.x * 13.0)) * 73856093u ^ static_cast<uint32_t>(std::lround(p.y * 7.0)) * 19349663u;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return h;
+}
+// An outdoor library piece at `at` (its back's centre), its front facing `face`; the variant's wood from `h`.
+OutdoorPiece outdoorPiece(Piece pc, uint32_t h, const Vec2& at, const Vec2& face, Real y, bool draped) {
+    OutdoorPiece o;
+    o.piece = static_cast<uint8_t>(pc);
+    o.variant = (h % 4u) << 3;   // the wood (furniture_kit.h variant bits 3-4)
+    o.at = at;
+    o.yaw = std::atan2(face.x, face.y);
+    o.y = y;
+    o.draped = draped;
+    return o;
+}
+}  // namespace
 
 // Merge a grown kit's parts into the by-PartId output array.
 void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts,
@@ -235,17 +257,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             Vec2 bp = c + dir * (r0 + 0.6);
             if (!pointInPolygon(poly, bp) || !clearAt(bp, 1.0)) continue;
             claim(bp, 1.0);
-            Vec2 t2(-dir.y, dir.x);
-            Vec3 t3(t2.x, 0, t2.y), n3(dir.x, 0, dir.y);
-            const Real by = gy(bp) + 0.02;
-            Vec3 o = Vec3(bp.x, by + 0.42, bp.y) - t3 * 0.8 - n3 * 0.22;
-            emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.6, 0.07, 0.44)},
-                    PartId::Wood, wood);
-            for (int lg = 0; lg < 2; ++lg)
-                emitBox(kit, Scope{Vec3(bp.x, by, bp.y) +
-                                       t3 * (lg ? 0.55 : -0.65) - n3 * 0.18,
-                                   {t3, up, n3}, Vec3(0.10, 0.42, 0.36)},
-                        PartId::Metal, Vec3(0.20, 0.21, 0.22));
+            // A PARK BENCH from the library (M2: sat on, lain on), facing the fountain, on the terrain.
+            (void)wood;
+            g.furniture.push_back(outdoorPiece(Piece::Bench, posHash(bp), bp + dir * 0.33, Vec2(-dir.x, -dir.y), 0.02, true));
         }
         // PLANTER hedges where each path meets the street: a stone curb box
         // with clipped greenery on top, one per side of the mouth.
@@ -802,11 +816,10 @@ void sculptForecourt(LotBuilding& b, const Poly2& plaza, const SiteFrame& f, Rea
         for (int k = 0; k < nb; ++k) {
             const Real fx = x0 + W * (k + 0.5) / nb;
             const Real fy = y0 + P * 0.62;
-            const Vec3 o = at(fx - 0.8, fy - 0.22) + up * 0.42;
-            emitBox(kit, Scope{o, {u3, up, v3}, Vec3(1.6, 0.07, 0.44)}, PartId::Wood, wood);
-            for (int lg = 0; lg < 2; ++lg)
-                emitBox(kit, Scope{at(fx + (lg ? 0.55 : -0.65), fy - 0.18), {u3, up, v3}, Vec3(0.10, 0.42, 0.36)},
-                        PartId::Metal, Vec3(0.20, 0.21, 0.22));
+            // A backless PLAZA BENCH from the library (M2), facing the avenue.
+            (void)wood;
+            const Vec2 face(-f.v.x, -f.v.y);
+            b.furniture.push_back(outdoorPiece(Piece::PlazaBench, posHash(f.toWorld({fx, fy})), f.toWorld({fx, fy}) - face * 0.275, face, y, false));
         }
     }
     appendKit(kit, outParts);
@@ -1189,17 +1202,9 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
             Vec2 bp = c + dir * ((r0 > 0 ? r0 + 1.1 : 2.8) + rng.range(0, 1.5));
             if (!onDeck(bp) || !clearAt(bp, 1.0)) continue;
             claim(bp, 1.0);
-            Vec2 t2(-dir.y, dir.x);
-            Vec3 t3(t2.x, 0, t2.y), n3(dir.x, 0, dir.y);
-            Vec3 o = Vec3(bp.x, slabY + 0.42, bp.y) - t3 * 0.8 - n3 * 0.22;
-            emitBox(kit, Scope{o, {t3, up, n3}, Vec3(1.6, 0.07, 0.44)},
-                    PartId::Wood, wood);
-            for (int lg = 0; lg < 2; ++lg)
-                emitBox(kit,
-                        Scope{Vec3(bp.x, slabY, bp.y) +
-                                  t3 * (lg ? 0.55 : -0.65) - n3 * 0.18,
-                              {t3, up, n3}, Vec3(0.10, 0.42, 0.36)},
-                        PartId::Metal, Vec3(0.20, 0.21, 0.22));
+            // A PARK BENCH from the library (M2), facing the plaza's centre, on the deck.
+            (void)wood;
+            b.furniture.push_back(outdoorPiece(Piece::Bench, posHash(bp), bp + dir * 0.33, Vec2(-dir.x, -dir.y), slabY, false));
         }
     }
 
@@ -4128,6 +4133,34 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (paved && parkingPoly.size() >= 3)
                 sculptParking(b, parkingPoly, siteFrameOf, b.paveY, bp,
                               mix(pp.seed, static_cast<uint32_t>(li) * 41u + 29u), outParts);
+            // CAFÉ TERRACES (the furniture library, M2): in front of every café and bakery on the storefront, where
+            // the paving reaches far enough (2.8 m), bistro sets along the glass -- a table, a chair either side
+            // facing across it -- clear of the shop's door. Sat on like any chair.
+            if (paved && planOk && b.pavedLot.size() >= 3) {
+                for (const ShopFront& sf : shopFrontsOf(plan, bp)) {
+                    if (sf.trade != 0 && sf.trade != 6) continue;   // cafe, bakery
+                    const Vec2 d0 = sf.b - sf.a;
+                    const Real L = d0.length();
+                    if (L < 2.4) continue;
+                    const Vec2 d = d0 * (1.0 / L);
+                    auto onPaving = [&](const Vec2& q) { return pointInPolygon(b.pavedLot, q) && clearOfRoads(q); };
+                    Real room = 0;
+                    for (Real t = 0.3; t <= 8.0; t += 0.25) {
+                        if (!onPaving((sf.a + sf.b) * 0.5 + sf.n * t)) break;
+                        room = t;
+                    }
+                    if (room < 2.8) continue;
+                    const Real out = std::min(room - 1.1, Real(1.9));   // the tables' line, out from the glass
+                    for (Real x = 1.1; x + 1.1 <= L + 1e-6; x += 2.3) {
+                        const Vec2 T = sf.a + d * x + sf.n * out;
+                        if (std::fabs(dot(T - sf.door, d)) < 1.3) continue;   // the door stays clear
+                        if (!onPaving(T - d * 0.85) || !onPaving(T + d * 0.85)) continue;
+                        b.furniture.push_back(outdoorPiece(Piece::BistroTable, posHash(T), T - sf.n * 0.35, sf.n, b.paveY, false));
+                        b.furniture.push_back(outdoorPiece(Piece::BistroChair, posHash(T), T - d * 0.80, d, b.paveY, false));
+                        b.furniture.push_back(outdoorPiece(Piece::BistroChair, posHash(T), T + d * 0.80, d * -1.0, b.paveY, false));
+                    }
+                }
+            }
             // A yarded house earns its LANDSCAPING: front walk to the street,
             // a hedge along the front lot line, back-yard tree spots.
             if (yardApplied)
@@ -4657,6 +4690,16 @@ void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
     const float rc = static_cast<float>(0.5 / kMassBoxTile);
     MeshBuilder::emitQuadUV(out, top + c[0], top + c[1], top + c[2], top + c[3],
                             Vec3(0, 1, 0), roofColor, rc, rc, rc, rc, rc, rc, rc, rc);
+}
+
+Mat4 outdoorPieceXform(const OutdoorPiece& p, Real y) {
+    const Real c = std::cos(p.yaw), s = std::sin(p.yaw);
+    Mat4 m;
+    // +x (c, 0, -s), +y up, +z (s, 0, c): right-handed, the piece's front along +z
+    m.m[0][0] = c;  m.m[0][1] = 0; m.m[0][2] = s;  m.m[0][3] = p.at.x;
+    m.m[1][0] = 0;  m.m[1][1] = 1; m.m[1][2] = 0;  m.m[1][3] = y;
+    m.m[2][0] = -s; m.m[2][1] = 0; m.m[2][2] = c;  m.m[2][3] = p.at.y;
+    return m;
 }
 
 }  // namespace engine

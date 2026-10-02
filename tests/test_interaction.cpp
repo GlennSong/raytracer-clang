@@ -8,6 +8,7 @@
 #include "../src/engine/procgen/furniture_kit.h"
 #include "../src/engine/procgen/furniture_library.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/scripting/furniture_library_lua.h"
 #include <cmath>
 #include <cstdio>
@@ -203,4 +204,24 @@ TEST_CASE(you_can_sit_on_the_toilet) {
     std::printf("    [toilet] %d toilets on the floor, %d offer a seat\n", toilets, offered);
     CHECK(toilets > 0);
     CHECK(offered == toilets);
+}
+
+// OUTDOOR PIECES (M2): the lot pass places a bench by its back's centre and the way it faces; the transform must
+// turn the piece's front (+z) that way, keep it right-handed (a mirrored frame turns a piece inside out), and put
+// its seats in front of where it stands.
+TEST_CASE(an_outdoor_piece_faces_where_it_was_placed) {
+    const FurnitureLibrary lib = shippedLibrary();
+    for (const Vec2 face : {Vec2(1, 0), Vec2(0, -1), Vec2(-0.6, 0.8)}) {
+        OutdoorPiece op;
+        op.piece = static_cast<uint8_t>(Piece::Bench);
+        op.at = Vec2(10, 20);
+        op.yaw = std::atan2(face.x, face.y);
+        const Mat4 m = outdoorPieceXform(op, 3.0);
+        const Vec3 Z = pieceDir(m, Vec3(0, 0, 1)), X = pieceDir(m, Vec3(1, 0, 0));
+        CHECK(std::fabs(Z.x - face.x) < 1e-9 && std::fabs(Z.z - face.y) < 1e-9);
+        CHECK(dot(cross(X, Vec3(0, 1, 0)), Z) > 0.99);
+        const Vec3 seat = piecePoint(m, lib.find(Piece::Bench)->spots[1].at);
+        CHECK(std::fabs(seat.y - 3.47) < 1e-6);
+        CHECK((seat.x - 10) * face.x + (seat.z - 20) * face.y > 0.3);   // in front of its back
+    }
 }

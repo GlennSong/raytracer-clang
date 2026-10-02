@@ -35,6 +35,7 @@ enum class Piece : uint8_t {
     DeskPod, Cubicle, MeetingTable, Whiteboard,   // buildings C: the office floor
     ShopCounter, Gondola, WallShelf, ClothesRack, CafeTable, DisplayCase, DrinksFridge, Bookcase,   // shops
     PalletRack, Checkout,   // big-box stores
+    Bench, PlazaBench, BistroTable, BistroChair,   // outdoor seating (the furniture library, M2)
     Count
 };
 constexpr int kPieceCount = static_cast<int>(Piece::Count);

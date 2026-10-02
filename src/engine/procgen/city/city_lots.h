@@ -31,6 +31,20 @@ namespace engine {
 // aperture. `foot` is the threshold centre (world XZ, at the unit's baseY),
 // `normal` the outward facade direction. Collected from the grammar's
 // "entrance" attaches (which mergeParts otherwise discards).
+// A kit piece placed OUTDOORS (furniture_kit.h Piece). `yaw` turns the piece's +z (its front) to world
+// (sin yaw, 0, cos yaw); `y` is its floor -- world height, or above the finished ground when `draped` (parks lie on
+// the terrain, which is only known once it is graded).
+struct OutdoorPiece {
+    uint8_t piece = 0;
+    uint32_t variant = 0;
+    Vec2 at{0, 0};
+    Real yaw = 0;
+    Real y = 0;
+    bool draped = false;
+};
+// The piece -> world transform for a floor at world height `y`.
+Mat4 outdoorPieceXform(const OutdoorPiece& p, Real y);
+
 struct DoorSpec {
     Vec2 foot;
     Vec2 normal;
@@ -97,6 +111,9 @@ struct LotBuilding {
     // real trees at (parks: around the paths; yards: behind the house). Each
     // entry is (world x, trunk scale, world z). Empty = host's own scatter.
     std::vector<Vec3> treeSpots;
+    // OUTDOOR FURNITURE (the furniture library, M2): benches, bistro sets -- library pieces placed by the park,
+    // plaza and forecourt passes, drawn instanced and sat on like any interior piece (engine/interaction.h).
+    std::vector<OutdoorPiece> furniture;
     // Fenced ring spans (world XZ pairs) sculptPark actually built — the
     // loader turns them into thin wall colliders (drive feedback: "Parks
     // also have no collision detection").
