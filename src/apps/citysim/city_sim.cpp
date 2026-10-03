@@ -2207,28 +2207,37 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
     const Vec2 u = al > 1e-6 ? along * (1.0 / al) : Vec2(1, 0);
     const Vec2 side(u.y, -u.x);   // right of travel: away from the kerb on the right-hand walk
     std::vector<int> near;
-    auto clear = [&](Vec2 p) {
+    // the nearest body to p, squared (capped at the 1.5 m query)
+    auto nearest2 = [&](Vec2 p) {
         grid_.query(p, 1.5, near);
+        Real best = 1.5 * 1.5;
         for (int bi : near) {
             if (bi == self) continue;
             const Agent& b = agents_[static_cast<std::size_t>(bi)];
             if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
             if (!b.moving && b.indoors) continue;   // inside: not on the pavement
             if (riding(bi)) continue;
-            if ((b.pos - p).lengthSquared() < 0.75 * 0.75) return false;
+            best = std::min(best, (b.pos - p).lengthSquared());
         }
-        return true;
+        return best;
     };
     constexpr Real kStep = 0.8;
-    for (int row = 0; row < 2; ++row) {
+    // A CROWD (a busy stop) can fill every spot tried; the fallback is then the roomiest of them, not `want`
+    // itself -- which stood the newcomer inside whoever already stood there (two STILL people are never pushed
+    // apart: macOS CI's one overlapping pair in metro_pedestrians_walk_and_keep_apart). Three rows now.
+    Vec2 roomiest = want;
+    Real roomiest2 = -1;
+    for (int row = 0; row < 3; ++row) {
         const Vec2 base = want + side * (row * kStep);
         for (int k = 0; k < 9; ++k) {
             const Real off = kStep * static_cast<Real>((k + 1) / 2) * ((k & 1) ? 1.0 : -1.0);
             const Vec2 p = base + u * off;
-            if (clear(p)) return p;
+            const Real d2 = nearest2(p);
+            if (d2 >= 0.75 * 0.75) return p;
+            if (d2 > roomiest2) { roomiest2 = d2; roomiest = p; }
         }
     }
-    return want;
+    return roomiest;
 }
 
 // Somewhere NEAR to go next on an outing: an open park, cafe, store,
