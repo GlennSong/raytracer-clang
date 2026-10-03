@@ -493,6 +493,9 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     // The producer's grow, twice, from the cached ring scene's products: byte-identical lots.
     const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
     LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.lotNav; city.pavedSidewalk = p.bands.sidewalkWidth;
+    // the decks too, as the producer reads them back: they set the earthwork and the 6 m freeway clearance (60c72b30).
+    // Without them this grow kept the 8 lots by the ring's ramps that the bake drops: 189 here vs 181 read back.
+    city.deck = p.deck;
     nlohmann::json ra, rb;
     const NetLotResult ga = growLotsForLevel(in, city, &ra), gb = growLotsForLevel(in, city, &rb);
     CHECK(ga.lots.size() > 100 && ga.lots.size() == gb.lots.size() && ra["units"] == rb["units"] && !ga.parts.empty());
