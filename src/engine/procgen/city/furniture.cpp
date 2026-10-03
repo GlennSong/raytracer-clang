@@ -241,6 +241,12 @@ const char* programFor(RoomKind kind) {
         case RoomKind::Kitchenette: return "kitchenette";
         case RoomKind::Closet: return "closet";
         case RoomKind::Bath: return "bath";
+        case RoomKind::Classroom: return "classroom";
+        case RoomKind::Lecture: return "lecture_hall";
+        case RoomKind::Lab: return "lab";
+        case RoomKind::Reading: return "reading_room";
+        case RoomKind::Stacks: return "stacks";
+        case RoomKind::Dorm: return "dorm";
         default: return "";
     }
 }
@@ -263,6 +269,48 @@ struct ProgramRun {
         return {0, 1, 2, 3};
     }
     Piece pickOf(const FurnPick& p, Real w, Real d) const { return lib.pick(p, w, d, hr); }
+
+    // A GRID whose cells hold a SET (a classroom's desk and its chair) or step up in TIERS (a lecture hall's rows):
+    // rows out from the window wall, every cell clear of what is already placed; a row's tier counted from the
+    // front, the side away from the windows, where the lectern stands.
+    void gridOfSets(const FurnStep& st) {
+        const Real zStart = 0.6, zEnd = F.f.D - 0.8, xEnd = F.f.W - 0.6;
+        int rows = 0;
+        for (Real z = zStart; z + st.d <= zEnd + 1e-6; z += st.d + st.aisleZ) ++rows;
+        int r = 0, placed = 0;
+        // the clearance kept to what is already placed -- but a grid's own cells may touch (a stack row's bookcases
+        // end to end, aisle 0): the margin is never wider than the grid's own aisles, or every other cell drops
+        const Real gap = std::min(Real(0.1), std::max(Real(0), std::min(st.aisleX, st.aisleZ) - Real(0.01)));
+        const std::size_t ownFrom = F.taken.size();
+        for (Real z = zStart; z + st.d <= zEnd + 1e-6; z += st.d + st.aisleZ, ++r) {
+            int inRun = 0;
+            for (Real x = 0.6; x + st.w <= xEnd + 1e-6; x += st.w + st.aisleX) {
+                if (st.runN > 0 && inRun == st.runN) { x += st.crossW; inRun = 0; if (x + st.w > xEnd + 1e-6) break; }
+                ++inRun;
+                Placement c{&F.f, 0, x, st.w, st.d, z};
+                const Box2 fp = c.footprint();
+                bool clear = true;
+                for (std::size_t bi = 0; bi < F.taken.size(); ++bi)
+                    if (overlaps(fp, F.taken[bi], bi >= ownFrom ? gap : Real(0.1))) { clear = false; break; }
+                if (!clear) continue;
+                F.taken.push_back(fp);
+                const uint32_t keep = F.variant;
+                if (st.tiers) F.variant = (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(std::min(rows - 1 - r, 7)) << 5);
+                if (st.set.empty()) {
+                    const Piece pc = pickOf(st.pick, st.w, st.d);
+                    if (pc != Piece::Count) F.put(c, pc, st.w * 0.5, 0.0);
+                } else {
+                    for (const FurnMember& m : st.set) {
+                        const Piece pc = pickOf(m.pick, m.fitW > 0 ? m.fitW : st.w, m.fitD > 0 ? m.fitD : st.d);
+                        if (pc != Piece::Count) F.put(c, pc, m.x, m.z, m.facing, m.y);
+                    }
+                }
+                F.variant = keep;
+                ++placed;
+            }
+        }
+        prevPlaced = placed > 0;
+    }
 
     void run(const FurnStep& st) {
         Placement p;
@@ -297,6 +345,7 @@ struct ProgramRun {
                 return;
             }
             case FurnStep::Kind::Grid: {
+                if (!st.set.empty() || st.tiers) { gridOfSets(st); return; }
                 const Piece pc = pickOf(st.pick, st.w, std::max(st.d, st.d2));
                 if (pc == Piece::Count) return;
                 const uint32_t v2 = st.style2 >= 0 ? (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(st.style2) << 5) : 0u;

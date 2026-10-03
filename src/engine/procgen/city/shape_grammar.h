@@ -533,6 +533,10 @@ struct BuildingParams {
     // improvement, 4 discount store. The front edge wears the chain's sign and canopy, the rear its loading docks,
     // a band in the chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
     uint8_t bigBox = 0;
+    // A UNIVERSITY building (the campus): 0 none, 1 a teaching hall (lecture halls, classrooms, labs), 2 the library
+    // (a reading room, the stacks), 3 a residence hall (dorm rooms, a lounge, shared baths). A stair building
+    // (core = 1): its floors are rooms either side of a corridor from the stair (campusPlan, room_plan.cpp).
+    uint8_t campus = 0;
 };
 
 // THE SHOPFRONTS of a building's ground storey (buildings: shops; the facade's own ShopUnits): each shop's stretch

@@ -998,6 +998,8 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
         const int chain = static_cast<int>(optField(L, idx, "big_box", 0.0));
         if (chain >= 1 && chain <= 4) dressBigBox(p, chain, p.seed);
     }
+    // campus = 1 teaching hall, 2 library, 3 residence hall (the university's room plans)
+    p.campus = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "campus", p.campus)), 0, 3));
     p.backDoor = optBoolField(L, idx, "back_door", p.backDoor);
     p.fireEscape = optBoolField(L, idx, "fire_escape", p.fireEscape);
 }

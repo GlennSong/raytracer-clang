@@ -54,8 +54,10 @@ enum class PlateTopology : uint8_t {
 // it has no walls of its own and overlaps the rooms set into it (the corner offices, the meeting rooms).
 // Shop: a ground-floor shop unit (Room::style its trade: 0 cafe, 1 grocery, 2 boutique, 3 bookshop, 4 electronics,
 // 5 pharmacy, 6 bakery).
+// Classroom .. Dorm: the university campus (campusPlan): a classroom, a tiered lecture hall, a teaching lab, the
+// library's reading room and its stacks, a residence hall's two-bed room.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
-                                Shop };
+                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

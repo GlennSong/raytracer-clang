@@ -159,6 +159,29 @@ furniture_library = {
   whiteboard = { family = "fixture", tags = { "meeting", "classroom" } },
   cubicle = { family = "surface", tags = { "office", "open_plan" } },
   desk_pod = { family = "surface", tags = { "office", "open_plan" } },
+  -- THE UNIVERSITY
+  single_bed = {
+    family = "sleeping", tags = { "dorm", "bedroom_single" },
+    spots = {
+      { id = "bed", at = seat(0, 0.50, 1.02) },
+      { id = "edge", at = seat(0.30, 0.50, 1.20) },
+    },
+    verbs = {
+      { verb = "lie", label = "lie down", spots = { "bed", "edge" }, eye = { 0, 0.74, 0.36 }, look = { 0, 1.6, 1 }, exit = { 0.85, 0, 1.0 } },
+      { verb = "sit", spots = { "edge" }, eye = { 0.30, 1.18, 1.10 }, look = { 1, -0.1, 0 }, exit = { 0.85, 0, 1.2 } },
+    },
+  },
+  school_desk = { family = "surface", tags = { "classroom", "study" } },
+  school_chair = {
+    family = "seating", tags = { "classroom", "study" },
+    spots = { { id = "seat", at = seat(0, 0.47, 0.26) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.19, 0.22 }, look = { 0, -0.08, 1 }, exit = { 0, 0, 0.9 } } },
+  },
+  lecture_row = { family = "seating", tags = { "lecture" } },
+  lectern = { family = "fixture", tags = { "lecture" } },
+  lab_bench = { family = "surface", tags = { "lab" } },
+  reading_table = { family = "surface", tags = { "library" } },
+  bookcase = { family = "storage", tags = { "books", "library" } },
   -- THE GOODS: small things the dressing pass stands on anchors, by their tags
   desk_lamp = { family = "goods", tags = { "desk", "lamp" } },
   potted_plant = { family = "goods", tags = { "plant" } },

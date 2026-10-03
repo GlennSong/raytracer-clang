@@ -716,6 +716,140 @@ static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, co
     return rp;
 }
 
+// ------------------------------------------------------------- the university
+// A CAMPUS BUILDING's floor (Glenn, 2026-10-03: "a university campus over blocks (library, classrooms, offices,
+// dorms, quads, sports fields)"). A stair building like the walk-up: a 2.4 m corridor down the long axis from the
+// stair, rooms either side of it, each with its door on the corridor -- but every room a single room of the
+// building's use:
+//   TEACHING HALL (campus 1)   the ground floor's larger side LECTURE HALLS (12-16 m), the rest CLASSROOMS (~8.5 m);
+//                              upstairs classrooms with a LAB every third room; restrooms by the stair.
+//   LIBRARY (2)                each run of the ground floor one READING room; the floors above, the STACKS.
+//   RESIDENCE HALL (3)         two-bed DORM rooms (3.6 m), a shared bath every eighth, a lounge by the stair.
+static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
+                           int storey) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Apartments;
+    rp.office = params.campus != 3;
+    if (planIn.size() != 4 || well.size() < 3) return rp;
+    const OBB2 ob = orientedBoundingBox(planIn);
+    const int la = ob.longAxis();
+    const Vec2 ua = ob.axis[la];
+    const Vec2 va(ua.y, -ua.x);
+    const Real hl = ob.half[la], hw = ob.half[1 - la];
+    const Vec2 o = ob.center;
+    const Real kCorr = 2.4;
+    const bool twoSides = 2 * hw >= 2 * (inset + 5.0) + kCorr;
+    Real s0 = 1e9, s1 = -1e9, t0 = 1e9, t1 = -1e9;
+    for (const Vec2& q : well) {
+        const Vec2 d = q - o;
+        s0 = std::min(s0, dot(d, ua)); s1 = std::max(s1, dot(d, ua));
+        t0 = std::min(t0, dot(d, va)); t1 = std::max(t1, dot(d, va));
+    }
+    s0 -= 1.0; s1 += 1.0;
+    struct Band { std::function<Vec2(Real, Real)> P; Real vFront; Real t0, t1; bool alongPlus; };
+    std::vector<Band> bands;
+    auto plusBand = [=](Real front, Real tLo) {
+        return Band{[=](Real x, Real v) { return o - ua * hl + va * hw + ua * x - va * v; }, front, tLo, hw, true};
+    };
+    auto minusBand = [=](Real front, Real tHi) {
+        return Band{[=](Real x, Real v) { return o + ua * hl - va * hw - ua * x + va * v; }, front, -hw, tHi, false};
+    };
+    if (twoSides) {
+        bands.push_back(plusBand(hw - kCorr * 0.5, kCorr * 0.5));
+        bands.push_back(minusBand(hw - kCorr * 0.5, -kCorr * 0.5));
+    } else if ((t0 + t1) * 0.5 >= 0) {
+        bands.push_back(plusBand(2 * hw - inset - kCorr, -hw + inset + kCorr));
+    } else {
+        bands.push_back(minusBand(2 * hw - inset - kCorr, hw - inset - kCorr));
+    }
+    uint32_t h = static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 131 + 7);
+    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    int roomNo = 0;
+    for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+        const Band& b = bands[bi];
+        const Real vIn = inset, D = b.vFront - vIn;
+        if (D < 4.5) continue;
+        std::vector<std::pair<Real, Real>> runs = {{inset, 2 * hl - inset}};
+        const bool stairHere = t1 > b.t0 && t0 < b.t1;
+        if (stairHere) {
+            const Real a = b.alongPlus ? s0 + hl : hl - s1, c = b.alongPlus ? s1 + hl : hl - s0;
+            runs = {{inset, a}, {c, 2 * hl - inset}};
+        }
+        for (std::size_t ri = 0; ri < runs.size(); ++ri) {
+            const Real r0 = runs[ri].first, r1 = runs[ri].second;
+            if (r1 - r0 < 3.4) continue;
+            // the rooms of this run: {width, kind}, laid from r0; the last takes the remainder
+            struct Seg { Real w; RoomKind kind; };
+            std::vector<Seg> want;
+            const Real len = r1 - r0;
+            auto fill = [&](Real target, Real minW, RoomKind kind) {
+                int n = std::max(1, static_cast<int>(len / target));
+                while (n > 1 && len / n < minW) --n;
+                for (int k = 0; k < n; ++k) want.push_back({len / n, kind});
+            };
+            // the run beside the stair hall's corridor end: its first room a bath (restrooms / a shared bath)
+            const bool byStair = stairHere && runs.size() == 2;
+            switch (params.campus) {
+                case 1:   // teaching hall
+                    if (storey == 0 && bi == 0 && D >= 8.0) fill(13.0 + 3.0 * rnd(), 10.0, RoomKind::Lecture);
+                    else fill(8.5, 6.5, RoomKind::Classroom);
+                    if (storey > 0)
+                        for (std::size_t k = 0; k < want.size(); ++k)
+                            if ((roomNo + static_cast<int>(k)) % 3 == 2) want[k].kind = RoomKind::Lab;
+                    break;
+                case 2:   // library: one room a run
+                    want.push_back({len, storey == 0 ? RoomKind::Reading : RoomKind::Stacks});
+                    break;
+                default:  // residence hall
+                    fill(3.6, 3.3, RoomKind::Dorm);
+                    for (std::size_t k = 0; k < want.size(); ++k)
+                        if ((roomNo + static_cast<int>(k)) % 8 == 7) want[k].kind = RoomKind::Bath;
+                    if (storey == 0 && bi == 0 && ri == 0 && want.size() >= 3) {   // the lounge: two rooms merged
+                        want[1].w += want[0].w;
+                        want[1].kind = RoomKind::Living;
+                        want.erase(want.begin());
+                    }
+                    break;
+            }
+            if (byStair && ri == 0 && params.campus != 2 && !want.empty() && want.back().w >= 3.0) want.back().kind = RoomKind::Bath;
+            roomNo += static_cast<int>(want.size());
+            Real x = r0;
+            for (std::size_t k = 0; k < want.size(); ++k) {
+                const Real x0 = x, x1 = k + 1 == want.size() ? r1 : x + want[k].w;
+                x = x1;
+                Room rm;
+                rm.edge = bi;
+                rm.kind = want[k].kind;
+                rm.rect = {b.P(x0, vIn), b.P(x1, vIn), b.P(x1, b.vFront), b.P(x0, b.vFront)};
+                rp.rooms.push_back(rm);
+                // the front, onto the corridor, with the room's door (a lecture hall's near its back corner)
+                RoomWall fw;
+                fw.a = b.P(x0, b.vFront);
+                fw.b = b.P(x1, b.vFront);
+                // a teaching room's door near the back corner (the middle of that wall is the front: the board)
+                const bool teaching = want[k].kind == RoomKind::Lecture || want[k].kind == RoomKind::Classroom ||
+                                      want[k].kind == RoomKind::Lab;
+                fw.doorAt = teaching ? (b.alongPlus ? 0.88 : 0.12) : 0.5;
+                rp.walls.push_back(fw);
+                // the partition to the next room
+                if (k + 1 < want.size()) {
+                    RoomWall pw;
+                    pw.a = b.P(x1, vIn);
+                    pw.b = b.P(x1, b.vFront);
+                    rp.walls.push_back(pw);
+                }
+            }
+            // the walls closing the run where it meets the stair hall (the plan's own ends are its facade)
+            for (Real xe : {r0, r1}) {
+                if (xe <= inset + 1e-6 || xe >= 2 * hl - inset - 1e-6) continue;
+                RoomWall w; w.a = b.P(xe, vIn); w.b = b.P(xe, b.vFront);
+                rp.walls.push_back(w);
+            }
+        }
+    }
+    return rp;
+}
+
 // ------------------------------------------------------------- the office floor
 // THE OFFICE FLOOR (Glenn, 2026-09-30: "the wider floors seem to have a lot of floorspace which in an office would
 // be good for cubicles or open floorplans"). A glass tower's typical floor, rectangular with a core:
@@ -1008,6 +1142,15 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     const OBB2 plateBox = orientedBoundingBox(planIn);
     const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
     const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
+    if (params.campus && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
+        // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
+        // a lecture hall, the reading room, dorms), walked from the stair's foot.
+        RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey);
+        cp.finish = interiorFinishFor(params);
+        if (!cp.rooms.empty() && floorIsWalkable(cp, planIn, centroid(stairWell), stairWell)) return cp;
+        if (std::getenv("RT_CAMPUS_DEBUG"))
+            std::fprintf(stderr, "[campus] storey %d: %zu rooms, NOT walkable\n", storey, cp.rooms.size());
+    }
     if (walkupShape && params.residential && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
         // A WALK-UP's floor: apartments off a corridor from the stair, walked from the stair's foot. A narrow plate
         // (one dwelling a floor) that is long enough for two takes a single-loaded corridor instead.

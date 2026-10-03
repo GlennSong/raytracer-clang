@@ -384,3 +384,51 @@ TEST_CASE(a_tag_pick_takes_the_largest_described_piece_that_fits_the_slot) {
     CHECK(more.pick(office, 0.9, 0.9, 1) == Piece::LoungeChair);   // it fits, and it is bigger
     CHECK(more.pick(office, 0.7, 0.7, 1) == Piece::OfficeChair);   // ...but not in a desk chair's slot
 }
+
+// THE UNIVERSITY'S FLOORS (the campus, milestone 1): a teaching hall's ground floor holds lecture halls and
+// classrooms, its upper floors classrooms and labs; the library a reading room below and stacks above; a residence
+// hall dorm rooms, shared baths and a lounge -- every room off the corridor (the floor walks from the stair), each
+// furnished by its program: tiered lecture rows, pupils' desks, lab benches, reading tables, back-to-back stacks,
+// two single beds a dorm room.
+TEST_CASE(campus_buildings_have_their_rooms_and_furniture) {
+    UseShippedFurniture shipped;
+    const Poly2 plans[3] = {{{0, 0}, {52, 0}, {52, 22}, {0, 22}}, {{0, 0}, {40, 0}, {40, 24}, {0, 24}},
+                            {{0, 0}, {54, 0}, {54, 15}, {0, 15}}};
+    std::array<int, kPieceCount> n{};
+    std::array<int, 32> kinds{};
+    for (int campus = 1; campus <= 3; ++campus)
+        for (int storey : {0, 1, 2}) {
+            BuildingParams p;
+            p.floors = 4; p.campus = static_cast<uint8_t>(campus); p.core = 1; p.walkableGround = true;
+            p.openDoorway = true; p.seed = 41;
+            const Poly2& plan = plans[campus - 1];
+            const std::size_t entrance = entranceEdgeFor(plan, p);
+            const InteriorLayout il = interiorLayout(plan, p, entrance);
+            CHECK(il.hasStair);
+            if (!il.hasStair) continue;
+            const Real inset = std::max(p.wallThickness, Real(0.55));
+            const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, entrance), il.edge, inset, storey, il.well, entrance);
+            CHECK(!rp.rooms.empty());
+            CHECK(floorIsWalkable(rp, plan, centroid(il.well), il.well));
+            for (const Room& r : rp.rooms) ++kinds[static_cast<std::size_t>(r.kind)];
+            std::vector<PlacedPiece> out;
+            RenderMesh col;
+            emitFurniture(out, &col, rp, 0.0, p.seed + storey, 3.2);
+            for (const PlacedPiece& pp : out) ++n[pp.piece];
+        }
+    auto k = [&](RoomKind r) { return kinds[static_cast<std::size_t>(r)]; };
+    auto c = [&](Piece pc) { return n[static_cast<std::size_t>(pc)]; };
+    std::printf("    [campus] rooms: lecture %d, classroom %d, lab %d, reading %d, stacks %d, dorm %d, bath %d, lounge %d | "
+                "pieces: lecture rows %d, school desks %d, lab benches %d, reading tables %d, bookcases %d, single beds %d\n",
+                k(RoomKind::Lecture), k(RoomKind::Classroom), k(RoomKind::Lab), k(RoomKind::Reading), k(RoomKind::Stacks),
+                k(RoomKind::Dorm), k(RoomKind::Bath), k(RoomKind::Living), c(Piece::LectureRow), c(Piece::SchoolDesk),
+                c(Piece::LabBench), c(Piece::ReadingTable), c(Piece::Bookcase), c(Piece::SingleBed));
+    for (RoomKind r : {RoomKind::Lecture, RoomKind::Classroom, RoomKind::Lab, RoomKind::Reading, RoomKind::Stacks,
+                       RoomKind::Dorm, RoomKind::Bath, RoomKind::Living})
+        CHECK(k(r) > 0);
+    for (Piece pc : {Piece::LectureRow, Piece::Lectern, Piece::SchoolDesk, Piece::SchoolChair, Piece::LabBench,
+                     Piece::ReadingTable, Piece::Bookcase, Piece::SingleBed, Piece::Whiteboard})
+        CHECK(c(pc) > 0);
+    CHECK(c(Piece::SchoolChair) >= c(Piece::SchoolDesk));   // every desk has its chair (dorm desks too)
+    CHECK(c(Piece::SingleBed) == 2 * k(RoomKind::Dorm));    // two singles a dorm room
+}

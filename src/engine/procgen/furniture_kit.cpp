@@ -818,6 +818,108 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Ceramic, {0.05, 0.05, 0.045}, {0.015, 0.06, 0.012}, 0.005, kMug[variant % 4], 1);
             break;
         }
+        // THE UNIVERSITY CAMPUS: a dorm's single bed, a classroom's desk and stacking chair, a lecture hall's row of
+        // tip-up seats on its own riser, the lectern, a lab's bench, the library's long reading table.
+        case Piece::SingleBed: {
+            // A made single, 0.95 x 2.05: the frame on legs, a low timber headboard, the duvet, one pillow.
+            k.out.size = {0.95, 0.85, 2.05};
+            k.box(F::Wood, {0, 0.22, 1.02}, {0.95, 0.12, 2.03}, 0.01, wood, 1);
+            for (double x : {-0.42, 0.42})
+                for (double z : {0.06, 1.98}) k.leg(F::Wood, {x, 0, z}, 0.16, 0.05, wood * 0.9);
+            k.box(F::Wood, {0, 0.52, 0.03}, {0.95, 0.66, 0.05}, 0.01, wood * 0.95, 1);
+            k.box(F::Fabric, {0, 0.38, 1.04}, {0.88, 0.20, 1.94}, 0.05, kLinen);
+            k.box(F::Fabric, {0, 0.51, 1.30}, {0.98, 0.06, 1.46}, 0.03, fabric);
+            for (double x : {-0.49, 0.49}) k.box(F::Fabric, {x, 0.40, 1.30}, {0.03, 0.26, 1.46}, 0.012, fabric * 0.94);
+            k.box(F::Fabric, {0, 0.55, 0.30}, {0.66, 0.13, 0.36}, 0.05, kLinen * 1.02);
+            break;
+        }
+        case Piece::SchoolDesk: {
+            // A pupil's desk: a laminate top on a tubular steel frame, a book shelf under it.
+            k.out.size = {0.70, 0.74, 0.50};
+            k.box(F::Hard, {0, 0.725, 0.25}, {0.70, 0.025, 0.50}, 0.006, wood * 1.1, 1);
+            for (double x : {-0.32, 0.32})
+                for (double z : {0.04, 0.46}) k.rod(F::Metal, {x, 0.0, z}, {x, 0.71, z}, 0.013, kSteel * 0.6, 8);
+            k.box(F::Metal, {0, 0.56, 0.30}, {0.60, 0.012, 0.32}, 0.0, kSteel * 0.6, 1);
+            break;
+        }
+        case Piece::SchoolChair: {
+            // A stacking chair: a moulded shell on four splayed steel legs.
+            k.out.size = {0.46, 0.80, 0.48};
+            k.out.solid = false;
+            const Vec3 shell = kFabric[(variant + 3) & 7u] * 0.9;
+            k.box(F::Hard, {0, 0.45, 0.26}, {0.42, 0.03, 0.40}, 0.015, shell);
+            k.boxTilted(F::Hard, {0, 0.66, 0.05}, {0.40, 0.34, 0.025}, 0.012, -0.12, shell);
+            for (double x : {-0.18, 0.18}) {
+                k.rod(F::Metal, {x * 1.1, 0.0, 0.44}, {x, 0.44, 0.40}, 0.011, kSteel * 0.7, 8);
+                k.rod(F::Metal, {x * 1.1, 0.0, 0.06}, {x, 0.44, 0.10}, 0.011, kSteel * 0.7, 8);
+                k.rod(F::Metal, {x, 0.44, 0.10}, {x, 0.62, 0.06}, 0.011, kSteel * 0.7, 8);
+            }
+            break;
+        }
+        case Piece::LectureRow: {
+            // A LECTURE HALL's row: six tip-up seats, the writing ledge for the row behind fixed to their backs, on
+            // its own carpeted RISER: style bits = the row's TIER, 0.18 m a tier -- a hall's rows step up toward
+            // the back, each standing on the flat floor as a solid block (the room program's grid numbers them).
+            const double h = 0.18 * static_cast<double>(style & 7u);
+            k.out.size = {3.4, 1.1 + h, 1.0};
+            const Vec3 carpet = kFabric[(variant + 5) & 7u] * 0.55;
+            if (h > 0) k.box(F::Fabric, {0, h * 0.5, 0.50}, {3.4, h, 1.0}, 0.0, carpet, 1);
+            for (int i = 0; i < 6; ++i) {
+                const double x = -1.4 + i * 0.56;
+                k.box(F::Fabric, {x, h + 0.44, 0.62}, {0.50, 0.08, 0.44}, 0.025, fabric);              // the seat
+                k.boxTilted(F::Fabric, {x, h + 0.78, 0.86}, {0.50, 0.56, 0.07}, 0.025, 0.12, fabric);  // its back
+                k.box(F::Hard, {x - 0.28, h + 0.35, 0.65}, {0.05, 0.62, 0.55}, 0.01, kBlack * 2.5, 1);  // the standard
+            }
+            k.box(F::Hard, {1.68, h + 0.35, 0.65}, {0.05, 0.62, 0.55}, 0.01, kBlack * 2.5, 1);
+            k.box(F::Wood, {0, h + 0.74, 0.96}, {3.36, 0.03, 0.12}, 0.005, wood, 1);   // the ledge, for the row behind
+            break;
+        }
+        case Piece::Lectern: {
+            k.out.size = {0.70, 1.15, 0.55};
+            k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
+            k.boxTilted(F::Wood, {0, 1.09, 0.28}, {0.70, 0.04, 0.52}, 0.008, -0.25, wood * 1.05);
+            k.box(F::Wood, {0, 0.03, 0.30}, {0.66, 0.06, 0.50}, 0.004, wood * 0.75, 1);
+            break;
+        }
+        case Piece::LabBench: {
+            // A LAB BENCH, 2.4 x 0.75: a black resin top over white cupboards, a sink at one end with its gooseneck
+            // tap, a service spine of sockets and gas taps along the back.
+            k.out.size = {2.4, 1.15, 0.75};
+            k.box(F::Hard, {0, 0.44, 0.38}, {2.36, 0.80, 0.70}, 0.006, kWhite, 1);
+            for (int d = 0; d < 4; ++d) {
+                const double x0 = -1.16 + d * 0.58;
+                k.front(F::Hard, x0, x0 + 0.58, 0.08, 0.80, 0.73, kWhite * 0.97, kChrome, true);
+            }
+            k.box(F::Hard, {0, 0.865, 0.375}, {2.4, 0.03, 0.75}, 0.004, Vec3(0.08, 0.08, 0.09), 1);
+            k.box(F::Ceramic, {0.85, 0.86, 0.40}, {0.40, 0.03, 0.34}, 0.01, Vec3(0.12, 0.12, 0.13), 1);   // the sink
+            k.rod(F::Metal, {0.85, 0.88, 0.12}, {0.85, 1.12, 0.12}, 0.012, kChrome, 8);
+            k.rod(F::Metal, {0.85, 1.12, 0.12}, {0.85, 1.10, 0.30}, 0.012, kChrome, 8);
+            k.box(F::Hard, {-0.2, 1.0, 0.06}, {1.8, 0.24, 0.10}, 0.01, kSteel * 0.85, 1);                  // the spine
+            for (int i = 0; i < 5; ++i) k.box(F::Hard, {-1.0 + i * 0.4, 1.0, 0.115}, {0.08, 0.06, 0.01}, 0.0, kWhite, 1);
+            break;
+        }
+        case Piece::ReadingTable: {
+            // The LIBRARY's long table for eight: an oak top, a green-shaded lamp at each end, four chairs a side
+            // (part of the piece: a reading room is tables in rows).
+            k.out.size = {2.6, 1.16, 2.0};
+            k.box(F::Wood, {0, 0.74, 1.0}, {2.4, 0.045, 0.95}, 0.01, wood, 1);
+            for (double x : {-1.1, 1.1})
+                for (double z : {0.6, 1.4}) k.leg(F::Wood, {x, 0, z}, 0.72, 0.07, wood * 0.9);
+            for (double x : {-0.95, 0.95}) {
+                k.turned(F::Metal, {x, 0.765, 1.0}, {{0.07, 0.0}, {0.07, 0.015}, {0.012, 0.03}, {0.012, 0.32}, {0.0, 0.33}},
+                         Vec3(0.55, 0.45, 0.25), 1.0, 12);
+                k.box(F::Ceramic, {x, 1.10, 1.0}, {0.34, 0.07, 0.16}, 0.03, Vec3(0.10, 0.32, 0.18));
+            }
+            for (double x : {-0.9, -0.3, 0.3, 0.9})
+                for (int side = 0; side < 2; ++side) {
+                    const double s2 = side == 0 ? -1.0 : 1.0, zc = 1.0 + s2 * 0.72;
+                    k.box(F::Wood, {x, 0.46, zc}, {0.44, 0.05, 0.42}, 0.012, wood * 0.95, 1);
+                    for (double lx : {-0.18, 0.18})
+                        for (double lz : {-0.17, 0.17}) k.leg(F::Wood, {x + lx, 0, zc + lz}, 0.44, 0.035, wood * 0.9);
+                    k.box(F::Wood, {x, 0.75, zc + s2 * 0.20}, {0.40, 0.40, 0.03}, 0.01, wood * 0.95, 1);
+                }
+            break;
+        }
         case Piece::CeilingLight: {
             // THE ROOM'S LIGHT (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes
             // from"): hung by its TOP at y = size.y (placed so that is the ceiling). An office's recessed 600 x 1200
@@ -855,7 +957,8 @@ const char* const kPieceNames[kPieceCount] = {
     "desk_pod", "cubicle", "meeting_table", "whiteboard",
     "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase",
     "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair", "ceiling_light",
-    "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug"};
+    "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug",
+    "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table"};
 
 }  // namespace
 

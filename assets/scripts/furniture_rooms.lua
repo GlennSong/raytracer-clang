@@ -122,3 +122,59 @@ furniture_rooms = {
     { wall = { 0.8, 0.5 }, sides = { 0, 1, 2, 3 }, clear = 0.6, pick = "vanity" },
   },
 }
+
+-- THE UNIVERSITY (campusPlan, room_plan.cpp): the corridor wall (side 2) is each room's front -- the door, the
+-- whiteboard, the lectern -- and the seats face it, rows out from the windows.
+furniture_rooms.classroom = {
+  { wall = { 1.6, 0.8 }, sides = { 2 }, pick = { family = "surface", tags = { "office" } } },   -- the teacher's desk
+  { hang = "whiteboard", sides = { 2, 1, 3 } },
+  -- a desk and its chair a cell: the pupil sits on the window side of the desk, facing the front
+  { grid = { 0.9, 1.25 }, aisle = { 0.35, 0.25 },
+    set = {
+      { pick = { family = "seating", tags = { "classroom" } }, x = 0.45, z = 0.0 },
+      { pick = { family = "surface", tags = { "classroom" } }, x = 0.45, z = 1.05, faces = "wall" },
+    } },
+}
+
+furniture_rooms.lecture_hall = {
+  { wall = { 0.8, 0.6 }, sides = { 2 }, pick = "lectern" },
+  { hang = "whiteboard", sides = { 2, 1, 3 } },
+  -- rows of six on their risers, stepping up toward the windows (the back), an aisle down each side
+  { grid = { 3.4, 1.0 }, aisle = { 0.9, 0.0 }, tiers = true, pick = { family = "seating", tags = { "lecture" } } },
+}
+
+furniture_rooms.lab = {
+  { hang = "whiteboard", sides = { 2, 1, 3 } },
+  { grid = { 2.4, 0.75 }, aisle = { 1.0, 1.5 }, pick = { family = "surface", tags = { "lab" } } },
+}
+
+furniture_rooms.reading_room = {
+  { wall = { 1.2, 0.35 }, sides = { 1, 3 }, tall = true, count = 6, pick = { family = "storage", tags = { "books" } } },
+  { grid = { 2.6, 2.0 }, aisle = { 1.4, 1.2 }, pick = { family = "surface", tags = { "library" } } },
+}
+
+furniture_rooms.stacks = {
+  -- shelving round the walls, then long rows of bookcases BACK TO BACK (books out to both aisles), a cross aisle
+  -- every five
+  { wall = { 1.2, 0.35 }, sides = { 1, 3, 0 }, tall = true, count = 8, pick = { family = "storage", tags = { "books" } } },
+  { grid = { 1.2, 0.72 }, aisle = { 0.0, 1.2 }, run = { 5, 1.4 },
+    set = {
+      { pick = { family = "storage", tags = { "books" } }, x = 0.6, z = 0.36, faces = "wall", fit = { 1.2, 0.36 } },
+      { pick = { family = "storage", tags = { "books" } }, x = 0.6, z = 0.36, fit = { 1.2, 0.36 } },
+    } },
+}
+
+furniture_rooms.dorm = {
+  -- two singles, their heads to the window wall, a desk and chair on each side wall, wardrobes by the door
+  { wall = { 3.2, 2.1 }, sides = { 0 },
+    set = {
+      { pick = { family = "sleeping", tags = { "dorm" } }, x = 0.5, fit = { 1.0, 2.1 } },
+      { pick = { family = "sleeping", tags = { "dorm" } }, x = 2.7, fit = { 1.0, 2.1 } },
+    } },
+  { wall = { 0.9, 1.2 }, sides = { 1, 3 }, count = 2,
+    set = {
+      { pick = { family = "surface", tags = { "classroom" } }, x = 0.45, z = 0.0 },
+      { pick = { family = "seating", tags = { "classroom" } }, x = 0.45, z = 1.15, faces = "wall" },
+    } },
+  { wall = { 1.2, 0.6 }, sides = { 1, 3 }, count = 2, tall = true, clear = 0.7, pick = { family = "storage", tags = { "bedroom" } } },
+}

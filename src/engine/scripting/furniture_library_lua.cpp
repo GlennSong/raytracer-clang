@@ -257,6 +257,11 @@ bool readStep(lua_State* L, int t, FurnStep& st, const std::string& where, std::
     lua_pop(L, 1);
     readPair(L, t, "aisle", st.aisleX, st.aisleZ);
     st.d2 = numField(L, t, "short", 0.0);
+    st.tiers = boolField(L, t, "tiers", false);
+    {
+        Real rn = 0, cw = 0;
+        if (readPair(L, t, "run", rn, cw)) { st.runN = static_cast<int>(rn); st.crossW = cw; }
+    }
     st.style2 = static_cast<int>(numField(L, t, "short_style", -1.0));
     lua_getfield(L, t, "set");
     if (lua_istable(L, -1)) {

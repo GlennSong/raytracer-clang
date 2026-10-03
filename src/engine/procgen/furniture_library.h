@@ -108,6 +108,12 @@ struct FurnStep {
     // not fit, built with style2 (the piece's style bits) -- an office pod of four where six will not go
     Real aisleX = 0, aisleZ = 0, d2 = 0;
     int style2 = -1;
+    // Grid TIERS: each row's style bits its tier counted from the front (the far side from the window wall), so a
+    // lecture hall's rows step up toward the back (LectureRow models its own riser)
+    bool tiers = false;
+    // Grid RUNS: after every `runN` cells along a row, a cross aisle `crossW` wide (a library's stack rows)
+    int runN = 0;
+    Real crossW = 0;
     // Counter: a run of 0.6 m modules on the longest wall: the roles' pieces and the pattern placing them
     std::string pattern;                 // "kitchen" | "kitchenette"
     FurnPick base, sink, hob, tallUnit, wallUnit;

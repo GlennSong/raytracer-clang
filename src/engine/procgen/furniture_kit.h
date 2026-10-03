@@ -39,6 +39,7 @@ enum class Piece : uint8_t {
     Bench, PlazaBench, BistroTable, BistroChair,   // outdoor seating (the furniture library, M2)
     CeilingLight,   // the room's light: a recessed panel, or (style bit 5) a round flush fitting
     DeskLamp, PottedPlant, BookStack, Kettle, FruitBowl, Vase, Mug,   // GOODS: dressing on the furniture's anchors (M3)
+    SingleBed, SchoolDesk, SchoolChair, LectureRow, Lectern, LabBench, ReadingTable,   // the university campus
     Count
 };
 constexpr int kPieceCount = static_cast<int>(Piece::Count);
