@@ -2880,6 +2880,9 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
                 // 0.35 m proud of its pad by design, and its skirt is a separate part
                 // (Concrete) — so it cannot float by this test, only be buried.
                 const bool plate = isPath && c0.x > 0.99 && c0.y > 0.99 && c0.z > 0.99;
+                if (up > 0.30 && !plate && std::getenv("RT_DRESS_DUMP"))
+                    std::printf("      FLOAT %.2f m at (%.1f, %.2f, %.1f) [lowest %.2f at (%.1f, %.1f)] colour %.3f %.3f %.3f, %zu verts\n", up, upAt.x, upAt.y,
+                                upAt.z, down, downAt.x, downAt.z, c0.x, c0.y, c0.z, piece.size());
                 if (up > 0.30 && !plate) {
                     ++t.floating;
                     if (up > t.worst) { t.worst = up; t.at = upAt; }

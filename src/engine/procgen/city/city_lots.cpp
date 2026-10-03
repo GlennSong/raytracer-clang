@@ -130,7 +130,9 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
 
     const Vec2 c = centroid(poly);
     const Real A = area(poly);
-    const Real py = h + 0.03;                    // paths float just off the lawn
+    // paths stand just off the lawn: a kerb's height at most, whatever the lot's own pad height (a block park's
+    // 0.25 m put its plaza and walks 0.28 m up -- a step, not a path)
+    const Real py = std::min(h, Real(0.18)) + 0.03;
     const Real r0 = std::min(Real(4.5), std::max(Real(2.2), std::sqrt(A) * 0.12));
 
     // The centre PLAZA: a paved disc fan, draped on the terrain.
@@ -1276,8 +1278,10 @@ Vertex lerpVertex(const Vertex& a, const Vertex& b, Real t) {
 }  // namespace
 
 void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground, Real gridStep,
-                   Vec2 gridOrigin) {
+                   Vec2 gridOrigin, bool followCreases) {
     if (!ground) return;
+    static const bool coarseOnly = std::getenv("RT_DRAPE_COARSE") != nullptr;   // A/B: the cell-sized floor everywhere
+    if (coarseOnly) followCreases = false;
     if (gridStep > Real(1e-6) && !m.indices.empty()) {
         const Real inv = Real(1) / gridStep;
         const Real ox = gridOrigin.x, oz = gridOrigin.y;
@@ -1290,6 +1294,17 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
         // gentle hill a few metre-scale pieces, a kerb crease its cell. Where neighbours split
         // differently the seam is off the ground by at most kDrapeTol.
         constexpr Real kDrapeTol = 0.03;
+        // The drawn ground at GRID NODES, remembered: neighbouring triangles (and every level of a split) test the
+        // same nodes, and the ground (lodSurfaceHeight, its flatten set) is the whole cost of a drape.
+        std::unordered_map<long long, Real> nodeGround;
+        auto nodeAt = [&](long i, long j) {
+            const long long key = (static_cast<long long>(i) << 32) ^ static_cast<long long>(static_cast<uint32_t>(j));
+            auto it = nodeGround.find(key);
+            if (it != nodeGround.end()) return it->second;
+            const Real g = ground(ox + i * gridStep, oz + j * gridStep);
+            nodeGround.emplace(key, g);
+            return g;
+        };
         auto withinTol = [&](const Vertex& A, const Vertex& B, const Vertex& C) {
             const Real ga = ground(A.position.x, A.position.z), gb = ground(B.position.x, B.position.z),
                        gc = ground(C.position.x, C.position.z);
@@ -1305,7 +1320,7 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
             for (long j = j0; j <= j1; ++j)
                 for (long i = i0; i <= i1; ++i) {
                     const Real x = ox + i * gridStep, z = oz + j * gridStep;
-                    if (std::fabs(ground(x, z) - (ga + bx * (x - A.position.x) + bz * (z - A.position.z))) > kDrapeTol) return false;
+                    if (std::fabs(nodeAt(i, j) - (ga + bx * (x - A.position.x) + bz * (z - A.position.z))) > kDrapeTol) return false;
                 }
             return true;
         };
@@ -1323,7 +1338,68 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
             };
             int e = 0;   // longest edge: (e, e+1)
             for (int k = 1; k < 3; ++k) if (len2(k, (k + 1) % 3) > len2(e, (e + 1) % 3)) e = k;
-            if (len2(e, (e + 1) % 3) <= gridStep * gridStep || withinTol(tri[0], tri[1], tri[2])) {
+            // A triangle SMALLER than a cell is checked too (lot_dressing_is_planted_on_the_ground, 2026-10-03): a park
+            // plaza's 2 m fan triangles were kept whole under the old "down to the grid cell" floor and bridged an
+            // earthwork lip the ground climbs 1.3 m over 1 m -- the plaza 0.6 m off the ground mid-triangle. The
+            // floor is a sixteenth of a cell, so a crease through a small triangle is followed to ~0.1 m.
+            // (a paved lot's PLATE -- white: its texture carries the look -- is a slab standing 0.35 m proud by
+            // design and covers whole lots; following every crease under it was most of the cost, for nothing)
+            auto white = [](const Vertex& v) { return v.color.x > Real(0.99) && v.color.y > Real(0.99) && v.color.z > Real(0.99); };
+            const bool walking = followCreases && tri[0].normal.y > Real(0.5) && tri[1].normal.y > Real(0.5) &&
+                                 tri[2].normal.y > Real(0.5) && !(white(tri[0]) && white(tri[1]) && white(tri[2]));
+            // A WALKING SURFACE IS CUT, NOT BISECTED. Inside one cell the drawn ground is two planar triangles split on
+            // the (0,0)-(1,1) diagonal (lodSurfaceHeight), so a walk triangle cut along the cell edges and diagonals
+            // it crosses lies on the ground exactly, in a handful of pieces. (Bisecting toward a crease took a walk
+            // down to 1/16-cell slivers along every line it crossed: +50 s on the island load. The plane-vs-grid-
+            // nodes test below is no use under a cell: on any slope the cell corners are off a small triangle's plane.)
+            if (walking) {
+                std::vector<std::vector<Vertex>> polys{{tri[0], tri[1], tri[2]}};
+                auto gxOf = [&](const Vertex& v) { return (v.position.x - ox) * inv; };
+                auto gzOf = [&](const Vertex& v) { return (v.position.z - oz) * inv; };
+                // split every polygon by the line f(v) = 0
+                auto cut = [&](const std::function<Real(const Vertex&)>& f) {
+                    std::vector<std::vector<Vertex>> next;
+                    for (const std::vector<Vertex>& poly : polys) {
+                        std::vector<Vertex> lo, hi;
+                        for (std::size_t k = 0; k < poly.size(); ++k) {
+                            const Vertex& p0 = poly[k];
+                            const Vertex& p1 = poly[(k + 1) % poly.size()];
+                            const Real f0 = f(p0), f1 = f(p1);
+                            if (f0 <= 0) lo.push_back(p0);
+                            if (f0 >= 0) hi.push_back(p0);
+                            if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
+                                const Vertex m2 = lerpVertex(p0, p1, f0 / (f0 - f1));
+                                lo.push_back(m2);
+                                hi.push_back(m2);
+                            }
+                        }
+                        if (lo.size() >= 3) next.push_back(std::move(lo));
+                        if (hi.size() >= 3) next.push_back(std::move(hi));
+                    }
+                    polys = std::move(next);
+                };
+                Real mnx = 1e30, mxx = -1e30, mnz = 1e30, mxz = -1e30, mnd = 1e30, mxd = -1e30;
+                for (const Vertex& v : tri) {
+                    const Real gx = gxOf(v), gz = gzOf(v);
+                    mnx = std::min(mnx, gx); mxx = std::max(mxx, gx); mnz = std::min(mnz, gz); mxz = std::max(mxz, gz);
+                    mnd = std::min(mnd, gx - gz); mxd = std::max(mxd, gx - gz);
+                }
+                for (long k = static_cast<long>(std::floor(mnx)) + 1; k < mxx; ++k)
+                    cut([&, k](const Vertex& v) { return gxOf(v) - Real(k); });
+                for (long k = static_cast<long>(std::floor(mnz)) + 1; k < mxz; ++k)
+                    cut([&, k](const Vertex& v) { return gzOf(v) - Real(k); });
+                for (long k = static_cast<long>(std::floor(mnd)) + 1; k < mxd; ++k)
+                    cut([&, k](const Vertex& v) { return gxOf(v) - gzOf(v) - Real(k); });
+                for (const std::vector<Vertex>& poly : polys) {
+                    const uint32_t base = static_cast<uint32_t>(out.vertices.size());
+                    for (const Vertex& v : poly) out.vertices.push_back(v);
+                    for (uint32_t k = 1; k + 1 < poly.size(); ++k) out.indices.insert(out.indices.end(), {base, base + k, base + k + 1});
+                }
+                continue;
+            }
+            const Real l2 = len2(e, (e + 1) % 3);
+            const bool keep = l2 <= gridStep * gridStep || withinTol(tri[0], tri[1], tri[2]);
+            if (keep) {
                 const uint32_t base = static_cast<uint32_t>(out.vertices.size());
                 for (const Vertex& v : tri) out.vertices.push_back(v);
                 out.indices.insert(out.indices.end(), {base, base + 1, base + 2});

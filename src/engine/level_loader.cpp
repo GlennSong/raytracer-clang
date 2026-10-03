@@ -5984,7 +5984,8 @@ bool LevelLoader::load(const std::string& path,
                             t.position = Vec3(0, 0, 0);   // world-space once draped
                             // Ground-relative (kDrapedPartBase): laid on the finished terrain.
                             RenderMesh onGround = lb.padMesh;
-                            engine::drapeOnGround(onGround, dressingGround, dressingStep, dressingOrigin);
+                            engine::drapeOnGround(onGround, dressingGround, dressingStep, dressingOrigin,
+                                                  /*followCreases=*/lb.type == "park");   // the plaza and its paths
                             r.mesh = assets.acquireMesh(
                                 onGround, "lotPad:" + std::to_string(lb.site.x) +
                                           ":" + std::to_string(lb.site.y));
@@ -6228,7 +6229,8 @@ bool LevelLoader::load(const std::string& path,
                     // A DRAPED slot is ground-relative dressing: lay it on the drawn ground and
                     // draw it as its base part (city_lots.h, kDrapedPartBase).
                     if (engine::isDrapedSlot(slot))
-                        engine::drapeOnGround(chunk, dressingGround, dressingStep, dressingOrigin);
+                        engine::drapeOnGround(chunk, dressingGround, dressingStep, dressingOrigin,
+                                              /*followCreases=*/engine::baseSlot(slot) == static_cast<std::size_t>(PartId::Path));
                     const double inv = (*reUVTable)[engine::baseSlot(slot)];
                     if (inv > 0.0) applyWorldPlanarUVs(chunk, inv);
                 };

@@ -397,8 +397,11 @@ inline std::size_t baseSlot(std::size_t slot) {
 // diagonals it crosses, so each piece lies inside one terrain triangle and, once
 // lifted, follows it EXACTLY — no chord between two joints can dip under the
 // grass or bridge a hollow.
+// `followCreases`: a WALKING SURFACE (paths, plazas) -- its up-facing triangles are also checked below the cell size
+// (down to 1/16 of it), so a crease through a small triangle is followed. Off for everything else: checking every
+// small triangle of every draped kit cost the island load 10x in part chunks.
 void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
-                   Real gridStep = 0, Vec2 gridOrigin = Vec2(0, 0));
+                   Real gridStep = 0, Vec2 gridOrigin = Vec2(0, 0), bool followCreases = false);
 
 // One building per viable lot across every block. Deterministic in seed.
 // `debug`, when non-null, receives the intermediate blocks + lots.
