@@ -91,6 +91,11 @@ private:
     void rideBus(engine::World& world, engine::Real dt, const RideInput& in,
                  engine::Entity player, engine::Transform& t,
                  engine::CharacterController& cc, const engine::Mat4& pose, bool interact);
+    // A RIDE IN SOMEONE'S CAR (Glenn, 2026-10-02: "a way to ... be a passenger (backseat, frontseat passenger) or
+    // the driver"): seated at carSeat_ in the agent car's own frame, the view turning with it; E gets out once the
+    // car slows to a walk (a press while it is moving waits for that).
+    void rideCar(engine::World& world, engine::Entity player, engine::Transform& t,
+                 engine::CharacterController& cc, bool interact);
     void pin(engine::World& world, engine::Entity player, engine::Transform& t,
              engine::CharacterController& cc, const engine::Vec3& pos);
     void leave(engine::World& world, engine::Entity player, const engine::Vec3& where);
@@ -111,6 +116,24 @@ private:
     bool seated_ = false;          // seat_ is meaningful
     Hud hud_;
     bool boardEdge_ = false;   // E pressed since the last fixed step
+    // The interaction broker's offer on foot (engine/interact_broker.h): the nearest stopped bus or cab in reach,
+    // found four times a second, not every frame (the agent list is long).
+    int boardAgent_ = -1;
+    // ABOARD A BUS: each free seat and door in reach is its own offer, so the marker shows WHICH seat E takes
+    // (Glenn, 2026-10-02: "some small indicator so I can say select which seat to sit on"). Filled in rideBus
+    // (the bus pose is known there), offered in update(); the broker's pick comes back as chosenKind_/chosenIdx_.
+    struct BusCand { int kind = 0; int index = 0; engine::Vec3 at{0, 0, 0}; };   // kind 0 seat, 1 door
+    std::vector<BusCand> busCands_;
+    int chosenKind_ = -1, chosenIdx_ = -1;
+    engine::Vec3 boardAt_{0, 0, 0};
+    engine::Real boardScanT_ = 0;
+    // On foot beside an ambient car: its passenger seats are offers (key kCarSeatKey + seat); the broker's pick
+    // comes back as pendingCarSeat_. Aboard: the seat we hold, and an exit asked for while the car was moving.
+    int rideCarAgent_ = -1;
+    std::vector<engine::Vec3> rideCarSeats_;   // world, offer anchors (seat 1.. ; 0 is the driver's: VehicleSystem's)
+    int pendingCarSeat_ = -1;
+    int carSeat_ = -1;
+    bool exitWhenSlow_ = false;
 };
 
 }  // namespace citysim

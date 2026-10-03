@@ -1,9 +1,12 @@
 #include "room_plan.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <utility>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 namespace engine {
 
@@ -28,11 +31,18 @@ std::vector<Real> bayBoundaries(Real W, const BuildingParams& p) {
 }
 
 // Distance from the line through a->b (outward normal n) to the nearest
-// corner of the core's outline, measured inward; +inf without a core.
-Real depthToCore(const Vec2& a, const Vec2& nOut, const CorePlan& core) {
+// corner of the core's outline, measured inward; +inf without a core -- or
+// when the core does not stand IN FRONT of the edge: on an L or cross plate
+// (buildings M10) the core beside an arm's edge is no limit on that arm's
+// rooms. The edge's span along `d` (length W) is widened by the corridor ring.
+Real depthToCore(const Vec2& a, const Vec2& d, Real W, const Vec2& nOut, const CorePlan& core) {
     if (!core.valid) return 1e9;
-    Real best = 1e9;
-    for (const Vec2& c : core.rect()) best = std::min(best, dot(a - c, nOut));
+    Real t0 = 1e30, t1 = -1e30, best = 1e9;
+    for (const Vec2& c : core.rect()) {
+        t0 = std::min(t0, dot(c - a, d)); t1 = std::max(t1, dot(c - a, d));
+        best = std::min(best, dot(a - c, nOut));
+    }
+    if (t1 < -kCorridorRing || t0 > W + kCorridorRing) return 1e9;
     return best;
 }
 
@@ -66,7 +76,7 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         ed.nOut = Vec2(ed.d.y, -ed.d.x);            // CCW: the interior is to the left
         if (e == blankEdge) continue;
         // The corridor ring: the band ends 2.2 m short of the core.
-        const Real room = depthToCore(ed.a, ed.nOut, core) - kCorridorRing - inset;
+        const Real room = depthToCore(ed.a, ed.d, ed.W, ed.nOut, core) - kCorridorRing - inset;
         ed.depth = std::min(depthWant, room);
         // Two bands may NEVER meet. Cap the depth at half the plate's own
         // depth less a gap to walk through: a shallow plate used to grow the
@@ -140,8 +150,14 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         if (!E[e].rooms) continue;
         const Edge& prev = E[(e + n - 1) % n];
         const Edge& next = E[(e + 1) % n];
-        const Real startAt = prev.rooms ? inset + prev.depth : inset;
-        const Real endAt = E[e].W - (next.rooms ? inset + next.depth : inset);
+        // Only a CONVEX corner is shared: there the neighbour's band runs into this one's and takes the corner.
+        // At an INSIDE corner (an L, T or cross plate -- a bundled tower once tubes drop out, buildings M10) the
+        // two bands meet at the corner without crossing; trimming this one by the neighbour's depth left a dead
+        // strip along the wall. Run to the corner instead and close the band with a full end partition.
+        const bool convexStart = cross(prev.d, E[e].d) > 1e-6;
+        const bool convexEnd = cross(E[e].d, next.d) > 1e-6;
+        const Real startAt = prev.rooms && convexStart ? inset + prev.depth : inset;
+        const Real endAt = E[e].W - (next.rooms && convexEnd ? inset + next.depth : inset);
         Real fw, lw;
         lay(e, startAt, endAt, fw, lw);
         if (fw <= 0) continue;
@@ -156,8 +172,8 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             w.b = P(x, to);
             rp.walls.push_back(w);
         };
-        endWall(startAt, prev.rooms ? inset + prev.cornerEnd : inset);
-        endWall(endAt, next.rooms ? inset + next.cornerStart : inset);
+        endWall(startAt, prev.rooms && convexStart ? inset + prev.cornerEnd : inset);
+        endWall(endAt, next.rooms && convexEnd ? inset + next.cornerStart : inset);
     }
     return rp;
 }
@@ -373,7 +389,434 @@ static RoomPlan housePlan(const Poly2& planIn, const BuildingParams& params, con
     return rp;
 }
 
+// ------------------------------------------------------------- the apartments
+// WHOLE-FLOOR APARTMENTS (Glenn, 2026-09-30: "you could pull the walls forward and make entire apartments out of
+// the floor and then subdivide the apartments into living rooms, bedrooms, kitchens, bathrooms, closets ... then
+// naturally there would be hallway where the stairwell or elevators would be"). A residential tower's plate:
+//
+//   +---------+-----------+---------+       a CORRIDOR rings the core; every band between it and the facade
+//   |  bed |  living     | bed |   |       is cut into apartments, each with its door on the corridor. In one:
+//   |------+--+=====+----+-----|   |       the window side holds the living room and the bedrooms (doors off
+//   | bath |hall| kitchen | clo |   |       the living room); a back strip along the corridor holds the entry
+//   +------+-=-+---------+-----+---+       hall, the bath (door off the hall), a closet, the kitchen (open to
+//          corridor                         the living room). Party walls between apartments.
+//
+// Rectangular plates with a core only; the even edges' bands take the corners, an odd band starts past them
+// (ringPlan's rule), and a band's corner apartment stretches until its front reaches the corridor.
+namespace {
+constexpr Real kCorridor = 2.2;   // core_plan.cpp's kCorridor: the ring kept clear round the core
+}
+
+// ONE APARTMENT (buildings B): the unit x0..x1 along a band, from the window wall (depth vIn) to its front on the
+// corridor (vFront, the band's depth D), its front door at xd -- laid out into rooms and walls. P maps (along the
+// band, depth in from the window wall) to the plan. Shared by the tower floor and the walk-up.
+static void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
+                            Real vIn, Real vFront, Real D, Real xd, bool partyWallRight) {
+    const Real kHall = 1.6, kBath = 2.3, kCloset = std::max(Real(1.4), kRoomDoorW + 0.7), kBedW = 3.4, kLivingMin = 4.2;
+    const Real UW = x1 - x0;
+        // The zones: the back strip along the corridor and the window side.
+        const Real bz = std::clamp(D * 0.32, Real(2.3), Real(2.8));
+        const Real vb = vFront - bz;
+        // BACK STRIP: the hall at the door, the bath beside it on the roomier side, the closet on the other,
+        // the kitchen in the largest remainder (else it joins the living room on the window side).
+        const Real hx0 = std::clamp(xd - kHall * 0.5, x0, x1 - kHall), hx1 = hx0 + kHall;
+        struct Seg { Real x0, x1; RoomKind kind; };
+        std::vector<Seg> back;
+        back.push_back({hx0, hx1, RoomKind::Hall});
+        const Real leftW = hx0 - x0, rightW = x1 - hx1;
+        const bool bathLeft = leftW >= rightW;
+        Real l = hx0, r = hx1;   // the frontier on each side
+        auto take = [&](bool left, Real w, RoomKind kind) {
+            if (left) { if (l - x0 < w - 1e-6) return false; back.push_back({l - w, l, kind}); l -= w; }
+            else { if (x1 - r < w - 1e-6) return false; back.push_back({r, r + w, kind}); r += w; }
+            return true;
+        };
+        // The bath beside the hall on the roomier side; the KITCHEN beside the hall on the other (open to it,
+        // so it is always reached), else it moves to the window side; the closet after whichever has room
+        // (beside the hall it opens onto the hall, else onto the room in front of it).
+        const bool bathOnLeft = take(bathLeft, kBath, RoomKind::Bath) ? bathLeft
+                                : (take(!bathLeft, kBath, RoomKind::Bath), !bathLeft);
+        bool kitchenBack = false;
+        {
+            const bool kLeft = !bathOnLeft;
+            const Real room = kLeft ? l - x0 : x1 - r;
+            if (room >= 2.4) {
+                const Real kw = std::min(room, Real(3.4));
+                take(kLeft, kw, RoomKind::Kitchen);
+                kitchenBack = true;
+            }
+        }
+        take(!bathOnLeft, kCloset, RoomKind::Closet) || take(bathOnLeft, kCloset, RoomKind::Closet);
+        // A leftover sliver joins its neighbour: grow the room next to it.
+        for (Seg& s : back) {
+            if (l > x0 + 1e-6 && std::fabs(s.x0 - l) < 1e-6) s.x0 = x0;
+            if (r < x1 - 1e-6 && std::fabs(s.x1 - r) < 1e-6) s.x1 = x1;
+        }
+        // WINDOW SIDE: bedrooms at the ends away from the hall, the living room between.
+        int beds = UW >= 10.5 ? 2 : (UW >= 7.0 ? 1 : 0);
+        // A kitchen before a second bedroom: one that could not sit in the back strip needs the window side.
+        const Real kitchenFront = kitchenBack ? 0.0 : 2.6;
+        while (beds > 0 && UW - beds * kBedW - kitchenFront < kLivingMin) --beds;
+        std::vector<Seg> front;
+        Real f0 = x0, f1 = x1;
+        const bool hallNearLeft = (xd - x0) < (x1 - xd);
+        if (beds == 2) { front.push_back({x0, x0 + kBedW, RoomKind::Bed}); front.push_back({x1 - kBedW, x1, RoomKind::Bed}); f0 += kBedW; f1 -= kBedW; }
+        else if (beds == 1) {
+            if (hallNearLeft) { front.push_back({x1 - kBedW, x1, RoomKind::Bed}); f1 -= kBedW; }
+            else { front.push_back({x0, x0 + kBedW, RoomKind::Bed}); f0 += kBedW; }
+        }
+        if (!kitchenBack && f1 - f0 >= kLivingMin + 2.6) {   // the kitchen takes the living room's far end
+            if (hallNearLeft) { front.push_back({f1 - 2.6, f1, RoomKind::Kitchen}); f1 -= 2.6; }
+            else { front.push_back({f0, f0 + 2.6, RoomKind::Kitchen}); f0 += 2.6; }
+        }
+        front.push_back({f0, f1, RoomKind::Living});
+        // The rooms.
+        for (const Seg& s : front) {
+            Room rm; rm.edge = e; rm.kind = s.kind;
+            rm.rect = {P(s.x0, vIn), P(s.x1, vIn), P(s.x1, vb), P(s.x0, vb)};
+            rp.rooms.push_back(rm);
+        }
+        for (const Seg& s : back) {
+            Room rm; rm.edge = e; rm.kind = s.kind;
+            rm.rect = {P(s.x0, vb), P(s.x1, vb), P(s.x1, vFront), P(s.x0, vFront)};
+            rp.rooms.push_back(rm);
+        }
+        // THE WALLS. The front, with the entry door.
+        {
+            RoomWall w; w.a = P(x0, vFront); w.b = P(x1, vFront);
+            w.doorAt = (xd - x0) / UW;
+            rp.walls.push_back(w);
+        }
+        // The party wall at this unit's right end (the band's own ends are the exterior or the band's front).
+        if (partyWallRight) {
+            RoomWall w; w.a = P(x1, vIn); w.b = P(x1, vFront);
+            rp.walls.push_back(w);
+        }
+        // Back-strip partitions: a door from the hall into the bath and the closet, solid between the rest; open
+        // between the hall and the kitchen.
+        std::sort(back.begin(), back.end(), [](const Seg& a2, const Seg& b2) { return a2.x0 < b2.x0; });
+        for (std::size_t i = 0; i + 1 < back.size(); ++i) {
+            const Seg& s = back[i];
+            const Seg& t = back[i + 1];
+            const bool hallSide = s.kind == RoomKind::Hall || t.kind == RoomKind::Hall;
+            const RoomKind other = s.kind == RoomKind::Hall ? t.kind : s.kind;
+            if (hallSide && other == RoomKind::Kitchen) continue;   // open
+            RoomWall w; w.a = P(s.x1, vb); w.b = P(s.x1, vFront);
+            if (hallSide && (other == RoomKind::Bath || other == RoomKind::Closet)) w.doorAt = 0.5;
+            rp.walls.push_back(w);
+        }
+        // Window-side partitions: a bedroom's wall to the living room (or kitchen) carries its door near the
+        // back; between two rooms that are not bedrooms the plan stays open.
+        std::sort(front.begin(), front.end(), [](const Seg& a2, const Seg& b2) { return a2.x0 < b2.x0; });
+        for (std::size_t i = 0; i + 1 < front.size(); ++i) {
+            const Seg& s = front[i];
+            const Seg& t = front[i + 1];
+            const bool bedS = s.kind == RoomKind::Bed, bedT = t.kind == RoomKind::Bed;
+            if (!bedS && !bedT) continue;
+            RoomWall w; w.a = P(s.x1, vIn); w.b = P(s.x1, vb);
+            if (bedS != bedT) w.doorAt = 0.78;
+            rp.walls.push_back(w);
+        }
+        // The divider between the zones: solid wherever either side is private (a bedroom, the bath, the
+        // closet), open between the hall, the kitchen and the living room.
+        std::vector<Real> xs = {x0, x1};
+        for (const Seg& s : front) { xs.push_back(s.x0); xs.push_back(s.x1); }
+        for (const Seg& s : back) { xs.push_back(s.x0); xs.push_back(s.x1); }
+        std::sort(xs.begin(), xs.end());
+        auto kindAt = [](const std::vector<Seg>& v, Real x) {
+            for (const Seg& s : v) if (x > s.x0 && x < s.x1) return s.kind;
+            return RoomKind::Living;
+        };
+        Real runA = -1;
+        auto flush = [&](Real upto) {
+            if (runA >= 0 && upto - runA > 0.05) { RoomWall w; w.a = P(runA, vb); w.b = P(upto, vb); rp.walls.push_back(w); }
+            runA = -1;
+        };
+        // A closet that is not beside the hall opens onto the room in front of it instead: a walk-in closet
+        // off a bedroom, a coat closet off the living room.
+        auto besideHall = [&](const Seg& c) {
+            for (const Seg& t : back)
+                if (t.kind == RoomKind::Hall && (std::fabs(t.x0 - c.x1) < 1e-6 || std::fabs(t.x1 - c.x0) < 1e-6)) return true;
+            return false;
+        };
+        for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
+            if (xs[i + 1] - xs[i] < 1e-6) continue;
+            const Real xm = (xs[i] + xs[i + 1]) * 0.5;
+            const RoomKind fk = kindAt(front, xm), bk = kindAt(back, xm);
+            const Seg* closet = nullptr;
+            for (const Seg& c : back) if (c.kind == RoomKind::Closet && xm > c.x0 && xm < c.x1) closet = &c;
+            if (closet && !besideHall(*closet)) {
+                flush(xs[i]);
+                RoomWall w; w.a = P(xs[i], vb); w.b = P(xs[i + 1], vb);
+                if (xs[i + 1] - xs[i] > kRoomDoorW + 0.6) w.doorAt = 0.5;
+                rp.walls.push_back(w);
+                continue;
+            }
+            const bool solid = fk == RoomKind::Bed || bk == RoomKind::Bath || bk == RoomKind::Closet;
+            if (solid) { if (runA < 0) runA = xs[i]; }
+            else flush(xs[i]);
+        }
+        flush(x1);
+}
+
+static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
+                              int storey) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Apartments;
+    rp.office = false;
+    if (storey < 1 || !core.valid || planIn.size() != 4) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    const Poly2 coreR = core.rect();
+    uint32_t h = static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 97);
+    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+
+    struct Band { Vec2 a, d, nOut; Real W = 0, D = 0; bool rooms = false; Real s0 = 0, s1 = 0; };
+    std::vector<Band> B(n);
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        b.a = plan[e];
+        const Vec2 dv = plan[(e + 1) % n] - b.a;
+        b.W = dv.length();
+        if (b.W < 1e-6) continue;
+        b.d = dv * (1.0 / b.W);
+        b.nOut = Vec2(b.d.y, -b.d.x);
+        Real toCore = 1e9;
+        for (const Vec2& c : coreR) toCore = std::min(toCore, dot(b.a - c, b.nOut));
+        b.D = toCore - kCorridor - inset;
+        b.rooms = b.D >= 5.0;
+        b.D = std::min(b.D, Real(13.0));
+    }
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        if (!b.rooms) continue;
+        if (e % 2 == 0) { b.s0 = inset; b.s1 = b.W - inset; }
+        else {
+            const Band& p = B[(e + n - 1) % n];
+            const Band& q = B[(e + 1) % n];
+            b.s0 = inset + (p.rooms ? p.D : 0);
+            b.s1 = b.W - inset - (q.rooms ? q.D : 0);
+        }
+    }
+    for (std::size_t e = 0; e < n; ++e) {
+        const Band& b = B[e];
+        if (!b.rooms || b.s1 - b.s0 < 6.8) continue;
+        auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };   // v: depth in from the wall line
+        const Real vIn = inset, vFront = inset + b.D;
+        // The corridor's reach along this band: the core's span widened by the corridor.
+        Real c0 = 1e9, c1 = -1e9;
+        for (const Vec2& c : coreR) { const Real t = dot(c - b.a, b.d); c0 = std::min(c0, t); c1 = std::max(c1, t); }
+        c0 = std::max(b.s0, c0 - kCorridor);
+        c1 = std::min(b.s1, c1 + kCorridor);
+        if (c1 - c0 < 3.4) continue;
+        // The units: ~7.5-9.5 m each, the first and last stretched to the band's ends but reaching 1.6 m into the
+        // corridor's span, so every front door opens onto the corridor.
+        const Real want = 7.5 + 2.0 * rnd();
+        int units = std::max(1, static_cast<int>((b.s1 - b.s0) / want));
+        std::vector<Real> cuts;
+        for (; units >= 1; --units) {
+            cuts.assign(1, b.s0);
+            for (int k = 1; k < units; ++k) cuts.push_back(b.s0 + (b.s1 - b.s0) * k / units);
+            cuts.push_back(b.s1);
+            if (units > 1) {
+                cuts[1] = std::max(cuts[1], c0 + 1.6);
+                cuts[units - 1] = std::min(cuts[units - 1], c1 - 1.6);
+            }
+            bool ok = true;
+            for (int k = 0; k < units; ++k)
+                if (cuts[k + 1] - cuts[k] < 6.8) ok = false;   // a living room and a kitchen, at the least
+            if (ok) break;
+        }
+        if (units < 1) continue;
+        for (int k = 0; k < units; ++k) {
+            const Real x0 = cuts[k], x1 = cuts[k + 1];
+            // The front door, on the corridor.
+            const Real dLo = std::max(x0, c0) + 0.9, dHi = std::min(x1, c1) - 0.9;
+            const Real xd = dLo <= dHi ? std::clamp((x0 + x1) * 0.5, dLo, dHi) : (std::max(x0, c0) + std::min(x1, c1)) * 0.5;
+            layoutApartment(rp, e, P, x0, x1, vIn, vFront, b.D, xd, k + 1 < units);
+        }
+    }
+    return rp;
+}
+
+// THE WALK-UP (Glenn, 2026-10-01: "I didn't see the apartments ... some of them look like dorms"): a residential
+// building without a lift core. A corridor runs the long axis from the stair, apartments either side of it
+// (double-loaded) -- or, on a plate too narrow for two, one row off a corridor along the back facade. The stair's
+// hall is cut out of the band it stands in, facade to corridor, so the stair opens onto the corridor.
+static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
+                           int storey) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Apartments;
+    rp.office = false;
+    if (storey < 1 || planIn.size() != 4 || well.size() < 3) return rp;
+    const OBB2 ob = orientedBoundingBox(planIn);
+    const int la = ob.longAxis();
+    const Vec2 ua = ob.axis[la];
+    const Vec2 va(ua.y, -ua.x);   // the outward normal of a band running along +ua (ringPlan's convention)
+    const Real hl = ob.half[la], hw = ob.half[1 - la];
+    const Vec2 o = ob.center;
+    const Real kCorr = 1.6;
+    const bool twoSides = 2 * hw >= 2 * (inset + 5.4) + kCorr;
+    // The stair hall in OBB coordinates (s along, t across), widened for the landing.
+    Real s0 = 1e9, s1 = -1e9, t0 = 1e9, t1 = -1e9;
+    for (const Vec2& q : well) {
+        const Vec2 d = q - o;
+        s0 = std::min(s0, dot(d, ua)); s1 = std::max(s1, dot(d, ua));
+        t0 = std::min(t0, dot(d, va)); t1 = std::max(t1, dot(d, va));
+    }
+    s0 -= 1.0; s1 += 1.0;
+    // The bands: {P, depth from the window wall to the corridor front}. Band 0 faces +va and runs along +ua (its
+    // x = s + hl); band 1 faces -va and runs along -ua (x = hl - s).
+    struct Band { std::function<Vec2(Real, Real)> P; Real vFront; Real t0, t1; bool alongPlus; };
+    std::vector<Band> bands;
+    auto plusBand = [=](Real front, Real tLo) {
+        return Band{[=](Real x, Real v) { return o - ua * hl + va * hw + ua * x - va * v; }, front, tLo, hw, true};
+    };
+    auto minusBand = [=](Real front, Real tHi) {
+        return Band{[=](Real x, Real v) { return o + ua * hl - va * hw - ua * x + va * v; }, front, -hw, tHi, false};
+    };
+    if (twoSides) {
+        bands.push_back(plusBand(hw - kCorr * 0.5, kCorr * 0.5));
+        bands.push_back(minusBand(hw - kCorr * 0.5, -kCorr * 0.5));
+    } else if ((t0 + t1) * 0.5 >= 0) {
+        // One row: the apartments on the stair's side, the corridor along the facade OPPOSITE (the stair would
+        // block a corridor beside it); the stair hall is cut through the row to reach it.
+        bands.push_back(plusBand(2 * hw - inset - kCorr, -hw + inset + kCorr));
+    } else {
+        bands.push_back(minusBand(2 * hw - inset - kCorr, hw - inset - kCorr));
+    }
+    for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+        const Band& b = bands[bi];
+        const Real vIn = inset, D = b.vFront - vIn;
+        if (D < 5.0) continue;
+        // The band's run along, less the stair hall where the stair stands in it. Band 0 runs along +ua (x = s +
+        // hl), band 1 along -ua (x = hl - s).
+        std::vector<std::pair<Real, Real>> runs = {{inset, 2 * hl - inset}};
+        if (t1 > b.t0 && t0 < b.t1) {
+            const Real a = b.alongPlus ? s0 + hl : hl - s1, c = b.alongPlus ? s1 + hl : hl - s0;
+            runs = {{inset, a}, {c, 2 * hl - inset}};
+        }
+        for (const auto& [r0, r1] : runs) {
+            if (r1 - r0 < 6.8) continue;
+            int units = std::max(1, static_cast<int>((r1 - r0) / (7.0 + 2.0 * (((params.seed >> (bi * 3)) & 7u) / 7.0))));
+            while (units > 1 && (r1 - r0) / units < 6.8) --units;
+            for (int k = 0; k < units; ++k) {
+                const Real x0 = r0 + (r1 - r0) * k / units, x1 = r0 + (r1 - r0) * (k + 1) / units;
+                layoutApartment(rp, bi, b.P, x0, x1, vIn, b.vFront, D, (x0 + x1) * 0.5, k + 1 < units);
+            }
+            // The walls closing the run where it meets the stair hall (the plan's own ends are its facade).
+            for (Real x : {r0, r1}) {
+                if (x <= inset + 1e-6 || x >= 2 * hl - inset - 1e-6) continue;
+                RoomWall w; w.a = b.P(x, vIn); w.b = b.P(x, b.vFront);
+                rp.walls.push_back(w);
+            }
+        }
+    }
+    return rp;
+}
+
+// ------------------------------------------------------------- the office floor
+// THE OFFICE FLOOR (Glenn, 2026-09-30: "the wider floors seem to have a lot of floorspace which in an office would
+// be good for cubicles or open floorplans"). A glass tower's typical floor, rectangular with a core:
+//
+//   +-----+---------------------------+-----+    the corners: glass-fronted corner OFFICES;
+//   | ofc |   open plan (desks by the  | ofc |    the rest of each band, windows to the corridor: OPEN PLAN,
+//   +-----+   windows)  +------+-----+-+-----+    filled with desk clusters (furniture.cpp);
+//   |     |   MEETING   |KITCH.|            |    on two bands, a strip against the corridor: a glass MEETING
+//   ...         corridor round the core            room, and once a floor a KITCHENETTE (open, counters).
+//
+// No partitions but the corner offices' and the meeting rooms' glass, so the floor walks by construction.
+static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
+                           int storey) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = true;
+    if (storey < 1 || !core.valid || planIn.size() != 4) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    const Poly2 coreR = core.rect();
+    struct Band { Vec2 a, d, nOut; Real W = 0, D = 0; bool rooms = false; Real s0 = 0, s1 = 0; };
+    std::vector<Band> B(n);
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        b.a = plan[e];
+        const Vec2 dv = plan[(e + 1) % n] - b.a;
+        b.W = dv.length();
+        if (b.W < 1e-6) continue;
+        b.d = dv * (1.0 / b.W);
+        b.nOut = Vec2(b.d.y, -b.d.x);
+        Real toCore = 1e9;
+        for (const Vec2& c : coreR) toCore = std::min(toCore, dot(b.a - c, b.nOut));
+        b.D = std::min(toCore - kCorridor - inset, Real(16.0));
+        b.rooms = b.D >= 4.0;
+    }
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        if (!b.rooms) continue;
+        if (e % 2 == 0) { b.s0 = inset; b.s1 = b.W - inset; }
+        else {
+            const Band& p = B[(e + n - 1) % n];
+            const Band& q = B[(e + 1) % n];
+            b.s0 = inset + (p.rooms ? p.D : 0);
+            b.s1 = b.W - inset - (q.rooms ? q.D : 0);
+        }
+    }
+    // The longest band gets the kitchenette; it and the band opposite get a meeting room each.
+    std::size_t longest = 0;
+    for (std::size_t e = 0; e < n; ++e)
+        if (B[e].rooms && B[e].s1 - B[e].s0 > B[longest].s1 - B[longest].s0) longest = e;
+    const std::size_t opposite = (longest + 2) % n;
+    const Real kCornerW = 5.0, kMeetW = 6.4, kMeetD = 4.0, kKitW = 5.0;
+    for (std::size_t e = 0; e < n; ++e) {
+        const Band& b = B[e];
+        if (!b.rooms || b.s1 - b.s0 < 6.0) continue;
+        auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
+        const Real vIn = inset, vFront = inset + b.D;
+        auto room = [&](Real x0, Real x1, Real v0, Real v1, RoomKind kind) {
+            Room rm; rm.edge = e; rm.kind = kind;
+            rm.rect = {P(x0, v0), P(x1, v0), P(x1, v1), P(x0, v1)};
+            rp.rooms.push_back(rm);
+        };
+        auto glassWall = [&](const Vec2& a, const Vec2& c, Real doorAt) {
+            RoomWall w; w.a = a; w.b = c; w.glass = true; w.doorAt = doorAt;
+            rp.walls.push_back(w);
+        };
+        Real x0 = b.s0, x1 = b.s1;
+        // CORNER OFFICES on the even bands, which own the corners: glass fronts, the door into the open plan.
+        if (e % 2 == 0 && b.s1 - b.s0 > 2 * kCornerW + 8.0) {
+            const Real cd = std::min(b.D - 1.6, Real(5.0));
+            for (int side = 0; side < 2; ++side) {
+                const Real a0 = side == 0 ? b.s0 : b.s1 - kCornerW, a1 = side == 0 ? b.s0 + kCornerW : b.s1;
+                room(a0, a1, vIn, vIn + cd, RoomKind::Office);
+                glassWall(P(a0, vIn + cd), P(a1, vIn + cd), side == 0 ? 0.75 : 0.25);
+                const Real xs = side == 0 ? a1 : a0;
+                glassWall(P(xs, vIn), P(xs, vIn + cd), -1);
+            }
+        }
+        // THE CORE-SIDE STRIP: a meeting room (and the kitchenette) against the corridor, mid-band.
+        const bool meet = (e == longest || e == opposite) && b.D >= kMeetD + 3.5 && b.s1 - b.s0 >= kMeetW + kKitW + 6.0;
+        if (meet) {
+            const Real mid = (x0 + x1) * 0.5;
+            const Real m0 = e == longest ? mid - kMeetW : mid - kMeetW * 0.5, m1 = m0 + kMeetW;
+            room(m0, m1, vFront - kMeetD, vFront, RoomKind::Meeting);
+            glassWall(P(m0, vFront - kMeetD), P(m1, vFront - kMeetD), 0.5);    // the front onto the open plan
+            glassWall(P(m0, vFront - kMeetD), P(m0, vFront), -1);
+            glassWall(P(m1, vFront - kMeetD), P(m1, vFront), -1);
+            glassWall(P(m0, vFront), P(m1, vFront), -1);                       // and onto the corridor
+            if (e == longest) room(m1 + 0.4, m1 + 0.4 + kKitW, vFront - kMeetD, vFront, RoomKind::Kitchenette);
+        }
+        // THE OPEN PLAN: the band from the windows to the corridor, between the corner offices.
+        room(x0, x1, vIn, vFront, RoomKind::OpenPlan);
+    }
+    (void)params;
+    return rp;
+}
+
 PlateTopology plateTopologyFor(const Poly2& plan, const BuildingParams& params, const CorePlan& core) {
+    // A RESIDENTIAL tower with a core and a rectangular plate is APARTMENTS, glass or masonry; offices keep the ring.
+    if (core.valid && params.residential && plan.size() == 4) return PlateTopology::Apartments;
     if (core.valid || plan.size() < 3 || params.curtainWall) return PlateTopology::Ring;
     const OBB2 ob = orientedBoundingBox(plan);
     return 2.0 * std::min(ob.half[0], ob.half[1]) < kWholeFloorShortSide ? PlateTopology::WholeFloor
@@ -534,7 +977,12 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
                 const int i = ci + di, j = cj + dj;
                 if (i >= 0 && i < nx && j >= 0 && j < nz && seen[at(i, j)]) reached = true;
             }
-        if (!reached) return false;
+        if (!reached) {
+            if (std::getenv("RT_APT_DEBUG"))
+                std::fprintf(stderr, "[walk] unreached room kind %d at %.1f %.1f (entry %.1f %.1f)\n",
+                             static_cast<int>(r.kind), c.x, c.y, entry.x, entry.y);
+            return false;
+        }
     }
     return true;
 }
@@ -543,6 +991,35 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
                   std::size_t blankEdge, Real inset, int storey,
                   const Poly2& stairWell, std::size_t entranceEdge) {
     const PlateTopology topo = plateTopologyFor(planIn, params, core);
+    if (topo == PlateTopology::Apartments) {
+        // Walk it from the corridor in front of the core's doors; a floor that fails falls back to the ring.
+        RoomPlan ap = apartmentPlan(planIn, params, core, inset, storey);
+        ap.finish = interiorFinishFor(params);
+        const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
+        const bool walk = !ap.rooms.empty() && floorIsWalkable(ap, planIn, entry);
+        if (std::getenv("RT_APT_DEBUG"))
+            std::fprintf(stderr, "[apts] storey %d: %zu rooms %zu walls, walkable %d\n", storey, ap.rooms.size(),
+                         ap.walls.size(), walk ? 1 : 0);
+        if (walk) return ap;
+        RoomPlan rg = ringPlan(planIn, params, core, blankEdge, inset, storey);
+        rg.finish = interiorFinishFor(params);
+        return rg;
+    }
+    const OBB2 plateBox = orientedBoundingBox(planIn);
+    const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
+    const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
+    if (walkupShape && params.residential && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
+        // A WALK-UP's floor: apartments off a corridor from the stair, walked from the stair's foot. A narrow plate
+        // (one dwelling a floor) that is long enough for two takes a single-loaded corridor instead.
+        RoomPlan wu = walkupPlan(planIn, params, stairWell, inset, storey);
+        wu.finish = interiorFinishFor(params);
+        if (!wu.rooms.empty() && floorIsWalkable(wu, planIn, centroid(stairWell), stairWell)) return wu;
+    }
+    if (topo == PlateTopology::Ring && params.curtainWall && core.valid && planIn.size() == 4) {
+        // An OFFICE floor: open plan with corner offices, meeting rooms and a kitchenette (buildings C).
+        RoomPlan of = officePlan(planIn, params, core, inset, storey);
+        if (!of.rooms.empty()) { of.finish = interiorFinishFor(params); return of; }
+    }
     RoomPlan rp = topo == PlateTopology::WholeFloor
                       ? housePlan(planIn, params, stairWell, entranceEdge, inset, storey)
                       : ringPlan(planIn, params, core, blankEdge, inset, storey);
@@ -632,7 +1109,8 @@ void wallRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real 
 
 // A glass front: one clear pane on the centre line (both faces shade; the
 // GlassClear material is two-sided), the doorway cut, a collider behind it.
-void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real y0, Real h, Real doorAt) {
+void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real y0, Real h, Real doorAt,
+              RenderMesh* frost = nullptr) {
     const Vec2 dv = b - a;
     const Real L = dv.length();
     if (L < 0.05) return;
@@ -647,10 +1125,19 @@ void glassRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real
         d0 = c - kRoomDoorW * 0.5;
         d1 = c + kRoomDoorW * 0.5;
     }
-    const Vec3 white(1, 1, 1);
+    // TINTED (Glenn, 2026-10-02: "in the offices the glass should probably be reflective ... and maybe tint a bit
+    // so that it stands out"): a cool green-blue over GlassClear's own colour, and a FROSTED STRIP at eye height on
+    // both faces -- the manifestation band real office glass carries so nobody walks into it.
+    const Vec3 white(0.70, 0.90, 0.92);
     auto piece = [&](Real x0, Real x1, Real yb, Real ytop) {
         if (x1 - x0 < 1e-4 || ytop - yb < 1e-4) return;
         quad(m, col, W(x0, yb), W(x1, yb), W(x1, ytop), W(x0, ytop), nrm, white);
+        if (frost && ytop > y0 + 1.6 && yb < y0 + 1.4) {
+            const Real s0 = y0 + 1.40, s1 = y0 + 1.52;
+            const Vec3 off = nrm * 0.004, fc(0.93, 0.95, 0.96);
+            quad(*frost, nullptr, W(x0, s0) + off, W(x1, s0) + off, W(x1, s1) + off, W(x0, s1) + off, nrm, fc);
+            quad(*frost, nullptr, W(x1, s0) - off, W(x0, s0) - off, W(x0, s1) - off, W(x1, s1) - off, nrm * -1.0, fc);
+        }
     };
     if (d0 < 0) { piece(0, L, y0, yt); return; }
     piece(0, d0, y0, yt);
@@ -752,7 +1239,7 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
     int strongLeft = rp.topology == PlateTopology::WholeFloor ? 1 : 2;
     for (const RoomWall& w : rp.walls) {
         if (w.glass) {
-            glassRun(out.glass, colliderOut, w.a, w.b, y0, h, w.doorAt);
+            glassRun(out.glass, colliderOut, w.a, w.b, y0, h, w.doorAt, &out.drywall);
             continue;
         }
         // The wall itself: the field colour, or the finish where the finish

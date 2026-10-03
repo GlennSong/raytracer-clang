@@ -19,7 +19,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-09-26.3";   // .3: balanced mountain profiles, authored-class guardrails with min_drop, girders under their bridges
+const char* const kLanesBuildTag = "2026-10-02.2";   // .2: a street bridging a street is not a junction in the twin   // 2026-10-02.1: the seam pull stands down across a bridge (pass8 over Third and Dogwood)  //   // 2026-09-30.2: deck undersides in the concrete mesh (#97)   // .3: balanced mountain profiles, authored-class guardrails with min_drop, girders under their bridges
 //   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
 //   // .1: the nav twin carries travel-lane widths (cars in the lane centre)
 //   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
@@ -51,6 +51,11 @@ public:
         for (const CityEntity& e : cityEntities(in.level)) {
             k = bundle::fnv1aStr("entity" + std::to_string(e.ordinal), k);
             if (e.inlineGraph) { k = bundle::fnv1aStr(e.block.dump(), k); continue; }
+            // The level's sidewalk override is built into the city (loadCityGraph), so it keys it: without it,
+            // a level sharing the graph handed its city forward (bake.cpp's donor search matches this key) --
+            // metro_lanes' 5-6 m sidewalks got the lab metro's narrower ones, one hole more, and 2 buildings.
+            // Hashed only when present, so a level without one keeps its key.
+            if (e.block.contains("sidewalks")) k = bundle::fnv1aStr("sidewalks" + e.block["sidewalks"].dump(), k);
             bundle::InputFile f; f.path = e.graphPath; uint64_t fk = bundle::kFnvOffset;
             if (bundle::fnv1aFile(e.graphPath, fk, &f.bytes, &f.mtime)) { f.fnv = fk; k = bundle::fnv1a(&fk, sizeof(fk), k); }
             else k = bundle::fnv1aStr("missing:" + e.graphPath, k);

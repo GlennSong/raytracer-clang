@@ -570,6 +570,22 @@ void PhysicsWorld::moveCharacter(CharacterId id, const Vec3& velocity, Real dt) 
                        {}, {}, impl->tempAllocator);
 }
 
+void PhysicsWorld::moveCharacterFree(CharacterId id, const Vec3& velocity, Real dt) {
+    if (!impl || id >= impl->characters.size()) return;
+    JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch) return;
+    impl->characters[id].pendingJump = 0.0f;   // no jumping off water
+    const JPH::Vec3 up = JPH::Vec3::sAxisY();
+    ch->SetLinearVelocity(toJolt(velocity));
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    settings.mWalkStairsStepUp = up * impl->characters[id].stepHeight;
+    settings.mStickToFloorStepDown = JPH::Vec3::sZero();
+    ch->ExtendedUpdate(static_cast<float>(dt), JPH::Vec3::sZero(), settings,
+                       impl->physicsSystem.GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+                       impl->physicsSystem.GetDefaultLayerFilter(Layers::MOVING),
+                       {}, {}, impl->tempAllocator);
+}
+
 bool PhysicsWorld::jumpCharacter(CharacterId id, Real speed) {
     if (!impl || id >= impl->characters.size()) return false;
     JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
@@ -643,6 +659,26 @@ bool PhysicsWorld::castRay(const Vec3& origin, const Vec3& dirAndLength,
     JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
     hitPoint = Vec3(p.GetX(), p.GetY(), p.GetZ());
     return true;
+}
+
+PhysicsBodyId PhysicsWorld::characterGroundBody(CharacterId id) const {
+    if (!impl || id >= impl->characters.size()) return INVALID_PHYSICS_BODY;
+    const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch || ch->GetGroundState() == JPH::CharacterBase::EGroundState::InAir) return INVALID_PHYSICS_BODY;
+    const JPH::BodyID b = ch->GetGroundBodyID();
+    return b.IsInvalid() ? INVALID_PHYSICS_BODY : b.GetIndexAndSequenceNumber();
+}
+
+void PhysicsWorld::setBodySurface(PhysicsBodyId id, uint8_t surface) {
+    if (!impl || id == INVALID_PHYSICS_BODY) return;
+    impl->bodies().SetUserData(JPH::BodyID(id), surface);
+}
+
+uint8_t PhysicsWorld::bodySurface(PhysicsBodyId id) const {
+    if (!impl || id == INVALID_PHYSICS_BODY) return 0;
+    const JPH::BodyID b(id);
+    if (!impl->bodies().IsAdded(b)) return 0;
+    return static_cast<uint8_t>(impl->bodies().GetUserData(b) & 0xFF);
 }
 
 Vec3 PhysicsWorld::characterVelocity(CharacterId id) const {

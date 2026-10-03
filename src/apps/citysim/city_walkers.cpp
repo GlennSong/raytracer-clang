@@ -1,5 +1,6 @@
 #include "../../log.h"
 #include "city_walkers.h"
+#include <cstdio>
 
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
@@ -266,6 +267,25 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         if (w.agentId < 0 || w.agentId >= static_cast<int>(sim.agents().size())) continue;
         const Agent& g = sim.agents()[w.agentId];
 
+        // SITTING (the furniture library, M5): the walker is drawn seated on its bench or chair -- hip on the seat,
+        // facing out -- and its capsule parks inside the seat, out of everyone's way, until it gets up.
+        if (const CitySim::SeatSpot* st = sim.seatedOn(w.agentId)) {
+            city_.simMutable().clearAgentTether(w.agentId);
+            if (cc && cc->characterId != engine::INVALID_CHARACTER)
+                pw.setCharacterPosition(cc->characterId, Vec3(st->pos.x, st->hip - 0.45 + kCapsuleHalf + kCapsuleRadius, st->pos.y));
+            auto it = seatedMeshes_.find(w.outfit);
+            if (it == seatedMeshes_.end())
+                it = seatedMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildSeatedPersonMesh(w.outfit),
+                                                                           "citywalk:seated" + std::to_string(w.outfit))).first;
+            if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = it->second;
+            w.facing = st->face;
+            t->position = Vec3(st->pos.x, st->hip, st->pos.y);
+            t->orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(st->face.x, st->face.y));
+            if (PrevTransform* pt = world.get<PrevTransform>(w.entity)) pt->value = *t;
+            w.haveLast = false;
+            continue;
+        }
+
         // BODYLESS (outside the physical budget): no capsule to step, nothing
         // to separate, nobody to knock down. Just wear the ghost's pose and
         // keep walking — visually identical, and the entire expensive tail of
@@ -348,9 +368,24 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 desired = Vec3();
             }
         }
+        const Vec2 before(pos.x, pos.z);
         pw.moveCharacter(cc->characterId, desired, dt);   // zero intent still settles
         pos = pw.characterPosition(cc->characterId);
         posXZ = Vec2(pos.x, pos.z);
+        // JITTER TELEMETRY (`walkers?`; Glenn, 2026-10-02: "npcs jittering about at superspeed"): the body's real
+        // speed this step, and whether it reversed against the last one -- a twitching body flips every step.
+        {
+            const Vec2 v = (posXZ - before) * (1.0 / std::max(dt, Real(1e-6)));
+            const Real sp = v.length();
+            if (sp > tel_.maxSpeed) { tel_.maxSpeed = sp; tel_.maxAt = posXZ; tel_.maxAgent = w.agentId; }
+            if (w.haveLast && sp > 0.8 && w.lastStep.length() > 0.8 && dot(v, w.lastStep) < 0) {
+                ++tel_.reversals;
+                tel_.revAt = posXZ;
+            }
+            w.lastStep = v;
+            w.haveLast = true;
+            ++tel_.steps;
+        }
 
         // Face the actual travel direction once really moving.
         Vec3 vel = pw.characterVelocity(cc->characterId);
@@ -446,6 +481,27 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
     spawnWalkers(ctx);
     driveWalkers(ctx);
+    // Publish the jitter telemetry every 2 s of sim, then start a fresh window.
+    tel_.window += ctx.clock.fixedStep();
+    if (tel_.window >= 2.0) {
+        // ...and who is sitting (M5): how many, and the one nearest the player's bubble centre
+        const CitySim& sm = city_.sim();
+        int seated = 0;
+        Vec2 seatAt(0, 0);
+        Real bestD = 1e30;
+        for (int i = 0; i < static_cast<int>(sm.agents().size()); ++i)
+            if (const CitySim::SeatSpot* st = sm.seatedOn(i)) {
+                ++seated;
+                const Real d = (st->pos - sm.tierCenter()).length();
+                if (d < bestD) { bestD = d; seatAt = st->pos; }
+            }
+        char b[320];
+        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f)",
+                      walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
+                      tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y);
+        ctx.settings.setString("walkers.telemetry", b);
+        tel_ = Telemetry{};
+    }
 }
 
 void CityWalkerSystem::onStop(engine::FrameContext&) {

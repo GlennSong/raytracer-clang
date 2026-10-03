@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace engine {
@@ -184,6 +185,15 @@ struct MeshBuilder {
     // normals), colour per ring (`colours` may be empty: white).
     static RenderMesh tube(const std::vector<Vec3>& points, const std::vector<double>& radii, int sides,
                            const std::vector<Vec3>& colours = {});
+    // A ROUNDED BOX (buildings M4b, the furniture words): `size` overall, centred on the origin, every edge and
+    // corner rounded to `radius` (clamped to half the smallest side) in `segs` steps per quarter -- cushions,
+    // mattresses, worktops, drawer fronts, upholstered panels. Smooth normals; UVs box-projected in metres times
+    // `uvPerMetre` (u along the face's first in-plane axis), so a baked surface tiles at its real scale.
+    static RenderMesh roundedBox(const Vec3& size, double radius, int segs = 2, double uvPerMetre = 1.0);
+    // A LATHE: the profile (r, y) pairs, bottom to top, turned `segs` times about +y. Radial normals from the
+    // profile's slope; a point on the axis (r = 0) closes the shape there. u round the turn 0..1, v the profile's
+    // length in metres. Lamp bases, gas lifts, basins, bowls, finials.
+    static RenderMesh lathe(const std::vector<std::pair<double, double>>& profile, int segs);
 };
 
 }  // namespace engine

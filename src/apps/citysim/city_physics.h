@@ -51,9 +51,20 @@ public:
         for (const auto& kv : carProxies_) out.push_back(kv.second.id);
         return out;
     }
+    // The same boxes with their half extents (a van's is bigger than a sedan's), for overlap gates.
+    // key: the baking agent's uid, or negative for a scenery (parked, agentless) car.
+    struct ProxyBox { engine::PhysicsBodyId id; engine::Vec3 he; long long key; };
+    std::vector<ProxyBox> carProxyBoxes() const {
+        std::vector<ProxyBox> out;
+        out.reserve(carProxies_.size());
+        for (const auto& kv : carProxies_) out.push_back({kv.second.id, kv.second.he, kv.first});
+        return out;
+    }
     // Times the backstop snapped a lost body onto its ghost. The soak gate
     // asserts the CONTROLLER never needs it; in production it's the fuse.
     int snapCount() const { return snapCount_; }
+    // Snaps the backstop wanted but held back because the ghost's spot (and the lane behind it) was taken.
+    int snapsHeld() const { return snapsHeld_; }
 
 private:
     void releaseBodies();
@@ -64,6 +75,7 @@ private:
     // tier promotion/demotion).
     struct ProxyBody {
         engine::PhysicsBodyId id{};
+        engine::Vec3 he{};     // collider half extent (a van's box is bigger than a sedan's)
         char parked = 0;       // last tick's possessed-parked state
         uint32_t stamp = 0;    // last sync pass that saw this instance
     };
@@ -88,6 +100,11 @@ private:
     // kinematic brains produce (driveTowards chases the sim's ghost); their
     // render pose comes from the body (city_.setAgentPhysPose).
     void possessTier(engine::World& world, engine::Real dt);
+    // #23: is a sedan footprint at (c, yaw) clear of every OTHER car -- the other possessed bodies and the
+    // kinematic boxes not parked below the world? A body is only ever PLACED (spawned on acquisition,
+    // snapped by the backstop) where this holds: teleporting a chassis into a car that is already there is
+    // what "piled upon other cars ... go through each other" was.
+    bool spotClear(engine::Vec2 c, engine::Real yaw, int selfAgent) const;
     // Stamp each possessed car's drawn instance transform from its live body,
     // so the car is never drawn where its chassis no longer is (#26).
     void syncPossessedInstances(engine::World& world);
@@ -103,6 +120,7 @@ private:
     bool polesBuilt_ = false;
     std::vector<Possessed> possessed_;
     int snapCount_ = 0;
+    int snapsHeld_ = 0;
     int maxPhysical_ = 12;
     engine::Real possessRadius_ = 90.0;   // acquire inside; drop past 1.3x
 };

@@ -44,6 +44,9 @@ struct LotsCityInputs {
     // from the same city grown in place — the cache deciding what the buildings look like.
     RoadGraph nav;
     double pavedSidewalk = 0.0;
+    // The drawn road decks: the earthwork field is pinned to them (lanesEarthworkField), so the lots grow
+    // on the ground the terrain will show -- the streets setting it, not natural ground under a skirt.
+    RoadDeckField deck;
 };
 
 // ONE derivation: what the producer runs, exposed for tests. `report` (optional) receives the counts.

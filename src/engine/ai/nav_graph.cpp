@@ -13,6 +13,8 @@ namespace {
 // Right-hand normal of a (unit) travel direction: rotate -90 deg. With Vec2
 // mapping to world XZ and +Y up, perp() = {-y, x} is the LEFT (+90) normal, so
 // the right side is its negation: {y, -x}.
+// The KERB side of travel. Named for the maths, not the road: in world x/z (y up) (dir.y, -dir.x) points to the
+// driver's LEFT -- traffic keeps left, UK/Japan style (Glenn, 2026-10-02: "I want to keep it that way").
 inline Vec2 rightOf(const Vec2& dir) { return {dir.y, -dir.x}; }
 
 // Distance from point p to segment [a,b], plus the clamped parameter.
@@ -40,7 +42,7 @@ Vec2 NavGraph::pointOnLink(int link, Real t) const {
 Vec2 NavGraph::laneCenter(int link, int lane, Real t, Real laneWidth) const {
     Vec2 c = pointOnLink(link, t);
     Vec2 r = rightOf(direction(link));
-    // Two-way: lanes fill the RIGHT half. One-way (carriageway/ramp): lanes
+    // Two-way: lanes fill the KERB half (rightOf = the driver's left: traffic keeps left). One-way (carriageway/ramp): lanes
     // span the whole width, centred on the chain (device: cars rode the
     // median because freeway lanes offset from the two-way centreline).
     const Real off = links[link].oneWay

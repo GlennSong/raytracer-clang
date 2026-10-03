@@ -31,11 +31,26 @@ namespace engine {
 // aperture. `foot` is the threshold centre (world XZ, at the unit's baseY),
 // `normal` the outward facade direction. Collected from the grammar's
 // "entrance" attaches (which mergeParts otherwise discards).
+// A kit piece placed OUTDOORS (furniture_kit.h Piece). `yaw` turns the piece's +z (its front) to world
+// (sin yaw, 0, cos yaw); `y` is its floor -- world height, or above the finished ground when `draped` (parks lie on
+// the terrain, which is only known once it is graded).
+struct OutdoorPiece {
+    uint8_t piece = 0;
+    uint32_t variant = 0;
+    Vec2 at{0, 0};
+    Real yaw = 0;
+    Real y = 0;
+    bool draped = false;
+};
+// The piece -> world transform for a floor at world height `y`.
+Mat4 outdoorPieceXform(const OutdoorPiece& p, Real y);
+
 struct DoorSpec {
     Vec2 foot;
     Vec2 normal;
     Real width = 0;
     Real height = 0;
+    bool back = false;   // the rear service door (attached buildings): it faces the yard, not the street
 };
 
 // One GROWN MASSING and its verbatim regen key (ADR-0080): growPlanBuilding
@@ -96,6 +111,9 @@ struct LotBuilding {
     // real trees at (parks: around the paths; yards: behind the house). Each
     // entry is (world x, trunk scale, world z). Empty = host's own scatter.
     std::vector<Vec3> treeSpots;
+    // OUTDOOR FURNITURE (the furniture library, M2): benches, bistro sets -- library pieces placed by the park,
+    // plaza and forecourt passes, drawn instanced and sat on like any interior piece (engine/interaction.h).
+    std::vector<OutdoorPiece> furniture;
     // Fenced ring spans (world XZ pairs) sculptPark actually built — the
     // loader turns them into thin wall colliders (drive feedback: "Parks
     // also have no collision detection").
@@ -129,6 +147,15 @@ struct LotBuilding {
 };
 
 struct LotParams {
+    // The ground already carries the streets smoothly (a lane city's earthwork field): skip the block
+    // planes and terraces -- they would replace a gentle slope with steps.
+    bool smoothGround = false;
+    // The height of the street a building fronts, at a point in front of it (a lane city's decks:
+    // lanesStreetHeight). Set, the pad takes the street's height, not the lawn's; unset, the ground's.
+    std::function<bool(Real, Real, Real*)> streetHeight;
+    // Within the freeway clearance of a freeway or ramp (a lane city's decks: lanesNearFreeway). Set, it replaces
+    // the lot graph's own test.
+    std::function<bool(Real, Real)> nearFreeway;
     Real roadMargin = 11.0;   // inset from the block edge to the buildable interior
                               // (road half-width + sidewalk) — wider = more sidewalk
     Real lotSetback = 1.4;    // building inset from its own lot lines
@@ -267,6 +294,11 @@ struct LotPlanDebug {
     int rejSliver = 0;   // site's OBB short side under minShort
     int rejAspect = 0;   // long/short over maxAspect (knife blade)
     int rejFill = 0;     // polygon fills too little of its OBB
+    int attachedSites = 0;   // sites run out to a shared side line (attached buildings)
+    int attachedBuilt = 0;   // buildings grown with at least one party wall
+    std::vector<Vec2> attachedAt;   // a few of them, for the log's teleport hint
+    int bigBoxBlocks = 0;            // whole blocks given to a big-box store and its parking lot
+    std::vector<Vec2> bigBoxAt;
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors
@@ -277,6 +309,7 @@ struct LotPlanDebug {
     // WHY the frontage walk rejected the lots it tried to lay (ParcelReject,
     // parcel.h — kept as plain ints so this header need not include it).
     int pEdgeShort = 0, pShallow = 0, pMitered = 0, pOverlap = 0;
+    int pNotStreet = 0;   // block edges that border a freeway or ramp, not a street: no lots laid
     int pEscaped = 0, pTiny = 0, pThin = 0, pPlaced = 0;
     int pClips = 0, pLeftOverlapping = 0, pSameEdge = 0, pAtInsert = 0, pConcave = 0, pClipFailed = 0;
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
@@ -364,8 +397,11 @@ inline std::size_t baseSlot(std::size_t slot) {
 // diagonals it crosses, so each piece lies inside one terrain triangle and, once
 // lifted, follows it EXACTLY — no chord between two joints can dip under the
 // grass or bridge a hollow.
+// `followCreases`: a WALKING SURFACE (paths, plazas) -- its up-facing triangles are also checked below the cell size
+// (down to 1/16 of it), so a crease through a small triangle is followed. Off for everything else: checking every
+// small triangle of every draped kit cost the island load 10x in part chunks.
 void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
-                   Real gridStep = 0, Vec2 gridOrigin = Vec2(0, 0));
+                   Real gridStep = 0, Vec2 gridOrigin = Vec2(0, 0), bool followCreases = false);
 
 // One building per viable lot across every block. Deterministic in seed.
 // `debug`, when non-null, receives the intermediate blocks + lots.

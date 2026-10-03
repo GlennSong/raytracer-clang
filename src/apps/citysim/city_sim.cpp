@@ -100,6 +100,8 @@ constexpr Real kPlayerClearance = 1.1;     // ...and this far from the PLAYER (a
                                            // so a near miss is a step-around, not a brush)
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
+constexpr Real kCarBuffer = 2.0;        // bumper to bumper behind a stopped (player's) car
+constexpr Real kLaneHalfCorridor = 2.0; // a car this far off our line is in another lane
 // The zebra band is painted 0.5..3.6 m past the junction MOUTH (road-texture
 // shaders, ADR-0062); a car held at a red must stop with its BUMPER short of
 // that band — not at the node, which put a legally-waiting car visually in the
@@ -2051,6 +2053,14 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     }
     // Rest: the dwell clock runs on in-world hours, like the schedule windows.
     a.goalHours += dtHours;
+    // ON A SEAT (M5): walking to or from it, nothing fires; sitting, the end of the dwell gets up and walks
+    // back to the path first -- the next trip starts from there, not from the bench.
+    if (a.seatPhase == 1 || a.seatPhase == 3) return;
+    if (a.seatPhase == 2) {
+        const Real sitFor = a.restDwell > 0 ? a.restDwell : s.dwellHours;   // a sit is short: the day's windows wait for it
+        if (a.goalHours >= sitFor) a.seatPhase = 3;
+        return;
+    }
     // The stop's own length when it set one (a coffee, a browse), else the
     // state's.
     const Real dwell = a.restDwell > 0 ? a.restDwell : s.dwellHours;
@@ -2197,28 +2207,37 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
     const Vec2 u = al > 1e-6 ? along * (1.0 / al) : Vec2(1, 0);
     const Vec2 side(u.y, -u.x);   // right of travel: away from the kerb on the right-hand walk
     std::vector<int> near;
-    auto clear = [&](Vec2 p) {
+    // the nearest body to p, squared (capped at the 1.5 m query)
+    auto nearest2 = [&](Vec2 p) {
         grid_.query(p, 1.5, near);
+        Real best = 1.5 * 1.5;
         for (int bi : near) {
             if (bi == self) continue;
             const Agent& b = agents_[static_cast<std::size_t>(bi)];
             if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
             if (!b.moving && b.indoors) continue;   // inside: not on the pavement
             if (riding(bi)) continue;
-            if ((b.pos - p).lengthSquared() < 0.75 * 0.75) return false;
+            best = std::min(best, (b.pos - p).lengthSquared());
         }
-        return true;
+        return best;
     };
     constexpr Real kStep = 0.8;
-    for (int row = 0; row < 2; ++row) {
+    // A CROWD (a busy stop) can fill every spot tried; the fallback is then the roomiest of them, not `want`
+    // itself -- which stood the newcomer inside whoever already stood there (two STILL people are never pushed
+    // apart: macOS CI's one overlapping pair in metro_pedestrians_walk_and_keep_apart). Three rows now.
+    Vec2 roomiest = want;
+    Real roomiest2 = -1;
+    for (int row = 0; row < 3; ++row) {
         const Vec2 base = want + side * (row * kStep);
         for (int k = 0; k < 9; ++k) {
             const Real off = kStep * static_cast<Real>((k + 1) / 2) * ((k & 1) ? 1.0 : -1.0);
             const Vec2 p = base + u * off;
-            if (clear(p)) return p;
+            const Real d2 = nearest2(p);
+            if (d2 >= 0.75 * 0.75) return p;
+            if (d2 > roomiest2) { roomiest2 = d2; roomiest = p; }
         }
     }
-    return want;
+    return roomiest;
 }
 
 // Somewhere NEAR to go next on an outing: an open park, cafe, store,
@@ -2229,9 +2248,16 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
 int CitySim::pickOuting(Agent& a, int origin) {
     const int prev = a.tripVenue;
     a.tripVenue = -1;
+    releaseSeat(a);
     if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
     const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
     const Real h = clockHours_;
+    // A SIT on a bench (M5): now and then the outing is a seat out in the open -- a park bench, a café's
+    // terrace chair -- and the walk to it.
+    if (!seats_.empty() && rnd() % 100u < 30u) {
+        const int s = pickSeat(a, here);
+        if (s >= 0) { a.tripSeat = s; return seats_[static_cast<std::size_t>(s)].node; }
+    }
     // Now and then, somewhere ACROSS TOWN: a park, a civic building, a
     // restaurant 1.2-3 km off -- the trip a bus is for (the rider plans it in
     // startGoalTrip like any other). Local stops are walks.
@@ -3134,6 +3160,15 @@ void CitySim::steer(Agent& a, Real dt) {
     // heading at all (like a real car) — it holds until it rolls, which also means
     // a car halted at a light never snaps its heading. Trip start seeds the initial
     // heading directly (startTrip), so a just-launched car is already aligned.
+    // CHANGING LANES the nose points where the car is going, the lane's way plus the sideways glide -- it used to
+    // point straight down the lane and slide across it like a crab
+    if (std::fabs(a.laneVel) > 1e-3 && a.speed > 1.0) {
+        const Real lat = a.laneVel * laneSpacingFor(a.route.links[a.leg]);   // m/s, + = toward the kerb
+        const Vec2 right(desired.y, -desired.x);
+        Vec2 d = desired * a.speed + right * lat;
+        const Real dlen = std::sqrt(d.x * d.x + d.y * d.y);
+        if (dlen > 1e-6) desired = d * (1.0 / dlen);
+    }
     Real rate = a.speed / kCarMinTurnRadius;
     a.heading = rotateToward(a.heading, desired, rate * dt);
 }
@@ -3408,6 +3443,17 @@ Real CitySim::senseAhead(Agent& a) {
     cone.range = 18.0;
     cone.halfAngleRad = 0.45;    // ~26 deg: a crosser in the lane ahead,
                                  // not someone standing on the far sidewalk
+    // A CAR is looked for down the LANE, as far as it takes to stop from this speed plus both bodies: the 18 m
+    // person cone saw a stopped car only once it was too late to stop from 50 km/h, and its 26 deg width at range
+    // would brake for the next lane. A corridor a lane wide, straight along where we are going.
+    const Vec2 dir = cone.forward;
+    const Real ownHalf = a.vehicle >= 0 ? fleetBody(a.vehicle).length * 0.5 : Real(2.2);
+    const Real carRange = std::max(Real(18), a.speed * a.speed / (2 * Real(4.5)) + ownHalf + 12);
+    auto inLaneAhead = [&](const Vec2& p) {
+        const Real dx = p.x - a.pos.x, dz = p.y - a.pos.y;
+        const Real fwd = dx * dir.x + dz * dir.y, lat = std::fabs(dx * dir.y - dz * dir.x);
+        return fwd > 0 && fwd < carRange && lat < kLaneHalfCorridor;
+    };
     if (brainUnit(a) <= a.reliability) {
         engine::SensorVolume sensor;
         sensor.cone = cone;
@@ -3426,7 +3472,7 @@ Real CitySim::senseAhead(Agent& a) {
         // host — skip the height gate rather than invent one for them.
         for (const SensedGhost& g : sensed_) {
             if (g.id >= 0) continue;   // agent ghosts handled via the grid above
-            if (engine::sees(sensor, g.pos, 0.0))
+            if (externalHalfOf(g.id) > 0 ? inLaneAhead(g.pos) : engine::sees(sensor, g.pos, 0.0))
                 a.memory.observe(g.id, g.pos, simSeconds_);
         }
     } else {
@@ -3435,6 +3481,17 @@ Real CitySim::senseAhead(Agent& a) {
     a.memory.update(simSeconds_);
     for (const engine::TrackedBody& t : a.memory.tracks()) {
         if (t.confidence < kMemoryActConfidence) continue;
+        // A CAR ahead (the player's): in the lane corridor, held short by both bodies, not a person's clearance
+        const Real oh = externalHalfOf(t.id);
+        if (oh > 0) {
+            if (!inLaneAhead(t.pos)) continue;
+            const Real extra = ownHalf + oh + kCarBuffer - kPedClearance;
+            Real fd = (t.pos.x - a.pos.x) * dir.x + (t.pos.y - a.pos.y) * dir.y;
+            seenAhead = std::min(seenAhead, std::max(Real(0), fd - extra));
+            Real ttc = engine::timeToCollision(a.pos, a.heading * a.speed, t.pos, t.vel, ownHalf + oh);
+            if (ttc < kTtcHorizon) seenAhead = std::min(seenAhead, std::max(Real(0), a.speed * ttc - extra));
+            continue;
+        }
         // Where memory says the body IS (extrapolated while unseen): yield
         // if that estimate sits in the corridor ahead.
         if (engine::sees(cone, t.pos)) {
@@ -3467,9 +3524,21 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // the change is a visible glide the lamp bake can indicate; a paced
         // discretionary change picks a neighbouring lane now and then on any
         // multi-lane link. Deterministic: agent-keyed hash, sim-clock paced.
-        const Real ease = dt * 0.55;
+        // THE GLIDE (Glenn, 2026-10-02: "Lane changing for simulated cars is wonky"): a critically damped spring,
+        // not a constant-rate slide -- the old glide started and stopped sideways at full rate, a kink at each
+        // end. ~2.6 s a lane, peak ~0.55 lanes/s; steer() turns the nose into it.
+        {
+            constexpr Real w = 1.8, kMaxRate = 0.6;
+            const Real e = Real(a.lane) - a.laneF;
+            a.laneVel += (w * w * e - 2 * w * a.laneVel) * dt;
+            a.laneVel = std::max(-kMaxRate, std::min(kMaxRate, a.laneVel));
+            a.laneF += a.laneVel * dt;
+            if (std::fabs(Real(a.lane) - a.laneF) < 0.002 && std::fabs(a.laneVel) < 0.01) {
+                a.laneF = Real(a.lane);
+                a.laneVel = 0;
+            }
+        }
         const Real dl = Real(a.lane) - a.laneF;
-        a.laneF += std::max(-ease, std::min(ease, dl));
         a.laneTimer -= dt;
         if (a.laneTimer <= 0) {
             const engine::NavLink& LL = nav_->links[li];
@@ -3477,27 +3546,50 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             uint32_t h = static_cast<uint32_t>(a.home * 73 + a.work * 131 +
                                                a.trips * 17 + a.leg) *
                          2654435761u;
-            a.laneTimer = 4.5 + (h >> 8) % 7;
-            if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05) {
-                // PURPOSEFUL lane choice (§9.6 device rules): fast drivers
-                // work toward the median (lane 0), slow ones stay right; an
-                // exit on the route within ~380 m pulls to the SLOW lane.
-                // One ADJACENT step at a time, and only when there is room.
-                int preferred = lanes - 1 -
-                    std::min(lanes - 1,
-                             std::max(0, static_cast<int>(
-                                             (a.speedFactor - 0.97) * 25)));
+            a.laneTimer = 1.0 + static_cast<Real>((h >> 8) % 10) * 0.1;   // a decision every 1-2 s
+            // ROAD RULES (Glenn, 2026-10-02: "Should we mimic road rules? Faster cars are in the furthest lane?" --
+            // "our cars and roads are left lane like the uk or japan. And I want to keep it that way"). Traffic
+            // drives on the LEFT: lane 0 lies next to the centre line (the OFFSIDE, overtaking lane) and the last
+            // lane is the NEARSIDE, the kerb. (NavGraph::rightOf is the kerb side: in world x/z it points left.)
+            // Not at a junction: nobody changes lane in the box or on its threshold.
+            if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05 && !nearJunction(a.pos, 6.0)) {
+                const int kerb = lanes - 1;
                 const int legCount = static_cast<int>(a.route.links.size());
+                // 1. THE NEXT TURN within ~90 m decides first: a LEFT turn (to the nearside) from the kerb lane, a
+                // RIGHT turn (across the oncoming traffic) from the offside lane, an exit from the kerb lane;
+                // straight on through a junction leaves the lane free
+                int turnLane = -1;
                 Real ahead = LL.length - a.distOnLeg;
-                for (int lg = a.leg + 1; lg < legCount && ahead < 380.0; ++lg) {
-                    const engine::NavLink& NL = nav_->links[a.route.links[lg]];
-                    if (NL.klass == engine::RoadClass::Ramp) {
-                        preferred = lanes - 1;   // exit ahead: work right
+                for (int lg = a.leg; lg + 1 < legCount && ahead < 90.0; ++lg) {
+                    const int c0 = a.route.links[lg], c1 = a.route.links[lg + 1];
+                    const engine::NavLink& cur = nav_->links[c0];
+                    const engine::NavLink& nxt = nav_->links[c1];
+                    if (cur.klass == engine::RoadClass::Freeway && nxt.klass == engine::RoadClass::Ramp) { turnLane = kerb; break; }
+                    if (nav_->isJunction(cur.to)) {
+                        const Vec2 d0 = nav_->direction(c0), d1 = nav_->direction(c1);
+                        const Vec2 nearside(d0.y, -d0.x);
+                        const Real side = d1.x * nearside.x + d1.y * nearside.y;
+                        if (side > 0.4) turnLane = kerb;
+                        else if (side < -0.4) turnLane = 0;
                         break;
                     }
-                    if (NL.klass != engine::RoadClass::Freeway) break;
-                    ahead += NL.length;
+                    ahead += nxt.length;
                 }
+                // 2. KEEP LEFT EXCEPT TO OVERTAKE: held up by a slower car close ahead, pull out one lane toward the
+                // offside; otherwise drift back to the nearside, one lane at a time, once there is room
+                int preferred = a.lane;
+                if (turnLane >= 0) {
+                    preferred = turnLane;
+                } else {
+                    const int ai = indexOf(a);
+                    const Real gap = gaps_[static_cast<std::size_t>(ai)];
+                    const Real leader = leaderSpeeds_[static_cast<std::size_t>(ai)];
+                    const Real cruise = engine::classSpeed(LL.klass) * a.speedFactor;
+                    const bool heldUp = gap < a.speed * 3.0 + 12.0 && leader < cruise * 0.85;
+                    if (heldUp && a.lane > 0) preferred = a.lane - 1;
+                    else if (!heldUp && a.lane < kerb) preferred = a.lane + 1;
+                }
+                const bool returning = preferred > a.lane && turnLane < 0;
                 const int dir = (preferred > a.lane) - (preferred < a.lane);
                 if (dir != 0) {
                     const int want = a.lane + dir;
@@ -3510,13 +3602,13 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                     // own link, and cars merged into bodies one link ahead.
                     bool room = true;
                     const Real spacing = laneSpacingFor(li);
-                    const Real shift = (Real(want) - a.laneF) * spacing;   // + = rightward
-                    grid_.query(a.pos, 26.0, queryScratch_);
+                    const Real shift = (Real(want) - a.laneF) * spacing;   // + = toward the kerb (nearside)
+                    grid_.query(a.pos, 60.0, queryScratch_);
                     for (int bi : queryScratch_) {
                         const Agent& b = agents_[bi];
+                        // (a STOPPED car counts: merging into a queue is merging into bodies)
                         if (&b == &a || b.mode != Agent::Mode::Driver ||
-                            b.far() ||
-                            !b.moving || b.leg >= (int)b.route.links.size())
+                            b.far() || b.leg >= (int)b.route.links.size())
                             continue;
                         if (b.heading.x * a.heading.x + b.heading.y * a.heading.y < 0.7)
                             continue;   // not travelling my way
@@ -3524,7 +3616,14 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                         const Real along = a.heading.x * dx + a.heading.y * dy;
                         const Real right = a.heading.y * dx - a.heading.x * dy;
                         if (std::fabs(right - shift) > spacing * 0.6) continue;
-                        if (std::fabs(along) < 13.0) {
+                        // room ahead and behind, plus what the speed difference closes in ~3 s: a car coming up
+                        // fast in the target lane is not "room" just because it is 20 m back
+                        Real need = along >= 0 ? 13.0 + std::max(Real(0), a.speed - b.speed) * 2.0
+                                               : 13.0 + std::max(Real(0), b.speed - a.speed) * 3.0;
+                        // back to the nearside only past the slower traffic: not into a gap behind a car you'd be
+                        // stuck behind again at once (that was the weave)
+                        if (returning && along >= 0 && b.speed < a.speed - 1.0) need = std::max(need, Real(40));
+                        if (std::fabs(along) < need) {
                             room = false;
                             break;
                         }
@@ -4236,7 +4335,20 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         auto jitter = [&](Real lo, Real hi) {
             return lo + (hi - lo) * static_cast<Real>(tripRnd(a) % 1000u) / 999.0;
         };
-        if (a.tripVenue >= 0 && a.tripVenue < static_cast<int>(venues_.size()) &&
+        bool seated = false;
+        if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
+            seats_[static_cast<std::size_t>(a.tripSeat)].node == node &&
+            seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a) && a.mode == Agent::Mode::Pedestrian) {
+            // AT THE SEAT'S PATH: off it to the seat, a sit of five to fifteen minutes, back (stepSeats).
+            a.restDwell = jitter(0.08, 0.25);
+            a.seatPhase = 1;
+            a.seatBack = a.pos;
+            seated = true;
+        } else if (a.tripSeat >= 0) {
+            releaseSeat(a);
+        }
+        if (seated) {
+        } else if (a.tripVenue >= 0 && a.tripVenue < static_cast<int>(venues_.size()) &&
             venues_[static_cast<std::size_t>(a.tripVenue)].node == node) {
             // An OUTING or LUNCH stop: in through the door, for as long as
             // that kind of place keeps people -- or, at a park, outside.
@@ -4271,8 +4383,9 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         a.outingTo = -1;   // arrived: the next outing chooses afresh
         // Outside: a spot of its own, not the sidewalk point everyone arriving
         // along this street ends on.
-        if (!a.indoors && a.mode == Agent::Mode::Pedestrian)
+        if (!a.indoors && a.mode == Agent::Mode::Pedestrian && a.seatPhase == 0)
             a.pos = freeStandingSpot(a, a.pos, nav_->direction(lastLink));
+        if (a.seatPhase == 1) a.seatBack = a.pos;
     }
     if (next >= 0) {
         a.goal = next;
@@ -4332,7 +4445,17 @@ void CitySim::computeGaps() {
         const Agent& a = agents_[i];
         if (a.far()) continue;   // far tier: not on the road
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
-        lanes[laneKeyOf(a, a.route.links[a.leg])].push_back({a.distOnLeg, i});
+        const int li = a.route.links[a.leg];
+        const long long key = laneKeyOf(a, li);
+        lanes[key].push_back({a.distOnLeg, i});
+        // MID-CHANGE a car is in BOTH lanes: the one it is leaving keeps it as a leader (its followers there
+        // used to lose it the instant it decided, and drove into its tail), and it follows both lanes' leaders
+        if (a.mode == Agent::Mode::Driver && std::fabs(Real(a.lane) - a.laneF) > 0.15) {
+            // the lane it is leaving: laneF rounded back toward where it came from
+            const int from = std::max(0, static_cast<int>(std::lround(a.laneF - (a.lane > a.laneF ? 0.35 : -0.35))));
+            const long long old = static_cast<long long>(li) * 4096 + std::min(from, std::max(1, nav_->links[li].lanes) - 1);
+            if (old != key) lanes[old].push_back({a.distOnLeg, i});
+        }
     }
     // (link,lane) -> the car nearest the entry {distOnLeg, agentIndex}, so a
     // follower crossing a node can pick up the leader on its next link AND that
@@ -4346,7 +4469,10 @@ void CitySim::computeGaps() {
         });
         minEntry[kv.first] = { v.front().first, v.front().second };
         for (std::size_t k = 0; k + 1 < v.size(); ++k) {
-            gaps_[v[k].second] = v[k + 1].first - v[k].first;
+            // the nearer leader wins: a changing car sits in two lanes' chains
+            const Real g = std::max(Real(0), v[k + 1].first - agents_[v[k + 1].second].bodyLag - v[k].first);
+            if (g >= gaps_[v[k].second]) continue;
+            gaps_[v[k].second] = g;
             minGaps_[v[k].second] = pairMinGap(v[k].second, v[k + 1].second);
             leaderSpeeds_[v[k].second] = agents_[v[k + 1].second].speed;
         }
@@ -4373,7 +4499,7 @@ void CitySim::computeGaps() {
             int nextLi = a.route.links[a.leg + step];
             auto it = minEntry.find(laneKeyOf(a, nextLi));
             if (it != minEntry.end()) {
-                gaps_[i] = ahead + it->second.first;
+                gaps_[i] = std::max(Real(0), ahead + it->second.first - agents_[it->second.second].bodyLag);
                 minGaps_[i] = pairMinGap(i, it->second.second);
                 leaderSpeeds_[i] = agents_[it->second.second].speed;
                 break;
@@ -4434,7 +4560,8 @@ void CitySim::computeCarWedge() {
             if (!b.moving && b.parkedBay >= 0) continue;
             // Different decks never conflict (viaduct vs the street below).
             if (std::fabs(b.elevation - a.elevation) > 2.5) continue;
-            const Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+            // A possessed leader is where its BODY is, up to a length behind its ghost (Agent::bodyLag).
+            const Real dx = b.pos.x - b.heading.x * b.bodyLag - a.pos.x, dy = b.pos.y - b.heading.y * b.bodyLag - a.pos.y;
             if (dx * dx + dy * dy > kRange * kRange) continue;
             const Real along = fx * dx + fy * dy;
             const Real across = -fy * dx + fx * dy;   // + = b on my left
@@ -4533,7 +4660,96 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     stepTick(simDt, hoursPerSecond);
 }
 
+// ---- SEATS (the furniture library, M5) ------------------------------------------------------------------------
+void CitySim::setSeats(std::vector<SeatSpot> seats) {
+    seats_.clear();
+    if (!nav_) return;
+    // the nearest node a walker can leave by, within 60 m: where a sit starts and ends
+    const int n = nav_->nodeCount();
+    for (SeatSpot& s : seats) {
+        Real best = 60.0 * 60.0;
+        s.node = -1;
+        for (int i = 0; i < n; ++i) {
+            const Vec2 d = nav_->nodes[static_cast<std::size_t>(i)] - s.pos;
+            const Real d2 = d.x * d.x + d.y * d.y;
+            if (d2 >= best) continue;
+            bool walk = false;
+            for (int ol : nav_->outLinks[static_cast<std::size_t>(i)]) walk = walk || nav_->links[static_cast<std::size_t>(ol)].walkable;
+            if (!walk) continue;
+            best = d2;
+            s.node = i;
+        }
+        s.occupant = -1;
+        if (s.node >= 0) seats_.push_back(s);
+    }
+}
+
+const CitySim::SeatSpot* CitySim::seatedOn(int i) const {
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return nullptr;
+    const Agent& a = agents_[static_cast<std::size_t>(i)];
+    if (a.seatPhase != 2 || a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) return nullptr;
+    return &seats_[static_cast<std::size_t>(a.tripSeat)];
+}
+
+void CitySim::releaseSeat(Agent& a) {
+    if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
+        seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a))
+        seats_[static_cast<std::size_t>(a.tripSeat)].occupant = -1;
+    a.tripSeat = -1;
+    a.seatPhase = 0;
+}
+
+int CitySim::pickSeat(Agent& a, Vec2 here) {
+    // a free seat 30-500 m off, one of the nearest four (so neighbours do not all take the same bench)
+    std::vector<std::pair<Real, int>> c;
+    for (int i = 0; i < static_cast<int>(seats_.size()); ++i) {
+        const SeatSpot& s = seats_[static_cast<std::size_t>(i)];
+        if (s.occupant >= 0) continue;
+        const Vec2 d = s.pos - here;
+        const Real d2 = d.x * d.x + d.y * d.y;
+        if (d2 < 30.0 * 30.0 || d2 > 500.0 * 500.0) continue;
+        c.push_back({d2, i});
+    }
+    if (c.empty()) return -1;
+    const std::size_t k = std::min<std::size_t>(4, c.size());
+    std::partial_sort(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(k), c.end());
+    const int pick = c[rnd() % static_cast<uint32_t>(k)].second;
+    seats_[static_cast<std::size_t>(pick)].occupant = indexOf(a);
+    return pick;
+}
+
+void CitySim::stepSeats(Real dt) {
+    constexpr Real kWalk = 1.2;   // an amble across the grass
+    for (Agent& a : agents_) {
+        if (a.seatPhase != 1 && a.seatPhase != 3) continue;
+        if (a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) { a.seatPhase = 0; continue; }
+        const SeatSpot& s = seats_[static_cast<std::size_t>(a.tripSeat)];
+        // to the seat, stopping in front of it; back to where it left the path
+        const Vec2 target = a.seatPhase == 1 ? s.pos + s.face * 0.35 : a.seatBack;
+        const Vec2 d = target - a.pos;
+        const Real L = d.length(), step = kWalk * dt;
+        if (L <= step) {
+            a.pos = target;
+            a.speed = 0;
+            if (a.seatPhase == 1) {
+                a.seatPhase = 2;
+                a.pos = s.pos;
+                a.heading = s.face;
+                a.goalHours = 0;   // the sit's own clock starts now, not on the walk over
+            } else {
+                releaseSeat(a);
+            }
+        } else {
+            a.pos = a.pos + d * (step / L);
+            a.heading = d * (1.0 / L);
+            a.speed = kWalk;
+        }
+        grid_.place(indexOf(a), a.pos);
+    }
+}
+
 void CitySim::stepTick(Real dt, Real hoursPerSecond) {
+    stepSeats(dt);
     RT_PROFILE_ZONE_NAMED("CitySim step");
     if (!nav_ || agents_.empty()) return;
     // Print-only phase timing (CitySim::PhaseTimes): whole-population passes
@@ -4746,8 +4962,12 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // contact until it drives clear — the tow-truck resolution. Without
             // it a crossing-path contact never resolves and the junction dies.
             if (a.crashCount > 5 || b.crashCount > 5) continue;
-            Real rs = 0.35 * (vehicleLength(static_cast<int>(i)) +
-                              vehicleLength(static_cast<int>(j)));
+            // Broad phase: the capsules below (half-length 0.5L - kHalfW, radius kHalfW) can touch out to a
+            // centre distance of exactly 0.5 * (La + Lb). This was 0.35 -- the old isotropic disc -- and cut
+            // the narrow phase short: two 6.4 m vans meeting at 37 degrees, centres 4.5 m apart, were
+            // "no contact" while their bodies overlapped 1.8 m (#23, the packed-junction soak).
+            Real rs = 0.5 * (vehicleLength(static_cast<int>(i)) +
+                             vehicleLength(static_cast<int>(j)));
             Real dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
             Real d2 = dx * dx + dy * dy;
             if (d2 >= rs * rs) continue;              // broad phase (cheap reject)
@@ -5049,20 +5269,33 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             grid_.query(a.pos, kPedBodyMin + 4.0, pairScratch_);
             for (int gj : pairScratch_) {
                 const std::size_t j = static_cast<std::size_t>(gj);
-                if (j <= i) continue;
+                if (j == i) continue;
                 Agent& b = agents_[j];
-                if (b.mode != Agent::Mode::Pedestrian || !b.moving ||
-                    b.far())
-                    continue;
+                if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
+                // A person STANDING or SITTING out on the street holds their ground too: the walker steps round
+                // them. (Only walker pairs were separated, so a walker could brush through someone standing at
+                // a stop or sitting on a bench -- the one overlapping pair macOS CI caught.) Walker pairs are
+                // visited once (j > i); a still body never runs this loop, so it is visited from every walker.
+                const bool still = !b.moving && pedVisible(gj);
+                if (!still && (!b.moving || j <= i)) continue;
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
                 if (d > 1e-4 && d < kPedBodyMin) {
-                    Real push = (kPedBodyMin - d) * 0.5;
-                    a.pos.x += dx / d * push; a.pos.y += dy / d * push;
-                    b.pos.x -= dx / d * push; b.pos.y -= dy / d * push;
+                    if (still) {
+                        const Real push = kPedBodyMin - d;
+                        a.pos.x += dx / d * push; a.pos.y += dy / d * push;
+                    } else {
+                        Real push = (kPedBodyMin - d) * 0.5;
+                        a.pos.x += dx / d * push; a.pos.y += dy / d * push;
+                        b.pos.x -= dx / d * push; b.pos.y -= dy / d * push;
+                    }
                 } else if (d <= 1e-4) {
-                    a.pos.x += kPedBodyMin * 0.5;
-                    b.pos.x -= kPedBodyMin * 0.5;
+                    if (still) {
+                        a.pos.x += kPedBodyMin;
+                    } else {
+                        a.pos.x += kPedBodyMin * 0.5;
+                        b.pos.x -= kPedBodyMin * 0.5;
+                    }
                 }
             }
         }

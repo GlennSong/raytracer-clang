@@ -19,10 +19,11 @@
 -- archetype_book_identity_weights_reproduce_the_ladders). Edit from here.
 archetype_book = {
   financial = {
-    {"glass_tower", 26}, {"podium_tower", 12}, {"office_slab", 17},
-    {"art_deco_tower", 9}, {"stepped_tower", 9}, {"drum_tower", 7},
-    {"commercial_block", 9}, {"parking_garage", 4.5}, {"plaza", 3.5},
-    {"civic_hall", 3},
+    {"glass_tower", 14}, {"podium_tower", 8}, {"tower_on_base", 7},
+    {"tapered_glass_tower", 6}, {"glass_slab", 5}, {"pencil_tower", 4},
+    {"sky_exposure_tower", 8}, {"art_deco_tower", 6}, {"stepped_tower", 5},
+    {"drum_tower", 4}, {"office_slab", 12}, {"commercial_block", 10},
+    {"parking_garage", 4.5}, {"plaza", 3.5}, {"civic_hall", 3},
   },
   commercial = {
     {"pocket_park", 4}, {"plaza", 3}, {"brick_shop", 18}, {"mixed_use", 13},

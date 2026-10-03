@@ -7,6 +7,11 @@
 #include "../world.h"
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
+#include "../procgen/furniture_kit.h"
+#include "../procgen/furniture_library.h"   // which pieces are interactive
+#include "../interaction.h"
+#include "../furniture_draw.h"   // the furniture kit, instanced (buildings M4b)
+#include <map>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -335,6 +340,27 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         // glowing sheet between you and the city was the old look.)
         res.entities.push_back(e);
         res.meshes.push_back(mh);
+    }
+
+    // FURNITURE (buildings M4b): the placed pieces, one INSTANCE GROUP per (piece, variant, finish) -- the kit's
+    // mesh uploaded once for every building, this building's placements as its transforms.
+    if (!bm.furniture.empty())
+        tris += spawnFurnitureGroups(world, assets, renderer, drawCache_, bm.furniture, r.params.wallColor, 80.0,
+                                     res.entities);
+
+    // INTERACTIONS (the furniture library, M1): the pieces someone can sit or lie on, as ONE set entity with the
+    // building -- InteractionSystem asks it what is in reach; released with the rest of the resident.
+    {
+        const FurnitureLibrary& lib = FurnitureLibrary::global();
+        Interactables set;
+        for (const PlacedPiece& pp : bm.furniture)
+            if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+        if (!set.pieces.empty()) {
+            set.refreshBounds();
+            Entity ie = world.create();
+            world.add<Interactables>(ie, std::move(set));
+            res.entities.push_back(ie);
+        }
     }
 
     const auto t1 = std::chrono::steady_clock::now();

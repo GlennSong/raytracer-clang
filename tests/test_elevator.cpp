@@ -515,3 +515,53 @@ TEST_CASE(character_rides_the_cab_to_the_twentieth_floor_and_takes_the_stairs) {
     CHECK(std::fabs(q.y - (target + storeys[20].h * 0.5 + kPlayerFeet)) < 0.3);
     phys.shutdown();
 }
+
+// THE CAB IN FRONT OF YOU (Glenn, 2026-09-30: "when I stand in front of the elevator to call it it doesn't call
+// that elevator"): every cab starts at the ground; a call from upstairs at hoistway 2's door brings cab 2, though
+// cabs 0 and 1 are just as near. Its arrival records the chime (rising: it came up) and the doors, and while it
+// travels hoistway 2's up lantern is the one lit.
+TEST_CASE(a_hall_call_brings_the_cab_in_front_of_it_and_chimes) {
+    World world;
+    StubUploader uploader;
+    AssetManager assets(uploader);
+    CityBuildings cb;
+    BuildingRecord r;
+    r.plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    r.baseY = 0;
+    r.groundY = -0.45;
+    r.params.floors = 30;
+    r.params.curtainWall = true;
+    r.params.walkableGround = true;
+    r.params.openDoorway = true;
+    r.params.seed = 5;
+    r.height = r.params.groundHeight + 30 * r.params.floorHeight;
+    r.enterable = true;
+    cb.records.push_back(r);
+    cb.buildIndex();
+    world.add<CityBuildings>(world.create(), std::move(cb));
+    const CorePlan core = coreFor(r.plan, r.params, entranceEdgeFor(r.plan, r.params));
+    CHECK(core.hoistways.size() == 3);
+    const CoreShaft& hw = core.hoistways[2];
+    const std::vector<StoreyPlan> sps = storeyPlans(r.plan, r.params);
+    const Real y4 = sps[4].y0 + 0.05;
+    const Vec2 front = hw.frame.toWorld({hw.doorX, -1.2});
+    const Vec3 p(front.x, y4 + kPlayerFeet, front.y);
+    const Real dt = 1.0 / 60.0;
+    ElevatorSystem sys(nullptr);
+    sys.step(world, nullptr, assets, p, dt, false, 0);   // the bank appears
+    sys.step(world, nullptr, assets, p, dt, true, 0);    // E at hoistway 2's door, storey 4
+    CHECK(sys.status().atDoor);
+    bool chimeUp = false, doors = false;
+    for (int i = 0; i < 60 * 30 && !chimeUp; ++i) {
+        sys.step(world, nullptr, assets, p, dt, false, 0);
+        for (const auto& ev : sys.sfxEvents()) {
+            if (ev.kind == ElevatorSystem::Sfx::DingUp) chimeUp = true;
+            if (ev.kind == ElevatorSystem::Sfx::Doors) doors = true;
+        }
+    }
+    CHECK(chimeUp);
+    CHECK(doors);
+    CHECK(std::fabs(sys.cabY(0, 2) - y4) < 1e-6);   // cab 2 came
+    CHECK(sys.cabY(0, 0) < y4 - 1.0);               // cab 0 stayed below
+    CHECK(sys.cabY(0, 1) < y4 - 1.0);
+}

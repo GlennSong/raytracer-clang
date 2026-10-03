@@ -244,7 +244,13 @@ struct CompositePush {
     int32_t  debugView;      // 0 normal; 1 AO/2 SSR/4 normals composite-side,
                              // 3/5/6/7/8 raw HDR (mesh.frag writes them)
     int32_t  dofEnabled;     // 1 → read the DOF-blurred scene instead of HDR
+    int32_t  pad0[3];        // GLSL starts the vec4 below on a 16-byte boundary (offset 80)
+    // UNDER THE WATER (#58, SceneLighting::underwater): x active, y surface y, z visibility (m), w time (s)
+    float    underwater[4];
+    float    underwaterColor[4];   // rgb water colour
 };
+static_assert(sizeof(CompositePush) <= 128, "composite push constants must fit the guaranteed 128 bytes");
+static_assert(offsetof(CompositePush, underwater) == 80, "composite.frag's vec4 underwater sits at offset 80");
 
 // Bloom pass push constants. dir is the blur direction in texels (0 for the
 // bright pass); threshold/knee used by the bright pass only.
@@ -482,6 +488,7 @@ struct VulkanRenderer::Impl {
     VkDescriptorSet compositeSet = VK_NULL_HANDLE;
     VkPipelineLayout compositePipelineLayout = VK_NULL_HANDLE;
     VkPipeline compositePipeline = VK_NULL_HANDLE;
+    UnderwaterParams underwater;   // this frame's (setLights), for the composite
     // THE GAME UI LAYER (Renderer::submitUi): textured quads drawn into the
     // composite pass after the tonemap. One transient descriptor per quad from
     // a per-frame pool, reset with the frame.
@@ -3148,10 +3155,13 @@ bool VulkanRenderer::Impl::createCompositeResources() {
     updateCompositeDescriptor();
 
     VkPushConstantRange pushRange{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(CompositePush)};
+    // set 0 = the frame's globals (camera + sky: the underwater pass rebuilds each pixel's world
+    // position, #58), set 1 = the composite's images -- the SSR pass's arrangement
+    const std::array<VkDescriptorSetLayout, 2> compositeLayouts{descriptorSetLayout, compositeSetLayout};
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &compositeSetLayout;
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(compositeLayouts.size());
+    layoutInfo.pSetLayouts = compositeLayouts.data();
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &compositePipelineLayout) != VK_SUCCESS)
@@ -5487,8 +5497,9 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout, 0, 1,
-                            &compositeSet, 0, nullptr);
+    const std::array<VkDescriptorSet, 2> compositeSets{descriptorSets[currentFrame], compositeSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout, 0,
+                            static_cast<uint32_t>(compositeSets.size()), compositeSets.data(), 0, nullptr);
     CompositePush cpush{};
     cpush.exposure = sceneExposure;
     cpush.tonemapOp = tonemapOp;          // mirrored from the Renderer in endFrame
@@ -5507,6 +5518,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.lensAspect = lensAspect;
     cpush.debugView = debugViewFrame;
     cpush.dofEnabled = dofEnabledFrame ? 1 : 0;
+    cpush.underwater[0] = underwater.active ? 1.0f : 0.0f;
+    cpush.underwater[1] = underwater.surfaceY;
+    cpush.underwater[2] = std::max(0.5f, underwater.visibility);
+    cpush.underwater[3] = cpuGlobals.wind1[3];   // the wind clock: seconds, runs with the scene
+    cpush.underwaterColor[0] = static_cast<float>(underwater.color.x);
+    cpush.underwaterColor[1] = static_cast<float>(underwater.color.y);
+    cpush.underwaterColor[2] = static_cast<float>(underwater.color.z);
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -6526,6 +6544,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.fog[1] = static_cast<float>(lighting.fog.color.y);
     impl->cpuGlobals.fog[2] = static_cast<float>(lighting.fog.color.z);
     impl->cpuGlobals.fog[3] = lighting.fog.enabled ? lighting.fog.density : 0.0f;
+    impl->underwater = lighting.underwater;
 
     int n = 0;
     auto setColor = [](float* dst, const Vec3& c, float w) {

@@ -33,27 +33,33 @@ TEST_CASE(rooms_ring_the_plate_and_keep_the_core_clear) {
     const Real inset = std::max(p.wallThickness, Real(0.55));
     const RoomPlan rp = roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 5);
     CHECK(rp.office);
-    CHECK(rp.rooms.size() >= 12);
-    // Every room sits inside the plan and outside the core's corridor ring.
-    const Poly2 ring = core.rect();
+    // THE OFFICE FLOOR (buildings C): open-plan zones window to corridor, glass corner offices, a meeting room and
+    // a kitchenette against the corridor. Every room inside the plan and outside the core.
+    int open = 0, corner = 0, meeting = 0, kitchenette = 0;
     for (const Room& r : rp.rooms) {
+        if (r.kind == RoomKind::OpenPlan) ++open;
+        if (r.kind == RoomKind::Office) ++corner;
+        if (r.kind == RoomKind::Meeting) ++meeting;
+        if (r.kind == RoomKind::Kitchenette) ++kitchenette;
+    }
+    CHECK(open >= 3);
+    CHECK(corner >= 2);
+    CHECK(meeting >= 1);
+    CHECK(kitchenette == 1);
+    const Poly2 ring = core.rect();
+    for (const Room& r : rp.rooms)
         for (const Vec2& c : r.rect) {
-            CHECK(pointInPolygon(plan, c));
-            Real best = 1e9;
-            for (const Vec2& q : ring) best = std::min(best, (c - q).length());
-            (void)best;
+            CHECK(pointInPolygon(plan, c + (centroid(r.rect) - c) * 0.01));
             CHECK(!pointInPolygon(ring, c));
         }
-    }
-    // Office fronts are glass with a door; partitions are drywall.
-    int glassFronts = 0, doors = 0;
+    // Every wall is glass, and every enclosed room (a corner office, a meeting room) has a door.
+    int doors = 0;
     for (const RoomWall& w : rp.walls) {
-        if (w.glass) ++glassFronts;
+        CHECK(w.glass);
         if (w.doorAt >= 0) ++doors;
         CHECK(segLen(w) > 0.3);
     }
-    CHECK(glassFronts == static_cast<int>(rp.rooms.size()));
-    CHECK(doors == static_cast<int>(rp.rooms.size()));
+    CHECK(doors == corner + meeting);
     // The lobby gets none.
     CHECK(roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 0).rooms.empty());
 }
@@ -354,4 +360,68 @@ TEST_CASE(rooms_do_not_overlap_on_a_house_sized_plate) {
             CHECK(!pointInPolygon(rp.rooms[j].rect, ci));
             CHECK(!pointInPolygon(rp.rooms[i].rect, cj));
         }
+}
+
+// INSIDE CORNERS (buildings M10): an L or a cross plate -- a bundled tower once its corner tubes drop out. Every
+// room inside the plate, none overlapping another, the core's ring clear, and each long edge lined to within a
+// room depth of its corners: the convex-corner trim used to cut a dead strip off a band at every inside corner.
+TEST_CASE(ring_rooms_line_an_inside_cornered_plate) {
+    const Real c = 16.0;
+    const Poly2 plus = {{c, 0}, {2 * c, 0}, {2 * c, c}, {3 * c, c}, {3 * c, 2 * c}, {2 * c, 2 * c},
+                         {2 * c, 3 * c}, {c, 3 * c}, {c, 2 * c}, {0, 2 * c}, {0, c}, {c, c}};
+    const Poly2 ell = {{0, 0}, {3 * c, 0}, {3 * c, c}, {c, c}, {c, 3 * c}, {0, 3 * c}};
+    int reflexEnds = 0;
+    for (const Poly2* plate : {&plus, &ell}) {
+        const BuildingParams p = tower(30, true);
+        const CorePlan core = coreFor(*plate, p, entranceEdgeFor(*plate, p));
+        const Real inset = std::max(p.wallThickness, Real(0.55));
+        const RoomPlan rp = roomPlan(*plate, p, core, static_cast<std::size_t>(-1), inset, 6);
+        CHECK(rp.rooms.size() >= 12);
+        const Vec2 mid = centroid(*plate);
+        auto shrink = [](const Poly2& q) {   // pulled 2 cm toward its own centre: touching is not overlapping
+            const Vec2 m = centroid(q);
+            Poly2 o = q;
+            for (Vec2& v : o) v = v + normalize(m - v) * 0.02;
+            return o;
+        };
+        auto overlap = [](const Poly2& A, const Poly2& B) {   // separating axis, convex quads
+            for (const Poly2* P : {&A, &B})
+                for (std::size_t i = 0; i < P->size(); ++i) {
+                    const Vec2 e = (*P)[(i + 1) % P->size()] - (*P)[i], n(-e.y, e.x);
+                    Real a0 = 1e30, a1 = -1e30, b0 = 1e30, b1 = -1e30;
+                    for (const Vec2& v : A) { a0 = std::min(a0, dot(v, n)); a1 = std::max(a1, dot(v, n)); }
+                    for (const Vec2& v : B) { b0 = std::min(b0, dot(v, n)); b1 = std::max(b1, dot(v, n)); }
+                    if (a1 <= b0 || b1 <= a0) return false;
+                }
+            return true;
+        };
+        for (std::size_t i = 0; i < rp.rooms.size(); ++i) {
+            const Poly2 ri = shrink(rp.rooms[i].rect);
+            for (const Vec2& v : ri) CHECK(pointInPolygon(*plate, v));
+            if (core.valid) for (const Vec2& v : ri) CHECK(!pointInPolygon(core.rect(), v));
+            for (std::size_t j = i + 1; j < rp.rooms.size(); ++j) CHECK(!overlap(ri, shrink(rp.rooms[j].rect)));
+        }
+        // Lined INTO the inside corners: at an end where the plate turns inward (a reflex corner), the band's rooms
+        // run to within the wall inset of the corner -- the old convex trim stopped them a room depth short.
+        Poly2 pl = *plate;
+        ensureCCW(pl);
+        const std::size_t n = pl.size();
+        for (std::size_t e = 0; e < n; ++e) {
+            const Vec2 a = pl[e], b = pl[(e + 1) % n];
+            const Vec2 d = normalize(b - a);
+            const Vec2 dPrev = normalize(a - pl[(e + n - 1) % n]), dNext = normalize(pl[(e + 2) % n] - b);
+            Real lo = 1e30, hi = -1e30;
+            for (const Room& r : rp.rooms)
+                if (r.edge == e)
+                    for (const Vec2& v : r.rect) { lo = std::min(lo, dot(v - a, d)); hi = std::max(hi, dot(v - a, d)); }
+            if (lo > hi) continue;
+            const Real W = (b - a).length();
+            if (cross(dPrev, d) < -1e-6) { ++reflexEnds; CHECK(lo <= inset + 0.3); }
+            if (cross(d, dNext) < -1e-6) { ++reflexEnds; CHECK(hi >= W - inset - 0.3); }
+        }
+        (void)mid;
+    }
+    // The L lines its inside corner. (The cross's arm SIDES beside the core stay open floor: one band depth per
+    // edge cannot step round a core that stands beside only part of an edge -- noted in the plan.)
+    CHECK(reflexEnds > 0);
 }

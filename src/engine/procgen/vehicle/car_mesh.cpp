@@ -411,7 +411,18 @@ CarMesh buildCarMesh(const CarParams& p) {
                                   ringY01[id]) * Real(0.25);
             const Real hAbove = std::max(meanY01 - beltAt(zc), Real(0)) * H;
             const Real zRaked = zc + hAbove * dloTan / L;
-            if (isGlass(zRaked, run, midU, prof[j].anchor, prof[j2].anchor))
+            // A WINDSCREEN OR BACKLIGHT IS RAKED, A ROOF IS FLAT (Glenn, 2026-10-03, #42: "the classic van/suv has a
+            // polygon missing in the roof. Not sure if that's supposed to be a sunroof"). The bands are lengths of
+            // the body, and on a box-tailed SUV or van the backlight's length lay along the flat roof: a glass
+            // panel cut into it -- clear near the player, and through it the cargo bay with no floor and the road.
+            // On the top run a cell is glass only where the surface rises at more than ~22 degrees.
+            bool raked = true;
+            if (run == Run::Top) {
+                const Real dz = std::fabs((ring[ic].z + ring[id].z) - (ring[ia].z + ring[ib].z)) * Real(0.5);
+                const Real dy = std::fabs((ring[ic].y + ring[id].y) - (ring[ia].y + ring[ib].y)) * Real(0.5);
+                raked = dz < 1e-9 || dy / dz > Real(0.40);   // ~22 degrees
+            }
+            if (raked && isGlass(zRaked, run, midU, prof[j].anchor, prof[j2].anchor))
                 cell[static_cast<std::size_t>(i) * K + j] = kGlassCell;
             else if (isArch(zc, run, meanY01))
                 cell[static_cast<std::size_t>(i) * K + j] = kArchCell;

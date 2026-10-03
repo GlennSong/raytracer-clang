@@ -6,6 +6,7 @@
 #include "../physics/physics_world.h"
 #include "../procgen/city/building_records.h"
 #include "../procgen/city/core_plan.h"   // the storey window rides the core (M5)
+#include "../furniture_draw.h"   // FurnitureDrawCache
 #include <array>
 #include <cstdint>
 #include <unordered_map>
@@ -88,6 +89,9 @@ private:
     // the streamed parts fell back to the in-shader procedural: the "second
     // floor texture is black / no bump / 45-degree diagonal" report.
     std::unordered_map<int, std::array<TextureHandle, 4>> surfTex_;
+    // The FURNITURE KIT's meshes on the GPU (buildings M4b): one per (piece, variant, finish), uploaded on first
+    // use and kept -- every resident building's instance groups draw from them.
+    FurnitureDrawCache drawCache_;   // the kit's meshes + surface maps, shared by every resident
     std::vector<MeshHandle> freeQueue_;
     std::uint64_t stepCount_ = 0;
     std::uint64_t lastFree_ = 0;

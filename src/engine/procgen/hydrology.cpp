@@ -333,6 +333,25 @@ bool Hydrology::inLake(double x, double z, double margin) const {
     return false;
 }
 
+double Hydrology::lakeLevelAt(double x, double z, double margin) const {
+    const int n = n_;
+    if (n <= 0 || lakeOfCell_.empty()) return std::numeric_limits<double>::quiet_NaN();
+    const int i0 = static_cast<int>(std::lround((x + p_.half) / p_.cell)), j0 = static_cast<int>(std::lround((z + p_.half) / p_.cell));
+    const int r = static_cast<int>(std::ceil(margin / p_.cell));
+    double level = std::numeric_limits<double>::quiet_NaN();
+    for (int j = j0 - r; j <= j0 + r; ++j)
+        for (int i = i0 - r; i <= i0 + r; ++i) {
+            if (i < 0 || j < 0 || i >= n || j >= n) continue;
+            const int lk = lakeOfCell_[static_cast<std::size_t>(j) * n + i];
+            if (lk < 0 || lk >= static_cast<int>(lakes_.size())) continue;
+            const double dx = -p_.half + i * p_.cell - x, dz = -p_.half + j * p_.cell - z;
+            if (dx * dx + dz * dz > (margin + 0.5 * p_.cell) * (margin + 0.5 * p_.cell)) continue;
+            const double lv = lakes_[static_cast<std::size_t>(lk)].level;
+            if (!std::isfinite(level) || lv > level) level = lv;
+        }
+    return level;
+}
+
 bool Hydrology::onShelf(double x, double z) const {
     const Vec2 q(x, z);
     for (const River& r : rivers_) {
@@ -576,8 +595,18 @@ std::vector<std::vector<Vec2>> Hydrology::corridorRings(double margin) const {
 }
 
 RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
-                               const std::function<double(double, double)>& ground, double parapet) const {
+                               const std::function<double(double, double)>& ground, double parapet,
+                               RenderMesh* copingOut) const {
     RenderMesh out;
+    RenderMesh& cope = copingOut ? *copingOut : out;
+    // RECTILINEAR (Glenn, 2026-10-02: "It makes no sense to have brick texture but then sloped tops of the wall. It
+    // should be rectilinear ... some kind of lining of bricks on the top to make it look finished"). The top used to
+    // follow the bank sample by sample, so every 2.5 m of coursed masonry ended in a slope. Now a run of wall is cut
+    // into LEVEL STRETCHES (each as high as the highest bank it holds, the bank varying by at most kStep along it,
+    // at most kStretch long), stepping up or down between them with a vertical step face, as a built quay does; and
+    // the top is a separate COPING course (kCopeH thick, overhanging both faces by kOver) the caller can dress as
+    // its own stone.
+    constexpr double kThick = 0.45, kCopeH = 0.14, kOver = 0.06, kStep = 0.45, kStretch = 22.0, kCourse = 0.1;
     // the wall stands just outside the water's outline (the water mesh reaches 1.05 x the half width)
     for (const std::vector<Vec2>& ring : corridorRings(0.3)) {
         if (ring.size() < 3) continue;
@@ -591,7 +620,8 @@ RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
         const std::size_t n = pts.size();
         // which samples carry a wall: where the caller says, and beside a RIVER (not a lake shore)
         std::vector<char> on(n, 0);
-        std::vector<double> lvl(n, 0.0), top(n, 0.0);
+        std::vector<double> lvl(n, 0.0), want(n, 0.0), bank(n, 0.0);
+        std::vector<Vec2> outw(n, Vec2(0, 0));
         for (std::size_t i = 0; i < n; ++i) {
             double level = 0.0;
             const double d = distanceToRiver(pts[i].x, pts[i].y, 20.0, &level);
@@ -604,29 +634,115 @@ RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
             const Vec2 q = pts[i] + outward * 1.5;
             on[i] = 1;
             lvl[i] = level;
-            top[i] = std::max(ground(q.x, q.y), level + 0.8) + parapet;
+            want[i] = std::max(ground(q.x, q.y), level + 0.8) + parapet - kCopeH;   // the wall body's top
+            outw[i] = outward;
+            bank[i] = ground(q.x, q.y);
         }
-        // strips over runs of wall samples
+        // segment s joins sample s to s+1; it carries wall when both ends do
+        auto segOn = [&](std::size_t s) { return on[s] && on[(s + 1) % n]; };
+        // walk the segments from just after a gap (or from 0 on an all-wall ring), cutting level stretches
+        std::size_t start = 0;
+        for (std::size_t s = 0; s < n; ++s) if (!segOn(s)) { start = (s + 1) % n; break; }
+        std::vector<double> T(n, 0.0);   // each segment's level top
+        {
+            std::vector<std::size_t> cur;
+            double lo = 1e30, hi = -1e30, len = 0.0;
+            auto flush = [&]() {
+                if (cur.empty()) return;
+                const double top = std::ceil(hi / kCourse) * kCourse;   // whole courses, never under the bank
+                for (std::size_t s : cur) T[s] = top;
+                cur.clear(); lo = 1e30; hi = -1e30; len = 0.0;
+            };
+            for (std::size_t k = 0; k < n; ++k) {
+                const std::size_t s = (start + k) % n, e = (s + 1) % n;
+                if (!segOn(s)) { flush(); continue; }
+                const double l = (pts[e] - pts[s]).length();
+                const double nlo = std::min({lo, want[s], want[e]}), nhi = std::max({hi, want[s], want[e]});
+                if (!cur.empty() && (nhi - nlo > kStep || len + l > kStretch)) flush();
+                cur.push_back(s);
+                lo = std::min({lo, want[s], want[e]}); hi = std::max({hi, want[s], want[e]});
+                len += l;
+            }
+            flush();
+        }
         double u = 0.0;
+        auto quadInto = [&](RenderMesh& m, const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, const Vec3& nrm,
+                            double w, double h) {
+            const uint32_t q0 = static_cast<uint32_t>(m.vertices.size());
+            const Vec3 tt = (p1 - p0).length() > 1e-9 ? (p1 - p0) * (1.0 / (p1 - p0).length()) : Vec3(1, 0, 0);
+            const Vec3 ps[4] = {p0, p1, p2, p3};
+            const double uv[4][2] = {{u, 0}, {u + w, 0}, {u + w, h}, {u, h}};
+            for (int c = 0; c < 4; ++c) {
+                Vertex v(ps[c], nrm, tt, static_cast<float>(uv[c][0]), static_cast<float>(uv[c][1]));
+                v.color = Vec3(1, 1, 1);
+                m.vertices.push_back(v);
+            }
+            m.indices.insert(m.indices.end(), {q0, q0 + 1, q0 + 2, q0, q0 + 2, q0 + 3});
+        };
+        // a horizontal quad facing up (or down), as its two triangles: at a sharp inside bend the two samples'
+        // offsets cross and a triangle would fold over -- that one is left out rather than drawn inside out
+        auto flat = [&](RenderMesh& m, const Vec3 (&P)[4], bool up, const Vec3& tt) {
+            const int tris[2][3] = {{0, 1, 2}, {0, 2, 3}};
+            for (const auto& tri : tris) {
+                const Vec3 w = cross(P[tri[1]] - P[tri[0]], P[tri[2]] - P[tri[0]]);
+                if (w.y <= 0.0) continue;
+                const uint32_t q0 = static_cast<uint32_t>(m.vertices.size());
+                const int order[3] = {tri[0], up ? tri[1] : tri[2], up ? tri[2] : tri[1]};
+                for (int c : order) {
+                    Vertex v(P[c], Vec3(0, up ? 1.0 : -1.0, 0), tt, static_cast<float>(u), 0.0f);
+                    v.color = Vec3(1, 1, 1);
+                    m.vertices.push_back(v);
+                }
+                m.indices.insert(m.indices.end(), {q0, q0 + 1, q0 + 2});
+            }
+        };
         for (std::size_t i = 0; i < n; ++i) {
             const std::size_t j = (i + 1) % n;
-            if (!on[i] || !on[j]) continue;
+            if (!segOn(i)) continue;
             const Vec2 a = pts[i], b = pts[j];
             const double len = (b - a).length();
             if (len < 1e-6) continue;
             const Vec2 t = (b - a) / len;
-            const Vec3 nrm(-t.y, 0.0, t.x);   // toward the water (left of a CCW outer ring)
-            const uint32_t base = static_cast<uint32_t>(out.vertices.size());
-            auto put = [&](const Vec2& p, double y, double uu, double vv) {
-                Vertex v(Vec3(p.x, y, p.y), nrm, Vec3(t.x, 0.0, t.y), static_cast<float>(uu), static_cast<float>(vv));
-                v.color = Vec3(1, 1, 1);
-                out.vertices.push_back(v);
+            const Vec3 tt(t.x, 0.0, t.y);
+            const Vec3 nf(-t.y, 0.0, t.x);   // toward the water (left of a CCW outer ring)
+            const Vec3 nb(t.y, 0.0, -t.x);   // toward the bank
+            const double top = T[i];
+            const double baseI = lvl[i] - 1.2, baseJ = lvl[j] - 1.2;
+            // front face: from under the water up to the level top
+            quadInto(out, Vec3(a.x, baseI, a.y), Vec3(b.x, baseJ, b.y), Vec3(b.x, top, b.y), Vec3(a.x, top, a.y), nf, len, top - baseI);
+            // back face: facing the bank, from the top down to below the bank's ground
+            const Vec2 ab = a + outw[i] * kThick, bb = b + outw[j] * kThick;
+            const double footI = std::min(bank[i], top) - 0.3, footJ = std::min(bank[j], top) - 0.3;
+            quadInto(out, Vec3(bb.x, footJ, bb.y), Vec3(ab.x, footI, ab.y), Vec3(ab.x, top, ab.y), Vec3(bb.x, top, bb.y), nb, len, top - footI);
+            // the wall's own top under the coping (seen only where the coping steps)
+            { const Vec3 P[4] = {Vec3(a.x, top, a.y), Vec3(b.x, top, b.y), Vec3(bb.x, top, bb.y), Vec3(ab.x, top, ab.y)}; flat(out, P, true, tt); }
+            // THE COPING: a slab kCopeH thick, overhanging the front and the back by kOver
+            {
+                const Vec2 fa = a - outw[i] * kOver, fb = b - outw[j] * kOver;
+                const Vec2 ba = a + outw[i] * (kThick + kOver), bb2 = b + outw[j] * (kThick + kOver);
+                const double y0 = top, y1 = top + kCopeH;
+                const Vec3 P[4] = {Vec3(fa.x, y1, fa.y), Vec3(fb.x, y1, fb.y), Vec3(bb2.x, y1, bb2.y), Vec3(ba.x, y1, ba.y)};
+                flat(cope, P, true, tt);
+                const Vec3 D[4] = {Vec3(fa.x, y0, fa.y), Vec3(fb.x, y0, fb.y), Vec3(bb2.x, y0, bb2.y), Vec3(ba.x, y0, ba.y)};
+                flat(cope, D, false, tt);   // its underside (the overhangs' soffits)
+                quadInto(cope, Vec3(fa.x, y0, fa.y), Vec3(fb.x, y0, fb.y), Vec3(fb.x, y1, fb.y), Vec3(fa.x, y1, fa.y), nf, len, kCopeH);
+                quadInto(cope, Vec3(bb2.x, y0, bb2.y), Vec3(ba.x, y0, ba.y), Vec3(ba.x, y1, ba.y), Vec3(bb2.x, y1, bb2.y), nb, len, kCopeH);
+                // ends: where the run stops, or where the next stretch is lower (a higher neighbour hides it)
+                const std::size_t pv = (i + n - 1) % n, nx = j;
+                const bool endJ = !segOn(nx) || T[nx] < top - 1e-6, endI = !segOn(pv) || T[pv] < top - 1e-6;
+                if (endJ) quadInto(cope, Vec3(fb.x, y0, fb.y), Vec3(bb2.x, y0, bb2.y), Vec3(bb2.x, y1, bb2.y), Vec3(fb.x, y1, fb.y), tt, kThick + 2 * kOver, kCopeH);
+                if (endI) quadInto(cope, Vec3(ba.x, y0, ba.y), Vec3(fa.x, y0, fa.y), Vec3(fa.x, y1, fa.y), Vec3(ba.x, y1, ba.y), tt * -1.0, kThick + 2 * kOver, kCopeH);
+            }
+            // end caps where the run stops, and STEP faces where the next stretch is lower: the higher stretch's
+            // end, from the lower top (or the base) up to its own top
+            auto cap = [&](const Vec2& f, const Vec2& k, double yb, double yt, const Vec3& nrm) {
+                if (yt > yb + 1e-6) quadInto(out, Vec3(f.x, yb, f.y), Vec3(k.x, yb, k.y), Vec3(k.x, yt, k.y), Vec3(f.x, yt, f.y), nrm, kThick, yt - yb);
             };
-            put(a, lvl[i] - 1.2, u, 0.0);
-            put(b, lvl[j] - 1.2, u + len, 0.0);
-            put(b, top[j], u + len, top[j] - lvl[j] + 1.2);
-            put(a, top[i], u, top[i] - lvl[i] + 1.2);
-            out.indices.insert(out.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+            const std::size_t nx = j, pv = (i + n - 1) % n;
+            if (!segOn(nx)) cap(b, bb, baseJ, top, tt);
+            else if (T[nx] < top - 1e-6) cap(b, bb, T[nx] + kCopeH, top, tt);
+            if (!segOn(pv)) cap(ab, a, baseI, top, tt * -1.0);
+            else if (T[pv] < top - 1e-6) cap(ab, a, T[pv] + kCopeH, top, tt * -1.0);
             u += len;
         }
     }

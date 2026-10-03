@@ -686,8 +686,9 @@ TEST_CASE(every_built_lot_touches_a_road) {
     // any stray — so a mid-block building here is a real regression. Stock
     // lotDepth is 28 (financial pads reach 60), so the bound is 60 m.
     const Real centreBound = std::max(ParcelParams().lotDepth * 1.6, Real(60.0));
+    // A BIG-BOX store is the exception by design: a whole block, the store at the back behind its own parking lot.
     for (const LotBuilding& b : buildings) {
-        if (b.type == "park" || b.type == "green") continue;
+        if (b.type == "park" || b.type == "green" || b.recipe == "big_box") continue;
         CHECK(distToRoads(b) <= centreBound);
     }
 }
@@ -1255,4 +1256,97 @@ TEST_CASE(a_tower_in_a_plaza_stands_back_from_the_avenue) {
         }
     }
     CHECK(plazas > 0);
+}
+
+// A building fronts a STREET, never a freeway or a ramp (Glenn, 2026-09-29: "buildings shouldn't face a
+// freeway as a road since that's not an accessible road"). A block with a freeway 8 m off its south edge and
+// a local street 12 m off its east edge: every building faces the street, even the lots nearest the freeway.
+TEST_CASE(buildings_face_the_street_not_the_freeway) {
+    const Poly2 block{{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    RoadGraph roads;
+    const int f0 = roads.addNode({-60, -8}), f1 = roads.addNode({100, -8});
+    roads.addEdge(f0, f1, 22, RoadClass::Freeway);
+    const int s0 = roads.addNode({52, -60}), s1 = roads.addNode({52, 100});
+    roads.addEdge(s0, s1, 8, RoadClass::Local);
+    LotParams lp;
+    lp.seed = 7;
+    std::vector<RenderMesh> parts;
+    const std::vector<LotBuilding> lots = growLotBuildings({block}, lp, nullptr, &parts, &roads, 0.0);
+    int units = 0, towardFreeway = 0;
+    for (const LotBuilding& lb : lots)
+        for (const BuildingUnit& u : lb.units) {
+            ++units;
+            const Vec3& d = u.params.faceDir;
+            if (d.z < -0.5) ++towardFreeway;   // -Z in world = graph -y = the freeway's side
+            CHECK(d.x > 0.5);                  // +X: the street
+        }
+    std::printf("    [frontage] %d units, %d facing the freeway\n", units, towardFreeway);
+    CHECK(units > 0);
+    CHECK(towardFreeway == 0);
+}
+
+// NO LOTS ALONG A FREEWAY: a block edge that borders a freeway or ramp is not frontage, so the parcel walk
+// lays nothing along it; a block with no street at all grows nothing (island_8_nature: a row of lots laid
+// along the freeway's edge overhung its block onto the embankment and were buried 7 m, 2026-09-29).
+TEST_CASE(no_lots_are_laid_along_a_freeway) {
+    // 120 x 80 block: freeway 12 m off its south edge (z = 0), local street 8 m off its east edge (x = 120)
+    const Poly2 block{{0, 0}, {120, 0}, {120, 80}, {0, 80}};
+    RoadGraph roads;
+    roads.addEdge(roads.addNode({-80, -12}), roads.addNode({220, -12}), 22, RoadClass::Freeway);
+    roads.addEdge(roads.addNode({128, -60}), roads.addNode({128, 160}), 8, RoadClass::Local);
+    LotParams lp;
+    lp.seed = 11;
+    LotPlanDebug dbg;
+    std::vector<RenderMesh> parts;
+    const std::vector<LotBuilding> lots = growLotBuildings({block}, lp, &dbg, &parts, &roads, 0.0);
+    int built = 0, onFreewayEdge = 0;
+    for (const LotBuilding& lb : lots) {
+        if (lb.units.empty()) continue;
+        ++built;
+        // a lot laid along the freeway edge has its front on z = 0: its plan reaches the south 3 m
+        Real zmin = 1e9; for (const Vec2& q : lb.plan) zmin = std::min(zmin, q.y);
+        Real xmax = -1e9; for (const Vec2& q : lb.plan) xmax = std::max(xmax, q.x);
+        if (zmin < 3 && xmax < 90) ++onFreewayEdge;   // south-edge lots, away from the street corner
+    }
+    std::printf("    [frontage] %d built, %d along the freeway edge, walk skipped %d freeway edge(s)\n", built, onFreewayEdge, dbg.pNotStreet);
+    CHECK(built > 0);
+    CHECK(onFreewayEdge == 0);
+    CHECK(dbg.pNotStreet >= 1);
+
+    // A block bordered by freeway alone: nothing to face, nothing built.
+    RoadGraph fw;
+    fw.addEdge(fw.addNode({-80, -12}), fw.addNode({220, -12}), 22, RoadClass::Freeway);
+    fw.addEdge(fw.addNode({-80, 92}), fw.addNode({220, 92}), 22, RoadClass::Freeway);
+    fw.addEdge(fw.addNode({-12, -80}), fw.addNode({-12, 160}), 12, RoadClass::Ramp);
+    fw.addEdge(fw.addNode({132, -80}), fw.addNode({132, 160}), 12, RoadClass::Ramp);
+    std::vector<RenderMesh> parts2;
+    const std::vector<LotBuilding> none = growLotBuildings({block}, lp, nullptr, &parts2, &fw, 0.0);
+    int built2 = 0; for (const LotBuilding& lb : none) if (!lb.units.empty()) ++built2;
+    std::printf("    [frontage] freeway-only block: %d built\n", built2);
+    CHECK(built2 == 0);
+}
+
+// ...and the street it faces is ON THE GROUND (Glenn, 2026-09-30: "assuming the city road is on the ground in
+// front of the house"): a city street on a bridge 6 m off the block's south edge, an at-grade one 12 m off its
+// east edge -- the building faces the one it can walk out onto.
+TEST_CASE(buildings_face_an_at_grade_street_not_a_bridge) {
+    const Poly2 block{{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    RoadGraph roads;
+    roads.addEdge(roads.addNode({-60, -6}), roads.addNode({100, -6}), 10, RoadClass::Collector);
+    roads.edges.back().layer = 1;   // on a bridge over the ground here
+    roads.addEdge(roads.addNode({56, -60}), roads.addNode({56, 100}), 8, RoadClass::Local);
+    LotParams lp;
+    lp.seed = 7;
+    std::vector<RenderMesh> parts;
+    const std::vector<LotBuilding> lots = growLotBuildings({block}, lp, nullptr, &parts, &roads, 0.0);
+    int units = 0, towardBridge = 0;
+    for (const LotBuilding& lb : lots)
+        for (const BuildingUnit& u : lb.units) {
+            ++units;
+            if (u.params.faceDir.z < -0.5) ++towardBridge;
+            CHECK(u.params.faceDir.x > 0.5);
+        }
+    std::printf("    [frontage] %d units, %d facing the bridge\n", units, towardBridge);
+    CHECK(units > 0);
+    CHECK(towardBridge == 0);
 }

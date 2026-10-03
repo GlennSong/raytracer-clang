@@ -1,4 +1,5 @@
 #include "city_player_body.h"
+#include "../../engine/interaction.h"   // engine::Seated
 
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"
@@ -61,7 +62,8 @@ void CityPlayerBodySystem::fixedUpdate(engine::FrameContext& ctx) {
     // already drawn by the car's driver model.
     bool visible = player.valid() &&
                    ctx.settings.getBool("playerThirdPerson", false) &&
-                   !world.has<engine::InVehicle>(player);
+                   !world.has<engine::InVehicle>(player) &&
+                   !world.has<engine::Seated>(player);   // sitting/lying: the camera is first person at the pose
     if (!visible) {
         if (bodyOn_ && player.valid() && world.has<Renderable>(player))
             world.remove<Renderable>(player);

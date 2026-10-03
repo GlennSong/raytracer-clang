@@ -59,6 +59,9 @@ struct DiamondOptions {
     double bandGap = 3.5;        // clear air between the deck's edge and a ramp's: more than the
                                  // pavement's `closing`, or the two fuse into one slab
     double gRamp = 0.08;         // the grade a ramp is sized at (its class's g_max)
+    // The STEEPEST grade the ramp's climb may reach (its smoothstep peaks at 1.5x the mean), when sized; 0 =
+    // gRamp / 1.15, the old sizing (~7.8% for a 9% class -- #40, Glenn: "Short on-ramps are steep").
+    double rampPeak = 0.0;
     double landing = 20;         // the level approach across a crossing street's half-width
     double diverge = 60;         // gore -> band: the run a ramp takes to pull clear of the deck
     double mouth = 30;           // least distance from a ramp terminal to the next junction on its street,

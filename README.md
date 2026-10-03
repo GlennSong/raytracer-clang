@@ -329,6 +329,7 @@ Hungarian notation. Smart pointers for heap ownership. One header + one `.cpp`
 per module. Front faces wind **clockwise**. See `AGENTS.md` for the full set.
 
 ## License
-[MIT](LICENSE). Vendored third-party code under `third_party/` (Jolt, Dear
-ImGui, Lua, tinygltf, the stb headers) remains under its own permissive
-licenses — see each project's notice.
+[MIT](LICENSE). Vendored third-party code under `third_party/` remains under
+its own licence. [CREDITS.md](CREDITS.md) lists every library, shipped asset
+and outside reference with its author and licence. Add a line there whenever
+something made by someone else comes in.

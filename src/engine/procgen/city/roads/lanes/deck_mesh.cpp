@@ -75,8 +75,16 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
                 if (dv->z + lift - thick - (*groundAt)(dv->xy) > 0.3) under = true;
         }
         if (under) {
+            // THE UNDERSIDE IS THE SLAB'S CONCRETE (#97, Glenn: "the elevated roads have no bottom to them"):
+            // emitted into the top mesh it took the road surface's material, whose procedural asphalt sets its
+            // own near-black colour, and a dark face pointing down where no sun reaches read as a void. It
+            // goes into the SIDE mesh (concrete, as the girders and slab edges are), wound to face down.
             const Vec3 Q[3] = {world(a.xy, a.z + lift - thick), world(b.xy, b.z + lift - thick), world(c.xy, c.z + lift - thick)};
-            emit(vi, Q, kNoUV, Vec3(0, -1, 0), 1);
+            const uint32_t base = static_cast<uint32_t>(side.vertices.size());
+            const Vec3 down(0, -1, 0), tan = normalize(Q[1] - Q[0]).lengthSquared() > 0 ? normalize(Q[1] - Q[0]) : Vec3(1, 0, 0);
+            for (const Vec3& q : Q) { Vertex vx(q, down, tan, 0.0f, 0.0f); vx.color = sideColor; side.vertices.push_back(vx); }
+            if (dot(cross(Q[2] - Q[0], Q[1] - Q[0]), down) >= 0) side.indices.insert(side.indices.end(), {base, base + 1, base + 2});
+            else side.indices.insert(side.indices.end(), {base, base + 2, base + 1});
         }
     }
     // THE SIDE ONLY WHERE IT SHOWS (ADR-0095). A side is dropped where the surface beyond the edge

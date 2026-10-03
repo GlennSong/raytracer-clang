@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <set>
+#include <unordered_map>
 #include <sstream>
 
 namespace engine {
@@ -91,9 +92,172 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
 
 std::vector<Poly2> sceneBlocks(const Result& r, double simplify, double minArea, double insetBy) { return blocksFromHoles(pavementHoles(r, minArea), simplify, insetBy); }
 
+std::vector<TerrainFlatten> lanesEarthworkPins(const RoadDeckField& deck, double sidewalk, double below, double falloff) {
+    std::vector<TerrainFlatten> out;
+    // THE ELEVATED DECKS, binned: a street's strip must never reach over a LOWER structure beside it -- a ramp
+    // descending 13 m off a collector 2.3 m above it lay under the collector's strip, pinned to the collector's
+    // height (metro_lanes: 396 ramp samples under up to 2.2 m of ground, 2026-09-30).
+    struct ESeg { Vec2 a, b; double ya, yb, hw; };
+    std::vector<ESeg> elev;
+    for (const UnionSpine& sp : deck.spines) {
+        if (!(sp.authoredDeck || sp.layer != 0) || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+            elev.push_back({sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});
+    }
+    constexpr double kCell = 48;
+    auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+    std::unordered_map<long long, std::vector<int>> egrid;
+    for (std::size_t k = 0; k < elev.size(); ++k) {
+        const ESeg& e = elev[k]; const double pad = e.hw + 30.0;
+        for (int cx = static_cast<int>(std::floor((std::min(e.a.x, e.b.x) - pad) / kCell)); cx <= static_cast<int>(std::floor((std::max(e.a.x, e.b.x) + pad) / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor((std::min(e.a.y, e.b.y) - pad) / kCell)); cz <= static_cast<int>(std::floor((std::max(e.a.y, e.b.y) + pad) / kCell)); ++cz)
+                egrid[key(cx, cz)].push_back(static_cast<int>(k));
+    }
+    // how far this strip may reach from its centreline at q before it would cover a deck lower than y
+    auto reachAllowed = [&](const Vec2& q, double y) {
+        double allowed = 1e30;
+        auto it = egrid.find(key(static_cast<int>(std::floor(q.x / kCell)), static_cast<int>(std::floor(q.y / kCell))));
+        if (it == egrid.end()) return allowed;
+        for (int k : it->second) {
+            const ESeg& e = elev[static_cast<std::size_t>(k)];
+            const Vec2 ab = e.b - e.a; const double l2 = dot(ab, ab);
+            double t = l2 > 1e-12 ? dot(q - e.a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
+            const double ey = e.ya + (e.yb - e.ya) * t;
+            if (ey > y - 0.3) continue;   // level with or above this street: not buried by it
+            allowed = std::min(allowed, (q - (e.a + ab * t)).length() - e.hw - 1.0);
+        }
+        return allowed;
+    };
+    for (const UnionSpine& sp : deck.spines) {
+        if (sp.authoredDeck || sp.layer != 0 || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+            const Vec2 a = sp.points[i], b = sp.points[i + 1];
+            if ((b - a).length() < 0.05) continue;
+            double hw = (i < sp.hw.size() ? std::max(sp.hw[i], i + 1 < sp.hw.size() ? sp.hw[i + 1] : sp.hw[i]) : sp.halfWidth) + std::max(0.0, sidewalk);
+            if (!elev.empty()) {
+                const double y = std::max(sp.yAbs[i], sp.yAbs[i + 1]);
+                // the strip AND its feather stop short of the lower deck (the finish's 6 m feather buried the ramp
+                // once its strip was clipped)
+                hw = std::min({hw, reachAllowed(a, y) - falloff, reachAllowed(b, y) - falloff, reachAllowed((a + b) * 0.5, y) - falloff});
+                if (hw < 1.0) continue;   // a lower structure runs right beside or under this piece: no strip here
+            }
+            TerrainFlatten f = makeFlattenRamp(Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y), sp.yAbs[i] - below, sp.yAbs[i + 1] - below, hw, falloff);
+            f.priority = kRoadFlattenPriority;
+            out.push_back(std::move(f));
+        }
+    }
+    return out;
+}
+
+double lanesMinSidewalk(const nlohmann::json& level, double fallback) {
+    double best = 1e30;
+    if (level.contains("entities") && level["entities"].is_array())
+        for (const nlohmann::json& e : level["entities"]) {
+            const nlohmann::json* road = e.contains("road") && e["road"].is_object() ? &e["road"] : e.contains("lanelab") && e["lanelab"].is_object() ? &e["lanelab"] : nullptr;
+            if (!road || !road->contains("sidewalks")) continue;
+            const nlohmann::json& sw = (*road)["sidewalks"];
+            if (sw.is_number()) best = std::min(best, sw.get<double>());
+            else if (sw.is_object()) for (const auto& kv : sw.items()) if (kv.value().is_number()) best = std::min(best, kv.value().get<double>());
+        }
+    return best < 1e29 ? std::min(best, fallback > 0 ? fallback : best) : fallback;
+}
+
+std::function<bool(double, double)> lanesNearFreeway(const RoadDeckField& deck, double clear) {
+    struct Seg { Vec2 a, b; double hw; };
+    auto segs = std::make_shared<std::vector<Seg>>();
+    for (const UnionSpine& sp : deck.spines) {
+        if (sp.klass != RoadClass::Freeway && sp.klass != RoadClass::Ramp) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) segs->push_back({sp.points[i], sp.points[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});
+    }
+    if (segs->empty()) return {};
+    constexpr double kCell = 32;
+    auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+    auto grid = std::make_shared<std::unordered_map<long long, std::vector<int>>>();
+    for (std::size_t k = 0; k < segs->size(); ++k) {
+        const Seg& g = (*segs)[k]; const double pad = g.hw + clear;
+        for (int cx = static_cast<int>(std::floor((std::min(g.a.x, g.b.x) - pad) / kCell)); cx <= static_cast<int>(std::floor((std::max(g.a.x, g.b.x) + pad) / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor((std::min(g.a.y, g.b.y) - pad) / kCell)); cz <= static_cast<int>(std::floor((std::max(g.a.y, g.b.y) + pad) / kCell)); ++cz)
+                (*grid)[key(cx, cz)].push_back(static_cast<int>(k));
+    }
+    return [segs, grid, key, clear](double x, double z) {
+        auto it = grid->find(key(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
+        if (it == grid->end()) return false;
+        for (int k : it->second) {
+            const Seg& g = (*segs)[static_cast<std::size_t>(k)];
+            const Vec2 ab = g.b - g.a; const double l2 = dot(ab, ab);
+            double t = l2 > 1e-12 ? dot(Vec2(x, z) - g.a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
+            if ((Vec2(x, z) - (g.a + ab * t)).length() - g.hw < clear) return true;
+        }
+        return false;
+    };
+}
+
+std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckField& deck, double reach) {
+    struct Seg { Vec2 a, b; double ya, yb, hw; };
+    auto segs = std::make_shared<std::vector<Seg>>();
+    for (const UnionSpine& sp : deck.spines) {
+        if (sp.authoredDeck || sp.layer != 0 || sp.klass == RoadClass::Freeway || sp.klass == RoadClass::Ramp) continue;
+        if (sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+            segs->push_back({sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});
+    }
+    if (segs->empty()) return {};
+    constexpr double kCell = 32;
+    auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+    auto grid = std::make_shared<std::unordered_map<long long, std::vector<int>>>();
+    const double pad = reach + 16.0;
+    for (std::size_t k = 0; k < segs->size(); ++k) {
+        const Seg& g = (*segs)[k];
+        const int x0 = static_cast<int>(std::floor((std::min(g.a.x, g.b.x) - pad) / kCell)), x1 = static_cast<int>(std::floor((std::max(g.a.x, g.b.x) + pad) / kCell));
+        const int z0 = static_cast<int>(std::floor((std::min(g.a.y, g.b.y) - pad) / kCell)), z1 = static_cast<int>(std::floor((std::max(g.a.y, g.b.y) + pad) / kCell));
+        for (int cx = x0; cx <= x1; ++cx) for (int cz = z0; cz <= z1; ++cz) (*grid)[key(cx, cz)].push_back(static_cast<int>(k));
+    }
+    return [segs, grid, key, reach](double x, double z, double* out) {
+        auto it = grid->find(key(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
+        if (it == grid->end()) return false;
+        double best = reach; bool found = false;
+        for (int k : it->second) {
+            const Seg& g = (*segs)[static_cast<std::size_t>(k)];
+            const Vec2 ab = g.b - g.a; const double l2 = dot(ab, ab);
+            double t = l2 > 1e-12 ? dot(Vec2(x, z) - g.a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
+            const double d = (Vec2(x, z) - (g.a + ab * t)).length() - g.hw;
+            if (d < best) { best = d; *out = g.ya + (g.yb - g.ya) * t; found = true; }
+        }
+        return found;
+    };
+}
+
+std::shared_ptr<const std::function<double(double, double)>> lanesEarthworkField(
+    const RoadDeckField& deck, double sidewalk, const std::function<double(double, double)>& natural,
+    const EarthworkParams& params, double seaLevel, EarthworkStats* stats) {
+    const std::vector<TerrainFlatten> pins = lanesEarthworkPins(deck, sidewalk);
+    if (pins.empty()) return nullptr;
+    // HOLD the ground under every elevated deck (layer > 0 or an authored deck), its shadow plus 6 m: its
+    // piers and underside were built at bake time on the ground there (#96 pillars floating, #95 ramps
+    // sunk, 2026-09-30 -- the street pins pulled the field up or down beneath the structures).
+    std::vector<TerrainFlatten> holds;
+    static const bool holdOff = [] { const char* e = std::getenv("RT_EARTHWORK_HOLD"); return e && e[0] == '0'; }();   // A/B
+    for (const UnionSpine& sp : deck.spines) {
+        if (holdOff) break;
+        if (!(sp.authoredDeck || sp.layer != 0) || sp.points.size() < 2) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i) {
+            const Vec2 a = sp.points[i], b = sp.points[i + 1];
+            if ((b - a).length() < 0.05) continue;
+            const double hw = (i < sp.hw.size() ? sp.hw[i] : sp.halfWidth) + 6.0;
+            holds.push_back(makeFlattenRamp(Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y), 0.0, 0.0, hw, 0.0));
+        }
+    }
+    return buildEarthworkField(pins, natural, params, seaLevel, stats, &holds);
+}
+
 double lanesSidewalkRise() { return Rules{}.skirtDrop + kSidewalkLift; }
 
-double lanesPadFalloff(double sidewalk) { (void)sidewalk; return 2.0; }   // the feather lives INSIDE the block: footprints are inset by it, so the ramp ends at the block line
+// The feather lives INSIDE the block: footprints are inset by it, so the ramp ends at the block line.
+// 1 m (was 2): the streets' own strips now carry the ground up to the sidewalk (lanesStreetFinish), and a
+// pad clipped 2 m short left its building's side walls standing on those strips' feathers -- at the SIDE
+// street's height, above a pad set by the front one (69 buried on island_8_nature, 2026-09-29). A pad
+// outranks every feather, so a wall on its pad cannot be buried; a higher side street shows a stepped base.
+double lanesPadFalloff(double sidewalk) { (void)sidewalk; return 1.0; }
 
 namespace {
 // A flatten footprint shrunk by its own feather and clipped to the block, so the graded plane plus its

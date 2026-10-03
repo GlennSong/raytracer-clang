@@ -262,6 +262,95 @@ PruneReport pruneBundles(const std::string& root, const std::vector<std::string>
     return rep;
 }
 
+LevelCacheStatus levelCacheStatus(const std::string& levelPath, const std::string& rootIn) {
+    LevelCacheStatus st;
+    st.root = rootIn.empty() ? bundleRoot() : rootIn;
+    std::error_code ec;
+    st.levelAbs = fs::absolute(levelPath, ec).lexically_normal().string();
+    LevelInputs in;
+    if (!loadLevelInputs(levelPath, in, &st.error)) return st;
+    st.currentDir = bundleDirForLevel(in, st.root);
+    st.applies = !st.currentDir.empty();
+    st.current = st.applies && fs::exists(fs::path(st.currentDir) / kBundleFile, ec);
+    const PruneReport rep = pruneBundles(st.root, st.applies ? std::vector<std::string>{st.currentDir} : std::vector<std::string>{}, false);
+    for (const PruneEntry& e : rep.entries) {
+        ++st.cacheBundles;
+        st.cacheBytes += e.bytes;
+        if (e.stale) { ++st.cacheStale; st.cacheStaleBytes += e.bytes; }
+        if (e.level != st.levelAbs) continue;
+        if (st.applies && fs::equivalent(e.dir, st.currentDir, ec)) {
+            st.currentBytes = e.bytes;
+            st.currentCreated = e.created;
+        } else {
+            st.older.push_back(e);
+            st.olderBytes += e.bytes;
+        }
+    }
+    std::sort(st.older.begin(), st.older.end(), [](const PruneEntry& a, const PruneEntry& b) { return a.created > b.created; });
+    return st;
+}
+
+std::vector<BakeListing> listBakes(const std::string& rootIn, bool classify) {
+    const std::string root = rootIn.empty() ? bundleRoot() : rootIn;
+    const PruneReport rep = pruneBundles(root, {}, false);
+    std::vector<BakeListing> out;
+    std::map<std::string, std::string> currentOf;   // level path -> its current bundle dir ("" = none / orphan)
+    std::error_code ec;
+    for (const PruneEntry& e : rep.entries) {
+        BakeListing b;
+        b.dir = e.dir;
+        b.level = e.level;
+        b.created = e.created;
+        b.bytes = e.bytes;
+        if (e.level == "(no manifest)") { b.state = BakeListing::State::Broken; out.push_back(b); continue; }
+        if (classify) {
+            auto it = currentOf.find(e.level);
+            if (it == currentOf.end()) {
+                std::string cur;
+                if (fs::exists(e.level, ec)) {
+                    LevelInputs in;
+                    std::string err;
+                    if (loadLevelInputs(e.level, in, &err)) cur = bundleDirForLevel(in, root);
+                    else cur = "?";   // readable level, inputs not: say out of date rather than orphan
+                }
+                it = currentOf.emplace(e.level, cur).first;
+            }
+            if (it->second.empty()) b.state = BakeListing::State::Orphan;
+            else if (it->second != "?" && fs::equivalent(it->second, e.dir, ec)) b.state = BakeListing::State::Current;
+            else b.state = BakeListing::State::OutOfDate;
+        }
+        out.push_back(b);
+    }
+    return out;
+}
+
+const char* bakeStateName(BakeListing::State s) {
+    switch (s) {
+        case BakeListing::State::Current: return "current";
+        case BakeListing::State::OutOfDate: return "out of date";
+        case BakeListing::State::Orphan: return "level deleted";
+        case BakeListing::State::Broken: return "incomplete";
+        default: return "";
+    }
+}
+
+std::size_t deleteBundleDirs(const std::string& root, const std::vector<std::string>& dirs, std::string* err) {
+    std::size_t n = 0;
+    std::error_code ec;
+    const fs::path r = fs::weakly_canonical(fs::path(root), ec);
+    for (const std::string& d : dirs) {
+        const fs::path p = fs::weakly_canonical(fs::path(d), ec);
+        const std::string leaf = p.filename().string();
+        if (p.parent_path() != r || leaf.empty() || leaf.find(".tmp-") != std::string::npos) {
+            if (err && err->empty()) *err = "refused (not a bundle directory under " + r.string() + "): " + d;
+            continue;
+        }
+        if (fs::remove_all(p, ec) > 0 && !ec) ++n;
+        else if (err && err->empty()) *err = "could not delete " + p.string() + (ec ? ": " + ec.message() : std::string());
+    }
+    return n;
+}
+
 std::string lastBundleStatus() { std::lock_guard<std::mutex> l(statusMutex()); return statusLine(); }
 void setLastBundleStatus(const std::string& s) { std::lock_guard<std::mutex> l(statusMutex()); statusLine() = s; }
 

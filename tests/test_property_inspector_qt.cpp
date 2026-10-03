@@ -33,6 +33,7 @@ int failures = 0;
 // same offscreen QApplication; returns its failure count.
 int runCityPlannerQtTests();
 int runBakeDialogQtTests();   // test_bake_dialog_qt.cpp
+int runLevelCachePanelQtTests();   // test_level_cache_panel_qt.cpp
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -177,6 +178,7 @@ int main(int argc, char** argv) {
                 failures);
 
     failures += runCityPlannerQtTests();   // City Planner bridge + panel (P7.3)
-    failures += runBakeDialogQtTests();   // City Planner bridge + panel (P7.3)
+    failures += runBakeDialogQtTests();   // "Bake level cache" options (ADR-0084)
+    failures += runLevelCachePanelQtTests();   // the open level's bake: status + actions
     return failures == 0 ? 0 : 1;
 }

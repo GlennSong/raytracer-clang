@@ -3,6 +3,7 @@
 
 #include "polygon.h"
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace engine {
@@ -27,6 +28,13 @@ struct Lot {
     bool  wholeBlock = false;   // the whole block as ONE site (the parcel walk
                                 // could not fill it): the lot pass builds a
                                 // landmark on it (architectBlockLandmark)
+    // SHARED SIDES (attached buildings): up to two side lot lines this lot shares with a neighbouring lot of its
+    // block, each as its outward normal and offset dot(normal, point) -- the lot pass may build up to them and
+    // blank the wall there (BuildingParams::partyWalls). Filled by the lot pass in dense districts only.
+    bool  bigBox = false;   // a whole-block BIG-BOX store site (the lot pass picks these; Massing::BigBox)
+    uint8_t partyCount = 0;
+    Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
+    Real  partyAt[2] = {0, 0};
 };
 
 struct ParcelParams {
@@ -53,6 +61,11 @@ struct ParcelParams {
     // whole chain — don't leave it half-connected.
     Real courtMinArea = 400;
     uint32_t seed = 0;
+    // WHICH EDGES ARE STREETS (Glenn, 2026-09-29: buildings face city roads, never a freeway -- "that's not
+    // an accessible road"). Asked of each edge the walk lays lots along (after the frontage runs merge);
+    // false = the edge borders a freeway or ramp and gets no lots. A block with NO street edge gets no lots
+    // at all: open ground, not a blind bisection. Unset = every edge is a street.
+    std::function<bool(const Vec2& a, const Vec2& b)> isFrontage;
 };
 
 // WHY the frontage walk rejects the lots it tries to lay. The walk is the
@@ -69,6 +82,7 @@ struct ParcelReject {
     int escaped = 0;     // concave block: the lot crossed outside its own block
     int tiny = 0;        // under the minimum lot area
     int thin = 0;        // depth-per-frontage collapsed (a back-alley strip)
+    int notStreet = 0;   // the edge borders a freeway or a ramp, not a street (ParcelParams::isFrontage)
     int placed = 0;      // lots actually laid
     int clips = 0;       // times the backstop SAW an overlap and cut the new lot
     int leftOverlapping = 0;   // pairs still overlapping after the walk finished

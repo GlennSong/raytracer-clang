@@ -45,11 +45,17 @@ namespace engine {
 enum class PlateTopology : uint8_t {
     Ring,        // rooms around an open middle (offices, flats)
     WholeFloor,  // the whole plate is one dwelling (houses, rowhouse units)
+    Apartments,  // whole apartments off a corridor round the core (residential towers, buildings B)
 };
 
 // What a room is FOR. The ring names its rooms by use only; the whole floor
 // names them properly, which is what furniture and lighting read later.
-enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed };
+// OpenPlan, Meeting, Kitchenette: the office floor's zones (buildings C). An OpenPlan room is a zone, not a room:
+// it has no walls of its own and overlaps the rooms set into it (the corner offices, the meeting rooms).
+// Shop: a ground-floor shop unit (Room::style its trade: 0 cafe, 1 grocery, 2 boutique, 3 bookshop, 4 electronics,
+// 5 pharmacy, 6 bakery).
+enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
+                                Shop };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line
@@ -99,6 +105,7 @@ struct Room {
     Poly2 rect;          // world XZ, CCW
     std::size_t edge = 0;   // the plan edge it sits against (ring only)
     RoomKind kind = RoomKind::Office;
+    uint8_t style = 0;      // a shop's trade
 };
 
 struct RoomPlan {

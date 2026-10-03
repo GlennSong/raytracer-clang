@@ -293,3 +293,66 @@ TEST_CASE(prune_keeps_the_newest_bundle_per_level_and_whatever_the_caller_resolv
     CHECK(done.removed == 2 && !fs::exists(r1.dir) && !fs::exists(out + "/deadbeefdeadbeef") && fs::exists(r2.dir + "/" + kBundleFile) && fs::exists(out + "/0123456789abcdef.tmp-42"));
     fs::remove_all(root, ec);
 }
+
+// THE LEVEL CACHE PANEL'S VIEW (Glenn: "the editor should show if there is a bake for a level, how current it is,
+// the size and have options to build it, rebuild it, delete it"): not baked -> current -> out of date after an
+// edit -> current again with the old one listed; deletes only bundle directories directly under the root.
+TEST_CASE(level_cache_status_says_current_out_of_date_and_counts_older_bakes) {
+    registerProducer(std::make_unique<FieldProducer>("tA", "a", &g_producedA));
+    registerProducer(std::make_unique<FieldProducer>("tB", "b", &g_producedB));
+    const std::string root = tempDir("lcstatus"); const std::string level = root + "/level.json"; const std::string out = root + "/out";
+    { std::ofstream f(level); f << R"({"version":1,"a":{"x":1},"b":{"y":2},"entities":[]})"; }
+    LevelCacheStatus s0 = levelCacheStatus(level, out);
+    CHECK(s0.error.empty() && s0.applies && !s0.current && s0.older.empty() && s0.cacheBundles == 0);
+    BakeRequest req; req.levelPath = level; req.outRoot = out; req.only = {"tA", "tB"};
+    const BakeReport r1 = bakeLevel(req, nullptr); CHECK(r1.ok);
+    LevelCacheStatus s1 = levelCacheStatus(level, out);
+    CHECK(s1.current && s1.currentBytes > 0 && !s1.currentCreated.empty() && s1.older.empty() && s1.cacheBundles == 1 && s1.cacheStale == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));   // "created" has second resolution
+    { std::ofstream f(level); f << R"({"version":1,"a":{"x":2},"b":{"y":2},"entities":[]})"; }   // edited: today's bake is elsewhere
+    LevelCacheStatus s2 = levelCacheStatus(level, out);
+    CHECK(!s2.current && s2.older.size() == 1 && s2.olderBytes == s1.currentBytes);
+    const BakeReport r2 = bakeLevel(req, nullptr); CHECK(r2.ok && r2.dir != r1.dir);
+    LevelCacheStatus s3 = levelCacheStatus(level, out);
+    CHECK(s3.current && s3.older.size() == 1 && s3.cacheBundles == 2 && s3.cacheStale == 1 && s3.cacheStaleBytes == s3.olderBytes);
+    // delete: refuses anything that is not a bundle directory directly under the root (and in-flight writes)
+    std::error_code ec; fs::create_directories(out + "/0123456789abcdef.tmp-42", ec);
+    std::string err;
+    CHECK(deleteBundleDirs(out, {root, out + "/0123456789abcdef.tmp-42"}, &err) == 0 && !err.empty());
+    CHECK(fs::exists(root) && fs::exists(out + "/0123456789abcdef.tmp-42"));
+    err.clear();
+    std::vector<std::string> olderDirs; for (const PruneEntry& e : s3.older) olderDirs.push_back(e.dir);
+    CHECK(deleteBundleDirs(out, olderDirs, &err) == 1 && err.empty() && !fs::exists(r1.dir) && fs::exists(r2.dir));
+    LevelCacheStatus s4 = levelCacheStatus(level, out);
+    CHECK(s4.current && s4.older.empty() && s4.cacheStale == 0);
+    fs::remove_all(root, ec);
+}
+
+// THE ALL BAKES WINDOW's listing: every bundle with its level and state -- current, out of date, and an
+// orphan whose level file is gone.
+TEST_CASE(list_bakes_says_which_level_and_whether_current) {
+    registerProducer(std::make_unique<FieldProducer>("tA", "a", &g_producedA));
+    registerProducer(std::make_unique<FieldProducer>("tB", "b", &g_producedB));
+    const std::string root = tempDir("lsbakes"); const std::string out = root + "/out";
+    const std::string lv1 = root + "/one.json", lv2 = root + "/two.json";
+    { std::ofstream f(lv1); f << R"({"version":1,"a":{"x":1},"b":{"y":2},"entities":[]})"; }
+    { std::ofstream f(lv2); f << R"({"version":1,"a":{"x":7},"b":{"y":2},"entities":[]})"; }
+    BakeRequest req; req.outRoot = out; req.only = {"tA", "tB"};
+    req.levelPath = lv1; CHECK(bakeLevel(req, nullptr).ok);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    { std::ofstream f(lv1); f << R"({"version":1,"a":{"x":2},"b":{"y":2},"entities":[]})"; }
+    CHECK(bakeLevel(req, nullptr).ok);            // one.json: now one current, one out of date
+    req.levelPath = lv2; CHECK(bakeLevel(req, nullptr).ok);
+    std::error_code ec; fs::remove(lv2, ec);      // two.json deleted: its bake is an orphan
+    const std::vector<BakeListing> all = listBakes(out);
+    int current = 0, stale = 0, orphan = 0;
+    for (const BakeListing& b : all) {
+        CHECK(b.bytes > 0 && !b.created.empty());
+        if (b.state == BakeListing::State::Current) { ++current; CHECK(b.level.find("one.json") != std::string::npos); }
+        if (b.state == BakeListing::State::OutOfDate) { ++stale; CHECK(b.level.find("one.json") != std::string::npos); }
+        if (b.state == BakeListing::State::Orphan) { ++orphan; CHECK(b.level.find("two.json") != std::string::npos); }
+    }
+    CHECK(all.size() == 3 && current == 1 && stale == 1 && orphan == 1);
+    for (const BakeListing& b : listBakes(out, false)) CHECK(b.state == BakeListing::State::Unknown);   // manifests only
+    fs::remove_all(root, ec);
+}

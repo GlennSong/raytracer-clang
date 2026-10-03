@@ -19,7 +19,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-09-26.1";   // .1: grows on roads/lotnav (the clearance widths), not the sim graph
+const char* const kLotsBuildTag = "2026-10-03.1";   // 10-03.1: park paths at most a kerb high   // .14: café terraces   // .13: outdoor library furniture (lots v9)   // .7: big-box frontage summed per side   // .6: big-box stores on whole blocks with parking lots (params v9); open-plan rows fixed   // .5: back doors marked on the door record (lots v7)   // .4: attached buildings (party walls, back doors, fire escapes; params v8)   // .3: shops: storefronts, shop doors, fascia signs   // .2: flats over shops are residential   // 10-01.1: params v7 (residential), apartments   // .16: no stick-thin windows (blank narrow bays)   // .15: the furniture finish parts shift the draped slots   // .14: parapets only on exposed roof edges   // .13: PartId::Furniture shifts the draped slots   // .12: tower tops, masonry depth (params v6)   // .11: storey heights by use, mechanical floors   // .10: glass colour per building (white glass material, packed lit panes)   // .9: NYC skyscraper envelopes + curtain styles (params v5)   // .7: freeway clearance from the drawn decks   // .6: 6 m clear   // .5: 4 m clear of freeways and ramps; landmarks stay in their block   // .4: a stoop reaches its own pad   // .3: street strips stop short of lower elevated decks   // .2: buildings face at-grade city streets only   // 2026-09-30.1: the earthwork field holds the ground under elevated decks   // .8: pads clipped and feathered 1 m, not 2   // .7: the finish strip stops short of the narrowest sidewalk   // .6: the streets' own strips finish the ground   // .5: a pad takes the height of the street it faces   // .4: lots grow on the earthwork field pinned to the streets, no block terraces   // .3: a lot must lie inside its block as it came (the road push can fold it)   // .2: no lots laid along a freeway or ramp edge   // 2026-09-29.1: buildings never front a freeway or a ramp   // 2026-09-26.1: grows on roads/lotnav (the clearance widths), not the sim graph
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
@@ -124,6 +124,8 @@ public:
         // and growing on it moved buildings a metre and a half closer to every street
         if (!out.readBack(pre + "roads/lotnav", bytes)) return fail(pre + "roads/lotnav: missing");
         { BinReader r(bytes.data(), bytes.size()); if (!bundle::getRoadGraph(r, city.nav)) return fail(pre + "roads/lotnav: unreadable"); }
+        if (!out.readBack(pre + "roads/deck", bytes)) return fail(pre + "roads/deck: missing");
+        { BinReader r(bytes.data(), bytes.size()); if (!bundle::getDeckField(r, city.deck)) return fail(pre + "roads/deck: unreadable"); }
         if (!out.readBack(pre + "roads/bands", bytes)) return fail(pre + "roads/bands: missing");
         { BinReader r(bytes.data(), bytes.size()); CurbBandAudit b; if (!bundle::getCurbBands(r, b)) return fail(pre + "roads/bands: unreadable"); city.pavedSidewalk = b.sidewalkWidth; }
         if (!report(0.03, "grow", std::to_string(city.holes.size()) + " pavement holes")) return fail("cancelled");
@@ -171,12 +173,28 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     HeightField ground;
     LotGroundWithFn groundWith;
     double groundMeshCell = 0.0;
+    bool smoothGround = false;   // the earthwork field carries the streets: no block terraces
     if (city.hasTerrain) {
         auto grid = std::make_shared<HeightGrid>();
         grid->x0 = city.ground.x0; grid->y0 = city.ground.y0; grid->res = city.ground.res; grid->nx = city.ground.nx; grid->ny = city.ground.ny; grid->z = city.ground.z;
         if (in.level.contains("terrain")) {
             auto tp = std::make_shared<TerrainParams>(readTerrainParams(in.level["terrain"]));
             tp->erodedBase = laneErodedBase(in.level, grid, readErodedBase(in.level));
+            // THE STREETS SET THE GROUND: the same earthwork field the loader installs (lanesEarthworkField),
+            // over the same natural ground, so every pad is fitted to the ground the terrain will show.
+            {
+                auto natTp = std::make_shared<TerrainParams>(*tp);
+                auto natNoise = std::make_shared<Noise>(in.level["terrain"].value("seed", 0u));
+                const std::function<double(double, double)> natural = [natTp, natNoise](double x, double z) { return terrainHeight(*natTp, *natNoise, x, z); };
+                tp->earthwork = lanesEarthworkField(city.deck, city.pavedSidewalk, natural, tp->earthworkParams,
+                                                     in.level.contains("water") ? in.level["water"].value("seaLevel", tp->seaLevel) : tp->seaLevel);
+                smoothGround = static_cast<bool>(tp->earthwork);
+                if (smoothGround) {   // the loader's finish, so the pads see the ground the terrain will show
+                    const std::vector<TerrainFlatten> finish = lanesStreetFinish(city.deck, lanesMinSidewalk(in.level, city.pavedSidewalk));
+                    tp->flatten.insert(tp->flatten.end(), finish.begin(), finish.end());
+                    rebuildFlattenIndex(*tp);
+                }
+            }
             const LotGround lg = lotGroundFor(tp, in.level["terrain"].value("seed", 0u));
             ground = lg.ground;
             groundWith = lg.groundWith;
@@ -198,6 +216,12 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     gin.water = &water;
     gin.streets = &city.nav;
     gin.pavedSidewalk = city.pavedSidewalk;
+    gin.smoothGround = smoothGround;
+    if (auto nf = lanesNearFreeway(city.deck, 6.0)) gin.nearFreeway = [nf](Real x, Real z) { return nf(x, z); };
+    if (smoothGround) {   // the pads meet the street they face (30 m: across a sidewalk and a front yard)
+        auto sh = lanesStreetHeight(city.deck, 30.0);
+        if (sh) gin.streetHeight = [sh](Real x, Real z, Real* y) { double d; if (!sh(x, z, &d)) return false; *y = static_cast<Real>(d); return true; };
+    }
     if (haveSpawn) gin.enterableAt = &spawn;
     const auto t0 = std::chrono::steady_clock::now();
     LotGrowSetup s;

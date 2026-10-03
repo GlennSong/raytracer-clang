@@ -1,0 +1,39 @@
+name: Levels (nightly, all)
+
+# Every shipped level through the level_tests gate, the heavy ones included (metro_mountain, metro_planned,
+# the island_8 variants, piedmont -- a minute+ each to build cold). The push workflow skips those
+# (RT_LEVEL_TESTS_SKIP_HEAVY) so it finishes; this one runs them once a day, or by hand from the Actions tab.
+
+on:
+  schedule:
+    - cron: "17 9 * * *"   # daily, 09:17 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: levels-nightly
+  cancel-in-progress: true
+
+jobs:
+  levels:
+    name: Linux — every level, heavy ones included
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libvulkan-dev libglfw3-dev glslc
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build level_tests
+        run: cmake --build build --target level_tests
+
+      - name: Level tests (all levels)
+        working-directory: ${{ github.workspace }}
+        run: stdbuf -oL build/level_tests

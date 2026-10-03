@@ -223,4 +223,96 @@ RenderMesh MeshBuilder::tube(const std::vector<Vec3>& pts, const std::vector<dou
     return m;
 }
 
+RenderMesh MeshBuilder::roundedBox(const Vec3& size, double radius, int segs, double uvPerMetre) {
+    RenderMesh m;
+    const Vec3 h = size * 0.5;
+    const double r = std::max(0.0, std::min(radius, std::min({h.x, h.y, h.z}) * 0.999));
+    segs = std::max(1, segs);
+    // The coordinates along one axis: the flat middle plus `segs` arc steps toward each end.
+    auto axis = [&](double e) {
+        std::vector<double> c;
+        if (r <= 1e-9) return std::vector<double>{-e, e};
+        for (int k = segs; k >= 1; --k) c.push_back(-(e - r) - r * std::sin(1.5707963267948966 * k / segs));
+        c.push_back(-(e - r));
+        c.push_back(e - r);
+        for (int k = 1; k <= segs; ++k) c.push_back((e - r) + r * std::sin(1.5707963267948966 * k / segs));
+        return c;
+    };
+    const std::vector<double> ax = axis(h.x), ay = axis(h.y), az = axis(h.z);
+    const Vec3 inner(h.x - r, h.y - r, h.z - r);
+    // Each face: its axis, sign, and the two in-plane axes (u, v).
+    struct Face { int n; double sgn; int u, v; };
+    const Face faces[6] = {{0, 1, 2, 1}, {0, -1, 2, 1}, {1, 1, 0, 2}, {1, -1, 0, 2}, {2, 1, 0, 1}, {2, -1, 0, 1}};
+    const std::vector<double>* lists[3] = {&ax, &ay, &az};
+    const double half[3] = {h.x, h.y, h.z};
+    for (const Face& f : faces) {
+        const std::vector<double>& lu = *lists[f.u];
+        const std::vector<double>& lv = *lists[f.v];
+        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
+        Vec3 outN(0, 0, 0);
+        (f.n == 0 ? outN.x : f.n == 1 ? outN.y : outN.z) = f.sgn;
+        for (double cv : lv)
+            for (double cu : lu) {
+                double p[3];
+                p[f.n] = f.sgn * half[f.n]; p[f.u] = cu; p[f.v] = cv;
+                const double q[3] = {std::clamp(p[0], -inner.x, inner.x), std::clamp(p[1], -inner.y, inner.y),
+                                     std::clamp(p[2], -inner.z, inner.z)};
+                Vec3 d(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+                const double l = d.length();
+                d = l > 1e-12 ? d * (1.0 / l) : outN;
+                const Vec3 pos = r > 1e-9 ? Vec3(q[0], q[1], q[2]) + d * r : Vec3(p[0], p[1], p[2]);
+                Vertex vx(pos, d, Vec3(f.u == 0 ? 1 : 0, f.u == 1 ? 1 : 0, f.u == 2 ? 1 : 0),
+                          static_cast<float>(cu * uvPerMetre), static_cast<float>(cv * uvPerMetre));
+                vx.color = Vec3(1, 1, 1);
+                m.vertices.push_back(vx);
+            }
+        const uint32_t nu = static_cast<uint32_t>(lu.size()), nv = static_cast<uint32_t>(lv.size());
+        for (uint32_t j = 0; j + 1 < nv; ++j)
+            for (uint32_t i = 0; i + 1 < nu; ++i) {
+                const uint32_t a = base + j * nu + i, b = a + 1, c = a + nu, d = c + 1;
+                triFacing(m, a, b, d, outN);
+                triFacing(m, a, d, c, outN);
+            }
+    }
+    return m;
+}
+
+RenderMesh MeshBuilder::lathe(const std::vector<std::pair<double, double>>& prof, int segs) {
+    RenderMesh m;
+    const std::size_t n = prof.size();
+    struct P2 { double x, y; };
+    std::vector<P2> profile(n);
+    for (std::size_t i = 0; i < n; ++i) profile[i] = {prof[i].first, prof[i].second};
+    auto len = [](const P2& a, const P2& b) { return std::hypot(b.x - a.x, b.y - a.y); };
+    segs = std::max(3, segs);
+    if (n < 2) return m;
+    std::vector<double> vlen(n, 0.0);
+    for (std::size_t i = 1; i < n; ++i) vlen[i] = vlen[i - 1] + len(profile[i - 1], profile[i]);
+    std::vector<uint32_t> base(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        // The profile's outward normal in (r, y): its tangent turned a right angle, averaged over both neighbours.
+        const P2& t1 = profile[std::min(i + 1, n - 1)];
+        const P2& t0 = profile[i > 0 ? i - 1 : 0];
+        double pnx = t1.y - t0.y, pny = -(t1.x - t0.x);
+        const double pl = std::hypot(pnx, pny);
+        if (pl > 1e-12) { pnx /= pl; pny /= pl; } else { pnx = 1; pny = 0; }
+        base[i] = static_cast<uint32_t>(m.vertices.size());
+        for (int k = 0; k <= segs; ++k) {
+            const double a = 6.283185307179586 * k / segs, ca = std::cos(a), sa = std::sin(a);
+            Vertex vx(Vec3(profile[i].x * ca, profile[i].y, profile[i].x * sa), normalize(Vec3(pnx * ca, pny, pnx * sa)),
+                      Vec3(-sa, 0, ca), static_cast<float>(static_cast<double>(k) / segs), static_cast<float>(vlen[i]));
+            vx.color = Vec3(1, 1, 1);
+            m.vertices.push_back(vx);
+        }
+    }
+    for (std::size_t i = 0; i + 1 < n; ++i)
+        for (int k = 0; k < segs; ++k) {
+            const uint32_t a = base[i] + k, b = a + 1, c = base[i + 1] + k, d = c + 1;
+            const Vec3 out = normalize(m.vertices[a].normal + m.vertices[d].normal);
+            if ((m.vertices[a].position - m.vertices[b].position).length() > 1e-9) triFacing(m, a, b, d, out);
+            if ((m.vertices[c].position - m.vertices[d].position).length() > 1e-9) triFacing(m, a, d, c, out);
+        }
+    return m;
+}
+
 }  // namespace engine

@@ -528,11 +528,20 @@ TextureData realFoliageTexture(RealSpecies species, int size, uint32_t seed) {
 }
 
 void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int w, int h, double colourScale,
-                    uint8_t* out, int stride) {
+                    uint8_t* out, int stride, uint8_t* normalOut) {
     const int S = 2, W = w * S, H = h * S;   // supersampled
     std::vector<float> depth(static_cast<std::size_t>(W) * H, -1e30f);
     std::vector<float> rgb(static_cast<std::size_t>(W) * H * 3, 0.0f);
     std::vector<uint8_t> cov(static_cast<std::size_t>(W) * H, 0);
+    std::vector<float> nrm(normalOut ? static_cast<std::size_t>(W) * H * 3 : 0, 0.0f);
+    // the tree's normal in the card's tangent frame (see real_tree.h): side card T = +x, B = +y, N = +z;
+    // top card T = +x, N = +y, B = N x T = -z
+    auto toCard = [top](const Vec3& n) {
+        const double tx = n.x, ty = top ? -n.z : n.y, along = top ? n.y : n.z;
+        // tilted at most ~50 deg off the card: steeper, the one-pixel rims of a far crown catch the sun
+        // at full strength and read as glitter, not volume
+        return Vec3(tx, ty, 0.85 + 0.5 * std::fabs(along));
+    };
     const double halfW = tree.crownRadius * 1.18 + 0.5;
     const double Ht = tree.height * 1.03;
     // world -> image (x right, y down), and depth (larger = nearer the viewer)
@@ -576,6 +585,10 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
                     }
                     depth[i] = static_cast<float>(dz);
                     cov[i] = 1;
+                    if (normalOut) {
+                        const Vec3 cn = toCard(normalize(v[0]->normal * w0 + v[1]->normal * w1 + v[2]->normal * w2));
+                        nrm[i * 3] = static_cast<float>(cn.x); nrm[i * 3 + 1] = static_cast<float>(cn.y); nrm[i * 3 + 2] = static_cast<float>(cn.z);
+                    }
                     rgb[i * 3] = static_cast<float>(col.x); rgb[i * 3 + 1] = static_cast<float>(col.y); rgb[i * 3 + 2] = static_cast<float>(col.z);
                 }
         }
@@ -603,6 +616,29 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
     dilateRGB(img, w, h, w * 4, 6);
     for (std::size_t i = 3; i < img.size(); i += 4) if (img[i] == 1) img[i] = 0;
     for (int y = 0; y < h; ++y) std::memcpy(out + static_cast<std::size_t>(y) * stride, &img[static_cast<std::size_t>(y) * w * 4], static_cast<std::size_t>(w) * 4);
+    if (normalOut) {
+        std::vector<uint8_t> nimg(static_cast<std::size_t>(w) * h * 4, 0);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                Vec3 acc(0, 0, 0);
+                int c = 0;
+                for (int k = 0; k < S * S; ++k) {
+                    const std::size_t i = static_cast<std::size_t>(y * S + k / S) * W + x * S + k % S;
+                    if (!cov[i]) continue;
+                    acc = acc + Vec3(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]);
+                    ++c;
+                }
+                const Vec3 n = c ? normalize(acc) : Vec3(0, 0, 1);
+                uint8_t* d = &nimg[(static_cast<std::size_t>(y) * w + x) * 4];
+                d[0] = static_cast<uint8_t>(std::clamp((n.x * 0.5 + 0.5) * 255.0, 0.0, 255.0));
+                d[1] = static_cast<uint8_t>(std::clamp((n.y * 0.5 + 0.5) * 255.0, 0.0, 255.0));
+                d[2] = static_cast<uint8_t>(std::clamp((n.z * 0.5 + 0.5) * 255.0, 0.0, 255.0));
+                d[3] = c ? 255 : 0;
+            }
+        dilateRGB(nimg, w, h, w * 4, 6);   // under the cut, so the mips at the silhouette keep crown normals
+        for (std::size_t i = 3; i < nimg.size(); i += 4) nimg[i] = 255;
+        for (int y = 0; y < h; ++y) std::memcpy(normalOut + static_cast<std::size_t>(y) * stride, &nimg[static_cast<std::size_t>(y) * w * 4], static_cast<std::size_t>(w) * 4);
+    }
 }
 
 }  // namespace engine

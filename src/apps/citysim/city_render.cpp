@@ -1,4 +1,6 @@
 #include "city_render.h"
+#include "../../engine/interaction.h"           // Interactables: the outdoor seats (M5)
+#include "../../engine/procgen/furniture_library.h"
 
 #include "bus_stop_props.h"
 
@@ -519,6 +521,38 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE SEATS out in the city (the furniture library, M5): every sit spot of the outdoor furniture the loader
+    // laid -- park benches, plaza benches, café chairs -- for the strollers to use. Interiors are not out yet (they
+    // stream in), and nobody walks into one to sit anyway.
+    {
+        const engine::FurnitureLibrary& flib = engine::FurnitureLibrary::global();
+        std::vector<CitySim::SeatSpot> seats;
+        world.each<engine::Interactables>([&](Entity, engine::Interactables& set) {
+            for (const engine::InteractPiece& ip : set.pieces) {
+                const engine::FurnitureAsset* fa = flib.find(static_cast<engine::Piece>(ip.piece));
+                if (!fa) continue;
+                bool outdoor = false;
+                for (const std::string& tg : fa->tags) outdoor = outdoor || tg == "outdoor";
+                if (!outdoor) continue;
+                for (const engine::FurnVerb& v : fa->verbs) {
+                    if (v.verb != engine::Verb::Sit) continue;
+                    for (std::size_t k = 0; k < fa->spots.size(); ++k) {
+                        if (!(v.spots & (1u << k))) continue;
+                        const Vec3 at = engine::piecePoint(ip.xform, fa->spots[k].at);
+                        const Vec3 f = engine::pieceDir(ip.xform, Vec3(0, 0, 1));
+                        CitySim::SeatSpot s;
+                        s.pos = Vec2(at.x, at.z);
+                        s.face = normalize(Vec2(f.x, f.z));
+                        s.hip = at.y;
+                        seats.push_back(s);
+                    }
+                }
+            }
+        });
+        const std::size_t offered = seats.size();
+        sim_.setSeats(std::move(seats));
+        if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
+    }
     sim_.setPerceptionReliability(params_.perceptionReliability);
     sim_.setWander(params_.wander);
     // Three-tier traffic (P4): the level's opt-in. The bubble only engages
@@ -898,8 +932,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             // opaque (traffic at large), and the cabin a near car shows through it.
             {
                 Entity ge{}, go{}, gi{};
+                MeshHandle glassH{}, cabinH{};
                 if (assets && !glassMesh.vertices.empty()) {
                     const MeshHandle gh = assets->acquireMesh(glassMesh, "city:carglass" + std::to_string(v));
+                    glassH = gh;
                     ge = world.create();
                     InstanceGroup gg;
                     gg.mesh = gh;
@@ -932,6 +968,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     gi = world.create();
                     InstanceGroup ig;
                     ig.mesh = assets->acquireMesh(interiorMesh, "city:carcabin" + std::to_string(v));
+                    cabinH = ig.mesh;
                     engine::RenderMaterial im;
                     im.albedo = Vec3(1, 1, 1);
                     im.metallic = 0.0f;
@@ -944,6 +981,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carGlassGroups_.push_back(ge);
                 carGlassOpaqueGroups_.push_back(go);
                 carInteriorGroups_.push_back(gi);
+                carGlassMesh_.push_back(glassH);   // for a commandeered car (city_vehicles.cpp): its own glass + cabin
+                carCabinMesh_.push_back(cabinH);   // invalid for a see-into body, whose cabin is in its chassis
                 carSeeInto_.push_back(seeInto ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
@@ -1025,6 +1064,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
       g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
       world.add<InstanceGroup>(pedGroup_, g); }
+    if (assets) {
+        pedSeatedGroup_ = world.create();
+        InstanceGroup g; g.mesh = assets->acquireMesh(buildSeatedPersonMesh(0), "city:ped_seated"); g.material = pedMaterial();
+        g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
+        world.add<InstanceGroup>(pedSeatedGroup_, g);
+    }
     for (int s = 0; s < 3; ++s) {
         signalGroups_[s] = world.create();
         InstanceGroup g;
@@ -1158,7 +1203,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     // Stop bars + lane-turn arrows (R6c, plan 4e): one white PAINT mesh for
     // every signalled approach (buildRoadMarkings), one identity instance.
-    {
+    // NOT on a road whose builder painted its own (LevelRoadGraph::paintedMarkings, the lanes builder):
+    // these quads float just over the asphalt and flickered with the camera angle beside the real paint (#39).
+    bool builderPainted = false;
+    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { builderPainted = builderPainted || g.paintedMarkings; });
+    if (!builderPainted) {
         engine::RenderMesh paint = buildRoadMarkings();
         MeshHandle mh{};
         if (assets) mh = assets->acquireMesh(paint, "city:roadmarks");
@@ -1977,6 +2026,8 @@ void CityRenderSystem::syncGroups(World& world) {
     cars.reserve(carGroups_.size());
     for (Entity e : carGroups_) cars.push_back(world.get<InstanceGroup>(e));
     InstanceGroup* ped = world.get<InstanceGroup>(pedGroup_);
+    InstanceGroup* pedSeated = pedSeatedGroup_.valid() ? world.get<InstanceGroup>(pedSeatedGroup_) : nullptr;
+    if (pedSeated) pedSeated->transforms.clear();
     InstanceGroup* sig[3];
     for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
@@ -2021,6 +2072,12 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
+            if (const CitySim::SeatSpot* st = sim_.seatedOn(static_cast<int>(ai))) {   // sitting (M5)
+                if (pedSeated)
+                    pedSeated->transforms.push_back(Mat4::translate(st->pos.x, st->hip, st->pos.y) *
+                                                    Mat4::rotateY(std::atan2(st->face.x, st->face.y)));
+                continue;
+            }
             ped->transforms.push_back(agentPose(a));
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
@@ -2206,6 +2263,8 @@ void CityRenderSystem::syncGroups(World& world) {
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
+                // the car the player RIDES in: its drawn matrix, every step, so the passenger sits still in it
+                if (ai == playerRidingAgent_) busDrawnPose_[ai] = cars[v]->transforms[k];
                 if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
@@ -3014,11 +3073,13 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // cars — driven OR abandoned): a promoted car has no planner ghost, so
     // without this ambient traffic plans straight through a car parked across
     // the lane and the kinematic proxies bulldoze the dynamic body.
+    std::vector<Real> halves(obstacles.size(), Real(0));   // the player on foot: a person
     ctx.world.each<engine::Transform, engine::Vehicle>(
-        [&](engine::Entity, engine::Transform& t, engine::Vehicle&) {
+        [&](engine::Entity, engine::Transform& t, engine::Vehicle& v) {
             obstacles.push_back(Vec2(t.position.x, t.position.z));
+            halves.push_back(std::max(Real(1.5), v.config.chassisHalfExtent.z));   // a CAR: held short by its length
         });
-    sim_.setExternalObstacles(std::move(obstacles));
+    sim_.setExternalObstacles(std::move(obstacles), std::move(halves));
 
     // The pose bake exists for the RENDERER. When the clock runs several fixed
     // steps in one frame (catching up), only the last bake is ever drawn — the
@@ -3067,6 +3128,32 @@ int CityRenderSystem::riderSeat(int agent, int j, int n) {
     for (int c : {7, 5, 11, 13, 3})
         if (std::gcd(c, n) == 1) { stride = c; break; }
     return ((j * stride + agent * 3) % n + n) % n;
+}
+
+bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seats) const {
+    const auto& ag = sim_.agents();
+    if (agent < 0 || agent >= static_cast<int>(ag.size()) || sim_.isBus(agent)) return false;
+    const Agent& a = ag[static_cast<std::size_t>(agent)];
+    if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || carDriverSeat_.empty()) return false;
+    const int n = static_cast<int>(carDriverSeat_.size());
+    const std::size_t v = static_cast<std::size_t>(((a.vehicle % n) + n) % n);
+    if (!carHasDriver_[v]) return false;
+    if (pose) {
+        const auto it = busDrawnPose_.find(agent);
+        *pose = it != busDrawnPose_.end() ? it->second : agentPose(a, agent);
+    }
+    if (seats) {
+        const Vec3 d = carDriverSeat_[v];
+        seats->clear();
+        seats->push_back(d);
+        seats->push_back(Vec3(-d.x, d.y, d.z));
+        // a rear bench needs ~0.85 m behind the front seats: a two-seater (under ~3.9 m) has none
+        if (sim_.fleetBody(a.vehicle).length >= 3.9) {
+            seats->push_back(Vec3(d.x, d.y, d.z - 0.85));
+            seats->push_back(Vec3(-d.x, d.y, d.z - 0.85));
+        }
+    }
+    return true;
 }
 
 bool CityRenderSystem::busFrame(int agent, Mat4* pose) const {

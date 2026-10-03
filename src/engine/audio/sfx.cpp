@@ -217,5 +217,102 @@ std::vector<float> engine(uint32_t sampleRate, uint32_t seed) {
     return frames;
 }
 
+
+// ---- ELEVATORS --------------------------------------------------------------------------------------------------
+std::vector<float> elevatorDing(bool up, uint32_t sampleRate, uint32_t seed) {
+    const auto count = static_cast<size_t>(sampleRate * 1.6);
+    std::vector<float> frames(count, 0.0f);
+    (void)seed;
+    // Two strikes 0.35 s apart: E6 then C6 falling (a down car), C6 then E6 rising (up). Each a bell: the
+    // fundamental, a bright inharmonic partial, a hum below, a soft mallet attack.
+    const double lo = 1046.5, hi = 1318.5;
+    const double notes[2] = {up ? lo : hi, up ? hi : lo};
+    for (int k = 0; k < 2; ++k) {
+        const size_t start = static_cast<size_t>(k * 0.35 * sampleRate);
+        const double f = notes[k];
+        for (size_t i = start; i < count; ++i) {
+            const double t = static_cast<double>(i - start) / sampleRate;
+            const double attack = 1.0 - std::exp(-t * 900.0);
+            const double v = 0.60 * std::sin(TWO_PI * f * t) * std::exp(-t * 2.4) +
+                             0.22 * std::sin(TWO_PI * f * 2.76 * t) * std::exp(-t * 6.0) +
+                             0.18 * std::sin(TWO_PI * f * 0.5 * t) * std::exp(-t * 3.0);
+            frames[i] += static_cast<float>(attack * v);
+        }
+    }
+    normalize(frames, 0.7f);
+    return frames;
+}
+
+std::vector<float> elevatorButton(uint32_t sampleRate, uint32_t seed) {
+    const auto count = static_cast<size_t>(sampleRate * 0.06);
+    std::vector<float> frames(count);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    double hp = 0, prev = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double n = noise(rng);
+        hp = 0.85 * (hp + n - prev);   // a bright, clicky high-pass
+        prev = n;
+        const double tick = hp * std::exp(-t * 260.0);
+        const double spring = 0.35 * std::sin(TWO_PI * 2300.0 * t) * std::exp(-t * 90.0);
+        frames[i] = static_cast<float>(tick + spring);
+    }
+    normalize(frames, 0.5f);
+    return frames;
+}
+
+std::vector<float> elevatorDoors(uint32_t sampleRate, uint32_t seed) {
+    const double dur = 1.3;
+    const auto count = static_cast<size_t>(sampleRate * dur);
+    std::vector<float> frames(count);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    double lp = 0, lp2 = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double u = t / dur;
+        // The leaves accelerate and brake: a smooth bump in level and in the motor's pitch.
+        const double move = std::sin(3.14159265 * std::min(1.0, u / 0.92));
+        lp += 0.08 * (noise(rng) - lp);
+        lp2 += 0.02 * (lp - lp2);
+        const double rumble = lp2 * 3.0 * move;
+        const double whirF = 180.0 + 220.0 * move;
+        const double whir = 0.18 * std::sin(TWO_PI * whirF * t) * move + 0.06 * std::sin(TWO_PI * whirF * 2.0 * t) * move;
+        // The leaves meet: a soft thunk at the end of the travel.
+        const double tt = t - dur * 0.92;
+        const double thunk = tt > 0 ? 0.6 * std::sin(TWO_PI * 85.0 * tt) * std::exp(-tt * 40.0) : 0.0;
+        frames[i] = static_cast<float>(rumble + whir + thunk);
+    }
+    normalize(frames, 0.55f);
+    return frames;
+}
+
+std::vector<float> elevatorHum(uint32_t sampleRate, uint32_t seed) {
+    // A loop: every tone an integer number of cycles over the buffer, the air a CIRCULAR moving average of noise.
+    const auto count = static_cast<size_t>(sampleRate * 2);
+    std::vector<float> frames(count);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    std::vector<double> n(count);
+    for (double& x : n) x = noise(rng);
+    const int win = std::max(1, static_cast<int>(sampleRate / 900));   // a dark rush
+    std::vector<double> air(count, 0.0);
+    double acc = 0;
+    for (int k = -win; k <= win; ++k) acc += n[(static_cast<long long>(count) + k) % static_cast<long long>(count)];
+    for (size_t i = 0; i < count; ++i) {
+        air[i] = acc / (2 * win + 1);
+        acc += n[(i + win + 1) % count] - n[(i + count - win) % count];
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const double ph = static_cast<double>(i) / count;
+        auto tone = [&](double hz, double g) { return g * std::sin(TWO_PI * std::round(hz * 2.0) * ph); };
+        const double hum = tone(60.0, 0.5) + tone(120.0, 0.25) + tone(180.0, 0.08);
+        frames[i] = static_cast<float>(hum + air[i] * 2.2);
+    }
+    normalize(frames, 0.45f);
+    return frames;
+}
+
 }  // namespace sfx
 }  // namespace engine

@@ -1,6 +1,7 @@
 #include "shape_grammar.h"
 #include "core_plan.h"
-#include "room_plan.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
+#include "room_plan.h"
+#include "furniture.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
 
 #include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
 #include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
@@ -68,17 +69,34 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
     Rng rng(seed ? seed : 1u);
     Real t = rng.unit();
     switch (style) {
-        case FacadeStyle::Brick:
-            // Warm reds/browns, some buff.
-            return lerp(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28), t);
+        case FacadeStyle::Brick: {
+            // Warm reds/browns for most; then the brickyard's other runs (Glenn, 2026-09-30: "more varied
+            // building materials ... it's all very samey"): buff, cream, chocolate, orange, iron-spot grey.
+            const Real k = rng.unit();
+            if (k < 0.52) return lerp(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28), t);
+            static const Vec3 kBrick[] = {
+                {0.74, 0.62, 0.46},   // buff / tan (the Upper East Side apartment tower)
+                {0.82, 0.76, 0.64},   // cream
+                {0.36, 0.23, 0.17},   // chocolate
+                {0.66, 0.34, 0.20},   // orange-red
+                {0.50, 0.47, 0.45},   // iron-spot grey
+            };
+            return kBrick[static_cast<int>((k - 0.52) / 0.48 * 5) % 5] * (0.94 + 0.12 * t);
+        }
         case FacadeStyle::Stucco:
             return lerp(Vec3(0.86, 0.82, 0.72), Vec3(0.80, 0.74, 0.60), t);
         case FacadeStyle::Painted:
             // Muted pastels (residential).
             return lerp(Vec3(0.74, 0.78, 0.78), Vec3(0.80, 0.72, 0.66), t) +
                    Vec3(rng.range(-0.04, 0.04), rng.range(-0.04, 0.04), rng.range(-0.04, 0.04));
-        case FacadeStyle::GlassCurtain:
-            return lerp(Vec3(0.58, 0.62, 0.66), Vec3(0.66, 0.68, 0.70), t);
+        case FacadeStyle::GlassCurtain: {
+            // The frame and trim of a glass building: aluminium, or dark bronze / black / white metal.
+            const Real k = rng.unit();
+            if (k < 0.55) return lerp(Vec3(0.58, 0.62, 0.66), Vec3(0.66, 0.68, 0.70), t);
+            if (k < 0.72) return Vec3(0.20, 0.18, 0.16);   // dark bronze
+            if (k < 0.87) return Vec3(0.12, 0.12, 0.13);   // black
+            return Vec3(0.84, 0.84, 0.82);                 // white
+        }
         case FacadeStyle::Metal:
             // Cool steel / corrugated siding (industrial).
             return lerp(Vec3(0.46, 0.50, 0.54), Vec3(0.56, 0.58, 0.60), t);
@@ -100,12 +118,33 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
         case FacadeStyle::DarkBrick:
             // Deep browns to charcoal reds (lofts, factories, dark towers).
             return lerp(Vec3(0.26, 0.14, 0.11), Vec3(0.38, 0.22, 0.18), t);
-        case FacadeStyle::Sandstone:
-            // Warm buff / honey ashlar (banks, museums, deco masonry).
-            return lerp(Vec3(0.78, 0.66, 0.48), Vec3(0.86, 0.76, 0.58), t);
+        case FacadeStyle::Sandstone: {
+            // Warm buff / honey ashlar (banks, museums, deco masonry) -- and the other dressed stones and
+            // terracottas of a midtown avenue.
+            const Real k = rng.unit();
+            if (k < 0.40) return lerp(Vec3(0.78, 0.66, 0.48), Vec3(0.86, 0.76, 0.58), t);
+            static const Vec3 kStone[] = {
+                {0.80, 0.79, 0.74},   // Indiana limestone
+                {0.90, 0.88, 0.82},   // white glazed terracotta (the Woolworth)
+                {0.62, 0.47, 0.43},   // pink granite
+                {0.50, 0.50, 0.50},   // grey granite
+                {0.19, 0.19, 0.20},   // black granite
+                {0.60, 0.63, 0.56},   // celadon terracotta
+            };
+            return kStone[static_cast<int>((k - 0.40) / 0.60 * 6) % 6] * (0.95 + 0.10 * t);
+        }
         case FacadeStyle::Concrete:
-        default:
-            return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
+        default: {
+            const Real k = rng.unit();
+            if (k < 0.55) return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
+            static const Vec3 kConcrete[] = {
+                {0.86, 0.85, 0.82},   // white precast (432 Park)
+                {0.70, 0.65, 0.58},   // warm sand aggregate
+                {0.56, 0.60, 0.62},   // cool blue-grey
+                {0.40, 0.40, 0.40},   // dark charcoal panel
+            };
+            return kConcrete[static_cast<int>((k - 0.55) / 0.45 * 4) % 4] * (0.95 + 0.10 * t);
+        }
     }
 }
 
@@ -142,20 +181,49 @@ bool litOfficeBay(const Vec3& bayAnchor, Real occupancy) {
     return (positionHash(bayAnchor) & 0xffu) / 255.0 < occupancy;
 }
 
-Vec3 litTint(const Vec3& worldPos, bool curtainWall) {
+int litTintIndex(const Vec3& worldPos, bool curtainWall) {
     // A second hash stream (offset anchor) so the tint is independent of the
     // lit/dark choice and the storey occupancy.
     const uint32_t h = positionHash(worldPos + Vec3(0.37, 0.11, 0.53));
     const Real u = static_cast<Real>(h & 0xffu) / 255.0;
-    if (curtainWall) {
-        if (u < 0.62) return Vec3(1.00, 0.96, 0.88);   // office white
-        if (u < 0.90) return Vec3(0.82, 0.90, 1.00);   // fluorescent blue-white
-        return Vec3(1.00, 0.82, 0.58);                 // a warm room
+    if (curtainWall) return u < 0.62 ? 1 : u < 0.90 ? 2 : 3;
+    return u < 0.60 ? 4 : u < 0.85 ? 5 : u < 0.95 ? 6 : 7;
+}
+
+// The palette mesh.frag (and lighting_surface.metal, mesh.wgsl) decode the index with -- keep them in step.
+Vec3 litTintOf(int index) {
+    switch (index) {
+        case 1: return Vec3(1.00, 0.96, 0.88);   // office white
+        case 2: return Vec3(0.82, 0.90, 1.00);   // fluorescent blue-white
+        case 3: return Vec3(1.00, 0.82, 0.58);   // a warm room
+        case 4: return Vec3(1.00, 0.72, 0.42);   // incandescent
+        case 5: return Vec3(1.00, 0.86, 0.64);   // cream
+        case 6: return Vec3(0.80, 0.88, 1.00);   // a cool room
+        case 7: return Vec3(0.72, 1.00, 0.78);   // the odd green-white
+        default: return Vec3(1, 1, 1);
     }
-    if (u < 0.60) return Vec3(1.00, 0.72, 0.42);       // incandescent
-    if (u < 0.85) return Vec3(1.00, 0.86, 0.64);       // cream
-    if (u < 0.95) return Vec3(0.80, 0.88, 1.00);       // a cool room
-    return Vec3(0.72, 1.00, 0.78);                     // the odd green-white
+}
+
+Vec3 litTint(const Vec3& worldPos, bool curtainWall) { return litTintOf(litTintIndex(worldPos, curtainWall)); }
+
+Vec3 glassGrey() { return Vec3(0.032, 0.073, 0.116); }
+
+bool mechanicalStorey(const BuildingParams& p, int floor) {
+    if (p.floors < 30 || p.parkingDecks || floor < 1 || floor >= p.floors) return false;
+    if (floor == p.floors - 1 && p.floors >= 40) return true;   // the plant under the roof
+    const int every = 15 + static_cast<int>((p.seed >> 7) % 11);
+    return floor % every == 0 && floor + 3 < p.floors;
+}
+
+  // the old grey material (0.18 0.27 0.34) squared
+
+Vec3 litPaneColour(const Vec3& glassCol, const Vec3& worldPos, bool curtainWall) {
+    const int idx = litTintIndex(worldPos, curtainWall);
+    auto chan = [](Real c, int bit) {
+        int b = static_cast<int>(std::lround(std::clamp(c, Real(0), Real(1)) * 255.0)) & ~1;
+        return static_cast<Real>(b | bit) / 255.0;
+    };
+    return Vec3(chan(glassCol.x, idx & 1), chan(glassCol.y, (idx >> 1) & 1), chan(glassCol.z, (idx >> 2) & 1));
 }
 
 RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
@@ -164,7 +232,8 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         case PartId::Glass:
             // Front face only: from inside a streamed interior the facade's
             // pane is not there, and the interior's own clear pane shows out.
-            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
+            // White: the pane's vertex colour is its glass (glassGrey, a curtain wall's tint).
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.9f; m.roughness = 0.08f;
             m.flags |= RenderMaterial::FLAG_FRONT_ONLY; break;
         case PartId::GlassLit:
             // Indistinguishable from Glass by DAY — the lit third of the
@@ -173,7 +242,10 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // and the pane's vertex colour is its TINT (litTint), which the
             // FLAG_EMISSIVE_VERTEX_TINT shader path applies to the emission
             // only, so the day glass stays the one glass colour.
-            m.albedo = {0.18, 0.27, 0.34}; m.metallic = 0.9f; m.roughness = 0.08f;
+            // The vertex colour PACKS the glass and the lit tint (litPaneColour): the interior-mapped path in
+            // mesh.frag unpacks both, so a lit pane is its building's glass by day. This albedo is the fallback
+            // for a renderer that does not unpack (the default grey).
+            m.albedo = glassGrey(); m.metallic = 0.9f; m.roughness = 0.08f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT | RenderMaterial::FLAG_FRONT_ONLY; break;
         case PartId::Beacon:
             // The lamp's LENS: red glass — a dark red by day with a tight
@@ -194,11 +266,36 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // glass look by day, emission tinted per vertex at night, no room.
             m.albedo = {0.16, 0.20, 0.26}; m.metallic = 0.6f; m.roughness = 0.2f;
             m.flags |= RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT; break;
+        case PartId::Furniture:
+            // Neutral satin: the piece's colour rides the vertex (a dark monitor stays dark, a white carcass stays
+            // white), with a little of drywall's self-light so a room without a staged light is not black.
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.0f; m.roughness = 0.55f;
+            m.emission = {0.03, 0.03, 0.03};
+            break;
+        case PartId::FurnitureWood:
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.0f; m.roughness = 0.5f;
+            m.setSurface(RenderMaterial::Surface::WoodGrain);
+            m.emission = {0.02, 0.02, 0.02};
+            break;
+        case PartId::FurnitureFabric:
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.0f; m.roughness = 0.92f;
+            m.setSurface(RenderMaterial::Surface::Fabric);
+            m.emission = {0.02, 0.02, 0.02};
+            break;
+        case PartId::FurnitureMetal:
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.85f; m.roughness = 0.28f;
+            break;
+        case PartId::FurnitureCeramic:
+            m.albedo = {1.0, 1.0, 1.0}; m.metallic = 0.0f; m.roughness = 0.12f;
+            m.emission = {0.02, 0.02, 0.02};
+            break;
         case PartId::GlassClear:
             // Clear glass: a faint blue, a sharp fresnel, most of what is
             // behind it coming through (the transparent pass), both faces.
-            m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.0f; m.roughness = 0.06f;
-            m.opacity = 0.18f; break;
+            // REFLECTIVE (Glenn, 2026-10-02): a little metal and a mirror-smooth face, so a pane catches the room
+            // and the sky instead of vanishing -- still mostly see-through.
+            m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.35f; m.roughness = 0.03f;
+            m.opacity = 0.24f; break;
         case PartId::BeaconHaze:
             // The bulb's corona: larger, fainter, the soft red halo.
             m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;
@@ -571,7 +668,9 @@ Scope scopeFromFootprint(const Poly2& footprint, Real baseY, Real height,
 
 namespace {
 
-enum class FacadeMode { Residential, Retail, Entrance, Solid };
+// Rear: a residential ground face whose middle bay is a plain SERVICE door (attached buildings' back doors);
+// facadeLayout and the emitters read it as Residential everywhere else.
+enum class FacadeMode { Residential, Retail, Entrance, Solid, Rear };
 
 // A curtain-wall storey (ADR-0040 Pass B): a continuous glass skin, not punched
 // windows — an opaque spandrel band hiding the floor slab, vision glass above,
@@ -582,6 +681,9 @@ enum class FacadeMode { Residential, Retail, Entrance, Solid };
 static void appendGlassParts(BuildingMesh& out, RenderMesh& glass, RenderMesh& glassLit,
                              bool clearPanes) {
     if (clearPanes) {
+        // Clear lobby glass is see-through whatever the tower's tint: its own faint colour (the old grey pane).
+        for (RenderMesh* m : {&glass, &glassLit})
+            for (Vertex& v : m->vertices) v.color = Vec3(0.18, 0.27, 0.34);
         appendToPart(out, PartId::GlassClear, glass);
         appendToPart(out, PartId::GlassClear, glassLit);
     } else {
@@ -590,23 +692,93 @@ static void appendGlassParts(BuildingMesh& out, RenderMesh& glass, RenderMesh& g
     }
 }
 
+namespace {
+// The glass by tint (vertex colour on the glass part): 0 keeps the wall-derived grey.
+Vec3 curtainGlassColour(uint8_t tint, const Vec3& grey) {
+    switch (tint) {
+        // The REFLECTANCE (the glass material is white, metallic): what colour the sky comes back in.
+        case 1: return Vec3(0.18, 0.32, 0.54);   // blue
+        case 2: return Vec3(0.18, 0.42, 0.33);   // green (Lever House)
+        case 3: return Vec3(0.42, 0.28, 0.15);   // bronze (Seagram)
+        case 4: return Vec3(0.06, 0.07, 0.08);   // smoke, near black
+        case 5: return Vec3(0.62, 0.66, 0.70);   // silver, a mirror
+        case 6: return Vec3(0.28, 0.36, 0.38);   // clear, pale green-grey
+        case 7: return Vec3(0.72, 0.54, 0.18);   // gold (the Toronto bank towers)
+        case 8: return Vec3(0.10, 0.38, 0.42);   // teal
+        case 9: return Vec3(0.54, 0.31, 0.23);   // copper / rose
+        default: return grey;
+    }
+}
+Vec3 curtainMullionColour(uint8_t tone) {
+    switch (tone) {
+        case 1: return Vec3(0.34, 0.25, 0.16);   // bronze
+        case 2: return Vec3(0.06, 0.06, 0.07);   // black
+        case 3: return Vec3(0.72, 0.74, 0.77);   // silver
+        case 4: return Vec3(0.88, 0.88, 0.86);   // white
+        default: return Vec3(0.34, 0.36, 0.40);  // steel
+    }
+}
+}  // namespace
+
+// How far a curtain wall's glass sits behind its mullion grid (the interior's skin is drawn just behind it).
+constexpr Real kCurtainGlassIn = 0.10;
+
+namespace {
+// The LOUVRE BAND of a mechanical storey across one face: a dark recess with horizontal blades proud of it (the
+// intake and exhaust of the plant room behind), a solid sill and head. `full` adds the blades; the far tier keeps
+// the dark band and its three lines.
+void emitLouvreBand(BuildingMesh& out, const FaceRect& fr, const Vec3& bladeCol, bool full) {
+    const Real W = fr.width, H = fr.height;
+    if (W < 0.5 || H < 0.5) return;
+    RenderMesh m;
+    const Real sill = std::min(Real(0.5), H * 0.12), head = std::min(Real(0.35), H * 0.08);
+    const Vec3 in = fr.n * -0.18;
+    const Vec3 dark(0.13, 0.13, 0.14);
+    // The solid sill and head, flush with the face.
+    MeshBuilder::emitQuad(m, fr.at(0, 0), fr.at(W, 0), fr.at(W, sill), fr.at(0, sill), fr.n, bladeCol * 0.7);
+    MeshBuilder::emitQuad(m, fr.at(0, H - head), fr.at(W, H - head), fr.at(W, H), fr.at(0, H), fr.n, bladeCol * 0.7);
+    // The recess and its reveals.
+    MeshBuilder::emitQuad(m, fr.at(0, sill) + in, fr.at(W, sill) + in, fr.at(W, H - head) + in, fr.at(0, H - head) + in,
+                          fr.n, dark);
+    MeshBuilder::emitQuad(m, fr.at(0, sill), fr.at(W, sill), fr.at(W, sill) + in, fr.at(0, sill) + in, fr.v, dark);
+    MeshBuilder::emitQuad(m, fr.at(0, H - head) + in, fr.at(W, H - head) + in, fr.at(W, H - head), fr.at(0, H - head),
+                          fr.v * -1.0, dark);
+    const Real span = H - sill - head;
+    const int blades = full ? std::max(3, static_cast<int>(span / 0.32)) : 3;
+    for (int k = 0; k < blades; ++k) {
+        // Each blade leans out and down: a strip from the recess up to near the face.
+        const Real y = sill + span * (k + 0.75) / blades;
+        const Vec3 top0 = fr.at(0, y) + in * 0.15, top1 = fr.at(W, y) + in * 0.15;
+        const Vec3 bot0 = fr.at(0, y - 0.16) + in * 0.9, bot1 = fr.at(W, y - 0.16) + in * 0.9;
+        MeshBuilder::emitQuad(m, bot0, bot1, top1, top0, normalize(fr.n + fr.v * -0.8), bladeCol);
+    }
+    appendToPart(out, PartId::Detail, m);
+}
+}  // namespace 
 void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
-                         const Vec3& wallColor,
+                         const Vec3& /*wallColor: the glass is its own colour now*/,
                          FacadeDetail detail = FacadeDetail::Full,
-                         bool clearPanes = false) {
+                         bool clearPanes = false, const CurtainStyle& cs = CurtainStyle{}) {
     Real fh = fr.height, W = fr.width;
     if (W < 0.5 || fh < 0.5) return;
     RenderMesh glass, glassLit, mull;
-    Vec3 glassCol = materialFor(PartId::Glass, wallColor).albedo;
+    Vec3 glassCol = curtainGlassColour(cs.glassTint, glassGrey());
     Vec3 spandrelCol = glassCol * 0.45;          // opaque shadow-box band
-    Vec3 mullCol(0.34, 0.36, 0.40);              // steel mullions
-    Real spandrelH = std::min(Real(0.9), fh * 0.30);
+    Vec3 mullCol = curtainMullionColour(cs.mullionTone);
+    Real spandrelH = cs.spandrelH(fh);
 
     // Glass sits INSET behind the frame plane; the mullion grid is SOLID
     // geometry — front face + side returns back to the glass — so up close it
     // reads as a frame the panes sit in, not a decal (device feedback).
-    const Real glassIn = 0.10;                   // glass plane behind the grid
+    const Real glassIn = kCurtainGlassIn;        // glass plane behind the grid
     Vec3 gin = fr.n * (-glassIn);
+    // A face too NARROW for a pane (a chamfer's first steps, a setback's sliver face): an opaque metal panel the
+    // storey's full height, not a stick-thin window (Glenn, 2026-09-30: "some windows are super skinny").
+    if (W < 1.0) {
+        emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin, fr.at(W, fh) + gin, fr.at(0, fh) + gin, fr.n, spandrelCol);
+        appendGlassParts(out, glass, glassLit, clearPanes);
+        return;
+    }
     emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin,
              fr.at(W, spandrelH) + gin, fr.at(0, spandrelH) + gin,
              fr.n, spandrelCol);                 // spandrel (floor-slab band)
@@ -619,7 +791,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     // full-width band (`curtain_wall_lights_vary_within_a_storey`). The
     // spandrel band stays dark. Flat (LOD1) runs this same loop, so the two
     // detail levels light the same offices.
-    const int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));
+    const int bays = cs.bays(W);
     const Real occupancy = litStoreyOccupancy(fr.at(0, spandrelH));
     for (int b = 0; b < bays; ++b) {
         const Real x0 = W * b / bays, x1 = W * (b + 1) / bays;
@@ -629,7 +801,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         const std::size_t pv0 = vision.vertices.size();
         emitQuad(vision, fr.at(x0, spandrelH) + gin, fr.at(x1, spandrelH) + gin,
                  fr.at(x1, fh) + gin, fr.at(x0, fh) + gin, fr.n,
-                 litBay ? litTint(bayAnchor, true) : glassCol);
+                 litBay ? litPaneColour(glassCol, bayAnchor, true) : glassCol);
         roomUV(vision, pv0, fr);
     }
     // FLAT (LOD1): the spandrel band + vision pane carry the curtain-wall read
@@ -668,6 +840,19 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         Real t0 = std::max(Real(0), ty - mw * 0.5), t1 = std::min(fh, ty + mw * 0.5);
         bar(0, t0, W, t1, false);
     }
+    // FINS: a deep vertical blade every `fins` bays (111 W 57th's ribs, a modern glass tower's shading fins),
+    // standing well proud of the grid -- they catch the light and break a glass face into strips.
+    if (cs.fins > 0) {
+        const Real finOut = 0.42, finW = 0.12;
+        const Vec3 fo = fr.n * finOut;
+        for (int b = 0; b <= bays; b += cs.fins) {
+            const Real x = std::min(std::max(b * W / bays, finW * 0.5), W - finW * 0.5);
+            const Real a0 = x - finW * 0.5, a1 = x + finW * 0.5;
+            emitQuad(mull, fr.at(a0, 0) + fo, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a0, fh) + fo, fr.n, mullCol);
+            emitQuad(mull, fr.at(a0, 0) + outv, fr.at(a0, 0) + fo, fr.at(a0, fh) + fo, fr.at(a0, fh) + outv, fr.h * -1, mullCol);
+            emitQuad(mull, fr.at(a1, 0) + outv, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a1, fh) + outv, fr.h, mullCol);
+        }
+    }
     appendGlassParts(out, glass, glassLit, clearPanes);
     appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
 }
@@ -695,17 +880,34 @@ struct BayOpening {
                               // so the springline is head - rise and the
                               // sill..head box is the arch's bounding box.
     bool entrance = false;    // this opening is the door
+    bool shopDoor = false;    // ...a SHOP's own street door (buildings: shops), not the building's entrance
+    bool backDoor = false;    // ...the building's rear service door (FacadeMode::Rear)
 };
+// A SHOP on a storefront face (Glenn, 2026-10-01: "I'm still waiting to see these small shops"): bays b0..b1
+// (inclusive), its door in bay `door`, its trade.
+struct ShopUnit { int b0 = 0, b1 = 0, door = 0; uint8_t type = 0; };
+constexpr Real kShopHead = 3.45;   // a storefront's glazing head; its fascia sign sits just above
+constexpr int kShopTypes = 7;   // cafe, grocery, boutique, bookshop, electronics, pharmacy, bakery
 struct FacadeLayout {
+    std::vector<ShopUnit> shops;   // the storefront face's shops (empty elsewhere)
     int bays = 1;
     Real bw = 0;
     bool retailish = false;
     std::vector<BayOpening> open;
 };
 
+// How many windows make a group on this face (M3): the building's windowGroup on its punched residential faces
+// with flat heads; 1 on storefronts, clerestories and arched windows.
+static int windowGroupOf(const BuildingParams& p, FacadeMode mode, bool retailish) {
+    if (mode != FacadeMode::Residential || retailish || p.window.head != OpeningStyle::Head::Flat) return 1;
+    return std::clamp(static_cast<int>(p.windowGroup), 1, 3);
+}
+
 static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                                  const BuildingParams& p) {
     FacadeLayout L;
+    const bool rear = mode == FacadeMode::Rear;
+    if (rear) mode = FacadeMode::Residential;
     L.bays = std::max(1, static_cast<int>(std::lround(fr.width / std::max(p.bayWidth, Real(0.5)))));
     L.bw = fr.width / L.bays;
     const Real bw = L.bw;
@@ -722,6 +924,12 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     } else {
         sill = L.retailish ? 0.4 : human::WINDOW_SILL;
         head = std::min(fh - 0.4, L.retailish ? fh - 0.4 : human::WINDOW_HEAD);
+        // An OFFICE storey's window (buildings M3): a building of office-height storeys (3.6 m and up, M1) glazes
+        // its storey, not a flat's 1.5 m opening -- sill at desk height, head under the ceiling void.
+        if (!L.retailish && p.floorHeight >= 3.6) {
+            sill = 0.75;
+            head = fh - std::max(Real(0.55), fh * 0.15);
+        }
         // A CONSTANT window module across every face (the piers absorb the slack),
         // so a wide face and a narrow one show the same window size, not different
         // ones (ADR-0040). Width is the bay minus piers, clamped PORTRAIT: the
@@ -733,22 +941,92 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                             p.window.head != OpeningStyle::Head::Flat;
         Real winW = std::min(arched ? Real(1.05) : Real(1.25),
                              std::max(Real(0.8), bw - 0.8));
+        // A STOREFRONT is glazed nearly bay to bay (slim piers), its head under the shop's fascia sign -- not a
+        // flat's portrait window: on a tall lobby storey those read as slits (Glenn's first look at the shops).
+        if (L.retailish) {
+            winW = std::max(Real(0.8), bw - 0.3);
+            head = std::min(fh - 0.4, kShopHead);
+        }
         margin = (bw - winW) * 0.5;
     }
     if (head <= sill) { head = fh * 0.75; sill = fh * 0.2; }
 
     const int centreBay = L.bays / 2;
+    const int group = windowGroupOf(p, mode, L.retailish);
+    // THE SHOPS of a storefront face: its bays grouped into units of two or three, each with its own door, the
+    // building's entrance bay and its neighbours kept for the lobby. Seeded by the face's own corner, so the
+    // facade, its far tier and the interior read the same shops.
+    if (L.retailish && p.groundRetail && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid) {
+        uint32_t h = positionHash(fr.bl + Vec3(0.13, 0.0, 0.29)) ^ static_cast<uint32_t>(p.seed);
+        auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+        const int lobby = mode == FacadeMode::Entrance ? centreBay : -100;
+        auto inLobby = [&](int b) { return b >= lobby - 1 && b <= lobby + 1; };
+        int b = 0;
+        while (b < L.bays) {
+            if (inLobby(b)) { ++b; continue; }
+            int run = 0;
+            while (b + run < L.bays && !inLobby(b + run)) ++run;
+            // Cut this run into units of two or three bays (a single bay joins its neighbour).
+            int s = b;
+            while (s < b + run) {
+                const int left = b + run - s;
+                int g = left <= 3 ? left : 2 + static_cast<int>(next() % 2u);
+                if (left - g == 1) g = (g == 2 ? 3 : 2);
+                if (g < 2) {   // a lone bay: grow the previous unit over it, else leave it to the lobby
+                    if (!L.shops.empty() && L.shops.back().b1 == s - 1) L.shops.back().b1 = s;
+                    break;
+                }
+                ShopUnit u;
+                u.b0 = s; u.b1 = s + g - 1;
+                u.door = g == 3 ? s + 1 : s + static_cast<int>(next() % 2u);
+                u.type = static_cast<uint8_t>(next() % static_cast<uint32_t>(kShopTypes));
+                L.shops.push_back(u);
+                s += g;
+            }
+            b += run;
+        }
+    }
+    auto isShopDoor = [&](int b) {
+        for (const ShopUnit& u : L.shops) if (u.door == b) return true;
+        return false;
+    };
     for (int b = 0; b < L.bays; ++b) {
         BayOpening o;
         o.x0 = b * bw; o.x1 = (b + 1) * bw;
         o.entrance = (mode == FacadeMode::Entrance && b == centreBay);
+        if (isShopDoor(b)) { o.entrance = true; o.shopDoor = true; }
+        // the back door: the middle bay, or with a fire escape the END bay, so the stair has the rest of the wall
+        // for a walkable pitch
+        if (rear && b == (p.fireEscape && L.bays >= 3 ? 0 : centreBay) && fr.width >= 1.6) {
+            o.entrance = true;
+            o.backDoor = true;
+        }
         o.wx0 = o.x0 + margin; o.wx1 = o.x1 - margin;       // window/opening span
+        if (group > 1) {
+            // GROUPED windows (M3): a slim mullion inside the group, a broad pier at its ends.
+            const bool first = b % group == 0, last = b % group == group - 1 || b == L.bays - 1;
+            const Real outer = std::max(Real(0.3), margin * 1.25);
+            o.wx0 = o.x0 + (first ? outer : 0.08);
+            o.wx1 = o.x1 - (last ? outer : 0.08);
+        }
         o.sill = o.entrance ? 0.0 : sill;
         o.head = o.entrance ? std::min(human::DOOR_HEIGHT, fh - 0.3) : head;
         if (o.entrance) {
             Real dw = std::min(human::DOOR_WIDTH, bw - 0.4);
             Real cx = (o.x0 + o.x1) * 0.5;
             o.wx0 = cx - dw * 0.5; o.wx1 = cx + dw * 0.5;
+        }
+        // TOO NARROW TO BE A WINDOW (Glenn: "some windows are super skinny"): a face narrower than a window
+        // module, or an opening squeezed under 0.55 m, is BLANK -- solid wall. Encoded as a zero-height opening at
+        // mid-storey, so every reader (the facade, its far tier, the inner wall) fills the bay with wall unchanged.
+        // ...and a BIG BOX's walls are blank but for its doors (the sign and the entry glazing dress the front).
+        if (!o.entrance && (fr.width < 1.2 || o.wx1 - o.wx0 < 0.55 || p.bigBox)) {
+            const Real mid = (o.x0 + o.x1) * 0.5;
+            o.wx0 = o.wx1 = mid;
+            o.sill = o.head = fh * 0.5;
+            o.rise = 0;
+            L.open.push_back(o);
+            continue;
         }
         // THE ARCH, decided here and nowhere else. It used to be worked out
         // inside the full facade emitter, so the inner wall and the flat
@@ -766,6 +1044,73 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
         L.open.push_back(o);
     }
     return L;
+}
+
+// THE GROUND STOREY'S MODE on edge `e` -- what the exterior draws there, and so where the shops and their doors
+// are: the entrance edge is the Entrance, a vehicle-bay front or the stair's wall carries no openings to speak of
+// (Solid), a storefront edge that does not face the street (retailStreetOnly) is a plain wall. One answer for the
+// exterior, its far tier, the interior's colliders and its shops.
+}  // namespace (the two below are declared in the header)
+
+bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e) {
+    const std::size_t n = plan.size();
+    if (params.partyWalls == 0 || n < 3) return false;
+    const Vec2 a = plan[e % n], b = plan[(e + 1) % n];
+    const Vec2 d = b - a;
+    const Real len = d.length();
+    if (len < 1e-6) return false;
+    const Vec2 nrm(d.y / len, -d.x / len);   // CCW plan: outward
+    for (int k = 0; k < std::min<int>(params.partyWalls, 2); ++k) {
+        const Vec2 N = params.partyN[k];
+        if (dot(nrm, N) < 0.98) continue;
+        if (std::fabs(dot(a, N) - params.partyAt[k]) < 0.35 && std::fabs(dot(b, N) - params.partyAt[k]) < 0.35)
+            return true;
+    }
+    return false;
+}
+
+std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params) {
+    std::size_t best = plan.size();
+    Real bestLen = 0;
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        const Vec2 d = plan[(i + 1) % plan.size()] - plan[i];
+        const Real len = d.length();
+        if (len < 2.0 || len <= bestLen) continue;
+        const Vec2 nrm(d.y / len, -d.x / len);
+        if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z > -0.7) continue;
+        if (partyEdge(plan, params, i)) continue;
+        best = i;
+        bestLen = len;
+    }
+    return best;
+}
+
+namespace {
+
+static FacadeMode groundModeFor(const Poly2& plan, const BuildingParams& params, std::size_t e,
+                                std::size_t entranceEdge) {
+    if (e == entranceEdge && params.groundBays > 0) return FacadeMode::Solid;
+    // A PARTY WALL has nothing in it: the neighbour stands against it.
+    if (e != entranceEdge && partyEdge(plan, params, e)) return FacadeMode::Solid;
+    const FacadeMode base = params.solidFacade ? FacadeMode::Solid
+                          : params.groundRetail ? FacadeMode::Retail
+                                                : FacadeMode::Residential;
+    FacadeMode mode = (e == entranceEdge && params.walkableGround) ? FacadeMode::Entrance : base;
+    if (params.openDoorway && e != entranceEdge) {
+        const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
+        if (il.hasStair && e == il.edge) return FacadeMode::Solid;
+    }
+    if (mode == FacadeMode::Retail && params.retailStreetOnly) {
+        const Vec2 a = plan[e], b = plan[(e + 1) % plan.size()];
+        const Vec2 d = normalize(b - a);
+        const Vec2 nrm(d.y, -d.x);
+        if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z < 0.35) mode = FacadeMode::Residential;
+    }
+    // The BACK DOOR: the rear face's middle bay, out to the yard (attached buildings).
+    if (params.backDoor && params.walkableGround && e != entranceEdge && mode != FacadeMode::Entrance &&
+        e == rearEdgeOf(plan, params))
+        mode = FacadeMode::Rear;
+    return mode;
 }
 
 // The ARC of an arched head, left springer to right springer, in FACE space
@@ -843,9 +1188,10 @@ static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge
 // 1.6 m bays). The same bay count and transom lines as emitCurtainWallRect,
 // as bars standing proud of the inner glass into the room, so a bay reads
 // as the same bay from both sides.
-static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real inset, Real spandrelH) {
+static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real inset, Real spandrelH,
+                                 const CurtainStyle& cs = CurtainStyle{}) {
     RenderMesh mull;
-    const Vec3 mullCol(0.34, 0.36, 0.40);
+    const Vec3 mullCol = curtainMullionColour(cs.mullionTone);
     const Real W = fr.width, fh = fr.height, mw = 0.09, proud = 0.06;
     if (W < 2.0 * inset + 0.5 || fh < 0.5) return;
     const Vec3 gin = fr.n * -inset;               // the inner glass plane
@@ -859,7 +1205,7 @@ static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real ins
         emitQuad(mull, fr.at(a0, b0) + inv, fr.at(a1, b0) + inv, fr.at(a1, b1) + inv, fr.at(a0, b1) + inv,
                  fr.n * -1.0, mullCol);
     };
-    const int bays = std::max(1, static_cast<int>(std::lround(W / 1.6)));   // emitCurtainWallRect's rule
+    const int bays = cs.bays(W);   // emitCurtainWallRect's rule
     for (int b = 0; b <= bays; ++b) {
         const Real x = std::min(std::max(b * W / bays, inset + mw * 0.5), W - inset - mw * 0.5);
         bar(x - mw * 0.5, 0, x + mw * 0.5, fh, true);
@@ -872,7 +1218,7 @@ static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real ins
 
 void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                        const FacadeLayout& L, Real thick,
-                       const Vec3& wallColor, const Poly2& plan,
+                       const Vec3& /*wallColor*/, const Poly2& plan,
                        const Vec3& paint, bool curtainWall, bool clearPanes = false,
                        Real revealFrom = 0.0) {
     RenderMesh wall, glass, glassLit;
@@ -937,8 +1283,8 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
             const bool lit = litWindow(fr.at(o.wx0, o.sill));
             RenderMesh& pane = lit ? glassLit : glass;
             const std::size_t pv0 = pane.vertices.size();
-            const Vec3 pcol = lit ? litTint(fr.at(o.wx0, o.sill), curtainWall)
-                                  : materialFor(PartId::Glass, wallColor).albedo;
+            const Vec3 pcol = lit ? litPaneColour(glassGrey(), fr.at(o.wx0, o.sill), curtainWall)
+                                  : glassGrey();
             q(pane, o.wx0, o.sill, o.wx1, narc > 0 ? ysp : o.head, pcol, in + fr.n * 0.02);
             if (narc > 0) {
                 const Vec3 off = in + fr.n * 0.02;
@@ -994,19 +1340,22 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
 static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                                const BuildingParams& p, const Vec3& wallColor) {
     RenderMesh wall, glass, glassLit, door;
+    const FacadeMode layoutMode = mode;   // Rear lays its back door out, and is Residential otherwise
+    if (mode == FacadeMode::Rear) mode = FacadeMode::Residential;
     emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0),
              fr.at(fr.width, fr.height), fr.at(0, fr.height), fr.n, wallColor);
     const Vec3 proud = fr.n * 0.02;
-    const Vec3 gcol = materialFor(PartId::Glass, wallColor).albedo;
+    const Vec3 gcol = glassGrey();
     const Vec3 dcol = materialFor(PartId::Door, wallColor).albedo;
-    for (const BayOpening& o : facadeLayout(fr, mode, p).open) {
+    for (const BayOpening& o : facadeLayout(fr, layoutMode, p).open) {
         // Same anchor as the full emitter's pane (fr.at(wx0, sill)), so a
         // window keeps its lit/dark choice across the LOD swap.
+        if (!o.entrance && o.head - o.sill < 1e-3) continue;   // a BLANK bay (facadeLayout): the wall quad has it
         const bool litPane = !o.entrance && litWindow(fr.at(o.wx0, o.sill));
         RenderMesh& dst = o.entrance ? door : (litPane ? glassLit : glass);
         const std::size_t pv0 = dst.vertices.size();
         const Vec3 fcol = o.entrance ? dcol
-                                     : (litPane ? litTint(fr.at(o.wx0, o.sill), p.curtainWall) : gcol);
+                                     : (litPane ? litPaneColour(gcol, fr.at(o.wx0, o.sill), p.curtainWall) : gcol);
         Vec2 farc[9];
         Vec2 farcC;
         const int fn = openingArc(o, farc, 8, &farcC);       // the middle tier arches too
@@ -1019,6 +1368,29 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
                                  fr.at(farc[k].x, farc[k].y) + proud,
                                  fr.at(farc[k + 1].x, farc[k + 1].y) + proud, fr.n, fcol);
         if (!o.entrance) roomUV(dst, pv0, fr);
+    }
+    // VERTICALS on the middle tier (M3): the dark spandrel bands and the pier fronts -- the stripe that carries
+    // the tower's look across the street.
+    const FacadeLayout FL = facadeLayout(fr, mode, p);
+    if (p.verticals && mode == FacadeMode::Residential && !FL.retailish) {
+        const int g = windowGroupOf(p, mode, FL.retailish);
+        const Vec3 sp = fr.n * 0.01, sc = wallColor * 0.62;
+        for (std::size_t b = 0; b < FL.open.size(); ++b) {
+            const BayOpening& o = FL.open[b];
+            if (o.entrance || o.rise > 0) continue;
+            const bool first = g <= 1 || b % g == 0, last = g <= 1 || static_cast<int>(b % g) == g - 1 || b + 1 == FL.open.size();
+            const Real sx0 = first ? o.wx0 : o.x0, sx1 = last ? o.wx1 : o.x1;
+            emitQuad(wall, fr.at(sx0, 0) + sp, fr.at(sx1, 0) + sp, fr.at(sx1, o.sill) + sp, fr.at(sx0, o.sill) + sp, fr.n, sc);
+            emitQuad(wall, fr.at(sx0, o.head) + sp, fr.at(sx1, o.head) + sp, fr.at(sx1, fr.height) + sp,
+                     fr.at(sx0, fr.height) + sp, fr.n, sc);
+        }
+        for (int b = 0; b <= FL.bays; b += g) {
+            const Real pw = 0.6, x = std::min(std::max(std::min(b, FL.bays) * FL.bw, pw * 0.5), fr.width - pw * 0.5);
+            const Vec3 o3 = fr.n * 0.24, al = fr.h * (pw * 0.5);
+            emitQuad(wall, fr.at(x, 0) - al + o3, fr.at(x, 0) + al + o3, fr.at(x, fr.height) + al + o3,
+                     fr.at(x, fr.height) - al + o3, fr.n, wallColor * 1.05);
+            if (b == FL.bays) break;
+        }
     }
     appendToPart(out, p.wallPart, wall);
     appendToPart(out, PartId::Glass, glass);
@@ -1036,6 +1408,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
     // The splitter's decisions come from the SHARED layout (see facadeLayout):
     // this function only decides how much detail to draw them with.
     const FacadeLayout L = facadeLayout(fr, mode, p);
+    if (mode == FacadeMode::Rear) mode = FacadeMode::Residential;   // the layout has its back door
     const int bays = L.bays;
     const Real bw = L.bw;
     const Real fh = fr.height;
@@ -1082,8 +1455,30 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
 
         // Wall surround: below, piers to the springline, above the apex — and
         // for an arch, the SPANDRELS between the arc and the apex line.
-        wallQuad(x0, x1, 0, openSill);                       // below opening
-        wallQuad(x0, x1, openHead, fh);                      // above apex
+        if (p.verticals && !entrance && !retailish && rise <= 0 && mode == FacadeMode::Residential) {
+            // VERTICALS (M3): the spandrel under and over the window set back and darker, running across the
+            // group's inner mullions; the broad piers stay on the wall plane (and wear the proud pier below).
+            const int g = windowGroupOf(p, mode, retailish);
+            const int bi = static_cast<int>(std::lround(x0 / std::max(bw, Real(1e-6))));
+            const bool first = g <= 1 || bi % g == 0, last = g <= 1 || bi % g == g - 1 || bi == bays - 1;
+            const Real sx0 = first ? wx0 : x0, sx1 = last ? wx1 : x1;
+            const Real sd = 0.10;
+            const Vec3 in = fr.n * -sd, sc = wallColor * 0.62;
+            wallQuad(x0, sx0, 0, openSill); wallQuad(sx1, x1, 0, openSill);
+            wallQuad(x0, sx0, openHead, fh); wallQuad(sx1, x1, openHead, fh);
+            for (const auto& [b0, b1] : {std::pair<Real, Real>{0, openSill}, std::pair<Real, Real>{openHead, fh}}) {
+                if (b1 - b0 < 1e-3) continue;
+                emitQuad(wall, fr.at(sx0, b0) + in, fr.at(sx1, b0) + in, fr.at(sx1, b1) + in, fr.at(sx0, b1) + in,
+                         fr.n, sc);
+                if (first) emitQuad(wall, fr.at(sx0, b0), fr.at(sx0, b0) + in, fr.at(sx0, b1) + in, fr.at(sx0, b1),
+                                    fr.h, wallColor * 0.8);
+                if (last) emitQuad(wall, fr.at(sx1, b0) + in, fr.at(sx1, b0), fr.at(sx1, b1), fr.at(sx1, b1) + in,
+                                   fr.h * -1, wallColor * 0.8);
+            }
+        } else {
+            wallQuad(x0, x1, 0, openSill);                   // below opening
+            wallQuad(x0, x1, openHead, fh);                  // above apex
+        }
         wallQuad(x0, wx0, openSill, ysp);                    // left pier
         wallQuad(wx1, x1, openSill, ysp);                    // right pier
         if (rise > 0) {
@@ -1104,6 +1499,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             }
         }
 
+        if (!entrance && openHead - openSill < 1e-3) continue;   // a BLANK bay: all wall (facadeLayout)
         if (entrance) {
             // The DOOR element: a recessed doorway. Closed like the windows —
             // jambs + lintel + threshold connect the wall opening back to the
@@ -1157,7 +1553,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // AWNING over the DOOR (device: it was centred on the face, not the
             // door — it belongs to the door grammar): a projecting ledge just
             // above the opening, spanning a little wider than the leaf.
-            if (p.awning) {
+            if (p.awning && !bay.backDoor) {
                 const Real aw = std::min((wx1 - wx0) + 1.2, fr.width - 0.4);
                 const Real ac = (wx0 + wx1) * 0.5;
                 Vec3 c0 = fr.at(ac - aw * 0.5, openHead + 0.22);
@@ -1173,11 +1569,11 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // aperture: the lot layer turns it into a DoorSpec for colliders,
             // records and the leaf.
             out.attaches.push_back({fr.at((wx0 + wx1) * 0.5, 0), fr.n,
-                                    "entrance", wx1 - wx0, openHead});
+                                    bay.shopDoor ? "shopdoor" : bay.backDoor ? "backdoor" : "entrance", wx1 - wx0, openHead});
         } else {
             const Vec3 in = fr.n * (-p.windowInset);
             const Vec3 rev = wallColor * 0.82;
-            const Vec3 gcol = materialFor(PartId::Glass, wallColor).albedo;
+            const Vec3 gcol = glassGrey();
             // Reveals: close the recess between the wall opening and the inset
             // glass — sill, jambs to the springline, then a flat lintel or the
             // arc SOFFIT (per-segment quads whose normals point at the arc
@@ -1254,7 +1650,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // emitter hashes, so LOD swaps keep the same homes lit).
             const bool litPane = litWindow(fr.at(wx0, openSill));
             RenderMesh& pane = litPane ? glassLit : glass;
-            const Vec3 pcol = litPane ? litTint(fr.at(wx0, openSill), p.curtainWall) : gcol;
+            const Vec3 pcol = litPane ? litPaneColour(gcol, fr.at(wx0, openSill), p.curtainWall) : gcol;
             const std::size_t pv0 = pane.vertices.size();
             emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, pcol);
             if (rise > 0) {
@@ -1347,6 +1743,26 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
         appendToPart(out, PartId::Trim, trim);
     }
 
+    // VERTICAL PIERS (M3): a pier proud of the wall at every window group's edge, the storey's full height -- the
+    // storeys stack them into one unbroken line up the tower.
+    if (p.verticals && mode == FacadeMode::Residential && !retailish) {
+        const int g = windowGroupOf(p, mode, retailish);
+        const Real proud = 0.24;
+        for (int b = 0; b <= bays; b += g) {
+            const int bb = std::min(b, bays);
+            const Real outer = bb < bays ? (L.open[static_cast<std::size_t>(bb)].wx0 - L.open[static_cast<std::size_t>(bb)].x0)
+                                         : (L.open.back().x1 - L.open.back().wx1);
+            const Real pw = std::clamp(outer * 1.5, Real(0.35), Real(0.9));
+            const Real x = std::min(std::max(bb * bw, pw * 0.5), fr.width - pw * 0.5);
+            const Vec3 c0 = fr.at(x, 0), c1 = fr.at(x, fh);
+            const Vec3 along = fr.h * (pw * 0.5), outv = fr.n * proud;
+            const Vec3 pc = wallColor * 1.05;
+            emitQuad(wall, c0 - along + outv, c0 + along + outv, c1 + along + outv, c1 - along + outv, fr.n, pc);
+            emitQuad(wall, c0 + along, c0 + along + outv, c1 + along + outv, c1 + along, fr.h, pc * 0.85);
+            emitQuad(wall, c0 - along + outv, c0 - along, c1 - along, c1 - along + outv, fr.h * -1, pc * 0.85);
+            if (b == bays) break;
+        }
+    }
     // The wall surface goes to the building's chosen facade part (procedural
     // brick/concrete/stucco/metal, or the flat Wall).
     appendToPart(out, p.wallPart, wall);
@@ -1415,7 +1831,7 @@ static BuildingMesh growCylinder(const Scope& scope, const BuildingParams& p) {
     Real R = std::min(scope.size.x, scope.size.z) * 0.5 * 0.96;
     int sides = std::max(20, p.sides);
     Vec3 wall = p.wallColor;
-    Vec3 glass = materialFor(PartId::Glass, wall).albedo;
+    Vec3 glass = glassGrey();
     Real y = baseY;
     Real gh = p.groundHeight;
 
@@ -1519,7 +1935,7 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
                 emitBox(out, Scope{cXZ + Vec3(sx * w - 0.16, y, sz * w - 0.16),
                                    {r, Vec3(0, 1, 0), f}, Vec3(0.32, tierH, 0.32)},
                         PartId::Trim, colCol);
-        boxAt(y + tierH * 0.18, tierH * 0.6, w * 0.82, PartId::Glass, Vec3(0.18, 0.10, 0.06));
+        boxAt(y + tierH * 0.18, tierH * 0.6, w * 0.82, PartId::Glass, Vec3(0.032, 0.027, 0.020));
         y += tierH;
         // Flared roof at the top of this tier (deep eaves, upturned corners).
         emitFlaredRoof(out, cXZ, y, w, w * 0.55, w * 0.62, w * 0.16, tile);
@@ -1870,7 +2286,7 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
                                              : FacadeMode::Residential;
         for (int side = 0; side < 4; ++side) {
             if (params.curtainWall)
-                emitCurtainWallRect(out, faceOf(storey, side), wallColor, detail);
+                emitCurtainWallRect(out, faceOf(storey, side), wallColor, detail, false, curtainStyleOf(params));
             else emitFacade(out, storey, side, mode, upper, wallColor, detail);
         }
         if (i == params.floors / 2) {
@@ -2380,6 +2796,256 @@ static void emitParkingDeckRect(BuildingMesh& out, const FaceRect& fr,
 // ART-DECO SPIRE CROWN: stepped setback blocks over the top tier and a
 // lathe-turned mast — the skyline finial (replaces the mechanical penthouse).
 // Returns the crown's rise above roofY.
+// THE TOP of a tower (buildings M2; Glenn, 2026-09-30: "tops ... the skyline is where variety shows most"): what
+// stands on the roof against the sky, by BuildingParams::top --
+//   2 SCREEN   the curtain wall run on past the roof, a storey and a half of glass hiding the plant;
+//   3 SLOPED   a single-pitch glass roof across the short side (Citigroup Center);
+//   4 FACETED  a truncated glass pyramid and a mast (Bank of America Plaza), glowing at night on half of them;
+//   5 LANTERN  a lit glass box set back on the roof, capped -- the skyline's lamp after dark;
+//   6 FRAME    an open frame of posts and beams, a storey and a half tall (the open crowns of the new towers);
+//   7 ANTENNAS two masts on the long axis (Sears);
+//   8 MAST     one mast on a plinth (One World Trade Center).
+// The plan forms (screen, faceted, lantern, frame) take any CONVEX top plan, octagon and drum included; sloped needs a
+// rect-ish top. A top that cannot stand on this plan returns 0 and the caller keeps the penthouse. Returns the rise
+// above roofY. `bodyH` is the building's height to the roof (the masts scale with it).
+static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real bodyH, const BuildingParams& p,
+                         const Vec3& /*wallColor*/, bool full, bool rectish) {
+    if (topIn.size() < 3 || p.top < 2) return 0;
+    Poly2 top = topIn;
+    ensureCCW(top);
+    bool convex = true;
+    for (std::size_t i = 0; i < top.size(); ++i) {
+        const Vec2 a = top[i], b = top[(i + 1) % top.size()], c = top[(i + 2) % top.size()];
+        if ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) < -1e-6) { convex = false; break; }
+    }
+    const OBB2 obb = orientedBoundingBox(top);
+    const Real shortW = 2 * std::min(obb.half[0], obb.half[1]);
+    const Real fh = std::max(Real(3.0), p.floorHeight);
+    const Vec2 c2 = centroid(top);
+    const Vec3 up(0, 1, 0);
+    const Vec3 glass = p.curtainWall ? curtainGlassColour(p.glassTint, glassGrey()) : glassGrey();
+    const Vec3 metal = curtainMullionColour(p.mullionTone);
+    const uint32_t h = positionHash(Vec3(c2.x, roofY, c2.y) + Vec3(0.17, 0.41, 0.83));
+    RenderMesh glassM, litM, metalM, roofM;
+    auto Y = [](const Vec2& v, Real y) { return Vec3(v.x, y, v.y); };
+    auto quad = [](RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& cc, const Vec3& d, const Vec3& col) {
+        const Vec3 n = normalize(cross(b - a, d - a));
+        emitQuad(m, a, b, cc, d, n, col);
+    };
+    // A vertical box post or beam (metal), centred on a segment's foot.
+    auto post = [&](const Vec2& at, Real y0, Real hgt, Real w) {
+        emitBox(out, Scope{Vec3(at.x - w * 0.5, y0, at.y - w * 0.5), {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(w, hgt, w)},
+                PartId::Detail, metal * 1.1);
+    };
+    auto beacon = [&](const Vec3& at) {
+        emitBox(out, Scope{at - Vec3(0.2, 0, 0.2), {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(0.4, 0.5, 0.4)},
+                PartId::Beacon, Vec3(1.0, 0.04, 0.02));
+        out.attaches.push_back({at + Vec3(0, 0.25, 0), up, "beacon"});
+    };
+    // A mast: three stacked, narrowing boxes and a beacon at the tip.
+    auto mast = [&](const Vec2& at, Real y0, Real hgt, Real w, const Vec3& col) {
+        Real y = y0;
+        const Real seg[3] = {0.45, 0.35, 0.20}, wid[3] = {1.0, 0.7, 0.4};
+        for (int k = 0; k < 3; ++k) {
+            const Real ww = w * wid[k], hh = hgt * seg[k];
+            emitBox(out, Scope{Vec3(at.x - ww * 0.5, y, at.y - ww * 0.5), {Vec3(1, 0, 0), up, Vec3(0, 0, 1)}, Vec3(ww, hh, ww)},
+                    PartId::Detail, col);
+            y += hh;
+        }
+        beacon(Vec3(at.x, y, at.y));
+        return y - y0;
+    };
+    // The glass screen around a plan, `H` tall: glass outside, a dark back inside, a mullion every bay, a cap.
+    auto screen = [&](const Poly2& pl, Real y0, Real H) {
+        for (std::size_t e = 0; e < pl.size(); ++e) {
+            const Vec2 a = pl[e], b = pl[(e + 1) % pl.size()];
+            const Real W = (b - a).length();
+            if (W < 0.3) continue;
+            quad(glassM, Y(a, y0), Y(b, y0), Y(b, y0 + H), Y(a, y0 + H), glass);
+            quad(metalM, Y(b, y0), Y(a, y0), Y(a, y0 + H), Y(b, y0 + H), Vec3(0.10, 0.10, 0.11));
+            const int bays = std::max(1, static_cast<int>(std::lround(W / 3.0)));
+            if (full)
+                for (int k = 0; k <= bays; ++k) {
+                    const Vec2 at = a + (b - a) * (static_cast<Real>(k) / bays);
+                    const Vec2 n = normalize(Vec2(b.y - a.y, a.x - b.x));   // outward (CCW)
+                    const Vec2 o = at + n * 0.08;
+                    quad(metalM, Y(o - normalize(b - a) * 0.06, y0), Y(o + normalize(b - a) * 0.06, y0),
+                         Y(o + normalize(b - a) * 0.06, y0 + H), Y(o - normalize(b - a) * 0.06, y0 + H), metal);
+                }
+        }
+        emitPlanParapet(out, pl, y0 + H - 0.05, 0.05, metal, PartId::Detail, metal);
+    };
+    Real rise = 0;
+    switch (p.top) {
+        case 2: {   // SCREEN
+            const Real H = std::clamp(fh * 1.6, Real(5.0), Real(9.0));
+            screen(top, roofY, H);
+            rise = H;
+            break;
+        }
+        case 3: {   // SLOPED
+            if (!rectish) return 0;
+            const int la = obb.longAxis(), sa = 1 - la;
+            const Vec2 L = obb.axis[la] * obb.half[la], S = obb.axis[sa] * obb.half[sa];
+            const Vec2 o = obb.center;
+            const Real H = shortW * (0.55 + 0.35 * ((h & 0xffu) / 255.0));
+            // Low edge on -S, high edge on +S.
+            const Vec3 A = Y(o - L - S, roofY), B = Y(o + L - S, roofY), C = Y(o + L + S, roofY), D = Y(o - L + S, roofY);
+            const Vec3 Cu = C + up * H, Du = D + up * H;
+            quad(glassM, A, B, Cu, Du, glass);                 // the slope
+            quad(glassM, C, D, Du, Cu, glass);                 // the tall back face
+            MeshBuilder::emitTri(glassM, B, C, Cu, normalize(cross(C - B, Cu - B)), glass);
+            MeshBuilder::emitTri(glassM, D, A, Du, normalize(cross(A - D, Du - D)), glass);
+            if (full) {   // mullion lines down the slope
+                const int n = std::max(2, static_cast<int>((obb.half[la] * 2) / 3.0));
+                for (int k = 1; k < n; ++k) {
+                    const Real t = static_cast<Real>(k) / n;
+                    const Vec3 lo = A + (B - A) * t, hi = Du + (Cu - Du) * t;
+                    const Vec3 side = normalize(B - A) * 0.07, lift = normalize(cross(B - A, Du - A)) * 0.05;
+                    quad(metalM, lo - side + lift, lo + side + lift, hi + side + lift, hi - side + lift, metal);
+                }
+            }
+            rise = H;
+            break;
+        }
+        case 4: {   // FACETED
+            if (!convex) return 0;
+            const Real H = shortW * (0.55 + 0.25 * ((h & 0xffu) / 255.0));
+            Poly2 lo = offsetPlan(top, 0.4), hi = top;
+            for (Vec2& v : hi) v = c2 + (v - c2) * 0.14;
+            const bool glow = ((h >> 8) & 1u) != 0;
+            // A masonry tower's pyramid is METAL -- verdigris copper, bright copper or slate -- not glass.
+            static const Vec3 kRoofMetal[3] = {{0.45, 0.72, 0.60}, {0.80, 0.45, 0.28}, {0.30, 0.32, 0.36}};
+            RenderMesh& faces = glow ? litM : (p.curtainWall ? glassM : metalM);
+            const Vec3 faceCol = glow ? Vec3(0.95, 0.90, 0.80) : p.curtainWall ? glass : kRoofMetal[(h >> 12) % 3];
+            for (std::size_t e = 0; e < lo.size() && e < hi.size(); ++e) {
+                const std::size_t f = (e + 1) % lo.size();
+                quad(faces, Y(lo[e], roofY), Y(lo[f], roofY), Y(hi[f], roofY + H), Y(hi[e], roofY + H), faceCol);
+                if (full) {   // a metal rib up each arris
+                    const Vec3 a = Y(lo[e], roofY), b = Y(hi[e], roofY + H);
+                    const Vec3 side = normalize(Y(lo[f], roofY) - a) * 0.09;
+                    quad(metalM, a - side, a + side, b + side * 0.4, b - side * 0.4, metal);
+                }
+            }
+            emitPlanSlab(out, hi, roofY + H + 0.3, 0.3, PartId::Roof, metal);
+            rise = H + 0.3 + mast(c2, roofY + H + 0.3, std::clamp(H * 0.6, Real(6), Real(30)), 0.9, metal * 1.2);
+            break;
+        }
+        case 5: {   // LANTERN
+            if (!convex) return 0;
+            const Poly2 lan = offsetPlan(top, std::max(Real(2.0), shortW * 0.18));
+            if (lan.size() < 3 || std::fabs(area(lan)) < 20) return 0;
+            const Real H = fh * 2.0;
+            for (std::size_t e = 0; e < lan.size(); ++e) {
+                const Vec2 a = lan[e], b = lan[(e + 1) % lan.size()];
+                quad(litM, Y(a, roofY), Y(b, roofY), Y(b, roofY + H), Y(a, roofY + H), Vec3(0.95, 0.92, 0.85));
+            }
+            if (full)
+                for (const Vec2& v : lan) post(v, roofY, H, 0.35);
+            emitPlanSlab(out, offsetPlan(lan, -0.5), roofY + H + 0.6, 0.6, PartId::Roof, metal);
+            rise = H + 0.6;
+            break;
+        }
+        case 6: {   // FRAME
+            if (!convex) return 0;
+            const Real H = fh * 1.6, w = 0.55;
+            const Poly2 ring = offsetPlan(top, 0.3);
+            for (std::size_t e = 0; e < ring.size(); ++e) {
+                const Vec2 a = ring[e], b = ring[(e + 1) % ring.size()];
+                const Real W = (b - a).length();
+                const int n = std::max(1, static_cast<int>(std::lround(W / 4.5)));
+                for (int k = 0; k < n; ++k) post(a + (b - a) * (static_cast<Real>(k) / n), roofY, H, w);
+                // The ring beam along the edge.
+                const Vec2 d = normalize(b - a), nn(-d.y, d.x);
+                const Vec2 a0 = a + nn * (w * 0.5), b0 = b + nn * (w * 0.5), a1 = a - nn * (w * 0.5), b1 = b - nn * (w * 0.5);
+                quad(metalM, Y(a1, roofY + H), Y(b1, roofY + H), Y(b0, roofY + H), Y(a0, roofY + H), metal * 1.1);
+                quad(metalM, Y(a1, roofY + H - w), Y(b1, roofY + H - w), Y(b1, roofY + H), Y(a1, roofY + H), metal * 1.1);
+                quad(metalM, Y(b0, roofY + H - w), Y(a0, roofY + H - w), Y(a0, roofY + H), Y(b0, roofY + H), metal * 1.1);
+            }
+            rise = H;
+            break;
+        }
+        case 7: {   // ANTENNAS
+            const int la = obb.longAxis();
+            const Vec2 L = obb.axis[la] * (obb.half[la] * 0.45);
+            const Real Hm = std::clamp(bodyH * 0.18, Real(20), Real(90));
+            const Vec3 white(0.82, 0.82, 0.80);
+            const Real r1 = mast(obb.center - L, roofY, Hm, 1.6, white);
+            const Real r2 = mast(obb.center + L, roofY, Hm * (0.88 + 0.12 * ((h & 0xffu) / 255.0)), 1.6, white);
+            rise = std::max(r1, r2);
+            break;
+        }
+        case 8: {   // MAST
+            if (!convex) return 0;
+            const Poly2 plinth = offsetPlan(top, shortW * 0.3);
+            if (plinth.size() >= 3) screen(plinth, roofY, fh);
+            const Real Hm = std::clamp(bodyH * 0.25, Real(25), Real(120));
+            rise = fh + mast(c2, roofY + fh, Hm, 2.2, Vec3(0.78, 0.79, 0.80));
+            break;
+        }
+        default: return 0;
+    }
+    appendToPart(out, PartId::Glass, glassM);
+    appendToPart(out, PartId::LitBand, litM);
+    appendToPart(out, PartId::Detail, metalM);
+    appendToPart(out, PartId::Roof, roofM);
+    return rise;
+}
+
+
+// THE EXPOSED EDGES of a lower tier (buildings M10): the stretches of its outline that are roof edge, not wall --
+// what is left of each edge once the stretches an upper tier's edges run along (collinear, within 5 cm) are taken
+// out. A setback tier sits wholly inside the one below and covers nothing: then `covered` is false and the caller
+// keeps the closed parapet ring exactly as before. A FLUSH face (a bundled tube that drops out, a feathered step)
+// covers part of the outline: only the rest gets a parapet, so no ledge wraps round the tower at the drop-off.
+struct ExposedRun { Vec2 a, b; };
+static std::vector<ExposedRun> exposedRuns(const Poly2& lowerIn, const Poly2& upperIn, bool& covered) {
+    Poly2 lower = lowerIn, upper = upperIn;
+    ensureCCW(lower); ensureCCW(upper);
+    std::vector<ExposedRun> runs;
+    covered = false;
+    for (std::size_t i = 0; i < lower.size(); ++i) {
+        const Vec2 a = lower[i], b = lower[(i + 1) % lower.size()];
+        const Real L = (b - a).length();
+        if (L < 1e-6) continue;
+        const Vec2 d = (b - a) * (1.0 / L);
+        std::vector<std::pair<Real, Real>> cov;
+        for (std::size_t j = 0; j < upper.size(); ++j) {
+            const Vec2 c = upper[j], e = upper[(j + 1) % upper.size()];
+            auto off = [&](const Vec2& q) { return std::fabs(cross(d, q - a)); };
+            if (off(c) > 0.05 || off(e) > 0.05) continue;
+            Real t0 = dot(c - a, d), t1 = dot(e - a, d);
+            if (t0 > t1) std::swap(t0, t1);
+            t0 = std::max(t0, Real(0)); t1 = std::min(t1, L);
+            if (t1 - t0 > 0.05) cov.push_back({t0, t1});
+        }
+        if (cov.empty()) { runs.push_back({a, b}); continue; }
+        covered = true;
+        std::sort(cov.begin(), cov.end());
+        Real t = 0;
+        for (const auto& [c0, c1] : cov) {
+            if (c0 > t + 0.05) runs.push_back({a + d * t, a + d * c0});
+            t = std::max(t, c1);
+        }
+        if (L > t + 0.05) runs.push_back({a + d * t, b});
+    }
+    return runs;
+}
+
+// One straight PARAPET RUN: an upstand `h` tall on the edge a->b of a CCW plan (the interior on its left), its
+// coping on top. The open-run sibling of emitPlanParapet's closed ring.
+static void emitParapetRun(BuildingMesh& out, const Vec2& a, const Vec2& b, Real roofY, Real h, const Vec3& wallCol,
+                           PartId wallPart, const Vec3& copingCol) {
+    const Real L = (b - a).length();
+    if (L < 0.05 || h <= 0) return;
+    const Vec2 d = (b - a) * (1.0 / L), in(-d.y, d.x);
+    const Real th = 0.24;
+    const Vec3 X(d.x, 0, d.y), Z(in.x, 0, in.y);
+    emitBox(out, Scope{Vec3(a.x, roofY, a.y), {X, Vec3(0, 1, 0), Z}, Vec3(L, h, th)}, wallPart, wallCol);
+    emitBox(out, Scope{Vec3(a.x, roofY + h, a.y) - Z * 0.05, {X, Vec3(0, 1, 0), Z}, Vec3(L, 0.09, th + 0.10)},
+            PartId::Trim, copingCol);
+}
+
 static Real emitSpireCrown(BuildingMesh& out, const OBB2& topObb, Real roofY,
                            const BuildingParams& p, const Vec3& wallColor) {
     const Vec3 up(0, 1, 0);
@@ -2447,7 +3113,7 @@ static Real emitSawtoothRoof(BuildingMesh& out, const Poly2& topPlan, Real y,
     const Vec3 C(obb.center.x, 0, obb.center.y);
     const Vec3 up(0, 1, 0);
     const Vec3 roofCol = materialFor(PartId::Roof, wallColor).albedo;
-    const Vec3 glassCol = materialFor(PartId::Glass, wallColor).albedo;
+    const Vec3 glassCol = glassGrey();
     RenderMesh roof, glass, wallM;
     const Real y0 = y + 0.03;
     for (int k = 0; k < teeth; ++k) {
@@ -2729,6 +3395,49 @@ bool tierInsetOk(const Poly2& outer, const Poly2& inner) {
     }
     return true;
 }
+
+// ---- the NYC-variety envelopes' plan vocabulary (skyscrapers NYC variety M1) ----------------------------
+// The narrowest a tier may get: the core (a hoistway bank, two stairs and a corridor round them, ~12.3 x
+// 10.5 m) is placed in the TOP tier and must fit every tier, or the building loses its door.
+constexpr Real kCoreTierMin = 14.0;
+Real tierShortSide(const Poly2& p) { const OBB2 b = orientedBoundingBox(p); return 2 * std::min(b.half[0], b.half[1]); }
+// `inner` stands on `outer`: every vertex inside it (nudged 2% to its centroid, so a shared edge counts),
+// smaller, and big enough to be a floor at all.
+bool tierNestedIn(const Poly2& outer, const Poly2& inner) {
+    if (inner.size() < 3) return false;
+    const Real ai = area(inner);
+    if (ai < 60.0 || ai >= area(outer) * 0.999) return false;
+    const Vec2 c = centroid(inner);
+    for (const Vec2& q : inner) if (!pointInPolygon(outer, q + (c - q) * 0.02)) return false;
+    return true;
+}
+// A box on `ob`'s axes: half extents hw (axis 0) x hd (axis 1), its centre moved `shift` along the axes, its
+// corners chamfered by `cut` (an octagon; < 0.3 m none).
+Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0)) {
+    const Vec2 c = ob.center + ob.axis[0] * shift.x + ob.axis[1] * shift.y, a0 = ob.axis[0], a1 = ob.axis[1];
+    Poly2 p;
+    if (cut < 0.3) {
+        p = {c - a0 * hw - a1 * hd, c + a0 * hw - a1 * hd, c + a0 * hw + a1 * hd, c - a0 * hw + a1 * hd};
+    } else {
+        cut = std::min(cut, std::min(hw, hd) * 0.9);
+        p = {c - a0 * (hw - cut) - a1 * hd, c + a0 * (hw - cut) - a1 * hd, c + a0 * hw - a1 * (hd - cut), c + a0 * hw + a1 * (hd - cut),
+             c + a0 * (hw - cut) + a1 * hd, c - a0 * (hw - cut) + a1 * hd, c - a0 * hw + a1 * (hd - cut), c - a0 * hw - a1 * (hd - cut)};
+    }
+    ensureCCW(p);
+    return p;
+}
+// The biggest box on the plan's own axes that stands inside it (the plan's OBB, shrunk until it fits).
+bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd) {
+    hw = ob.half[0]; hd = ob.half[1];
+    for (int k = 0; k < 14; ++k) {
+        const Poly2 b = tierBox(ob, hw, hd);
+        bool in = true;
+        for (const Vec2& q : b) if (!pointInPolygon(plan, q + (ob.center - q) * 0.02)) { in = false; break; }
+        if (in) return true;
+        hw *= 0.93; hd *= 0.93;
+    }
+    return false;
+}
 }  // namespace
 
 std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& params) {
@@ -2796,6 +3505,76 @@ std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& param
                 cur = next;
                 out.push_back({cur, i});
             }
+        }
+        return out;
+    }
+    using Env = BuildingParams::Envelope;
+    // THE SKY EXPOSURE PLANE: the street wall, then a step every `stepFloors` along the plane (skyRatio up per
+    // metre back), the first at least setback1, until the mass covers towerFrac of the lot; the tower above
+    // rises straight.
+    if (params.envelope == Env::SkyExposure && params.baseFloors > 0 && params.floors > params.baseFloors + 1) {
+        const int sf = std::max(1, params.stepFloors);
+        const Real run = sf * params.floorHeight / std::max(Real(0.5), params.skyRatio);
+        const Real towerArea = area(plan) * std::clamp(params.towerFrac, Real(0.15), Real(0.6));
+        bool first = true;
+        for (int g = params.baseFloors; g < params.floors - 1; g += sf) {
+            if (area(cur) <= towerArea) break;
+            const Poly2 next = offsetPlan(cur, first ? std::max(run, params.setback1) : run);
+            if (!tierInsetOk(cur, next) || tierShortSide(next) < kCoreTierMin) break;
+            out.push_back({next, g});
+            cur = next;
+            first = false;
+        }
+        return out;
+    }
+    // THE TOWER ON ITS LOT'S RECTANGLE: Taper (narrowing, chamfering), Slab (a thin slab on the long axis) and
+    // Feathered (a pencil stepping back one face at a time near the top), from `baseFloors` (the floors below
+    // are the lot plan -- a base when the rectangle is smaller than the lot).
+    if (params.envelope == Env::Taper || params.envelope == Env::Slab || params.envelope == Env::Feathered) {
+        const OBB2 ob = orientedBoundingBox(plan);
+        Real hw = 0, hd = 0;
+        if (!tierBoxInside(plan, ob, hw, hd)) return out;
+        const int f0 = std::max(1, params.baseFloors);
+        if (f0 >= params.floors) return out;
+        auto stand = [&](const Poly2& next, int floor0) {   // a tier on the one below, or (equal to it) nothing new
+            if (area(next) >= area(cur) * 0.999) return true;
+            if (!tierNestedIn(cur, next) || tierShortSide(next) < kCoreTierMin) return false;
+            out.push_back({next, floor0});
+            cur = next;
+            return true;
+        };
+        if (params.envelope == Env::Taper) {
+            if (!stand(tierBox(ob, hw, hd), f0)) return out;
+            const int span = params.floors - f0;
+            const int sf = std::max(1, span / 16);   // ~16 steps over the height: a taper, not a staircase
+            for (int g = f0 + sf; g < params.floors; g += sf) {
+                const Real t = Real(g - f0) / span;
+                const Real sc = 1 - (1 - std::clamp(params.taperTop, Real(0.3), Real(1))) * t;
+                const Real cut = std::clamp(params.chamferTop, Real(0), Real(0.45)) * t * 2 * std::min(hw, hd) * sc;
+                if (!stand(tierBox(ob, hw * sc, hd * sc, cut), g)) break;
+            }
+            return out;
+        }
+        if (params.envelope == Env::Slab) {
+            const bool longX = hw >= hd;
+            const Real shortHalf = longX ? hd : hw, longHalf = longX ? hw : hd;
+            const Real sw = std::max(kCoreTierMin * 0.5 + 0.25, shortHalf * std::clamp(params.towerFrac, Real(0.3), Real(1)));
+            const Real sl = longHalf * 0.97;
+            if (sw >= shortHalf) { stand(tierBox(ob, hw, hd), f0); return out; }
+            stand(longX ? tierBox(ob, sl, sw) : tierBox(ob, sw, sl), f0);
+            return out;
+        }
+        // Feathered: the rectangle, then from featherFrom every two floors the BACK face (axis 1, minus side)
+        // steps in stepDepth, and from the third step the SIDE face (axis 0, plus side) alternates with it.
+        if (!stand(tierBox(ob, hw, hd), f0)) return out;
+        Real x0 = -hw, x1 = hw, z0 = -hd, z1 = hd;
+        const Real d = std::clamp(params.stepDepth, Real(1.0), Real(4.0));
+        const int ff = std::max(f0 + 1, static_cast<int>(params.floors * std::clamp(params.featherFrom, Real(0.3), Real(0.95))));
+        int k = 0;
+        for (int g = ff; g < params.floors - 1; g += 2, ++k) {
+            if (k < 2 || k % 2 == 0) z0 += d; else x1 -= d;
+            if (x1 - x0 < kCoreTierMin || z1 - z0 < kCoreTierMin) break;
+            if (!stand(tierBox(ob, (x1 - x0) * 0.5, (z1 - z0) * 0.5, 0, Vec2((x0 + x1) * 0.5, (z0 + z1) * 0.5)), g)) break;
         }
         return out;
     }
@@ -2915,16 +3694,374 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
     return il;
 }
 
+Poly2 LobbyPiece::footprint() const {
+    Poly2 cs = {c - u * (w * 0.5) - v * (d * 0.5), c + u * (w * 0.5) - v * (d * 0.5),
+                c + u * (w * 0.5) + v * (d * 0.5), c - u * (w * 0.5) + v * (d * 0.5)};
+    // INSIDE-OUT DESKS (Glenn, 2026-09-17): the ring's winding follows (u, v)'s handedness; force CCW so
+    // each side's (dy, -dx) normal points out.
+    Real area = 0;
+    for (std::size_t i = 0; i < 4; ++i) area += cs[i].x * cs[(i + 1) % 4].y - cs[(i + 1) % 4].x * cs[i].y;
+    if (area < 0) std::swap(cs[1], cs[3]);
+    return cs;
+}
+
+namespace {
+// Do two convex polygons overlap (separating axis)?
+bool convexOverlap(const Poly2& A, const Poly2& B) {
+    for (const Poly2* P : {&A, &B})
+        for (std::size_t i = 0; i < P->size(); ++i) {
+            const Vec2 e = (*P)[(i + 1) % P->size()] - (*P)[i];
+            const Vec2 ax(-e.y, e.x);
+            Real a0 = 1e300, a1 = -1e300, b0 = 1e300, b1 = -1e300;
+            for (const Vec2& q : A) { const Real t = dot(q, ax); a0 = std::min(a0, t); a1 = std::max(a1, t); }
+            for (const Vec2& q : B) { const Real t = dot(q, ax); b0 = std::min(b0, t); b1 = std::max(b1, t); }
+            if (a1 < b0 || b1 < a0) return false;
+        }
+    return true;
+}
+}  // namespace
+
+std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdge, const CorePlan& core) {
+    std::vector<LobbyPiece> out;
+    if (!core.valid || plan.size() < 3) return out;
+    const std::size_t e = entranceEdge % plan.size();
+    const Vec2 E = (plan[e] + plan[(e + 1) % plan.size()]) * 0.5;
+    const Vec2 C = core.frame.toWorld({core.length * 0.5, 0.0});
+    if ((E - C).length() <= 7.0) return out;
+    // FACING THE DOOR (#60, Glenn: "a flattened reception desk ... clips into the stairs"): the desk's width
+    // runs SQUARE to the way it faces. It ran along the core's own axis, and where the door lay along that
+    // axis the width and the facing were parallel and the desk collapsed to a line.
+    const Vec2 v = normalize(E - C);
+    const Vec2 u(v.y, -v.x);
+    // the core grown by a walkway: nothing of the lobby's dressing stands in front of a shaft door or a stair
+    Poly2 coreRect = core.rect();
+    {
+        Vec2 m(0, 0);
+        for (const Vec2& q : coreRect) m = m + q;
+        m = m * (1.0 / static_cast<Real>(coreRect.size()));
+        for (Vec2& q : coreRect) { const Vec2 d = q - m; const Real l = d.length(); if (l > 1e-9) q = q + d * (1.4 / l); }
+    }
+    const Vec3 wood(0.42, 0.30, 0.20), top(0.62, 0.60, 0.56), pot(0.30, 0.30, 0.32), leaf(0.20, 0.42, 0.22);
+    auto group = [&](const Vec2& centre, bool planters) {
+        std::vector<LobbyPiece> g;
+        g.push_back({centre, u, v, 3.4, 0.9, 0.0, 1.05, wood, true});     // the desk
+        g.push_back({centre, u, v, 3.6, 1.0, 1.05, 1.12, top, true});     // its counter top
+        if (planters)
+            for (Real sgn : {-1.0, 1.0}) {
+                const Vec2 pc = centre + u * (sgn * 2.6);
+                g.push_back({pc, u, v, 0.7, 0.7, 0.0, 0.62, pot, true});    // planter
+                g.push_back({pc, u, v, 0.55, 0.55, 0.62, 1.35, leaf, false});  // its plant
+            }
+        return g;
+    };
+    auto fits = [&](const std::vector<LobbyPiece>& g) {
+        for (const LobbyPiece& pc : g) {
+            const Poly2 fp = pc.footprint();
+            if (convexOverlap(fp, coreRect)) return false;
+            for (const Vec2& q : fp)
+                if (!pointInPolygon(plan, q)) return false;
+        }
+        return true;
+    };
+    for (const bool planters : {true, false})
+        for (Real t = 0.45; t <= 0.80 + 1e-9; t += 0.05) {
+            std::vector<LobbyPiece> g = group(C + (E - C) * t, planters);
+            if (fits(g)) return g;
+        }
+    return out;
+}
+
+// THE SHOPS of the ground storey (Glenn, 2026-10-01: "I'm still waiting to see these small shops ... I'd also like
+// to see that with smaller buildings"): a room behind every shop unit of every storefront edge (facadeLayout's own
+// units, so the room sits behind its shopfront and door), from the facade back to a wall that stops short of the
+// core or the stair, party walls between. The lobby is whatever is left.
+// THE BIG BOX'S FLOOR (Glenn, 2026-10-01): one store. Inside the doors the CHECKOUT lanes (a 10 m band along the
+// front), behind them the sales floor in the chain's own stock (furniture.cpp: pallet racks, gondolas, televisions,
+// racks of clothes), and across the back the STOCKROOM behind a wall with two doors. Rooms carry the trade:
+// Shop styles 7-10 the chain's floor (7 + chain - 1), 11 the checkouts, 12 the stockroom.
+std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& params) {
+    std::vector<ShopFront> out;
+    Poly2 plan = planIn;
+    if (plan.size() < 3 || !params.groundRetail || !params.walkableGround) return out;
+    ensureCCW(plan);
+    const std::size_t entranceEdge = entranceEdgeFor(plan, params);
+    for (std::size_t e = 0; e < plan.size(); ++e) {
+        const FacadeMode mode = groundModeFor(plan, params, e, entranceEdge);
+        if (mode != FacadeMode::Retail && mode != FacadeMode::Entrance) continue;
+        const FaceRect fr = planEdgeRect(plan, e, 0.0, params.groundHeight);
+        const FacadeLayout L = facadeLayout(fr, mode, params);
+        const Vec2 a = plan[e], d = normalize(plan[(e + 1) % plan.size()] - a), n(d.y, -d.x);
+        for (const ShopUnit& u : L.shops) {
+            const BayOpening& o0 = L.open[static_cast<std::size_t>(u.b0)];
+            const BayOpening& o1 = L.open[static_cast<std::size_t>(u.b1)];
+            const BayOpening& od = L.open[static_cast<std::size_t>(u.door)];
+            ShopFront f;
+            f.a = a + d * o0.x0;
+            f.b = a + d * o1.x1;
+            f.n = n;
+            f.door = a + d * ((od.wx0 + od.wx1) * 0.5);
+            f.trade = u.type;
+            out.push_back(f);
+        }
+    }
+    return out;
+}
+
+static RoomPlan bigBoxRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = false;
+    rp.finish = interiorFinishFor(params);
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    if (plan.size() != 4 || entranceEdge >= plan.size()) return rp;
+    const Real inset = interiorInset(params);
+    const Vec2 a = plan[entranceEdge], b = plan[(entranceEdge + 1) % 4];
+    const Real W = (b - a).length();
+    if (W < 20) return rp;
+    const Vec2 d = (b - a) * (1.0 / W), nOut(d.y, -d.x);
+    Real D = 0;
+    for (const Vec2& v : plan) D = std::max(D, dot(a - v, nOut));
+    if (D < 30) return rp;
+    auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
+    auto rect = [&](Real v0, Real v1) { return Poly2{P(inset, v0), P(W - inset, v0), P(W - inset, v1), P(inset, v1)}; };
+    const Real vc = inset + 10.0, vs = D - inset - 12.0;
+    Room checkout, floor, stock;
+    checkout.kind = floor.kind = stock.kind = RoomKind::Shop;
+    checkout.style = 11;
+    floor.style = static_cast<uint8_t>(7 + (std::clamp<int>(params.bigBox, 1, 4) - 1));
+    stock.style = 12;
+    checkout.rect = rect(inset, vc);
+    floor.rect = rect(vc, vs);
+    stock.rect = rect(vs, D - inset);
+    checkout.edge = floor.edge = stock.edge = entranceEdge;
+    rp.rooms = {checkout, floor, stock};
+    // the stockroom wall, in two runs, each with a door
+    for (int k = 0; k < 2; ++k) {
+        RoomWall w;
+        w.a = P(k == 0 ? W - inset : W * 0.5, vs);
+        w.b = P(k == 0 ? W * 0.5 : inset, vs);
+        w.doorAt = 0.5;
+        rp.walls.push_back(w);
+    }
+    return rp;
+}
+
+static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge, Real y0,
+                             Real h, const CorePlan& core, const Poly2& well, const Vec2& stairFoot = Vec2(1e30, 1e30)) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = false;
+    rp.finish = interiorFinishFor(params);
+    if (!params.groundRetail || !params.walkableGround || planIn.size() < 3) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    const Real inset = interiorInset(params);
+    const Poly2 coreR = core.valid ? core.rect() : well;
+    std::vector<Poly2> taken;
+    for (std::size_t e = 0; e < n; ++e) {
+        const FacadeMode mode = groundModeFor(plan, params, e, entranceEdge);
+        if (mode != FacadeMode::Retail && mode != FacadeMode::Entrance) continue;
+        const FaceRect fr = planEdgeRect(plan, e, y0, h);
+        const FacadeLayout L = facadeLayout(fr, mode, params);
+        if (L.shops.empty()) continue;
+        const Vec2 a = plan[e], dv = plan[(e + 1) % n] - a;
+        const Real W = dv.length();
+        if (W < 1e-6) continue;
+        const Vec2 d = dv * (1.0 / W), nOut(d.y, -d.x);
+        // How deep: to 1.5 m short of the core or stair (only where it stands in front), else 45% of the plate.
+        Real across = 0;
+        for (const Vec2& v : plan) across = std::max(across, dot(a - v, nOut));
+        Real deep = std::min(Real(10.0), across * 0.45);
+        if (coreR.size() >= 3) {
+            Real t0 = 1e9, t1 = -1e9, dist = 1e9;
+            for (const Vec2& c : coreR) {
+                t0 = std::min(t0, dot(c - a, d)); t1 = std::max(t1, dot(c - a, d));
+                dist = std::min(dist, dot(a - c, nOut));
+            }
+            (void)t0; (void)t1;
+            deep = std::min(deep, dist - 1.5);
+        }
+        if (deep < inset + 3.0) continue;
+        auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
+        // The STAIR and its approach stay lobby: a shop that would cover them is cut short of them, or left out.
+        Poly2 stairZone;
+        if (well.size() >= 3) {
+            const Vec2 wc = centroid(well);
+            stairZone = well;
+            for (Vec2& v : stairZone) v = v + normalize(v - wc) * 2.5;
+        }
+        for (const ShopUnit& u : L.shops) {
+            const Real x0 = L.open[static_cast<std::size_t>(u.b0)].x0, x1 = L.open[static_cast<std::size_t>(u.b1)].x1;
+            Real dpt = deep;
+            if (stairZone.size() >= 3) {
+                for (int tries = 0; tries < 8; ++tries) {
+                    const Poly2 r0 = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
+                    bool hit = false;
+                    for (const Vec2& v : stairZone) if (pointInPolygon(r0, v)) hit = true;
+                    const Vec2 c0 = centroid(r0);
+                    for (const Vec2& v : r0) if (pointInPolygon(stairZone, v + (c0 - v) * 0.02)) hit = true;
+                    if (!hit) break;
+                    dpt -= 1.0;
+                }
+                if (dpt < inset + 3.0) continue;
+            }
+            Poly2 r = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
+            // A corner: the shop on the other edge got there first.
+            bool clash = false;
+            for (const Poly2& t : taken) {
+                const Vec2 c = centroid(r);
+                for (const Vec2& v : r) if (pointInPolygon(t, v + (c - v) * 0.02)) clash = true;
+                const Vec2 ct = centroid(t);
+                for (const Vec2& v : t) if (pointInPolygon(r, v + (ct - v) * 0.02)) clash = true;
+            }
+            if (clash) continue;
+            taken.push_back(r);
+            Room rm;
+            rm.edge = e;
+            rm.kind = RoomKind::Shop;
+            rm.style = u.type;
+            rm.rect = r;
+            rp.rooms.push_back(rm);
+            // Its walls: the back, and a party wall at each side (not where the side is the plan's own end).
+            RoomWall back; back.a = P(x1, dpt); back.b = P(x0, dpt);
+            rp.walls.push_back(back);
+            for (Real x : {x0, x1}) {
+                if (x < inset + 0.05 || x > W - inset - 0.05) continue;
+                RoomWall w; w.a = P(x, inset); w.b = P(x, dpt);
+                rp.walls.push_back(w);
+            }
+        }
+    }
+    // The LOBBY must still reach the stair from the building's entrance: walk it (the shops' walls only, a probe
+    // room at the stair's foot); a ground floor that would wall the stair off gets no shops.
+    if (!rp.rooms.empty() && stairFoot.x < 1e29 && entranceEdge < n) {
+        const Vec2 a = plan[entranceEdge], b = plan[(entranceEdge + 1) % n];
+        const Vec2 d = normalize(b - a), nOut(d.y, -d.x);
+        const Vec2 entry = (a + b) * 0.5 - nOut * (inset + 0.8);
+        RoomPlan probe;
+        probe.walls = rp.walls;
+        Room foot;
+        foot.rect = {stairFoot + Vec2(-0.3, -0.3), stairFoot + Vec2(0.3, -0.3), stairFoot + Vec2(0.3, 0.3),
+                     stairFoot + Vec2(-0.3, 0.3)};
+        probe.rooms.push_back(foot);
+        if (!floorIsWalkable(probe, plan, entry, well)) return RoomPlan{};
+    }
+    return rp;
+}
+
+// THE FIRE ESCAPE (attached buildings; Glenn, 2026-10-01: "different ways up to the second floor"). A steel
+// stair on the REAR face, at the end clear of the back door: an inner strip of grating along the wall at every
+// floor, and in an outer strip a flight from each level to the next -- every flight rising the same way, so each
+// stands a storey above the one below (no flight under another's treads). The first flight starts in the yard.
+// `vis` gets the drawing (Metal), `col` the walkable treads, landings and rails (the streamed interior's
+// collider); either may be null. Derived from the plan and params alone: exterior and interior agree.
+static void emitFireEscape(BuildingMesh* vis, RenderMesh* col, const Poly2& planIn, const BuildingParams& params,
+                           Real baseY, bool full) {
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return;
+    ensureCCW(plan);
+    const std::size_t re = rearEdgeOf(plan, params);
+    if (re >= plan.size()) return;
+    const std::vector<StoreyPlan> st = storeyPlans(plan, params);
+    if (st.size() < 2) return;
+    const FaceRect fr = planEdgeRect(plan, re, baseY, params.groundHeight);
+    const Real W = fr.width;
+    Real doorX0 = W * 0.5, doorX1 = W * 0.5;
+    if (params.backDoor)
+        for (const BayOpening& o : facadeLayout(fr, FacadeMode::Rear, params).open)
+            if (o.backDoor) { doorX0 = o.x0; doorX1 = o.x1; }
+    // the side of the door with more room; built as if on the right, mirrored onto the left (x -> W - x)
+    const bool flip = doorX0 > W - doorX1;
+    const Real room = flip ? doorX0 : W - doorX1;
+    const Real xe1 = W - 0.3;
+    const Real span = std::min(Real(9.0), room - 0.5);
+    if (span < 3.4) return;
+    const Real xe0 = xe1 - span;
+    auto mx = [&](Real x) { return flip ? W - x : x; };
+    const Real zi0 = 0.05, zi1 = 0.85, zo1 = 1.55;   // inner strip (landing), outer strip (flights)
+    const Real fx0 = xe0, fx1 = xe1 - 0.8;            // the flights' run; the arrival platform beyond it
+    const Vec3 X = fr.h, U(0, 1, 0), N = fr.n;
+    const Vec3 iron(0.11, 0.11, 0.12);
+    auto boxQuads = [&](RenderMesh& m, const Scope& sc) {
+        const Vec3 c000 = sc.corner(0, 0, 0), c100 = sc.corner(1, 0, 0), c110 = sc.corner(1, 1, 0),
+                   c010 = sc.corner(0, 1, 0), c001 = sc.corner(0, 0, 1), c101 = sc.corner(1, 0, 1),
+                   c111 = sc.corner(1, 1, 1), c011 = sc.corner(0, 1, 1);
+        const Vec3 r = sc.axis[0], u = sc.axis[1], f = sc.axis[2];
+        emitQuad(m, c000, c100, c110, c010, f * -1, iron);
+        emitQuad(m, c001, c101, c111, c011, f, iron);
+        emitQuad(m, c000, c001, c011, c010, r * -1, iron);
+        emitQuad(m, c100, c101, c111, c110, r, iron);
+        emitQuad(m, c000, c100, c101, c001, u * -1, iron);
+        emitQuad(m, c010, c110, c111, c011, u, iron);
+    };
+    RenderMesh steel;
+    // An axis-aligned box in face space (x along the wall, y up from baseY, z out from it).
+    auto box = [&](Real x0, Real x1, Real y0, Real y1, Real z0, Real z1, bool collide) {
+        const Real a = std::min(mx(x0), mx(x1)), b = std::max(mx(x0), mx(x1));
+        const Scope sc{fr.at(a, 0) + U * y0 + N * z0, {X, U, N}, Vec3(b - a, y1 - y0, z1 - z0)};
+        if (vis) boxQuads(steel, sc);
+        if (col && collide) boxQuads(*col, sc);
+    };
+    // A box sloped up the flight (x0,y0) -> (x1,y1): `lift` above the pitch line, `t` thick, z0..z1.
+    auto sloped = [&](Real x0, Real y0, Real x1, Real y1, Real lift, Real t, Real z0, Real z1, bool collide) {
+        const Real dx = mx(x1) - mx(x0), dy = y1 - y0, len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-6) return;
+        const Real sx = dx < 0 ? -1.0 : 1.0;   // the up-normal of the pitch line stays up when mirrored
+        const Vec3 a0 = (X * dx + U * dy) * (1.0 / len), a1 = (X * (-dy * sx) + U * (dx * sx)) * (1.0 / len);
+        const Scope sc{fr.at(mx(x0), 0) + U * y0 + a1 * lift + N * z0, {a0, a1, N}, Vec3(len, t, z1 - z0)};
+        if (vis) boxQuads(steel, sc);
+        if (col && collide) boxQuads(*col, sc);
+    };
+    Real yPrev = 0;   // the yard
+    for (std::size_t k = 1; k < st.size(); ++k) {
+        if (st[k].plan.size() != plan.size()) break;   // a setback moved the rear wall: stop at the tier
+        const Real Y = st[k].y0;
+        const Real rise = Y - yPrev;
+        // the flight: treads (solid risers in the collider), stringers, the outer handrail
+        const int n = std::max(1, static_cast<int>(std::ceil(rise / 0.19)));
+        const Real tread = (fx1 - fx0) / n;
+        for (int i = 0; i < n; ++i) {
+            const Real top = yPrev + rise * (i + 1) / n;
+            const Real xa = fx0 + tread * i, xb = xa + tread;
+            if (vis && full) box(xa, xb, top - 0.04, top, zi1 + 0.04, zo1 - 0.04, false);   // a tread
+            if (col) box(xa, xb, top - rise / n, top, zi1, zo1, true);                       // its riser, solid
+        }
+        sloped(fx0, yPrev, fx1, Y, -0.22, 0.2, zi1, zi1 + 0.03, false);          // inner stringer
+        sloped(fx0, yPrev, fx1, Y, -0.22, 0.2, zo1 - 0.03, zo1, false);          // outer stringer
+        sloped(fx0, yPrev + 0.95, fx1, Y + 0.95, 0, 0.05, zo1 - 0.05, zo1, true);   // handrail
+        // the landing: grating along the wall, the arrival platform, rails and corner posts
+        box(xe0, xe1, Y - 0.06, Y, zi0, zi1, true);
+        box(fx1, xe1, Y - 0.06, Y, zi1, zo1, true);
+        box(fx1, xe1, Y + 0.95, Y + 1.0, zo1 - 0.05, zo1, true);                 // platform's outer rail
+        box(xe1 - 0.05, xe1, Y, Y + 1.0, zi0, zo1, true);                        // end rail
+        box(xe0, xe0 + 0.05, Y, Y + 1.0, zi0, zi1, true);                        // the other end
+        if (vis && full) {
+            for (Real px : {xe0, fx1, xe1 - 0.05})
+                box(px, px + 0.05, Y - 0.3, Y + 1.0, zo1 - 0.05, zo1, false);
+            for (int b = 1; b * 0.12 < xe1 - fx1; ++b)                            // balusters
+                box(fx1 + b * 0.12, fx1 + b * 0.12 + 0.02, Y, Y + 0.95, zo1 - 0.04, zo1 - 0.02, false);
+            box(xe0, xe1, Y - 0.22, Y - 0.06, zi0, zi0 + 0.05, false);           // the bracket band on the wall
+        }
+        yPrev = Y;
+    }
+    if (vis) appendToPart(*vis, PartId::Metal, steel);
+}
+
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
+    // The fire escape's treads and landings are walkable while the interior is resident (its back door streams it).
+    if (params.fireEscape && colliderOut) emitFireEscape(nullptr, colliderOut, planIn, params, baseY, true);
     Poly2 plan = planIn;
     if (plan.size() < 3) return out;
     ensureCCW(plan);
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
     const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
-    if (storeys.size() < 2) return out;   // no storeys above ground
+    // no storeys above ground -- but a BIG BOX is its one tall storey, and that is the store
+    if (storeys.size() < 2 && !params.bigBox) return out;
     // The core (M5) and the storey window [kA, kB).
     const CorePlan core = coreFor(plan, params, entranceEdge);
     const int nS = static_cast<int>(storeys.size());
@@ -3051,12 +4188,12 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Poly2 innerPlan = offsetPolygonEdges(spk.plan, std::vector<Real>(spk.plan.size(), -inset));
             for (std::size_t e = 0; e < spk.plan.size(); ++e) {
                 const FaceRect fr = planEdgeRect(spk.plan, e, wy0, spk.h);
-                Real gap0 = -1, gap1 = -1;
-                if (k == 0 && e == entranceEdge && params.walkableGround) {
-                    const FacadeLayout L =
-                        facadeLayout(fr, FacadeMode::Entrance, params);
+                // The ground storey keeps a gap at EVERY door on the edge: the entrance and the shops' doors.
+                std::vector<std::pair<Real, Real>> gaps;
+                if (k == 0 && params.walkableGround) {
+                    const FacadeLayout L = facadeLayout(fr, groundModeFor(spk.plan, params, e, entranceEdge), params);
                     for (const BayOpening& o : L.open)
-                        if (o.entrance) { gap0 = o.wx0; gap1 = o.wx1; }
+                        if (o.entrance) gaps.push_back({o.wx0, o.wx1});
                 }
                 const Vec3 off = fr.n * -inset;
                 // Along the INSET edge (mitred ends), parametrised by the
@@ -3077,12 +4214,9 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                     emitQuad(*colliderOut, A, B, B + up, A + up, fr.n * -1.0, icol);
                     (void)ih;
                 };
-                if (gap0 >= 0) {
-                    wallQuad(0, gap0);
-                    wallQuad(gap1, fr.width);
-                } else {
-                    wallQuad(0, fr.width);
-                }
+                Real at = 0;
+                for (const auto& [g0, g1] : gaps) { wallQuad(at, g0); at = g1; }
+                wallQuad(at, fr.width);
             }
         }
     }
@@ -3102,18 +4236,36 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (std::size_t e = 0; e < spk.plan.size(); ++e) {
             const FaceRect fr =
                 planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
+            if (partyEdge(spk.plan, params, e)) {   // the party wall: painted plaster, no windows
+                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
+                              interiorInset(params), interiorPaintFor(params), false);
+                continue;
+            }
+            if (mechanicalStorey(params, ki)) {
+                // The plant room: a closed painted wall behind the louvres.
+                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
+                              interiorInset(params), interiorPaintFor(params) * 0.8, false);
+                continue;
+            }
             if (params.curtainWall) {
                 // The inside of a curtain wall is GLASS above a spandrel band:
                 // the pane part, which the interior system draws clear, so a
                 // floor looks out over the city; the band is painted.
                 // The band is the exterior's spandrel (emitCurtainWallRect:
                 // min(0.9, 0.30 fh)), and the grid inside mirrors its bays.
-                const Real band = std::min(Real(0.9), spk.h * 0.30);
+                // DRAWN AGAINST THE OUTER GLASS (Glenn, 2026-09-30: "in the skyscrapers with the steel frames the
+                // interior and exterior don't really match up, it feels like there's a gap between the two"): the
+                // inner skin sat at the 0.55 m clipping inset, 0.45 m behind the curtain's glass (0.10 in), so a
+                // cavity and a second, offset mullion grid showed between. It is drawn 2 cm behind the glass now;
+                // the COLLIDER planes keep the 0.55 m inset, so the camera still cannot reach it.
+                const Real skin = kCurtainGlassIn + 0.02;
+                const CurtainStyle ics = curtainStyleOf(params);
+                const Real band = ics.spandrelH(spk.h);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0, band,
-                              interiorInset(params), interiorPaintFor(params), false);
+                              skin, interiorPaintFor(params), false);
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0 + band, spk.h - band,
-                              interiorInset(params), Vec3(1, 1, 1), false, PartId::Glass);
-                emitInnerCurtainGrid(out, fr, interiorInset(params), band);
+                              skin, Vec3(1, 1, 1), false, PartId::Glass);
+                emitInnerCurtainGrid(out, fr, skin, band, ics);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, upperP),
                                   interiorInset(params), params.wallColor,
@@ -3283,16 +4435,27 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // and the ring pass returns nothing for a lobby anyway.
     for (int ki = kA; ki < kB; ++ki) {
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
-        const RoomPlan rp = roomPlan(spk.plan, params, core,
-                                     il.hasStair ? il.edge : static_cast<std::size_t>(-1),
-                                     interiorInset(params), ki,
-                                     il.hasStair ? il.well : Poly2{}, entranceEdge);
+        if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
+        // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
+        RoomPlan rp = ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
+                    : ki == 0 ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
+                                             il.hasStair ? il.well : Poly2{},
+                                             il.hasStair ? il.stairFoot : Vec2(1e30, 1e30))
+                              : RoomPlan{};
+        if (rp.rooms.empty())
+            rp = roomPlan(spk.plan, params, core,
+                          il.hasStair ? il.edge : static_cast<std::size_t>(-1),
+                          interiorInset(params), ki,
+                          il.hasStair ? il.well : Poly2{}, entranceEdge);
         if (rp.walls.empty()) continue;
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
         appendToPart(out, PartId::Interior, rm.drywall);
         appendToPart(out, PartId::GlassClear, rm.glass);
         appendToPart(out, rp.finish.part, rm.accent);   // brick, concrete or timber
+        // FURNITURE (buildings M4b): every named room gets the kit's pieces, placed for instanced drawing.
+        // the ceiling's underside: the next storey's floor slab is 0.25 m deep
+        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25);
     }
 
     // --- the core (M5): shaft walls with doors, the dog-leg flights and
@@ -3305,60 +4468,23 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (int ki = kA; ki < kB; ++ki)
             emitCoreStorey(cm, colliderOut, core, storeys[static_cast<std::size_t>(ki)], baseY,
                            params, ki + 1 < nS, ki >= 1, false);
-        // LOBBY DRESSING (M5, owed): a reception desk facing the entrance,
-        // between the door and the bank, with a planter at each end — boxes
-        // with colliders, in the lobby's own storey only.
+        // LOBBY DRESSING (M5; #60): the desk, its top and two planters, placed by lobbyDressing.
         if (kA == 0) {
-            const std::size_t e = entranceEdge % plan.size();
-            const Vec2 E = (plan[e] + plan[(e + 1) % plan.size()]) * 0.5;
-            const Vec2 C = core.frame.toWorld({core.length * 0.5, 0.0});
-            const Real gap = (E - C).length();
-            if (gap > 7.0) {
-                const Vec2 centre = C + (E - C) * 0.45;
-                const Vec2 u = core.frame.u, v = normalize(E - C);   // v: toward the entrance
-                const Real yF = baseY + 0.07;                        // on the lobby overlay
-                auto box = [&](const Vec2& c, Real w, Real d, Real h0, Real h1, const Vec3& colr, bool collide) {
-                    Vec2 cs[4] = {c - u * (w * 0.5) - v * (d * 0.5), c + u * (w * 0.5) - v * (d * 0.5),
-                                  c + u * (w * 0.5) + v * (d * 0.5), c - u * (w * 0.5) + v * (d * 0.5)};
-                    // INSIDE-OUT DESKS (Glenn, 2026-09-17: "some of the table
-                    // furniture's normals are backwards"). This ring inherits
-                    // its winding from (u, v): u is the core's frame axis, v is
-                    // "toward the entrance" -- an arbitrary direction with no
-                    // fixed handedness. Where (u, v) comes out left-handed the
-                    // ring is CW, and the side normal below, (dy, -dx), is the
-                    // right-hand perpendicular: on a CW ring it points INWARD,
-                    // so the box lights as if seen from inside. SOME desks, not
-                    // all -- it depends which side of the core the door is on,
-                    // which is why it survived. The top is immune: its normal is
-                    // hardcoded up. Force CCW and (dy, -dx) is outward again.
-                    Real ringArea = 0;
-                    for (int i = 0; i < 4; ++i) {
-                        const Vec2& p0 = cs[i];
-                        const Vec2& p1 = cs[(i + 1) % 4];
-                        ringArea += p0.x * p1.y - p1.x * p0.y;
-                    }
-                    if (ringArea < 0) std::swap(cs[1], cs[3]);
-                    for (int i = 0; i < 4; ++i) {
-                        const Vec2 a = cs[i], b = cs[(i + 1) % 4];
-                        const Vec2 dd = b - a;
-                        const Vec2 n = normalize(Vec2(dd.y, -dd.x));
-                        const Vec3 A(a.x, yF + h0, a.y), B(b.x, yF + h0, b.y), Cc(b.x, yF + h1, b.y), D(a.x, yF + h1, a.y);
-                        emitQuad(cm.drywall, A, B, Cc, D, Vec3(n.x, 0, n.y), colr);
-                        if (collide && colliderOut) emitQuad(*colliderOut, A, B, Cc, D, Vec3(n.x, 0, n.y), colr);
-                    }
-                    const Vec3 T0(cs[0].x, yF + h1, cs[0].y), T1(cs[1].x, yF + h1, cs[1].y),
-                        T2(cs[2].x, yF + h1, cs[2].y), T3(cs[3].x, yF + h1, cs[3].y);
-                    emitQuad(cm.drywall, T0, T1, T2, T3, Vec3(0, 1, 0), colr);
-                    if (collide && colliderOut) emitQuad(*colliderOut, T0, T1, T2, T3, Vec3(0, 1, 0), colr);
-                };
-                const Vec3 wood(0.42, 0.30, 0.20), top(0.62, 0.60, 0.56), pot(0.30, 0.30, 0.32), leaf(0.20, 0.42, 0.22);
-                box(centre, 3.4, 0.9, 0.0, 1.05, wood, true);          // the desk
-                box(centre, 3.6, 1.0, 1.05, 1.12, top, true);          // its counter top
-                for (Real sgn : {-1.0, 1.0}) {
-                    const Vec2 pc = centre + u * (sgn * 2.6);
-                    box(pc, 0.7, 0.7, 0.0, 0.62, pot, true);           // planter
-                    box(pc, 0.55, 0.55, 0.62, 1.35, leaf, false);      // its plant
+            const Real yF = baseY + 0.07;   // on the lobby overlay
+            for (const LobbyPiece& pc : lobbyDressing(plan, entranceEdge, core)) {
+                Poly2 cs = pc.footprint();   // CCW, so (dy, -dx) is each side's outward normal
+                for (std::size_t i = 0; i < 4; ++i) {
+                    const Vec2 a = cs[i], b = cs[(i + 1) % 4];
+                    const Vec2 dd = b - a;
+                    const Vec2 n = normalize(Vec2(dd.y, -dd.x));
+                    const Vec3 A(a.x, yF + pc.h0, a.y), B(b.x, yF + pc.h0, b.y), Cc(b.x, yF + pc.h1, b.y), D(a.x, yF + pc.h1, a.y);
+                    emitQuad(cm.drywall, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
+                    if (pc.collide && colliderOut) emitQuad(*colliderOut, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
                 }
+                const Vec3 T0(cs[0].x, yF + pc.h1, cs[0].y), T1(cs[1].x, yF + pc.h1, cs[1].y),
+                    T2(cs[2].x, yF + pc.h1, cs[2].y), T3(cs[3].x, yF + pc.h1, cs[3].y);
+                emitQuad(cm.drywall, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
+                if (pc.collide && colliderOut) emitQuad(*colliderOut, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
             }
         }
         appendToPart(out, PartId::Interior, cm.drywall);
@@ -3371,6 +4497,63 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     appendToPart(out, stairFinishPartFor(params), stairMesh);
     out.height = storeys.back().y0 + storeys.back().h;
     return out;
+}
+
+// THE BIG BOX'S FRONT (Glenn, 2026-10-01: "Big box stores like Costco or Bestbuy"): a band in the chain's colour
+// round the top of every wall; over the doors a deep canopy on two posts, the glazed entry either side of them,
+// and above it the chain's lit sign with its name in letter blocks. The walls and the door are the ordinary
+// facade's (one aperture, so the interior and its colliders agree); this only dresses them.
+static void emitBigBoxDress(BuildingMesh& out, const Poly2& plan, std::size_t entranceEdge, Real y, Real gh,
+                            const BuildingParams& params, bool full) {
+    const Vec3 brand = params.trimColor;
+    for (std::size_t i = 0; i < plan.size(); ++i) {   // the band
+        const FaceRect fr = planEdgeRect(plan, i, y, gh);
+        if (fr.width < 1.0) continue;
+        emitBox(out, Scope{fr.at(0, gh - 1.7), {fr.h, Vec3(0, 1, 0), fr.n}, Vec3(fr.width, 1.0, 0.08)}, PartId::Trim, brand);
+    }
+    if (entranceEdge >= plan.size()) return;
+    const FaceRect fr = planEdgeRect(plan, entranceEdge, y, gh);
+    const Real cx = fr.width * 0.5;
+    const Vec3 X = fr.h, U(0, 1, 0), N = fr.n;
+    // the canopy and its posts
+    const Real cw = std::min(fr.width - 4.0, Real(18.0)), cd = 4.0, cy = 4.4;
+    if (cw > 6) {
+        emitBox(out, Scope{fr.at(cx - cw * 0.5, cy), {X, U, N}, Vec3(cw, 0.55, cd)}, PartId::Trim, brand * 0.85);
+        emitBox(out, Scope{fr.at(cx - cw * 0.5, cy - 0.06), {X, U, N}, Vec3(cw, 0.06, cd)}, PartId::Trim, Vec3(0.85, 0.85, 0.83));
+        for (Real px : {cx - cw * 0.5 + 0.4, cx + cw * 0.5 - 0.8})
+            emitBox(out, Scope{fr.at(px, 0) + N * (cd - 0.8), {X, U, N}, Vec3(0.4, cy, 0.4)}, PartId::Metal, Vec3(0.30, 0.31, 0.33));
+    }
+    // the glazed entry either side of the doors: dark glass panels, mullions
+    if (full) {
+        RenderMesh glass, mull;
+        for (int side = 0; side < 2; ++side) {
+            const Real g0 = side == 0 ? cx - 7.0 : cx + 1.2, g1 = side == 0 ? cx - 1.2 : cx + 7.0;
+            if (g0 < 0.5 || g1 > fr.width - 0.5) continue;
+            const Vec3 o = N * 0.03;
+            emitQuad(glass, fr.at(g0, 0.1) + o, fr.at(g1, 0.1) + o, fr.at(g1, 3.4) + o, fr.at(g0, 3.4) + o, N, glassGrey());
+            for (Real mx = g0; mx <= g1 + 1e-6; mx += (g1 - g0) / 4)
+                emitBox(out, Scope{fr.at(mx - 0.05, 0.1), {X, U, N}, Vec3(0.1, 3.3, 0.08)}, PartId::Metal, Vec3(0.55, 0.57, 0.6));
+            emitBox(out, Scope{fr.at(g0, 3.4), {X, U, N}, Vec3(g1 - g0, 0.12, 0.08)}, PartId::Metal, Vec3(0.55, 0.57, 0.6));
+        }
+        appendToPart(out, PartId::Glass, glass);
+    }
+    // the sign: a dark board, the lit face in the chain's colour, the name in pale letter blocks
+    const Real sw = std::min(fr.width * 0.4, Real(24.0));
+    // a 2.4 m board just above the canopy -- standing proud of the roofline on a low box, as real ones do
+    const Real sy0 = std::max(cy + 0.9, gh - 4.6), sy1 = std::max(sy0 + 2.4, gh - 1.9);
+    if (sw > 6 && sy1 - sy0 > 1.2) {
+        emitBox(out, Scope{fr.at(cx - sw * 0.5 - 0.3, sy0 - 0.3), {X, U, N}, Vec3(sw + 0.6, sy1 - sy0 + 0.6, 0.25)},
+                PartId::Trim, Vec3(0.10, 0.10, 0.11));
+        // the board in the chain's colour by day; the NAME is what lights (LitBand, a warm white at night)
+        const Vec3 o = N * 0.26;
+        emitBox(out, Scope{fr.at(cx - sw * 0.5, sy0) + N * 0.25, {X, U, N}, Vec3(sw, sy1 - sy0, 0.02)}, PartId::Trim, brand);
+        const int nL = 5 + static_cast<int>(params.seed % 4u);
+        const Real lh = (sy1 - sy0) * 0.62, lw = std::min(lh * 0.75, sw * 0.8 / nL);
+        const Real lx0 = cx - (nL * lw * 1.15) * 0.5;
+        for (int k = 0; k < nL; ++k)
+            emitBox(out, Scope{fr.at(lx0 + k * lw * 1.15, sy0 + (sy1 - sy0 - lh) * 0.5) + o, {X, U, N},
+                               Vec3(lw, lh, full ? 0.12 : 0.02)}, PartId::LitBand, Vec3(1.0, 0.96, 0.88));
+    }
 }
 
 BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
@@ -3500,6 +4683,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             emitBayFront(out, planEdgeRect(plan, i, y, gh), params, wallColor);
             continue;
         }
+        // A BIG BOX's back is its LOADING DOCKS: roller doors along the rear wall.
+        if (params.bigBox && i != entranceEdge && i == rearEdgeOf(plan, params)) {
+            BuildingParams sp = params;
+            const FaceRect dfr = planEdgeRect(plan, i, y, gh);
+            sp.groundBays = std::clamp(static_cast<int>(dfr.width / 14.0), 2, 6);
+            emitBayFront(out, dfr, sp, wallColor);
+            if (full && params.openDoorway)
+                emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
+            continue;
+        }
         if (i == sideEdge) {
             BuildingParams sp = params;
             sp.groundBays = params.sideBays;
@@ -3524,8 +4717,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
             continue;
         }
-        FacadeMode mode = (i == entranceEdge && params.walkableGround)
-                              ? FacadeMode::Entrance : groundMode;
+        FacadeMode mode = groundModeFor(plan, params, i, entranceEdge);
+        (void)groundMode;
         // The stairwell hugs one wall; ANY window there reads wrong from
         // both sides -- Solid mode's clerestory strip included (device:
         // "the wall along which the stairwell was still had windows"). The
@@ -3537,38 +4730,75 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 interiorLayout(plan, params, entranceEdge);
             stairEdge = ilw.hasStair && i == ilw.edge;
         }
-        if (stairEdge) {
+        // A PARTY WALL is the same blank wall, at every detail level (attached buildings).
+        const bool party = i != entranceEdge && partyEdge(plan, params, i);
+        if (stairEdge || party) {
             const FaceRect bfr = planEdgeRect(plan, i, y, gh);
             RenderMesh bw;
             emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
                      bfr.at(bfr.width, bfr.height), bfr.at(0, bfr.height),
                      bfr.n, wallColor);
             appendToPart(out, params.wallPart, bw);
-            emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
+            if (full && params.openDoorway)
+                emitInsetSkin(out, plan, i, y, gh, interiorInset(params), interiorPaintFor(params), true);
             continue;
-        }
-        if (mode == FacadeMode::Retail && params.retailStreetOnly) {
-            Vec2 a = plan[i], b = plan[(i + 1) % plan.size()];
-            Vec2 d = normalize(b - a);
-            Vec2 nrm(d.y, -d.x);
-            if (nrm.x * params.faceDir.x + nrm.y * params.faceDir.z < 0.35)
-                mode = FacadeMode::Residential;
         }
         // An enterable building's ground storey has CLEAR panes at Full
         // detail (the lobby shows from the street, the street from the lobby).
         const bool clearLobby = full && params.openDoorway;
-        if (params.curtainWall && mode != FacadeMode::Entrance)
-            emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor, detail, clearLobby);
+        // A glass tower's STOREFRONT edges are shopfronts (the shops' glazing and doors), its other ground edges
+        // its curtain wall.
+        if (params.curtainWall && mode != FacadeMode::Entrance && mode != FacadeMode::Retail)
+            emitCurtainWallRect(out, planEdgeRect(plan, i, y, gh), wallColor, detail, clearLobby, curtainStyleOf(params));
         else if (full)
             emitFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor, clearLobby);
         else
             emitFlatFacadeRect(out, planEdgeRect(plan, i, y, gh), mode, params, wallColor);
+        // THE SHOP SIGNS: over every shop on a storefront edge, a fascia board -- a dark backing, a lit face in
+        // the trade's colour (it glows at night), and a line of letter blocks up close.
+        if (mode == FacadeMode::Retail || mode == FacadeMode::Entrance) {
+            const FaceRect sfr = planEdgeRect(plan, i, y, gh);
+            const FacadeLayout SL = facadeLayout(sfr, mode, params);
+            static const Vec3 kTrade[7] = {{0.95, 0.70, 0.35}, {0.35, 0.85, 0.40}, {0.95, 0.45, 0.65}, {0.40, 0.65, 1.00},
+                                           {0.30, 0.85, 1.00}, {0.35, 1.00, 0.55}, {1.00, 0.85, 0.50}};
+            RenderMesh lit, letters;
+            for (const ShopUnit& u : SL.shops) {
+                const Real x0 = SL.open[static_cast<std::size_t>(u.b0)].x0 + 0.15;
+                const Real x1 = SL.open[static_cast<std::size_t>(u.b1)].x1 - 0.15;
+                // The fascia just above the storefront's glazing (kShopHead), below the uplight band at the
+                // storey's head on a tall lobby storey.
+                const Real yb = std::min(gh - 1.0, kShopHead + 0.12), yt = yb + 0.55, proud = 0.16;
+                if (x1 - x0 < 1.0 || yb < human::DOOR_HEIGHT + 0.05) continue;
+                const Vec3 X = normalize(sfr.h);
+                emitBox(out, Scope{sfr.at(x0, yb), {X, Vec3(0, 1, 0), sfr.n}, Vec3(x1 - x0, yt - yb, proud)},
+                        PartId::Trim, Vec3(0.10, 0.10, 0.11));
+                const Vec3 o = sfr.n * (proud + 0.005);
+                emitQuad(lit, sfr.at(x0 + 0.05, yb + 0.05) + o, sfr.at(x1 - 0.05, yb + 0.05) + o,
+                         sfr.at(x1 - 0.05, yt - 0.05) + o, sfr.at(x0 + 0.05, yt - 0.05) + o, sfr.n,
+                         kTrade[u.type % 7]);
+                if (full) {   // the name: letter blocks centred on the board
+                    const int nLetters = 4 + static_cast<int>((u.type * 3 + u.b0) % 5);
+                    const Real lw = 0.22, gap = 0.06, total = nLetters * lw + (nLetters - 1) * gap;
+                    const Real lx0 = (x0 + x1) * 0.5 - total * 0.5;
+                    const Vec3 lo = sfr.n * (proud + 0.02);
+                    for (int c = 0; c < nLetters && total < x1 - x0 - 0.3; ++c) {
+                        const Real lx = lx0 + c * (lw + gap);
+                        const Real lh = (c * 7 + u.type) % 3 == 0 ? 0.22 : 0.30;
+                        emitQuad(letters, sfr.at(lx, yb + 0.10) + lo, sfr.at(lx + lw, yb + 0.10) + lo,
+                                 sfr.at(lx + lw, yb + 0.10 + lh) + lo, sfr.at(lx, yb + 0.10 + lh) + lo, sfr.n,
+                                 Vec3(0.12, 0.10, 0.10));
+                    }
+                }
+            }
+            appendToPart(out, PartId::LitBand, lit);
+            appendToPart(out, PartId::Detail, letters);
+        }
         // Enterable buildings (ADR-0080): back the one-sided exterior skin
         // with an inner face at -wallThickness so the room reads as a room,
         // not as a view through to the sky.
         if (full && params.openDoorway) {
             const FaceRect ifr = planEdgeRect(plan, i, y, gh);
-            if (params.curtainWall && mode != FacadeMode::Entrance) {
+            if (params.curtainWall && mode != FacadeMode::Entrance && mode != FacadeMode::Retail) {
                 emitInsetSkin(out, plan, i, y, gh, interiorInset(params),
                               Vec3(1, 1, 1), false, PartId::GlassClear);
             } else {
@@ -3579,6 +4809,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
         }
     }
+    if (params.bigBox) emitBigBoxDress(out, plan, entranceEdge, y, gh, params, full);
     // The covered timber PORCH (bungalow/craftsman) — brings its own platform
     // and steps, so it replaces the classical entrance elements.
     if (full && params.porch) {
@@ -3759,26 +4990,49 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             // A setback landed at this floor: cap the tier below.
             emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
                          materialFor(PartId::Roof, wallColor).albedo);
-            if (full && params.stringCourse && !params.curtainWall)
-                sweptCornice(cur, y - 0.4, 1.0);
+            bool flushFace = false;
+            (void)exposedRuns(cur, sp.plan, flushFace);
+            if (full && params.stringCourse && !params.curtainWall && !flushFace)
+                sweptCornice(cur, y - 0.4, 1.0);   // a cornice rings a setback; a flush face runs on unbroken
             if (full) cornerPosts(cur, tierY0, y - tierY0);
-            emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
-                            materialFor(PartId::Trim, wallColor).albedo,
-                            PartId::Trim,
-                            materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            bool flush = false;
+            const std::vector<ExposedRun> runs = exposedRuns(cur, sp.plan, flush);
+            if (!flush)
+                emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
+                                materialFor(PartId::Trim, wallColor).albedo,
+                                PartId::Trim,
+                                materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            else
+                for (const ExposedRun& r : runs)
+                    emitParapetRun(out, r.a, r.b, y, 0.55, materialFor(PartId::Trim, wallColor).albedo,
+                                   PartId::Trim, materialFor(PartId::Trim, wallColor).albedo * 0.9);
             cur = sp.plan;
             tierY0 = y;
         }
         const Real fh = params.floorHeight;
+        const bool plant = mechanicalStorey(params, i + 1);
         for (std::size_t e = 0; e < cur.size(); ++e) {
+            if (plant) {
+                const Vec3 blade = params.curtainWall ? curtainMullionColour(params.mullionTone) * 1.2 : wallColor * 0.8;
+                emitLouvreBand(out, planEdgeRect(cur, e, y, fh), blade, full);
+                continue;
+            }
             if (full && params.parkingDecks && !params.curtainWall) {
                 emitParkingDeckRect(out, planEdgeRect(cur, e, y, fh), upper,
                                     wallColor);
                 continue;
             }
+            if (partyEdge(cur, params, e)) {   // a party wall: blank to the roof
+                const FaceRect bfr = planEdgeRect(cur, e, y, fh);
+                RenderMesh bw;
+                emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0), bfr.at(bfr.width, bfr.height),
+                         bfr.at(0, bfr.height), bfr.n, wallColor);
+                appendToPart(out, params.wallPart, bw);
+                continue;
+            }
             if (params.curtainWall)
                 emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor,
-                                    detail);
+                                    detail, false, curtainStyleOf(params));
             else if (full) {
                 bool stairEdgeU = false;
                 if (params.openDoorway && cur.size() == plan.size()) {
@@ -3831,6 +5085,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         y += fh;
     }
     if (full) cornerPosts(cur, tierY0, y - tierY0);
+    if (params.fireEscape) emitFireEscape(&out, nullptr, plan, params, baseY, full);
 
     // ROOF (P3.c): a Gable/Hip pitched roof over a rect-ish top plan — the
     // residential silhouette — else the flat deck + parapet + crown.
@@ -4157,11 +5412,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             emitRotunda(out, Vec3(topObb.center.x, 0, topObb.center.y), R,
                         y + 0.05, r3, f3, wallColor, params.trimColor);
             roofRise = R * 0.62 + std::max(Real(2.6), R * 0.85) + 1.7;
-        } else if (full) {
+        } else {
+            // THE TOP (buildings M2) -- both tiers: it is the skyline. The penthouse stays behind a screen and
+            // wherever no top stands; a sloped, faceted, lantern, frame or mast top houses the plant itself.
+            const Real topRise = emitTowerTop(out, cur, y + 0.05, y - baseY, params, wallColor, full, rectish);
+            roofRise = std::max(roofRise, topRise);
             // Flat (LOD1) keeps spire/dome/steeple — they are the skyline —
             // but skips the penthouse + roof-furniture pack.
-            emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
-                      y + 0.05, params, rng, &cur);
+            if (full && (topRise <= 0 || params.top == 2 || params.top == 7))
+                emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
+                          y + 0.05, params, rng, &cur);
         }
     }
     out.attaches.push_back({Vec3(centroid(cur).x, y + roofRise, centroid(cur).y),
@@ -4183,6 +5443,15 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         out.proxy = scratch.merged();
     }
     return out;
+}
+
+
+CurtainStyle curtainStyleOf(const BuildingParams& p) {
+    CurtainStyle cs;
+    cs.glassTint = p.glassTint; cs.mullionTone = p.mullionTone; cs.fins = p.fins;
+    cs.bay = p.curtainBay > 0.5 ? p.curtainBay : 1.6;
+    cs.spandrelFrac = p.spandrelFrac;
+    return cs;
 }
 
 }  // namespace engine

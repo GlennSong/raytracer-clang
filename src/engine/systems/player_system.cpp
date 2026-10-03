@@ -1,6 +1,8 @@
 #include "player_system.h"
+#include "underwater_system.h"
 #include "physics_system.h"
 #include "../components.h"
+#include "../interaction.h"   // Seated
 #include "../camera/scene_camera.h"
 #include "../../log.h"
 
@@ -42,6 +44,11 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("player_jump", GamepadButton::A);
     ctx.actions.setActionContext("player_jump", engine::InputContext::OnFoot);
     ctx.actions.bindButton("player_crouch", KeyCode::LeftControl);
+    ctx.actions.bindButton("player_crouch", GamepadButton::B);
+    // RUN (Glenn, 2026-10-02: "I thought shift was run"): Shift held, or L3 (the pad convention).
+    ctx.actions.bindButton("player_run", KeyCode::LeftShift);
+    ctx.actions.bindButton("player_run", GamepadButton::LeftThumb);
+    ctx.actions.setActionContext("player_run", engine::InputContext::OnFoot);
     ctx.actions.setActionContext("player_crouch", engine::InputContext::OnFoot);
 }
 
@@ -56,6 +63,8 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             if (ctx.world.has<InVehicle>(e)) return;
             // A PASSENGER (a bus): the carrier owns the position every step.
             if (ctx.world.has<Passenger>(e)) return;
+            // SEATED on a piece of furniture (InteractionSystem): the body stays where it stood; the camera sits.
+            if (ctx.world.has<Seated>(e)) return;
             if (cc.characterId == INVALID_CHARACTER) return;
             if (!spawnCaptured) {                                  // authored spawn
                 spawnPos = t.position;
@@ -75,8 +84,23 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 standRadius = cc.radius;
                 standCaptured = true;
             }
+            // SWIMMING (#43): water deep enough at the feet floats the player (UnderwaterSystem knows
+            // whose water is where). While afloat, crouch means dive, not a smaller capsule.
+            {
+                const Real feetY = t.position.y - (cc.halfHeight + cc.radius);
+                const UnderwaterSystem::Surface water = UnderwaterSystem::surfaceAt(ctx.world, t.position.x, t.position.z);
+                const Real depth = water.kind != UnderwaterSystem::Water::None ? Real(water.level) - feetY : Real(-1);
+                const GroundState g = physicsSys.physicsWorld().characterGroundState(cc.characterId);
+                const bool was = swim_.swimming;
+                swim_.update(depth, g != GroundState::InAir);
+                cc.swimming = swim_.swimming;
+                if (swim_.swimming != was)
+                    LOG_INFO << (swim_.swimming ? "[swim] afloat" : "[swim] standing again") << " at (" << t.position.x << ", "
+                             << t.position.z << "), water depth " << depth << " m";
+                swimLevel_ = water.level;
+            }
             const bool wantCrouch =
-                camera.positionLocked && ctx.actions.held("player_crouch");
+                camera.positionLocked && ctx.actions.held("player_crouch") && !swim_.swimming;
             if (wantCrouch != crouched) {
                 const Real targetHalf =
                     wantCrouch ? standHalfHeight * kCrouchHalfScale
@@ -141,9 +165,34 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 Real len = moveDir.length();
                 if (len > 1.0) moveDir = moveDir / len;
                 desired = moveDir * moveSpeed *
-                          (crouched ? kCrouchSpeedScale : Real(1));
+                          (crouched ? kCrouchSpeedScale : ctx.actions.held("player_run") ? kRunSpeedScale : Real(1));
             }
 
+            if (swim_.swimming) {
+                // afloat: swim pace, the water holds you at the surface; jump rises, crouch dives
+                swimClock_ += dt;
+                const Real floatY = swimLevel_ + SwimState::kEyeAbove - eyeHeight;
+                const bool rise = camera.positionLocked && ctx.actions.held("player_jump");
+                const bool dive = camera.positionLocked && ctx.actions.held("player_crouch");
+                Vec3 v = desired * (SwimState::kSpeed / std::max(moveSpeed, Real(0.1)));
+                v.y = SwimState::verticalSpeed(t.position.y, floatY, rise, dive, swimClock_);
+                airVel_ = Vec3(v.x, 0, v.z);   // leaving the water keeps the stroke's speed
+                physicsSys.physicsWorld().moveCharacterFree(cc.characterId, v, dt);
+                t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
+                fall.onGrounded(t.position.y);   // floating is footing: never a fall
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
+            }
+            // In the air the keys only nudge what the body left the ground with (#83); on the
+            // ground they set it, and that is what a jump or a step off a ledge carries.
+            const GroundState before = physicsSys.physicsWorld().characterGroundState(cc.characterId);
+            if (before == GroundState::InAir) {
+                airVel_ = airborneVelocity(airVel_, desired, dt);
+                desired = airVel_;
+            } else {
+                airVel_ = Vec3(desired.x, 0, desired.z);
+            }
             physicsSys.physicsWorld().moveCharacter(cc.characterId, desired, dt);
             t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
 
@@ -266,7 +315,8 @@ void PlayerSystem::update(FrameContext& ctx) {
     // ...but NOT while seated: Space is the brake in a car, and staging a
     // jump on every brake press would fire it the moment the player got out.
     if (ctx.actions.pressed("player_jump") &&
-        !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity)))
+        !(ctx.world.alive(playerEntity) &&
+          (ctx.world.has<InVehicle>(playerEntity) || ctx.world.has<Seated>(playerEntity))))
         jumpRequested = true;
 
     // The one-shot beside the V key (device: "how do I switch between third
@@ -337,6 +387,19 @@ void PlayerSystem::update(FrameContext& ctx) {
                   std::max(Real(1e-3), standHalfHeight + standRadius)
             : Real(1);
     camera.eye = t->position + Vec3(0, eyeHeight * eyeScale, 0);
+    // SEATED or LYING (InteractionSystem, engine/interaction.h): the eye is the pose's, turned once to face along
+    // it -- after that the mouse looks round as usual. First person while there: the shoulder rig frames the
+    // standing capsule, not the seat.
+    Seated* seated = ctx.world.get<Seated>(playerEntity);
+    if (seated) {
+        camera.eye = seated->eye;
+        if (!seated->aimed) {
+            seated->aimed = true;
+            const Vec3 l = seated->look;
+            camera.yaw = std::atan2(l.x, -l.z) * 180.0 / 3.14159265358979323846;
+            camera.pitch = std::asin(std::clamp(l.y, Real(-1), Real(1))) * 180.0 / 3.14159265358979323846;
+        }
+    }
 
     // A placed SceneCamera owns the view this frame; keep the eye pinned above
     // so returning to first person is seamless, but don't write over it.
@@ -345,7 +408,7 @@ void PlayerSystem::update(FrameContext& ctx) {
     float aspect = (ctx.framebufferHeight > 0)
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
-    if (thirdPerson) {
+    if (thirdPerson && !seated) {
         // Over the shoulder: mouse look still steers the player heading — the
         // fly controller owns yaw/pitch exactly as in first person (CameraSystem
         // feeds it look input); the shoulder rig just frames that heading from

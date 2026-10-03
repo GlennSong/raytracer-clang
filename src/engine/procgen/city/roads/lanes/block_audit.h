@@ -10,6 +10,10 @@
 
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/city_lots.h"
+#include "engine/procgen/earthwork.h"
+#include "engine/procgen/city/road_mesh.h"   // RoadDeckField
+#include <functional>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <string>
@@ -89,6 +93,52 @@ BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim, bool from
 // Pavement (grey), blocks (tinted, red where broken), lots (thin outlines), built plans (dark).
 void writeBlocksSvg(const Result& r, const BlockAudit& a, const std::string& path);
 std::string summary(const BlockAudit& a);
+
+// THE STREETS SET THE GROUND (Glenn, 2026-09-29: roads "float off the ground", buildings sit below their
+// streets, and he is "not a huge fan of the terraced terrain look" -- "a gentle slope ... something like
+// Blender's proportional editing"). A lane city's pavement is drawn at its own solved heights and the
+// ground beside it was left at natural height, so a street on a hillside stood on its slab's side skirt
+// over the houses that front it (half of all road edges > 0.35 m proud, the worst 7 m).
+//
+// The fix is the earthwork field (procgen/earthwork.h) the lattice cities already use: ONE smooth
+// displacement, pinned to the streets, decaying over `reach` -- proportional editing solved as a screened
+// Poisson field, so the natural ground's own shape survives inside it. A lane city had no road regions to
+// pin it to; these are they: one ramp per at-grade deck segment (layer 0, not an authored deck -- a bridge
+// is meant to stand clear), as wide as the carriageway plus the paved sidewalk, `below` metres under the
+// deck so the ground never shows through the asphalt. Priority kRoadFlattenPriority: the only thing
+// buildEarthworkField fits.
+std::vector<TerrainFlatten> lanesEarthworkPins(const RoadDeckField& deck, double sidewalk, double below = 0.10, double falloff = 2.0);
+// THE FINISH: the same strips as terrain flatten records with a wide feather (kLanesStreetFeather). The field
+// is solved on cells up to 9 m, so over the first metres past a sidewalk it cannot hold the ground at the
+// street's height; each street's own strip levels the ground under its pavement and eases it into the field
+// over the feather. Installed by the loader and by the lot pass alike.
+constexpr double kLanesStreetFeather = 6.0;
+// The NARROWEST sidewalk a level's streets draw (its road block's `sidewalks`, a number or per class, else
+// `fallback`): the finish strip's flat interior stops half a metre short of it, so it never reaches into a
+// block -- an interior outranks every feather, a building pad's included, and a strip as wide as the
+// widest sidewalk stood 1 m inside the blocks of the narrower streets (119 buildings buried, 2026-09-29).
+double lanesMinSidewalk(const nlohmann::json& level, double fallback);
+inline std::vector<TerrainFlatten> lanesStreetFinish(const RoadDeckField& deck, double minSidewalk) {
+    std::vector<TerrainFlatten> f = lanesEarthworkPins(deck, std::max(0.0, minSidewalk - 0.5), 0.10, kLanesStreetFeather);
+    for (TerrainFlatten& r : f) r.priority = 0;   // generic grading, not a road carve: pads (2) still outrank it
+    return f;
+}
+// The field itself, over `natural` (the ground the city is built on, WITHOUT this field). Null when the
+// deck has no at-grade road or the level turned earthwork off. The loader installs it into the terrain
+// the city is drawn on; the lot pass installs the same one into the ground its pads are fitted to.
+// THE STREET IN FRONT: the deck height of the nearest AT-GRADE CITY street (layer 0, no authored deck, not
+// a freeway or a ramp -- a building never fronts those) whose carriageway edge lies within `reach` of
+// (x, z). False when none does. A building's pad takes this height, so its door meets the street it
+// faces -- not the lawn two metres in front of it, which on a hillside can be metres off (buildings sunk
+// below their streets, 864 on island_8_nature). Segments are binned once; a query touches a few.
+std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckField& deck, double reach);
+// Within `clear` of a FREEWAY or RAMP deck's carriageway edge (any layer), by the drawn decks -- the lot graph can
+// carry an at-grade ramp's links under the street class it merges into, and its widths run narrower than the
+// asphalt (a shop 0.3 m and an office 1.8 m off island_8_nature's ramps, 2026-09-30).
+std::function<bool(double, double)> lanesNearFreeway(const RoadDeckField& deck, double clear);
+std::shared_ptr<const std::function<double(double, double)>> lanesEarthworkField(
+    const RoadDeckField& deck, double sidewalk, const std::function<double(double, double)>& natural,
+    const EarthworkParams& params, double seaLevel, EarthworkStats* stats = nullptr);
 
 }  // namespace roads::lanes
 }  // namespace engine

@@ -63,6 +63,8 @@ struct BuildingRecipe {
         PodiumTower, // a full-lot PODIUM of a few floors carrying a slender
                      // TOWER above it — the modern downtown block (density
                      // round: "more varied building shapes")
+        BigBox,      // a BIG-BOX store on a whole block: the box at the back,
+                     // a striped parking lot in front (Glenn, 2026-10-01)
         TowerInPlaza // the 1961 New York model (Seagram): the tower pulled
                      // 12-30 m back from the avenue, the front of the lot a
                      // paved PLAZA with pools, planters and benches
@@ -163,6 +165,10 @@ struct ArchetypeBook {
 int architectRecipeIndex(const std::string& name);
 int architectRecipeCount();
 const char* architectRecipeName(int index);   // nullptr out of range
+// ONE named recipe, grown as the city would grow it on a footprint of `shortSide` / `area` at `coreness` (the
+// slenderness cap included) -- a gallery or a lineup shows exactly what a lot gets. False for an unknown name.
+bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness, Real shortSide, Real area,
+                           BuildingRecipe& out);
 
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no
@@ -180,6 +186,14 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
 // a residential quarter; a grand hall in an old town; a works in industry. Deterministic in seed.
 BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area, uint32_t seed,
                                       Real coreness = 0);
+
+// A BIG-BOX STORE (Glenn, 2026-10-01: "Big box stores like Costco or Bestbuy"): one tall storey of blank walls in
+// its chain's colours, a lit sign and a canopy over the doors, loading docks behind; Massing::BigBox (the parking
+// lot in front). BuildingParams::bigBox names the chain: 1 warehouse club, 2 electronics, 3 home improvement,
+// 4 discount store.
+BuildingRecipe architectBigBox(uint32_t seed);
+// The chain's look on `p` (walls, cladding, the band's colour) and p.bigBox = chain.
+void dressBigBox(BuildingParams& p, int chain, uint32_t seed);
 
 }  // namespace engine
 

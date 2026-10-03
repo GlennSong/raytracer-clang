@@ -735,6 +735,23 @@ void main() {
     float metallic = clamp(pc.albedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(pc.emissionRough.a, 0.04, 1.0);
     vec3 emission = pc.emissionRough.rgb * (emissiveTint ? inColor : vec3(1.0));
+    // A LIT PANE (the interior-mapped, emissive-tinted part) PACKS its glass and its lit tint in the vertex
+    // colour (shape_grammar litPaneColour): the glass in the top 7 bits of each channel is the day albedo,
+    // the low bits (r bit 0, g bit 1, b bit 2) index the lit palette (litTintOf -- keep in step). Index 0 is
+    // a legacy pane: the tint as it was, the material's grey by day.
+    vec3 paneTint = inColor;
+    if (emissiveTint && (pc.surfaceFlags.y & 65536u) != 0u) {
+        ivec3 by = ivec3(round(clamp(inColor, 0.0, 1.0) * 255.0));
+        int li = (by.r & 1) | ((by.g & 1) << 1) | ((by.b & 1) << 2);
+        if (li > 0) {
+            const vec3 kLit[7] = vec3[7](vec3(1.00, 0.96, 0.88), vec3(0.82, 0.90, 1.00), vec3(1.00, 0.82, 0.58),
+                                         vec3(1.00, 0.72, 0.42), vec3(1.00, 0.86, 0.64), vec3(0.80, 0.88, 1.00),
+                                         vec3(0.72, 1.00, 0.78));
+            paneTint = kLit[li - 1];
+            albedo = vec3(by & ivec3(~1)) / 255.0;
+            emission = pc.emissionRough.rgb * paneTint;
+        }
+    }
     uint texFlags = pc.surfaceFlags.z;
     float ao = 1.0;
     // TERRAIN LAYERS: the texture slots are the ground's layers, not the usual maps.
@@ -862,7 +879,7 @@ void main() {
         vec3 cellv = floor(roomCorner * 2.0 + 0.5);
         float rnd = fract(sin(dot(cellv, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
         float rnd2 = fract(sin(dot(cellv, vec3(39.3467, 11.135, 83.155))) * 24634.6345);
-        bool office = inColor.b >= inColor.r;
+        bool office = paneTint.b >= paneTint.r;
         float roomIdx = floor(rnd * 8.0) + (office ? 0.0 : 8.0);
         vec2 tileO = vec2(mod(roomIdx, 4.0), floor(roomIdx / 4.0)) * 0.25;
         vec2 faceUV;
@@ -894,6 +911,13 @@ void main() {
         // (and tree cards, FLAG_LOD_BAND: a far crown's needles average away the same way)
         if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19))) != 0u)
             cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
+        // an impostor's TOP card seen edge-on is a bright dash through the crown (Glenn: "the tree cards in the
+        // distance are still pretty visibly tree cards" -- a far forest striped with them): it thins away as
+        // the view grazes it, gone under ~7 deg, whole from ~25 deg up; the side cards carry the crown there
+        if ((pc.surfaceFlags.y & (1u << 19)) != 0u && (texFlags & 4u) != 0u && abs(inWorldNormal.y) > 0.9) {
+            const float s = abs(normalize(g.cameraPosition.xyz - inWorldPos).y);
+            cut *= smoothstep(0.12, 0.42, s);
+        }
         if ((pc.surfaceFlags.y & 2u) != 0u && cut < 0.5) discard;
         if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;
     }
@@ -907,6 +931,26 @@ void main() {
 
     vec3 N = normalize(inWorldNormal);
     if (featNormal) N = featN;
+    // FOLIAGE CARDS (Glenn, 2026-10-02: "grass and tree cards are noticeable as cards ... the lighting on them is
+    // off"): a card lit by its own flat normal shows its orientation -- each blade or leaf plane a different shade,
+    // its back face dark. Face the normal at the viewer, then BEND it: grass mostly to the sky (a meadow shades as
+    // one soft surface, like the ground it grows on), tree cards part way (a crown keeps some shape).
+    // A tree card WITH a normal picture (the far impostors) is not flipped here: its picture is decoded in the card's
+    // own frame below, then mirrored through the card when seen from behind (the old flip-first frame turned the
+    // picture's "up" DOWN on every back face -- half the cards on screen lit upside down).
+    bool impostorCard = false, cardBack = false;
+    vec3 cardN = N;
+    {
+        const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u;
+        const bool leafCard = (pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u);
+        if (leafCard && (texFlags & 4u) != 0u) {
+            impostorCard = true;
+            cardBack = dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0;
+        } else if (grassCard || leafCard) {
+            if (dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) N = -N;
+            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), grassCard ? 0.7 : 0.45));
+        }
+    }
     // CRAGS (ADR-0120): the mesh's triangles are the only relief a distant mountain had ("the mountains
     // look lowpoly"). Rock gets a per-pixel normal from two octaves of noise (~22 m and ~6 m), projected
     // on the plane the face mostly lies in, each octave faded out once a pixel covers too much of it
@@ -957,6 +1001,10 @@ void main() {
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
         N = normalize(T * tsN.x + B * tsN.y + N * tsN.z);
+        if (impostorCard) {
+            if (cardBack) N -= 2.0 * dot(N, cardN) * cardN;   // the crown from behind: sides still out, top still up
+            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.2));   // a little sky, as the near crowns get
+        }
     }
 
     // TOP LAYER (material feature): moss / snow / dust on faces that look up, broken by noise and

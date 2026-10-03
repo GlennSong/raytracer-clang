@@ -24,6 +24,9 @@ BuildingParams everyFieldSet() {
     p.balconies = true; p.porch = true; p.chimney = true; p.spire = true; p.steeple = true; p.parkingDecks = true; p.sideBays = 5; p.trimColor = Vec3(0.7, 0.8, 0.9);
     p.shape = BuildingShape::Cylinder; p.tiers = 9; p.sides = 48; p.seed = 0xDEADBEEFu;
     p.envelope = BuildingParams::Envelope::StreetWallSetback; p.baseFloors = 6; p.setback1 = 7.5; p.stepFloors = 9; p.stepDepth = 2.25; p.towerFrac = 0.4; p.towerFloor = 24; p.core = 2; p.crown = 5; p.signage = 1; p.uplights = 2;
+    p.skyRatio = 5.6; p.taperTop = 0.62; p.chamferTop = 0.18; p.featherFrom = 0.66; p.twistDeg = 45; p.stackShift = 3.5;
+    p.top = 7; p.windowGroup = 3; p.verticals = true; p.residential = true; p.glassTint = 3; p.mullionTone = 1; p.fins = 2; p.curtainBay = 2.4; p.spandrelFrac = 0.45;
+    p.partyWalls = 2; p.partyN[0] = Vec2(0.6, 0.8); p.partyN[1] = Vec2(-0.6, -0.8); p.partyAt[0] = 12.5; p.partyAt[1] = -3.25; p.backDoor = true; p.fireEscape = true; p.bigBox = 3;
     return p;
 }
 bool sameVec3(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
@@ -36,7 +39,10 @@ bool sameParams(const BuildingParams& a, const BuildingParams& b) {
         && a.quoins == b.quoins && a.groundBays == b.groundBays && a.portico == b.portico && a.entranceSteps == b.entranceSteps && a.dome == b.dome && a.roofStyle == b.roofStyle && a.roofPitch == b.roofPitch && a.retailStreetOnly == b.retailStreetOnly
         && a.balconies == b.balconies && a.porch == b.porch && a.chimney == b.chimney && a.spire == b.spire && a.steeple == b.steeple && a.parkingDecks == b.parkingDecks && a.sideBays == b.sideBays && sameVec3(a.trimColor, b.trimColor)
         && a.shape == b.shape && a.tiers == b.tiers && a.sides == b.sides && a.seed == b.seed
-        && a.envelope == b.envelope && a.baseFloors == b.baseFloors && a.setback1 == b.setback1 && a.stepFloors == b.stepFloors && a.stepDepth == b.stepDepth && a.towerFrac == b.towerFrac && a.towerFloor == b.towerFloor && a.core == b.core && a.crown == b.crown && a.signage == b.signage && a.uplights == b.uplights;
+        && a.envelope == b.envelope && a.baseFloors == b.baseFloors && a.setback1 == b.setback1 && a.stepFloors == b.stepFloors && a.stepDepth == b.stepDepth && a.towerFrac == b.towerFrac && a.towerFloor == b.towerFloor && a.core == b.core && a.crown == b.crown && a.signage == b.signage && a.uplights == b.uplights
+        && a.skyRatio == b.skyRatio && a.taperTop == b.taperTop && a.chamferTop == b.chamferTop && a.featherFrom == b.featherFrom && a.twistDeg == b.twistDeg && a.stackShift == b.stackShift
+        && a.top == b.top && a.windowGroup == b.windowGroup && a.verticals == b.verticals && a.residential == b.residential && a.glassTint == b.glassTint && a.mullionTone == b.mullionTone && a.fins == b.fins && a.curtainBay == b.curtainBay && a.spandrelFrac == b.spandrelFrac
+        && a.partyWalls == b.partyWalls && a.partyN[0].x == b.partyN[0].x && a.partyN[0].y == b.partyN[0].y && a.partyN[1].x == b.partyN[1].x && a.partyN[1].y == b.partyN[1].y && a.partyAt[0] == b.partyAt[0] && a.partyAt[1] == b.partyAt[1] && a.backDoor == b.backDoor && a.fireEscape == b.fireEscape && a.bigBox == b.bigBox;
 }
 bool samePoly(const Poly2& a, const Poly2& b) { if (a.size() != b.size()) return false; for (size_t i = 0; i < a.size(); ++i) if (a[i].x != b[i].x || a[i].y != b[i].y) return false; return true; }
 }  // namespace

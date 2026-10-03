@@ -179,8 +179,10 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
             if (e.id == dumpId && e.s.size() == e.z.size() && e.t.size() == e.z.size()) {
                 std::fprintf(stderr, "[dump] %s: station, deck z, ground, floors %zu\n", e.id.c_str(), e.floorPts.size());
                 double next = 0;
+                const char* stepEnv = std::getenv("LANELAB_DUMP_STEP");   // metres between rows (default 50)
+                const double step = stepEnv ? std::max(1.0, std::atof(stepEnv)) : 50.0;
                 for (std::size_t i = 0; i < e.s.size(); ++i)
-                    if (e.s[i] >= next) { std::fprintf(stderr, "[dump]   %7.0f %8.2f %8.2f  (%+.1f)  at (%.0f, %.0f)\n", e.s[i], e.z[i], e.t[i], e.z[i] - e.t[i], e.xy[i].x, e.xy[i].y); next += 50.0; }
+                    if (e.s[i] >= next) { std::fprintf(stderr, "[dump]   %7.0f %8.2f %8.2f  (%+.1f)  at (%.0f, %.0f)\n", e.s[i], e.z[i], e.t[i], e.z[i] - e.t[i], e.xy[i].x, e.xy[i].y); next += step; }
             }
     r.timings["profiles"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(2, "footprints", 0.0);
     // 3. footprints, closing, layers; 4. arrangement and surfaces

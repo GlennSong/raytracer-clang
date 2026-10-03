@@ -121,3 +121,28 @@ TEST_CASE(weather_for_day_spans_the_kinds_and_is_deterministic) {
     for (int d = 1; d <= 30 && !differs; ++d) differs = weatherForDay(7u, d) != weatherForDay(11u, d);
     CHECK(differs);
 }
+
+// NIGHT GLOW reaches a chunk that streams in AFTER dusk (Glenn, 2026-09-30: towers he had walked past stayed dark
+// at night). The glow used to be written only when the dusk ramp changed; a chunk spawned while the ramp held still
+// kept its zero emission. applyNightGlowRamp lights each entity once per ramp value.
+#include "../src/engine/systems/day_night_system.h"
+#include "../src/engine/world.h"
+#include "../src/engine/components.h"
+TEST_CASE(night_glow_lights_a_chunk_that_streams_in_after_dusk) {
+    World world;
+    auto spawn = [&] {
+        Entity e = world.create();
+        world.add<Renderable>(e, Renderable{});
+        world.add<NightGlow>(e, NightGlow{Vec3(1, 1, 1)});
+        return e;
+    };
+    const Entity early = spawn();
+    applyNightGlowRamp(world, 1.0);
+    CHECK_APPROX(world.get<Renderable>(early)->material.emission.x, 1.0, 1e-6);
+    const Entity late = spawn();               // streams in at night, the ramp unchanged
+    applyNightGlowRamp(world, 1.0);
+    CHECK_APPROX(world.get<Renderable>(late)->material.emission.x, 1.0, 1e-6);
+    applyNightGlowRamp(world, 0.0);            // dawn: both go dark
+    CHECK_APPROX(world.get<Renderable>(early)->material.emission.x, 0.0, 1e-6);
+    CHECK_APPROX(world.get<Renderable>(late)->material.emission.x, 0.0, 1e-6);
+}

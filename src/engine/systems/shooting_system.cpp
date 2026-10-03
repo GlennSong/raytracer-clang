@@ -7,7 +7,7 @@ namespace engine {
 
 void ShootingSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("fire", MouseButton::Left);
-    ctx.actions.bindButton("fire", GamepadButton::RightBumper);
+    ctx.actions.bindButton("fire", GamepadAxis::RightTrigger);   // RT: LB / RB cycle the tools
 
     // Upload bullet mesh (small cube) once
     {

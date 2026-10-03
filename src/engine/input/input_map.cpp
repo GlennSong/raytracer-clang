@@ -1,3 +1,4 @@
+#include <cmath>
 #include "input_map.h"
 
 #include "../../log.h"
@@ -126,6 +127,13 @@ void InputMap::bindButton(const std::string& action, GamepadButton button) {
     buttons[action].push_back(encodeGamepadButton(button));
 }
 
+namespace { constexpr int GAMEPAD_TRIGGER_BASE = GAMEPAD_BUTTON_BASE + 1000; }
+
+void InputMap::bindButton(const std::string& action, GamepadAxis trigger) {
+    if (trigger != GamepadAxis::LeftTrigger && trigger != GamepadAxis::RightTrigger) return;
+    buttons[action].push_back(GAMEPAD_TRIGGER_BASE + (trigger == GamepadAxis::LeftTrigger ? 0 : 1));
+}
+
 void InputMap::bindButton(const std::string& action, XrButton button) {
     buttons[action].push_back(encodeXrButton(button));
 }
@@ -199,6 +207,7 @@ const char* gamepadAxisName(int index) {
 // Decode an encoded button/digital source back to a display name.
 std::string sourceName(int encoded) {
     if (encoded >= XR_BUTTON_BASE) return "XR Pinch";
+    if (encoded >= GAMEPAD_BUTTON_BASE + 1000) return encoded == GAMEPAD_BUTTON_BASE + 1000 ? "Pad LT" : "Pad RT";
     if (encoded >= GAMEPAD_BUTTON_BASE)
         return gamepadButtonName(encoded - GAMEPAD_BUTTON_BASE);
     if (encoded >= MOUSE_SOURCE_BASE)
@@ -231,6 +240,8 @@ std::vector<InputMap::BindingDesc> InputMap::listBindings() const {
 void InputMap::beginFrame() {
     pressedSources.clear();
     releasedSources.clear();
+    injectedNow_.swap(injectedNext_);
+    injectedNext_.clear();
 }
 
 void InputMap::setTextInputCaptured(bool captured) {
@@ -248,6 +259,7 @@ void InputMap::processEvent(const Event& event) {
             // A held key repeats; only the initial press is an edge.
             if (event.repeat) break;
             if (textCaptured) break;   // typed into a text field, not an action
+            gamepadLast_ = false;
             heldSources.insert(encodeKey(event.key));
             pressedSources.insert(encodeKey(event.key));
             break;
@@ -256,6 +268,7 @@ void InputMap::processEvent(const Event& event) {
             releasedSources.insert(encodeKey(event.key));
             break;
         case EventType::MouseButtonPressed:
+            gamepadLast_ = false;
             heldSources.insert(encodeMouse(event.button));
             pressedSources.insert(encodeMouse(event.button));
             break;
@@ -291,6 +304,7 @@ void InputMap::updateGamepad(const GamepadState& pad) {
         if (down && !was) {
             heldSources.insert(source);
             pressedSources.insert(source);
+            gamepadLast_ = true;
         } else if (!down && was) {
             heldSources.erase(source);
             releasedSources.insert(source);
@@ -301,6 +315,16 @@ void InputMap::updateGamepad(const GamepadState& pad) {
     // Axes: store deadzoned values for axis() to read.
     for (std::size_t i = 0; i < GAMEPAD_AXIS_COUNT; i++) {
         gamepadAxisValues[i] = pad.connected ? applyDeadzone(pad.axes[i]) : 0.0;
+        if (std::fabs(gamepadAxisValues[i]) > 0.5) gamepadLast_ = true;
+    }
+    // The triggers as buttons: past half way is down.
+    for (int t = 0; t < 2; ++t) {
+        const std::size_t ai = static_cast<std::size_t>(t == 0 ? GamepadAxis::LeftTrigger : GamepadAxis::RightTrigger);
+        const bool down = pad.connected && pad.axes[ai] > 0.5f;
+        const int source = GAMEPAD_TRIGGER_BASE + t;
+        if (down && !prevTriggers[static_cast<std::size_t>(t)]) { heldSources.insert(source); pressedSources.insert(source); }
+        else if (!down && prevTriggers[static_cast<std::size_t>(t)]) { heldSources.erase(source); releasedSources.insert(source); }
+        prevTriggers[static_cast<std::size_t>(t)] = down;
     }
 }
 
@@ -340,7 +364,7 @@ bool InputMap::held(const std::string& action) const {
 }
 
 bool InputMap::pressed(const std::string& action) const {
-    return live(action) && anyBoundSourceIn(action, pressedSources);
+    return live(action) && (anyBoundSourceIn(action, pressedSources) || injectedNow_.count(action));
 }
 
 bool InputMap::released(const std::string& action) const {

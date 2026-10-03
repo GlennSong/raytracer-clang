@@ -130,6 +130,11 @@ struct Agent {
     Real wakeAt = -1;
     Real sleptAt = 0;
     bool playerControlled = false;
+    // THE PHYSICAL TIER'S BODY, as the sim's followers must see it (#23): metres the possessed car's real
+    // chassis trails this ghost along its heading (0 when not possessed, or not behind). Car-following and
+    // the vision wedge measure a leader to its BODY -- gaps planned to the ghost put the car behind's
+    // kinematic box into a body still a length back, and an immovable box ramming a chassis is the climb.
+    Real bodyLag = 0;
     // DIRECTED (ADR-0091): a director owns this agent's plan — the possession
     // channel now, a model later. The goal layer leaves it entirely alone (no
     // schedule, no chained trip on arrival) while the stepper keeps moving it
@@ -207,6 +212,11 @@ struct Agent {
     Real restDwell = 0;
     // The venue (CitySim::venues_) this trip is heading for, -1 for none.
     int tripVenue = -1;
+    // A SEAT this trip is for (CitySim::seats_, reserved by this agent), -1 for none; and where the agent is in
+    // using it: 0 not, 1 walking from the path to it, 2 sitting, 3 walking back to `seatBack` (the path).
+    int tripSeat = -1;
+    uint8_t seatPhase = 0;
+    engine::Vec2 seatBack{0, 0};
     // Where the current outing/lunch trip is going, kept until arrival: a leg
     // by BUS sets the walker down at a stop and the trip resumes from there,
     // and it must resume to the same place, not re-pick one.
@@ -286,6 +296,7 @@ struct Agent {
     // reads the gap to blink the correct indicator. laneTimer paces the next
     // discretionary change.
     Real laneF = 0;
+    Real laneVel = 0;   // d(laneF)/dt, lanes/s: the glide is a damped spring, so it eases in and out (S-curve)
     Real laneTimer = 5.0;
     // Tether (ADR-0062): while set, this planner ghost may not LEAD `tetherAnchor`
     // (its physical car) by more than `tetherLead` metres — it waits instead. The
@@ -792,6 +803,12 @@ public:
                agents_[static_cast<std::size_t>(agentIndex)].directed;
     }
 
+    // The physical tier reports how far a possessed car's body trails its ghost (Agent::bodyLag).
+    void setAgentBodyLag(int agentIndex, Real metres) {
+        if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
+            agents_[static_cast<std::size_t>(agentIndex)].bodyLag = metres;
+    }
+
     // Mark an agent as host-driven (the player): the sim won't run its AI brain.
     void setPlayerControlled(int agentIndex, bool on) {
         if (agentIndex >= 0 && agentIndex < static_cast<int>(agents_.size()))
@@ -1099,6 +1116,20 @@ public:
         }
     };
     const std::vector<Venue>& venues() const { return venues_; }
+    // SEATS out in the city (the furniture library, M5; Glenn: benches you can sit on -- and so can everyone
+    // else): one per place a body sits, its floor point, the way it faces, its seat height, the path node it is
+    // reached from (setSeats finds it) and who has it. A stroller's outing may be a sit on one.
+    struct SeatSpot {
+        engine::Vec2 pos, face{0, 1};
+        Real hip = 0.45;
+        int node = -1;
+        int occupant = -1;
+    };
+    void setSeats(std::vector<SeatSpot> seats);
+    const std::vector<SeatSpot>& seats() const { return seats_; }
+    // The agent's seat while it is SITTING on it (seatPhase 2), else nullptr: the renderer and the walker
+    // system draw a seated body there.
+    const SeatSpot* seatedOn(int agentIndex) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0
     // once it has merged into its lane (see Agent::pullOffset).
     // `pullS`: how far into the pull the DRAWN car is (interpolated through
@@ -1175,8 +1206,14 @@ public:
     // World-space (XZ) points that cars must yield to in addition to the sim's own
     // pedestrians — chiefly the live player (on foot or in a car), injected by the
     // host each step so AI cars brake for and hold short of the player.
-    void setExternalObstacles(std::vector<engine::Vec2> obstacles) {
+    // `halfLengths` (parallel, optional): > 0 marks a VEHICLE that long (half, m) -- the player's car, a taken car.
+    // A car is not a person: it is seen down the lane far enough to stop from speed, and held short of by both
+    // bodies' lengths, not by a person's clearance measured to its centre (Glenn, 2026-10-02: "If my car stops the
+    // car behind me just rams me").
+    void setExternalObstacles(std::vector<engine::Vec2> obstacles, std::vector<Real> halfLengths = {}) {
         externalObstacles_ = std::move(obstacles);
+        externalHalf_ = std::move(halfLengths);
+        externalHalf_.resize(externalObstacles_.size(), Real(0));
     }
 
     // World-space (XZ) static obstacles pedestrians steer around and never stand
@@ -1298,6 +1335,11 @@ private:
     JunctionAhead junctionAhead(const Agent& a, Real horizon) const;
     Real stopLineBack(const Agent& a, const JunctionAhead& ja) const;   // line, metres short of ja.node
     Real senseAhead(Agent& a);   // perception/memory/TTC: distance to a body ahead
+    // An injected body's half length when it is a vehicle (sensed id -(1+k)), else 0
+    Real externalHalfOf(int id) const {
+        const int k = -id - 1;
+        return id < 0 && k < static_cast<int>(externalHalf_.size()) ? externalHalf_[static_cast<std::size_t>(k)] : Real(0);
+    }
     void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain, park, or rest
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
     void computeGaps();
@@ -1393,6 +1435,7 @@ private:
     std::vector<int> sensedIndex_;      // per agent: its slot in sensed_, -1 = absent
                                         // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
+    std::vector<Real> externalHalf_;                // parallel: a vehicle's half length, 0 = a person
     std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width (+ pad)
@@ -1445,6 +1488,10 @@ private:
     GoalTable goalPed_ = defaultScheduleGoals();
     GoalTable strollerTable_ = strollerGoals();
     std::vector<Venue> venues_;
+    std::vector<SeatSpot> seats_;
+    void releaseSeat(Agent& a);
+    int pickSeat(Agent& a, engine::Vec2 here);   // a free seat to walk to, reserved; -1 none
+    void stepSeats(Real dt);                     // the walk off the path to a seat and back
     GoalTable goalDriver_ = defaultScheduleGoals();
     RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     long faultCount_ = 0;

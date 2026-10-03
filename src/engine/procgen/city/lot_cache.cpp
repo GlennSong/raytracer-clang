@@ -11,12 +11,13 @@ namespace lotcache {
 using bundle::BinReader;
 using bundle::BinWriter;
 
+constexpr std::size_t kBuildingParamsSize = 496;   // 432 before the party walls (params v8); 352 until the NYC-variety envelope + curtain fields (params v5)
 // If this trips, BuildingParams gained or changed a field: extend putBuildingParams/getBuildingParams, the
 // every-field test, and bump kLotsFormatVersion. (304 on clang/Linux x86_64 with Real = double.)
-static_assert(sizeof(BuildingParams) == 352, "BuildingParams layout changed: update lot_cache.cpp");
+static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 4, kLotsVersion = 6, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 9, kLotsVersion = 8, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -43,7 +44,10 @@ void putBuildingParams(BinWriter& w, const BuildingParams& p) {
     putBool(w, p.quoins); w.put<int32_t>(p.groundBays); w.put<int32_t>(p.portico); putBool(w, p.entranceSteps); putBool(w, p.dome);
     w.put<uint8_t>(static_cast<uint8_t>(p.roofStyle)); w.put<double>(p.roofPitch); putBool(w, p.retailStreetOnly); putBool(w, p.balconies); putBool(w, p.porch); putBool(w, p.chimney); putBool(w, p.spire); putBool(w, p.steeple); putBool(w, p.parkingDecks);
     w.put<int32_t>(p.sideBays); putVec3(w, p.trimColor); w.put<uint8_t>(static_cast<uint8_t>(p.shape)); w.put<int32_t>(p.tiers); w.put<int32_t>(p.sides); w.put<uint32_t>(p.seed);
-    w.put<uint8_t>(static_cast<uint8_t>(p.envelope)); w.put<int32_t>(p.baseFloors); w.put<double>(p.setback1); w.put<int32_t>(p.stepFloors); w.put<double>(p.stepDepth); w.put<double>(p.towerFrac); w.put<int32_t>(p.towerFloor); w.put<uint8_t>(p.core); w.put<uint8_t>(p.crown); w.put<uint8_t>(p.signage); w.put<uint8_t>(p.uplights);
+    w.put<uint8_t>(static_cast<uint8_t>(p.envelope)); w.put<int32_t>(p.baseFloors); w.put<double>(p.setback1); w.put<int32_t>(p.stepFloors); w.put<double>(p.stepDepth); w.put<double>(p.towerFrac); w.put<int32_t>(p.towerFloor); w.put<uint8_t>(p.core); w.put<uint8_t>(p.crown); w.put<uint8_t>(p.signage); w.put<uint8_t>(p.uplights); w.put<uint8_t>(p.top); w.put<uint8_t>(p.windowGroup); w.put<uint8_t>(p.verticals ? 1 : 0); w.put<uint8_t>(p.residential ? 1 : 0);
+    w.put<double>(p.skyRatio); w.put<double>(p.taperTop); w.put<double>(p.chamferTop); w.put<double>(p.featherFrom); w.put<double>(p.twistDeg); w.put<double>(p.stackShift);
+    w.put<uint8_t>(p.glassTint); w.put<uint8_t>(p.mullionTone); w.put<uint8_t>(p.fins); w.put<double>(p.curtainBay); w.put<double>(p.spandrelFrac);
+    w.put<uint8_t>(p.partyWalls); for (int k = 0; k < 2; ++k) { w.put<double>(p.partyN[k].x); w.put<double>(p.partyN[k].y); w.put<double>(p.partyAt[k]); } putBool(w, p.backDoor); putBool(w, p.fireEscape); w.put<uint8_t>(p.bigBox);
 }
 
 bool getBuildingParams(BinReader& r, BuildingParams& p) {
@@ -61,7 +65,13 @@ bool getBuildingParams(BinReader& r, BuildingParams& p) {
     uint8_t envelope = 0;
     if (!r.get(envelope) || !r.get(p.baseFloors) || !r.get(p.setback1) || !r.get(p.stepFloors) || !r.get(p.stepDepth) || !r.get(p.towerFrac) || !r.get(p.towerFloor)) return false;
     p.envelope = static_cast<BuildingParams::Envelope>(envelope);
-    if (!r.get(p.core) || !r.get(p.crown) || !r.get(p.signage) || !r.get(p.uplights)) return false;
+    if (!r.get(p.core) || !r.get(p.crown) || !r.get(p.signage) || !r.get(p.uplights) || !r.get(p.top)) return false;
+    { uint8_t wg = 1, vt = 0; uint8_t rs = 0; if (!r.get(wg) || !r.get(vt) || !r.get(rs)) return false; p.windowGroup = wg; p.verticals = vt != 0; p.residential = rs != 0; }
+    if (!r.get(p.skyRatio) || !r.get(p.taperTop) || !r.get(p.chamferTop) || !r.get(p.featherFrom) || !r.get(p.twistDeg) || !r.get(p.stackShift)) return false;
+    if (!r.get(p.glassTint) || !r.get(p.mullionTone) || !r.get(p.fins) || !r.get(p.curtainBay) || !r.get(p.spandrelFrac)) return false;
+    if (!r.get(p.partyWalls)) return false;
+    for (int k = 0; k < 2; ++k) { double nx = 0, nz = 0; if (!r.get(nx) || !r.get(nz) || !r.get(p.partyAt[k])) return false; p.partyN[k] = Vec2(nx, nz); }
+    if (!getBool(r, p.backDoor) || !getBool(r, p.fireEscape) || !r.get(p.bigBox)) return false;
     p.wallPart = static_cast<PartId>(wallPart); o.head = static_cast<OpeningStyle::Head>(head); o.hood = static_cast<OpeningStyle::Hood>(hood);
     p.roofStyle = static_cast<BuildingParams::RoofStyle>(roof); p.shape = static_cast<BuildingShape>(shape);
     return r.ok();
@@ -77,11 +87,12 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         putPoly(w, lb.plan); putVec3(w, lb.color); putPoly(w, lb.pad);
         bundle::putPackedMesh(w, bundle::packMesh(lb.padMesh, "pad", lb.color, 0u, 1.0f, 0.0));
         w.put<uint32_t>(static_cast<uint32_t>(lb.treeSpots.size())); for (const Vec3& t : lb.treeSpots) putVec3(w, t);
+        w.put<uint32_t>(static_cast<uint32_t>(lb.furniture.size())); for (const OutdoorPiece& f : lb.furniture) { w.put<uint8_t>(f.piece); w.put<uint32_t>(f.variant); putVec2(w, f.at); w.put<double>(f.yaw); w.put<double>(f.y); putBool(w, f.draped); }
         w.put<uint32_t>(static_cast<uint32_t>(lb.fenceSegs.size())); for (const auto& f : lb.fenceSegs) { putVec2(w, f.first); putVec2(w, f.second); }
         w.put<uint32_t>(static_cast<uint32_t>(lb.units.size()));
         for (const BuildingUnit& u : lb.units) {
             putPoly(w, u.plan); w.put<double>(u.baseY); putBuildingParams(w, u.params);
-            w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); }
+            w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); putBool(w, d.back); }
             putBool(w, u.enterable);
             w.put<uint32_t>(static_cast<uint32_t>(u.beacons.size())); for (const Vec3& b : u.beacons) putVec3(w, b);
         }
@@ -103,12 +114,13 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         if (!getPoly(r, lb.plan) || !getVec3(r, lb.color) || !getPoly(r, lb.pad)) return false;
         bundle::PackedMesh pm; if (!bundle::getPackedMesh(r, pm)) return false; lb.padMesh = bundle::unpackMesh(pm);
         uint32_t nt = 0; if (!r.get(nt)) return false; lb.treeSpots.resize(nt); for (Vec3& t : lb.treeSpots) if (!getVec3(r, t)) return false;
+        uint32_t nfu = 0; if (!r.get(nfu)) return false; lb.furniture.resize(nfu); for (OutdoorPiece& f : lb.furniture) if (!r.get(f.piece) || !r.get(f.variant) || !getVec2(r, f.at) || !r.get(f.yaw) || !r.get(f.y) || !getBool(r, f.draped)) return false;
         uint32_t nf = 0; if (!r.get(nf)) return false; lb.fenceSegs.resize(nf); for (auto& f : lb.fenceSegs) if (!getVec2(r, f.first) || !getVec2(r, f.second)) return false;
         uint32_t nu = 0; if (!r.get(nu)) return false; lb.units.resize(nu);
         for (BuildingUnit& u : lb.units) {
             if (!getPoly(r, u.plan) || !r.get(u.baseY) || !getBuildingParams(r, u.params)) return false;
             uint32_t nd = 0; if (!r.get(nd)) return false; u.doors.resize(nd);
-            for (DoorSpec& d : u.doors) if (!getVec2(r, d.foot) || !getVec2(r, d.normal) || !r.get(d.width) || !r.get(d.height)) return false;
+            for (DoorSpec& d : u.doors) if (!getVec2(r, d.foot) || !getVec2(r, d.normal) || !r.get(d.width) || !r.get(d.height) || !getBool(r, d.back)) return false;
             if (!getBool(r, u.enterable)) return false;
             uint32_t nb = 0; if (!r.get(nb)) return false; u.beacons.resize(nb);
             for (Vec3& b : u.beacons) if (!getVec3(r, b)) return false;

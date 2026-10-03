@@ -438,3 +438,78 @@ TEST_CASE(door_leaf_swings_away_from_the_mover) {
     // Sidling along the wall (tangential velocity): position decides.
     CHECK(doorSwingSign(Vec2(1.0, 0.8), Vec2(1.2, 0), foot, n) < 0);
 }
+
+// THE FIRE ESCAPE IS A WAY UP (Glenn, 2026-10-01: "different ways up to the second floor of a building"). An
+// attached walk-up's steel stair, walked: from the yard up the first flight to the first floor's landing, along the
+// landing to the next flight's foot, and up it to the second floor's. The colliders are the streamed interior's.
+TEST_CASE(character_climbs_the_fire_escape_from_the_yard) {
+    const Poly2 plan = {{-6, -9}, {6, -9}, {6, 9}, {-6, 9}};
+    BuildingParams p = interiorParams();
+    p.floors = 3;
+    p.partyWalls = 2;
+    p.partyN[0] = Vec2(-1, 0); p.partyAt[0] = 6;
+    p.partyN[1] = Vec2(1, 0);  p.partyAt[1] = 6;
+    p.backDoor = true;
+    p.fireEscape = true;
+    RenderMesh collider;
+    growInterior(plan, p, 0.0, &collider);
+    const std::vector<StoreyPlan> st = storeyPlans(plan, p);
+    // The escape on the rear (z = -9) face: the back door takes the end bay (x -6..-2), the stair the rest --
+    // flights from x -1.8 to 4.9 in the outer strip (z -9.85..-10.55), landings along the wall (z -9.05..-9.85).
+    Real fx0 = 1e9, fx1 = -1e9;
+    for (const Vertex& v : collider.vertices)
+        if (v.position.z < -9.8 && v.position.z > -10.6 && v.position.y < 0.5) {
+            fx0 = std::min(fx0, v.position.x);
+        }
+    for (const Vertex& v : collider.vertices)
+        if (v.position.z < -9.8 && v.position.z > -10.6 && std::fabs(v.position.y - st[1].y0) < 0.05)
+            fx1 = std::max(fx1, v.position.x);
+    std::printf("    [escape] first flight foot x %.2f, platform end x %.2f, storeys at %.2f %.2f\n", fx0, fx1,
+                st[1].y0, st[2].y0);
+    CHECK(fx0 > -2.5 && fx0 < 0.0);
+
+    PhysicsWorld world;
+    world.initialize();
+    world.addBox(Vec3(60, 0.5, 60), Vec3(0, -0.5, 0), Quat::identity(), BodyMotion::Static);   // the yard
+    world.addBox(Vec3(6, 8, 9), Vec3(0, 8, 0), Quat::identity(), BodyMotion::Static);           // the building
+    std::vector<Vec3> verts;
+    for (const Vertex& v : collider.vertices) verts.push_back(v.position);
+    std::vector<uint32_t> idx = collider.indices;
+    const std::size_t oneSided = idx.size();
+    for (std::size_t i = 0; i + 2 < oneSided; i += 3) {
+        idx.push_back(idx[i]);
+        idx.push_back(idx[i + 2]);
+        idx.push_back(idx[i + 1]);
+    }
+    world.addMesh(verts, idx, Vec3(), 0.85);
+    const Real zo = -10.2, zi = -9.45;
+    CharacterId c = world.addCharacter(0.8, 0.3, Vec3(fx0 - 1.2, 1.2, zo));
+    world.optimizeBroadPhase();
+    walk(world, c, Vec3(), 60);
+    auto walkTo = [&](Real tx, Real tz, int maxFrames) {
+        for (int i = 0; i < maxFrames; ++i) {
+            const Vec3 q = world.characterPosition(c);
+            const Real dx = tx - q.x, dz = tz - q.z;
+            const Real len = std::sqrt(dx * dx + dz * dz);
+            if (len < 0.15) break;
+            world.moveCharacter(c, Vec3(dx / len * 1.2, 0, dz / len * 1.2), 1.0 / 60.0);
+        }
+    };
+    const Real top = fx1 - 0.4;   // on the arrival platform
+    walkTo(top, zo, 1500);
+    Vec3 pos = world.characterPosition(c);
+    std::printf("    [escape] flight 1 end x=%.2f y=%.2f z=%.2f\n", pos.x, pos.y, pos.z);
+    CHECK_APPROX(pos.y, st[1].y0 + 1.1, 0.25);
+    walkTo(top, zi, 300);                 // onto the landing along the wall
+    walkTo(fx0 + 0.4, zi, 1200);          // back along it to the next flight's foot
+    pos = world.characterPosition(c);
+    std::printf("    [escape] landing 1 x=%.2f y=%.2f z=%.2f\n", pos.x, pos.y, pos.z);
+    CHECK_APPROX(pos.y, st[1].y0 + 1.1, 0.25);
+    CHECK(pos.x < fx0 + 0.8);
+    walkTo(fx0 + 0.4, zo, 300);           // onto the flight
+    walkTo(top, zo, 1500);
+    pos = world.characterPosition(c);
+    std::printf("    [escape] flight 2 end x=%.2f y=%.2f z=%.2f\n", pos.x, pos.y, pos.z);
+    CHECK_APPROX(pos.y, st[2].y0 + 1.1, 0.25);
+    world.shutdown();
+}

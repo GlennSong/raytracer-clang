@@ -21,6 +21,54 @@ using engine::PhysicsWorld;
 using engine::PhysicsBodyId;
 using engine::BodyMotion;
 
+namespace {
+// The ambient sedan every possessed car is (see possessTier's VehicleConfig).
+constexpr Real kBodyHalfX = 0.92, kBodyHalfZ = 2.15;
+
+struct Footprint { engine::Vec2 c, ax, az; Real hx, hz; };
+Footprint footprint(engine::Vec2 c, Real yaw, Real hx, Real hz) {
+    const engine::Vec2 az(std::sin(yaw), std::cos(yaw));   // local +Z, the way the car faces
+    return Footprint{c, engine::Vec2(az.y, -az.x), az, hx, hz};
+}
+// Separating-axis test of two oriented rectangles, `margin` added to every side.
+bool overlaps(const Footprint& a, const Footprint& b, Real margin) {
+    const engine::Vec2 d = b.c - a.c;
+    for (const engine::Vec2& n : {a.ax, a.az, b.ax, b.az}) {
+        auto r = [&](const Footprint& f) {
+            return f.hx * std::fabs(f.ax.x * n.x + f.ax.y * n.y) + f.hz * std::fabs(f.az.x * n.x + f.az.y * n.y);
+        };
+        if (std::fabs(d.x * n.x + d.y * n.y) >= r(a) + r(b) + 2 * margin) return false;
+    }
+    return true;
+}
+Real yawOf(const Quat& q) {
+    const Vec3 f = q.rotate(Vec3(0, 0, 1));
+    return std::atan2(f.x, f.z);
+}
+}  // namespace
+
+bool CityPhysicsSystem::spotClear(engine::Vec2 c, Real yaw, int selfAgent) const {
+    const PhysicsWorld& pw = physics_.physicsWorld();
+    const Footprint me = footprint(c, yaw, kBodyHalfX, kBodyHalfZ);
+    const Real margin = 0.1;
+    const Real reach = 8.0;   // nothing car-sized farther than this can touch a sedan
+    for (const Possessed& p : possessed_) {
+        if (p.agent == selfAgent) continue;
+        const Vec3 bp = pw.vehiclePosition(p.vid);
+        const engine::Vec2 o(bp.x, bp.z);
+        if ((o - c).length() > reach) continue;
+        if (overlaps(me, footprint(o, yawOf(pw.vehicleOrientation(p.vid)), kBodyHalfX, kBodyHalfZ), margin)) return false;
+    }
+    for (const auto& kv : carProxies_) {
+        if (kv.second.parked) continue;   // a possessed car's own box, below the world
+        const Vec3 bp = pw.bodyPosition(kv.second.id);
+        const engine::Vec2 o(bp.x, bp.z);
+        if ((o - c).length() > reach) continue;
+        if (overlaps(me, footprint(o, yawOf(pw.bodyOrientation(kv.second.id)), kv.second.he.x, kv.second.he.z), margin)) return false;
+    }
+    return true;
+}
+
 void CityPhysicsSystem::releaseBodies() {
     PhysicsWorld& pw = physics_.physicsWorld();
     for (const auto& kv : carProxies_) pw.removeBody(kv.second.id);
@@ -86,6 +134,7 @@ void CityPhysicsSystem::syncKinematic(World& world, const std::vector<Entity>& g
                 // bubble): SPAWN the box at the drawn pose — like park/unpark
                 // below, arriving is a discontinuous move, never a sweep.
                 ProxyBody nb;
+                nb.he = he;
                 nb.id = pw.addBox(he, p, rot, BodyMotion::Kinematic,
                                   /*restitution*/ 0.0, /*friction*/ 0.6);
                 nb.parked = isParked ? 1 : 0;
@@ -231,6 +280,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                           dist2(agents[ai]) < dropR2;
         if (!keep) {
             city_.clearAgentPhysPose(ai);
+            city_.simMutable().setAgentBodyLag(ai, 0);
             pw.removeVehicle(possessed_[i].vid);
             possessed_[i] = possessed_.back();
             possessed_.pop_back();
@@ -268,6 +318,10 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
         for (const auto& [d2, ai] : cand) {
             if (static_cast<int>(possessed_.size()) >= budget) break;
             const Agent& a = agents[ai];
+            // Spawn only into a clear spot (#23): the ghost of a car in a sim fender-bender can sit a metre
+            // into the car ahead, and a chassis spawned there is two solid cars in one place. It stays a
+            // kinematic car this tick and is offered again next tick.
+            if (!spotClear(a.pos, std::atan2(a.heading.x, a.heading.y), ai)) continue;
             PhysicsWorld::VehicleConfig cfg;   // ambient sedan
             cfg.chassisHalfExtent = Vec3(0.92, 0.45, 2.15);
             cfg.mass = 1400.0;
@@ -326,6 +380,9 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
         const engine::Vec2 bpos(bp.x, bp.z);
         const engine::Vec2 toGhost = a.pos - bpos;
         const Real dist = toGhost.length();
+        // Followers keep their gap to the body, not the ghost (#23): report how far behind it runs.
+        city_.simMutable().setAgentBodyLag(
+            p.agent, std::clamp(toGhost.x * a.heading.x + toGhost.y * a.heading.y, Real(0), Real(12)));
 
         // BACKSTOP: a body that clearly lost its ghost snaps back onto it —
         // the LOD contract is "the drawn car is where the sim says a car
@@ -348,26 +405,40 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
             p.stuckTime = 0;
         if (dist > 12.0 || p.stuckTime > 1.5) {
             const Real yaw2 = std::atan2(a.heading.x, a.heading.y);
-            const Real gy2 = a.deckY > -1e29
-                                 ? a.deckY
-                                 : city_.groundHeightAt(a.pos.x, a.pos.y) +
-                                       a.elevation;
-            pw.teleport(pw.vehicleBody(p.vid),
-                        Vec3(a.pos.x, gy2 + 0.8, a.pos.y),
-                        Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2));
-            pw.setLinearVelocity(
-                pw.vehicleBody(p.vid),
-                Vec3(a.heading.x * a.speed, 0, a.heading.y * a.speed));
-            ++snapCount_;
-            p.stuckTime = 0;
-            // Move the RENDER pose with the body (#26). Skipping this left the
-            // car drawn at the pre-snap spot until the next bake, while its
-            // chassis — the only solid thing standing in for it — was already
-            // metres away. syncPossessedInstances re-stamps the instance too.
-            city_.setAgentPhysPose(
-                p.agent, Mat4::translate(a.pos.x, gy2 + 0.8, a.pos.y) *
-                             Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2).toMat4());
-            continue;
+            // Land on a CLEAR spot (#23): the ghost's own, else the nearest one back along its lane (up to
+            // 6 m -- the body still reads as that car, just a length behind). Every deep overlap the packed-
+            // junction soak measured began with this teleport dropping a chassis into a car already there.
+            // Nothing clear: hold the body where it is and try again next tick -- a lagging car is a
+            // smaller wrong than two cars in one place.
+            engine::Vec2 land = a.pos;
+            bool clear = false;
+            for (int k = 0; k <= 8 && !clear; ++k) {
+                land = a.pos - a.heading * (0.75 * k);
+                clear = spotClear(land, yaw2, p.agent);
+            }
+            if (!clear) ++snapsHeld_;   // falls through: the body keeps driving at its ghost
+            else {
+                const Real gy2 = a.deckY > -1e29
+                                     ? a.deckY
+                                     : city_.groundHeightAt(land.x, land.y) +
+                                           a.elevation;
+                pw.teleport(pw.vehicleBody(p.vid),
+                            Vec3(land.x, gy2 + 0.8, land.y),
+                            Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2));
+                pw.setLinearVelocity(
+                    pw.vehicleBody(p.vid),
+                    Vec3(a.heading.x * a.speed, 0, a.heading.y * a.speed));
+                ++snapCount_;
+                p.stuckTime = 0;
+                // Move the RENDER pose with the body (#26). Skipping this left the
+                // car drawn at the pre-snap spot until the next bake, while its
+                // chassis — the only solid thing standing in for it — was already
+                // metres away. syncPossessedInstances re-stamps the instance too.
+                city_.setAgentPhysPose(
+                    p.agent, Mat4::translate(land.x, gy2 + 0.8, land.y) *
+                                 Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2).toMat4());
+                continue;
+            }
         }
 
         // PURE PURSUIT at the ghost's forward lead (the lab's arc-clean
@@ -442,6 +513,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
 void CityPhysicsSystem::onStop(engine::FrameContext& ctx) {
     for (const Possessed& p : possessed_) {
         city_.clearAgentPhysPose(p.agent);
+        city_.simMutable().setAgentBodyLag(p.agent, 0);
         physics_.physicsWorld().removeVehicle(p.vid);
     }
     possessed_.clear();

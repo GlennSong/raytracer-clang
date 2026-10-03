@@ -12,6 +12,9 @@
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
 #include "world.h"
+#include <array>
+#include <unordered_map>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -139,6 +142,12 @@ struct Renderable {
     // detail chunk fades. 0 = defer to DrawPolicy via drawClass below.
     Real drawDistance = 0;
     Real minDistance = 0;
+    // LOCKSTEP TIERS (Glenn, 2026-10-02: "parts of buildings disappear ... then pop in later when I move closer").
+    // lodCell > 0: the distance tests above measure to the centre of the lodCell-square the bounds centre falls in
+    // (and vertically to the bounds' height span), so every part of a city cell -- walls, glass, trim, crowns, the
+    // flat facades, the mass-box proxy -- swaps tiers at the same moment. Measured to each chunk's own centre,
+    // a part's detail chunk could be past detailDistance while its flat chunk was still inside it: neither drew.
+    Real lodCell = 0;
     // Content class. An explicit drawDistance above still wins (the HLOD chunks
     // compute theirs); this is what everything else resolves through.
     DrawClass drawClass = DrawClass::Unset;
@@ -195,6 +204,81 @@ struct GrassField {
     double cardFadeIn = 38.0, cardFadeOut = 40.0;
     double cardTile = 32.0;
 };
+
+// THE OCEAN a level draws (its "water" block): the OPEN-sea cells the water mesh covers, at `level`.
+// What "is this point sea?" means -- a river channel carved below sea level is not sea, and neither is
+// a pond the water plane fills in a basin (openSeaCells keeps the water that reaches the edge of the
+// map or is big enough to have waves; #65's surf).
+struct Sea {
+    double level = 0.0;
+    std::vector<std::array<double, 4>> boxes;             // each cell: minX, minZ, maxX, maxZ
+    double bucket = 64.0;                                 // lookup grid (m)
+    std::unordered_map<int64_t, std::vector<int>> index;  // bucket -> boxes touching it
+    static int64_t key(int64_t bx, int64_t bz) {   // unsigned shift: negative buckets are UB shifted signed
+        return static_cast<int64_t>((static_cast<uint64_t>(bx) << 32) ^ (static_cast<uint64_t>(bz) & 0xffffffffULL));
+    }
+    void add(double x0, double z0, double x1, double z1) {
+        const int id = static_cast<int>(boxes.size());
+        boxes.push_back({x0, z0, x1, z1});
+        for (int64_t bx = static_cast<int64_t>(std::floor(x0 / bucket)); bx <= static_cast<int64_t>(std::floor(x1 / bucket)); ++bx)
+            for (int64_t bz = static_cast<int64_t>(std::floor(z0 / bucket)); bz <= static_cast<int64_t>(std::floor(z1 / bucket)); ++bz)
+                index[key(bx, bz)].push_back(id);
+    }
+    bool contains(double x, double z) const {
+        auto it = index.find(key(static_cast<int64_t>(std::floor(x / bucket)), static_cast<int64_t>(std::floor(z / bucket))));
+        if (it == index.end()) return false;
+        for (int id : it->second) {
+            const auto& b = boxes[static_cast<std::size_t>(id)];
+            if (x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3]) return true;
+        }
+        return false;
+    }
+};
+
+// The sea cells (axis-aligned squares) that belong to OPEN water: connected bodies reaching the edge of
+// the water's region [lo, hi] (the ocean runs off the map), or larger than `minArea` m^2. Basin ponds drop out.
+inline std::vector<std::array<double, 4>> openSeaCells(const std::vector<std::array<double, 4>>& cells, double loX, double loZ,
+                                                       double hiX, double hiZ, double minArea = 5e5) {
+    const std::size_t n = cells.size();
+    if (n == 0) return {};
+    std::vector<int> parent(n);
+    for (std::size_t i = 0; i < n; ++i) parent[i] = static_cast<int>(i);
+    auto find = [&](int i) { while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    Sea grid;   // the bucket index, to find touching cells
+    for (const auto& b : cells) grid.add(b[0], b[1], b[2], b[3]);
+    const double eps = 1e-3;
+    // "at the edge": within a cell or so of the region's border (cells may not land exactly on it)
+    double cellSize = 0;
+    for (const auto& a : cells) cellSize = std::max(cellSize, std::max(a[2] - a[0], a[3] - a[1]));
+    const double X0 = loX + cellSize, Z0 = loZ + cellSize, X1 = hiX - cellSize, Z1 = hiZ - cellSize;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& a = cells[i];
+        for (int64_t bx = static_cast<int64_t>(std::floor(a[0] / grid.bucket)); bx <= static_cast<int64_t>(std::floor(a[2] / grid.bucket)); ++bx)
+            for (int64_t bz = static_cast<int64_t>(std::floor(a[1] / grid.bucket)); bz <= static_cast<int64_t>(std::floor(a[3] / grid.bucket)); ++bz) {
+                auto it = grid.index.find(Sea::key(bx, bz));
+                if (it == grid.index.end()) continue;
+                for (int j : it->second) {
+                    const auto& b = cells[static_cast<std::size_t>(j)];
+                    if (a[0] <= b[2] + eps && b[0] <= a[2] + eps && a[1] <= b[3] + eps && b[1] <= a[3] + eps)
+                        parent[find(static_cast<int>(i))] = find(j);
+                }
+            }
+    }
+    std::unordered_map<int, double> area;
+    std::unordered_map<int, bool> edge;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& a = cells[i];
+        const int r = find(static_cast<int>(i));
+        area[r] += (a[2] - a[0]) * (a[3] - a[1]);
+        if (a[0] <= X0 + eps || a[1] <= Z0 + eps || a[2] >= X1 - eps || a[3] >= Z1 - eps) edge[r] = true;
+    }
+    std::vector<std::array<double, 4>> out;
+    for (std::size_t i = 0; i < n; ++i) {
+        const int r = find(static_cast<int>(i));
+        if (edge[r] || area[r] >= minArea) out.push_back(cells[i]);
+    }
+    return out;
+}
 
 // CDLOD heightfield terrain (ADR-0036, open-world Phase 1c). One per level: when a
 // terrain block opts in via "cdlod", the loader stamps this instead of static chunk
@@ -339,16 +423,22 @@ struct CharacterController {
     Real halfHeight = 0.4;
     Real stepHeight = 0.4;   // tallest ledge it can walk up in one step
     CharacterId characterId = INVALID_CHARACTER;
+    bool swimming = false;   // afloat in deep water (PlayerSystem, #43): footsteps become strokes
 };
 
 // A static triangle-mesh collider (terrain, and later any baked static geometry)
 // the PhysicsSystem turns into one static Jolt mesh body. Separate from Collider
 // because it owns geometry (CPU triangles in world space), not just dimensions.
 // bodyId is filled when the body is created, so it is made exactly once.
+// What a collider's surface is to the ear (footsteps, landings: engine/audio/footsteps.h). Terrain
+// asks the ground-cover map instead (grass, sand, snow ... under the foot); Unknown reads as concrete.
+enum class ColliderSurface : uint8_t { Unknown = 0, Terrain, Asphalt, Concrete, Grass, Dirt, Sand, Rock, Snow, Wood, Metal };
+
 struct MeshCollider {
     std::vector<Vec3> vertices;
     std::vector<uint32_t> indices;
     Real friction = 0.6;
+    ColliderSurface surface = ColliderSurface::Unknown;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
 };
 
@@ -458,6 +548,10 @@ struct NightGlow {
     // and its lit-window glow reads. 1 = leave the albedo alone.
     float nightAlbedo = 1.0f;
     Vec3 dayAlbedo{1.0, 1.0, 1.0};
+    // The ramp this entity was last lit at (DayNightSystem). -1 = never: a chunk that STREAMS IN after dusk is
+    // lit on its first frame, not left dark until the ramp next changes (Glenn's towers that went dark once he
+    // had walked past them, 2026-09-30).
+    float appliedRamp = -1.0f;
 };
 
 // A FLASHING night light (skyscrapers v2 M4): with NightGlow on the same
@@ -738,6 +832,10 @@ struct CitySimConfig {
 // (Supersedes the P8.4 ExtraNavGraph bolt-on, which only the sim could see.)
 struct LevelRoadGraph {
     RoadGraph graph;
+    // The builder painted stop bars, crosswalks and lane arrows INTO its road surface (the lanes builder,
+    // ADR-0108), so a consumer must not add floating marking quads of its own on top (#39: they z-fought
+    // the asphalt and flickered with the camera angle).
+    bool paintedMarkings = false;
 };
 
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the

@@ -6,6 +6,7 @@
 
 #include "../src/engine/procgen/city/polygon.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/core_plan.h"   // coreFor (the NYC envelopes keep a core)
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
@@ -803,6 +804,70 @@ TEST_CASE(street_wall_setback_envelope_stacks_a_base_steps_and_a_shaft) {
     CHECK(s2[5].tier == 1);                // floor 4: the first uniform setback
 }
 
+// THE NEW YORK ENVELOPES (Glenn, 2026-09-30: "rules about building step back to avoid having the whole city in
+// shadow ... recipes that mimic that and create more variety"): on a 44 x 32 m lot, 40 floors, each form stacks
+// tiers that stand on the one below, keeps a tier a core fits in to the top (an interior and a door), and has
+// its own shape.
+TEST_CASE(nyc_envelopes_stack_nested_tiers_that_keep_a_core) {
+    const Poly2 plan = {{0, 0}, {44, 0}, {44, 32}, {0, 32}};
+    using E = BuildingParams::Envelope;
+    auto base = [] { BuildingParams p; p.floors = 40; p.openDoorway = true; return p; };
+    auto nestedAndCored = [&](const BuildingParams& p, const char* name) {
+        const std::vector<MassTier> tiers = massStack(plan, p);
+        for (std::size_t i = 1; i < tiers.size(); ++i) {
+            CHECK(tiers[i].floor0 > tiers[i - 1].floor0);
+            CHECK(area(tiers[i].plan) < area(tiers[i - 1].plan));
+            const Vec2 c = centroid(tiers[i].plan);
+            for (const Vec2& v : tiers[i].plan) CHECK(pointInPolygon(tiers[i - 1].plan, v + (c - v) * 0.02));
+        }
+        const OBB2 top = orientedBoundingBox(tiers.back().plan);
+        CHECK(2 * std::min(top.half[0], top.half[1]) >= 14.0 - 1e-6);
+        CHECK(coreFor(plan, p, 0).valid);
+        CHECK(!growPlanBuilding(plan, p).parts.empty());
+        std::printf("    [nyc] %-12s %zu tiers, top %.0f m2 of %.0f\n", name, tiers.size(), area(tiers.back().plan), area(plan));
+        return tiers;
+    };
+    {   // THE SKY EXPOSURE PLANE: a 6-floor street wall, then a step every 2 floors, 2.7 m up per metre back
+        BuildingParams p = base();
+        p.envelope = E::SkyExposure; p.baseFloors = 6; p.stepFloors = 2; p.skyRatio = 2.7; p.setback1 = 3.0; p.towerFrac = 0.25;
+        const auto t = nestedAndCored(p, "sky_exposure");
+        CHECK(t.size() >= 4u);
+        CHECK(t[1].floor0 == 6);
+        if (t.size() > 3) {   // a later step goes back floorHeight * stepFloors / skyRatio on every side
+            const OBB2 a = orientedBoundingBox(t[2].plan), b = orientedBoundingBox(t[3].plan);
+            const Real run = 2 * p.floorHeight / 2.7;
+            CHECK(std::fabs((a.half[0] - b.half[0]) - run) < 0.05);
+            CHECK(t[3].floor0 - t[2].floor0 == 2);
+        }
+    }
+    {   // THE TAPER: narrowing to taperTop and chamfering into an octagon toward the top
+        BuildingParams p = base();
+        p.envelope = E::Taper; p.baseFloors = 2; p.taperTop = 0.6; p.chamferTop = 0.25;
+        const auto t = nestedAndCored(p, "taper");
+        CHECK(t.size() >= 8u);
+        CHECK(t.back().plan.size() == 8u);
+        CHECK(area(t.back().plan) < 0.5 * area(plan));
+    }
+    {   // THE SLAB: thin on the short axis, nearly the lot's length on the long one
+        BuildingParams p = base();
+        p.envelope = E::Slab; p.baseFloors = 2; p.towerFrac = 0.4;
+        const auto t = nestedAndCored(p, "slab");
+        CHECK(t.size() == 2u);
+        const OBB2 sb = orientedBoundingBox(t.back().plan);
+        CHECK(2 * std::max(sb.half[0], sb.half[1]) > 40.0);
+        CHECK(2 * std::min(sb.half[0], sb.half[1]) < 16.0);
+    }
+    {   // THE PENCIL: the front face (axis 1, plus side) never steps; the back and a side feather near the top
+        BuildingParams p = base();
+        p.envelope = E::Feathered; p.baseFloors = 1; p.featherFrom = 0.6; p.stepDepth = 2.0;
+        const auto t = nestedAndCored(p, "feathered");
+        CHECK(t.size() >= 3u);
+        CHECK(t.back().floor0 >= 24);
+        Real maxY = -1e9; for (const Vec2& v : t.back().plan) maxY = std::max(maxY, v.y);
+        CHECK(std::fabs(maxY - 32.0) < 0.05 || std::fabs(maxY - 0.0) < 0.05 || maxY > 31.9);   // one long face stays on the lot line
+    }
+}
+
 // NIGHT LIGHTING (skyscrapers v2 M4): a lit pane's vertex colour is its tint,
 // picked per window from the building's palette — cool whites behind a
 // curtain wall, warm ones elsewhere — and the lit-glass material carries the
@@ -932,7 +997,10 @@ TEST_CASE(curtain_wall_interior_skins_meet_at_the_corners) {
     p.core = 1;   // no core: the four facade skins are the whole room
     p.seed = 3;
     const Real inset = std::max(p.wallThickness, Real(0.55));
-    auto cornersShared = [&](const BuildingMesh& bm, Real y0, const Poly2& storeyPlan) {
+    // The upper storeys' skin is drawn against the outer glass (0.10 + 0.02, buildings D: no cavity between the
+    // inside and the curtain); the ground storey's lobby walls keep the clipping inset.
+    const Real skinInset = 0.12;
+    auto cornersShared = [&](const BuildingMesh& bm, Real y0, const Poly2& storeyPlan, Real inset) {
         const Poly2 inner = offsetPolygonEdges(storeyPlan, std::vector<Real>(storeyPlan.size(), -inset));
         int shared = 0;
         for (const Vec2& c : inner) {
@@ -950,9 +1018,9 @@ TEST_CASE(curtain_wall_interior_skins_meet_at_the_corners) {
     };
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
     const BuildingMesh upper = growInterior(plan, p, 0.0);
-    CHECK(cornersShared(upper, storeys[2].y0, storeys[2].plan) == 4);
+    CHECK(cornersShared(upper, storeys[2].y0, storeys[2].plan, skinInset) == 4);
     const BuildingMesh ground = growPlanBuilding(plan, p, 0.0, FacadeDetail::Full);
-    CHECK(cornersShared(ground, 0.0, plan) == 4);   // the entrance wall and the blank stair wall mitre too
+    CHECK(cornersShared(ground, 0.0, plan, inset) == 4);   // the entrance wall and the blank stair wall mitre too
 }
 
 // Glenn's walk (2026-09-14): "looking out the windows there's a gap between
@@ -1220,8 +1288,11 @@ TEST_CASE(some_towers_wear_podium_uplights) {
     low.floors = 4;
     low.seed = 3;
     const BuildingMesh bm = growPlanBuilding({{0, 0}, {20, 0}, {20, 16}, {0, 16}}, low);
+    // No night dressing on a low building -- above its ground storey: the SHOPS' fascia signs at street level are
+    // the street's own lighting (buildings: shops), not a crown.
     for (const RenderMesh& part : bm.parts)
-        CHECK(part.materialIndex != static_cast<int>(PartId::LitBand) || part.vertices.empty());
+        if (part.materialIndex == static_cast<int>(PartId::LitBand))
+            for (const Vertex& v : part.vertices) CHECK(v.position.y < low.groundHeight + 0.01);
 }
 
 TEST_CASE(lighting_spec_overrides_the_hash) {
@@ -1261,4 +1332,180 @@ TEST_CASE(lighting_spec_overrides_the_hash) {
     // Signage forced on: a box high on one face.
     p.signage = 2;
     CHECK(litBand(p, roof - 4.0, roof - 0.9, nullptr) > 0);
+}
+
+// PARAPETS RUN ONLY ALONG EXPOSED ROOF EDGES (buildings M10). At a tier change the lower tier is capped with a
+// parapet -- but where the upper tier's wall runs on FLUSH (a feathered step, a bundled tube that drops out) that
+// edge is not a roof edge, and the old closed ring wrapped the tower in a ledge there. Feathered tower: no parapet
+// triangle (Trim, in the upstand band above a tier change) lies along a flush stretch. Plain setback tower: every
+// lower edge keeps its parapet, as before.
+TEST_CASE(parapets_run_only_along_exposed_roof_edges) {
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 26}, {0, 26}};
+    auto parapetTris = [](const BuildingMesh& bm, Real y) {
+        std::vector<Vec2> c;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::Trim)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vec3 a = part.vertices[part.indices[i]].position, b = part.vertices[part.indices[i + 1]].position,
+                           d = part.vertices[part.indices[i + 2]].position;
+                const Vec3 m = (a + b + d) * (1.0 / 3.0);
+                if (m.y > y + 0.05 && m.y < y + 0.62) c.push_back(Vec2(m.x, m.z));
+            }
+        }
+        return c;
+    };
+    {   // FEATHERED: the faces that do not step run on flush through every tier change.
+        BuildingParams p;
+        p.floors = 40; p.envelope = BuildingParams::Envelope::Feathered; p.baseFloors = 1; p.featherFrom = 0.6;
+        p.stepDepth = 2.5; p.curtainWall = false; p.openDoorway = false;
+        const std::vector<MassTier> tiers = massStack(plan, p);
+        CHECK(tiers.size() >= 3u);
+        const BuildingMesh bm = growPlanBuilding(plan, p);
+        int flushChecked = 0;
+        for (std::size_t k = 1; k < tiers.size(); ++k) {
+            const Real y = p.groundHeight + tiers[k].floor0 * p.floorHeight;
+            const std::vector<Vec2> tris = parapetTris(bm, y);
+            const Poly2& lo = tiers[k - 1].plan;
+            const Poly2& up = tiers[k].plan;
+            for (std::size_t j = 0; j < up.size(); ++j) {
+                const Vec2 c0 = up[j], c1 = up[(j + 1) % up.size()];
+                const Real L = (c1 - c0).length();
+                if (L < 1.0) continue;
+                const Vec2 d = (c1 - c0) * (1.0 / L);
+                bool onLower = false;   // is this upper edge flush with a lower one?
+                for (std::size_t i = 0; i < lo.size(); ++i) {
+                    const Vec2 a = lo[i], b = lo[(i + 1) % lo.size()];
+                    if (std::fabs(cross(normalize(b - a), c0 - a)) < 0.05 && std::fabs(cross(normalize(b - a), c1 - a)) < 0.05)
+                        onLower = true;
+                }
+                if (!onLower) continue;
+                ++flushChecked;
+                for (const Vec2& m : tris) {
+                    const Real t = dot(m - c0, d), off = std::fabs(cross(d, m - c0));
+                    CHECK(!(t > 0.6 && t < L - 0.6 && off < 0.4));
+                }
+            }
+        }
+        CHECK(flushChecked > 0);
+    }
+    {   // A SETBACK that steps in on every side keeps its whole ring.
+        BuildingParams p;
+        p.floors = 20; p.setbackFloors = 8; p.setbackEvery = 2.0; p.curtainWall = false; p.openDoorway = false;
+        const std::vector<MassTier> tiers = massStack(plan, p);
+        CHECK(tiers.size() >= 2u);
+        const BuildingMesh bm = growPlanBuilding(plan, p);
+        const Real y = p.groundHeight + tiers[1].floor0 * p.floorHeight;
+        const std::vector<Vec2> tris = parapetTris(bm, y);
+        const Poly2& lo = tiers[0].plan;
+        for (std::size_t i = 0; i < lo.size(); ++i) {
+            const Vec2 a = lo[i], b = lo[(i + 1) % lo.size()];
+            const Real L = (b - a).length();
+            const Vec2 d = (b - a) * (1.0 / L);
+            int near = 0;
+            for (const Vec2& m : tris)
+                if (std::fabs(cross(d, m - a)) < 0.5 && dot(m - a, d) > 0 && dot(m - a, d) < L) ++near;
+            CHECK(near > 0);
+        }
+    }
+}
+
+// NO STICK-THIN WINDOWS (Glenn, 2026-09-30: "some windows are super skinny"). A face narrower than a window module
+// -- here a 0.57 m chamfer cut across a corner, on a masonry block and on a curtain wall -- carries no glass at all.
+// (A curtain wall's limit is a metre: one mullion bay of 1-1.6 m is a normal pane; masonry's is a window module.)
+TEST_CASE(a_face_too_narrow_for_a_window_is_solid) {
+    const Poly2 plan = {{0, 0}, {20, 0}, {20, 13.6}, {19.6, 14}, {0, 14}};   // the cut: 0.57 m across the corner
+    const Vec2 a(20, 13.6), b(19.6, 14);
+    const Vec2 d = normalize(b - a);
+    const Real L = (b - a).length();
+    for (bool curtain : {false, true}) {
+        BuildingParams p;
+        p.floors = 6; p.curtainWall = curtain; p.openDoorway = false;
+        const BuildingMesh bm = growPlanBuilding(plan, p);
+        int onCut = 0;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex != static_cast<int>(PartId::Glass) &&
+                part.materialIndex != static_cast<int>(PartId::GlassLit)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vec3 m = (part.vertices[part.indices[i]].position + part.vertices[part.indices[i + 1]].position +
+                                part.vertices[part.indices[i + 2]].position) * (1.0 / 3.0);
+                const Vec2 q(m.x, m.z);
+                const Real t = dot(q - a, d), off = std::fabs(cross(d, q - a));
+                if (t > 0.05 && t < L - 0.05 && off < 0.3 && m.y > p.groundHeight) {
+                    // a pane on the cut face: only the curtain wall's opaque panel (the spandrel colour) may be here
+                    const Vec3 c = part.vertices[part.indices[i]].color;
+                    if (!curtain || part.materialIndex == static_cast<int>(PartId::GlassLit) || c.length() > 0.3) {
+                        ++onCut;
+                        if (onCut < 3) std::printf("    [narrow] curtain %d part %d at %.2f %.2f %.2f t %.2f off %.2f col %.2f\n", curtain ? 1 : 0, part.materialIndex, m.x, m.y, m.z, t, off, c.length());
+                    }
+                }
+            }
+        }
+        CHECK(onCut == 0);
+    }
+}
+
+// ATTACHED BUILDINGS (Glenn, 2026-10-01: "buildings right next to each other ... windows aren't made on the sides
+// and we have back doors and different ways up to the second floor"). A 12 x 18 m walk-up whose two side walls
+// are party walls: no glass within them at any storey, a back door on the rear face (away from the street, +z),
+// and a fire escape whose landings are walkable at every floor, from the yard up.
+TEST_CASE(an_attached_building_has_blank_party_walls_a_back_door_and_a_fire_escape) {
+    const Poly2 plan = {{-6, -9}, {6, -9}, {6, 9}, {-6, 9}};
+    BuildingParams p;
+    p.floors = 4; p.openDoorway = true; p.faceDir = Vec3(0, 0, 1);
+    p.partyWalls = 2;
+    p.partyN[0] = Vec2(-1, 0); p.partyAt[0] = 6;
+    p.partyN[1] = Vec2(1, 0);  p.partyAt[1] = 6;
+    p.backDoor = true; p.fireEscape = true;
+    Poly2 ccw = plan;
+    ensureCCW(ccw);
+    int partyEdges = 0;
+    for (std::size_t e = 0; e < ccw.size(); ++e) partyEdges += partyEdge(ccw, p, e) ? 1 : 0;
+    CHECK(partyEdges == 2);
+    const BuildingMesh bm = growPlanBuilding(plan, p);
+    int sideGlass = 0, frontGlass = 0;
+    for (const RenderMesh& part : bm.parts) {
+        if (part.materialIndex != static_cast<int>(PartId::Glass) &&
+            part.materialIndex != static_cast<int>(PartId::GlassLit) &&
+            part.materialIndex != static_cast<int>(PartId::GlassClear)) continue;
+        for (const Vertex& v : part.vertices) {
+            // a pane IN a side wall faces across it (the storefront's corner bay ends 0.15 m short of the side)
+            if (std::fabs(std::fabs(v.position.x) - 6) < 0.6 && std::fabs(v.normal.x) > 0.9) {
+                if (sideGlass < 4) std::printf("    [party] glass part %d at %.2f %.2f %.2f\n", part.materialIndex, v.position.x, v.position.y, v.position.z);
+                ++sideGlass;
+            }
+            if (v.position.z > 8.5) ++frontGlass;
+        }
+    }
+    CHECK(sideGlass == 0);
+    CHECK(frontGlass > 0);
+    int backDoors = 0, frontDoors = 0;
+    for (const AttachPoint& ap : bm.attaches) {
+        if (ap.tag == "backdoor" && ap.normal.z < -0.9) ++backDoors;
+        if (ap.tag == "entrance" && ap.normal.z > 0.9) ++frontDoors;
+    }
+    CHECK(backDoors == 1);
+    CHECK(frontDoors == 1);
+    // the steel stands behind the rear wall, up to the top floor
+    Real metalTop = -1;
+    for (const RenderMesh& part : bm.parts)
+        if (part.materialIndex == static_cast<int>(PartId::Metal))
+            for (const Vertex& v : part.vertices)
+                if (v.position.z < -9.0) metalTop = std::max(metalTop, v.position.y);
+    const std::vector<StoreyPlan> st = storeyPlans(plan, p);
+    CHECK(metalTop > st.back().y0 + 0.8);
+    // every floor's landing is a walkable top in the collider, behind the wall
+    RenderMesh col;
+    (void)growInterior(plan, p, 0.0, &col, 0, -1);
+    for (std::size_t k = 1; k < st.size(); ++k) {
+        int tops = 0;
+        for (std::size_t i = 0; i + 2 < col.indices.size(); i += 3) {
+            const Vertex& a = col.vertices[col.indices[i]];
+            const Vertex& b = col.vertices[col.indices[i + 1]];
+            const Vertex& c = col.vertices[col.indices[i + 2]];
+            const Vec3 m = (a.position + b.position + c.position) * (1.0 / 3.0);
+            if (a.normal.y > 0.9 && m.z < -9.0 && m.z > -10.0 && std::fabs(m.y - st[k].y0) < 0.02) ++tops;
+        }
+        if (tops == 0) std::printf("    [fire escape] no landing at storey %zu (y %.2f)\n", k, st[k].y0);
+        CHECK(tops > 0);
+    }
 }

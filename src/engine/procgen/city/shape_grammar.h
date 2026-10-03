@@ -94,6 +94,13 @@ enum class PartId : uint8_t {
              // the lobby that ships with the exterior shows from the street
              // and the street shows from the lobby. Transparent, both faces,
              // no room behind it.
+    Furniture,    // FURNITURE (buildings M4): painted / plastic pieces -- a neutral satin material whose colour
+             // is the vertex's, with a faint self-light (furniture.h). Its siblings carry the other finishes of
+             // the furniture kit (procgen/furniture_kit.h), one per FurnMat:
+    FurnitureWood,     // wood grain (Surface::WoodGrain), the species in the vertex colour
+    FurnitureFabric,   // woven upholstery (Surface::Fabric), the colour on the vertex
+    FurnitureMetal,    // brushed steel / chrome / black metal: metallic, the tint on the vertex
+    FurnitureCeramic,  // glazed porcelain and stone tops: glossy
     Count    // KEEP LAST: materialIndexFor is the ordinal; arrays size by Count
 };
 
@@ -108,6 +115,16 @@ bool litWindow(const Vec3& worldPos);
 // choice survives the LOD swap. Carried in the pane's vertex colour and
 // applied to the EMISSION only (RenderMaterial::FLAG_EMISSIVE_VERTEX_TINT).
 Vec3 litTint(const Vec3& worldPos, bool curtainWall);
+// THE GLASS COLOUR (Glenn, 2026-09-30: "more varied glass colour, it's all very samey"). The Glass and GlassLit
+// materials are white; a pane's VERTEX COLOUR is its glass -- the reflectance the sky is mirrored in -- so every
+// building carries its own. glassGrey() is the default pane (what every glass looked like before).
+Vec3 glassGrey();
+// A LIT pane's vertex colour carries BOTH its glass (by day) and its lit tint (by night): the glass colour in the
+// top 7 bits of each 8-bit channel, the lit tint's palette index (1..7, litTintOf) in the low bits -- r bit 0, g
+// bit 1, b bit 2. mesh.frag decodes it on the interior-mapped lit part; index 0 = an unpacked, legacy pane.
+int litTintIndex(const Vec3& worldPos, bool curtainWall);
+Vec3 litTintOf(int index);
+Vec3 litPaneColour(const Vec3& glassCol, const Vec3& worldPos, bool curtainWall);
 // Curtain-wall towers light per BAY, not per storey-face (device: "the way
 // it's lit up row by row is odd"): each mullion bay flips its own coin
 // against a per-STOREY occupancy — some floors busy, some nearly dark, the
@@ -179,8 +196,17 @@ struct AttachPoint {
     Real height = 0;    // opening height (entrance: head above the foot)
 };
 
+// A FURNITURE piece placed in a building (buildings M4b): which piece of the kit (procgen/furniture_kit.h, Piece),
+// in which variant, where -- drawn INSTANCED by the interior system, not merged into the parts.
+struct PlacedPiece {
+    uint8_t piece = 0;
+    uint32_t variant = 0;
+    Mat4 xform;   // piece space -> world
+};
+
 struct BuildingMesh {
     std::vector<RenderMesh> parts;     // one per non-empty PartId, materialIndex set
+    std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
     std::vector<AttachPoint> attaches;
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;
@@ -278,6 +304,21 @@ PartId stairFinishPartFor(const BuildingParams& params);
 // all): each storey's slab, inner walls and core, the top ceiling only when
 // the range reaches the top — a tall building streams a window of floors
 // around the player. No RNG — two calls are identical.
+// THE LOBBY'S DRESSING (M5; #60): a reception desk facing the entrance, with its counter top and a planter
+// at each end, as footprints -- a centre, the desk's width axis `u` (square to the way it faces) and its
+// facing axis `v` (toward the door), and a height band. Placed between the core and the door and slid
+// toward the door until the whole group clears the core (stair shafts included) by a walkway and stays
+// inside the plan; without the room for the planters, the desk alone; without room for that, nothing.
+struct LobbyPiece {
+    Vec2 c, u, v;
+    Real w = 0, d = 0, h0 = 0, h1 = 0;   // along u, along v, and the height band above the lobby floor
+    Vec3 colour;
+    bool collide = true;
+    Poly2 footprint() const;
+};
+struct CorePlan;
+std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdge, const CorePlan& core);
+
 BuildingMesh growInterior(const Poly2& plan, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut = nullptr,
                           int k0 = 0, int k1 = -1);
@@ -413,7 +454,22 @@ struct BuildingParams {
     //                      from `towerFloor` a shaft covering `towerFrac` of
     //                      the base plan rises to the top (Empire State,
     //                      Chrysler). Floors count above the ground storey.
-    enum class Envelope : uint8_t { None, StreetWallSetback };
+    //   SkyExposure        the SKY EXPOSURE PLANE (New York 1916/1961, Glenn 2026-09-30: "rules about building
+    //                      step back to avoid having the whole city in shadow"): the street wall rises
+    //                      `baseFloors`, then the mass steps back every `stepFloors` along a plane rising
+    //                      `skyRatio` metres per metre back (1961: 2.7 on a narrow street, 5.6 on a wide one),
+    //                      the first step at least `setback1`, until it covers `towerFrac` of the lot -- above
+    //                      that a tower may rise straight (the wedding cake; Empire State, 1916).
+    //   Taper              a tower on its lot's rectangle from `baseFloors`, narrowing to `taperTop` of its
+    //                      width at the top, its corners chamfered up to `chamferTop` of the short side (One
+    //                      World Trade Center), in steps of a few floors.
+    //   Slab               a thin rectangular slab on the lot's long axis from `baseFloors` (UN Secretariat,
+    //                      Lever House) -- its width `towerFrac` of the short side, never under a core's 14 m.
+    //   Feathered          a pencil tower (432 Park, 111 W 57th): the lot's rectangle full height, stepping back
+    //                      on ONE face every two floors from `featherFrom` of its height, then a second face.
+    //   Twist, Stack       overhanging forms (milestone 3): each tier rotated `twistDeg` over the height /
+    //                      shifted `stackShift` metres from the one below, with a soffit under the overhang.
+    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack };
     Envelope envelope = Envelope::None;
     int   baseFloors = 5;
     Real  setback1 = 6.0;
@@ -421,6 +477,21 @@ struct BuildingParams {
     Real  stepDepth = 3.0;
     Real  towerFrac = 0.35;      // 0 = no shaft
     int   towerFloor = 20;       // 0 = no shaft
+    Real  skyRatio = 2.7;        // SkyExposure: metres up per metre back
+    Real  taperTop = 0.7;        // Taper: width at the top, as a fraction of the base's
+    Real  chamferTop = 0.0;      // Taper: corner cut at the top, fraction of the short side
+    Real  featherFrom = 0.7;     // Feathered: where the one-sided steps begin, fraction of floors
+    Real  twistDeg = 0.0;        // Twist: total rotation over the height (degrees)
+    Real  stackShift = 0.0;      // Stack: each tier's offset from the one below (m)
+    // THE CURTAIN STYLE (skyscrapers NYC variety M2): glassTint 0 auto grey, 1 blue, 2 green, 3 bronze, 4 smoke,
+    // 5 silver (reflective), 6 clear; mullionTone 0 steel, 1 bronze, 2 black, 3 silver, 4 white; fins: a vertical
+    // fin every `fins` bays (0 none); curtainBay the mullion spacing (m); spandrelFrac the opaque band's share of
+    // the storey (0 = floor-to-ceiling glass, ~0.45 = ribbon windows).
+    uint8_t glassTint = 0;
+    uint8_t mullionTone = 0;
+    uint8_t fins = 0;
+    Real  curtainBay = 1.6;
+    Real  spandrelFrac = 0.30;
     // THE CORE (skyscrapers v2 M5, core_plan.h): 0 = auto (four floors and
     // up get an elevator bank and two enclosed stairwells when one fits),
     // 1 = never (the straight stair of ADR-0080, or nothing), 2 = always.
@@ -434,7 +505,50 @@ struct BuildingParams {
     uint8_t crown = 0;
     uint8_t signage = 0;
     uint8_t uplights = 0;
+    // THE TOP (buildings M2): what stands on a flat roof against the sky -- 0/1 the mechanical penthouse, 2 screen,
+    // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop). spire/dome win over it.
+    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse".
+    uint8_t top = 0;
+    // MASONRY DEPTH (buildings M3): windowGroup 1-3 -- windows in pairs or triples, a slim mullion between them and
+    // a broad pier between groups; verticals -- full-height piers proud of the wall at every group, the spandrel
+    // panels between storeys recessed and darker (Rockefeller Center, the Empire State). Lua: window_group = 2,
+    // verticals = true.
+    uint8_t windowGroup = 1;
+    bool  verticals = false;
+    // WHAT IT IS FOR (buildings B): a residential building's typical floors are whole apartments off a corridor
+    // (room_plan.h, PlateTopology::Apartments); anything else keeps its office ring. Set from the recipe's use.
+    bool  residential = false;
+    // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each other ...
+    // windows aren't made on the sides and we have back doors and different ways up to the second floor"). Up to
+    // two PARTY WALLS, each the world line it stands on: outward normal (x, z) and offset dot(normal, point). A
+    // plan edge lying on one is a blank wall, ground to roof, inside and out. backDoor: the rear edge's middle bay
+    // is a plain service door. fireEscape: a steel fire escape climbs the rear face -- a landing at every floor,
+    // a flight between landings, a drop ladder over the yard. Set by the lot pass (city_lots), never by recipes.
+    uint8_t partyWalls = 0;
+    Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
+    Real  partyAt[2] = {0, 0};
+    bool  backDoor = false;
+    bool  fireEscape = false;
+    // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
+    // improvement, 4 discount store. The front edge wears the chain's sign and canopy, the rear its loading docks,
+    // a band in the chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
+    uint8_t bigBox = 0;
 };
+
+// THE SHOPFRONTS of a building's ground storey (buildings: shops; the facade's own ShopUnits): each shop's stretch
+// of wall (world XZ, a -> b along the facade), the facade's outward normal, its door's centre and its trade (0 cafe,
+// 1 grocery, 2 boutique, 3 bookshop, 4 electronics, 5 pharmacy, 6 bakery). The lot pass lays café terraces in front.
+struct ShopFront {
+    Vec2 a, b, n, door;
+    uint8_t trade = 0;
+};
+std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& params);
+
+// Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
+bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
+// The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
+// plan.size() when there is none.
+std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params);
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.
 // Full is today's facades — reveals, frames, muntins, sills, cornices, trim.
@@ -446,6 +560,24 @@ struct BuildingParams {
 // (lot-system-plan §15.2). Cylinder and Pagoda shapes currently emit Full at
 // both levels (they are already lean; their flat pass is a later follow-up).
 enum class FacadeDetail : uint8_t { Full, Flat };
+
+// THE CURTAIN STYLE a glass facade is drawn in (skyscrapers NYC variety M2; the numbers live on BuildingParams:
+// glassTint, mullionTone, fins, curtainBay, spandrelFrac). The defaults are the curtain wall as it always was:
+// grey glass from the wall colour, steel mullions every 1.6 m, a 30% spandrel band (at most 0.9 m), no fins.
+struct CurtainStyle {
+    uint8_t glassTint = 0, mullionTone = 0, fins = 0;
+    Real bay = 1.6, spandrelFrac = 0.30;
+    Real spandrelH(Real storey) const {   // the opaque band: 0 = floor-to-ceiling glass (a slim slab edge stays)
+        return spandrelFrac <= 0.02 ? std::min(Real(0.14), storey * 0.05) : std::min(Real(1.4), storey * spandrelFrac);
+    }
+    int bays(Real width) const { return std::max(1, static_cast<int>(std::lround(width / std::max(Real(0.8), bay)))); }
+};
+CurtainStyle curtainStyleOf(const BuildingParams& p);
+// MECHANICAL FLOORS (buildings M1): a tall tower's plant storeys -- a louvre band in place of its windows, never lit,
+// no rooms inside -- every 15-25 floors (by the seed) on a tower of 30+ floors, and the storey under the roof of a
+// 40+ one. `floor` counts from 1 (the first storey above the ground storey). Derived from the params alone, so the
+// exterior, its far tier and the interior agree.
+bool mechanicalStorey(const BuildingParams& p, int floor);
 
 // Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
 BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,

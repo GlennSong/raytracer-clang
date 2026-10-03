@@ -882,6 +882,117 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
         const int m = std::max(1, static_cast<int>(std::ceil((b2 - a2).length() / 20.0)));
         for (int j = 0; j < m; ++j) dense.push_back(a2 + (b2 - a2) * (static_cast<double>(j) / m));
     }
+    // NO HAIRPINS (#89, Glenn: "the freeway has a hairpin turn near one of the towns"): each leg is routed
+    // on its own and they meet at a city's waypoint with no turn limit there -- one arrived heading south-east
+    // and left heading north, a 26 m radius. Wherever the ring turns tighter than a freeway can, cut across
+    // the V with a chord, the shortest that stays off the water and out of every city's limits, then round
+    // the whole ring.
+    {
+        auto inLimits = [&w](const Vec2& p) {
+            for (const IslandSite& site : w.sites)
+                for (const std::vector<Vec2>& L : site.limits) {
+                    bool in = false;
+                    for (std::size_t i = 0, j = L.size() - 1; i < L.size(); j = i++)
+                        if (((L[i].y > p.y) != (L[j].y > p.y)) && p.x < (L[j].x - L[i].x) * (p.y - L[i].y) / (L[j].y - L[i].y) + L[i].x) in = !in;
+                    if (in) return true;
+                }
+            return false;
+        };
+        auto chordClear = [&](const Vec2& a0, const Vec2& b0) {
+            const int m = std::max(1, static_cast<int>(std::ceil((b0 - a0).length() / 15.0)));
+            for (int j = 0; j <= m; ++j) {
+                const Vec2 p = a0 + (b0 - a0) * (static_cast<double>(j) / m);
+                if (w.water(p.x, p.y) || inLimits(p)) return false;
+            }
+            return true;
+        };
+        auto radiusAt = [&](const std::vector<Vec2>& R, std::size_t q) {
+            const std::size_t h = 5;
+            if (q < h || q + h >= R.size()) return 1e9;
+            const Vec2 a0 = R[q] - R[q - h], a1 = R[q + h] - R[q];
+            const double la = a0.length(), lb = a1.length();
+            if (la < 1e-6 || lb < 1e-6) return 1e9;
+            const double turn = std::acos(std::clamp((a0.x * a1.x + a0.y * a1.y) / (la * lb), -1.0, 1.0));
+            return turn > 1e-6 ? (la + lb) / turn : 1e9;
+        };
+        constexpr double kMinRadius = 300.0;
+        std::vector<char> hopeless(dense.size(), 0);
+        int cuts = 0;
+        for (int iter = 0; iter < 60; ++iter) {
+            std::size_t worst = 0;
+            double wr = kMinRadius;
+            for (std::size_t q = 0; q < dense.size(); ++q)
+                if (!hopeless[q] && radiusAt(dense, q) < wr) { wr = radiusAt(dense, q); worst = q; }
+            if (wr >= kMinRadius) break;
+            bool done = false;
+            for (std::size_t half = 8; half <= 75 && !done; half += 3) {   // 160 m .. 1.5 km each side
+                if (worst < half || worst + half >= dense.size()) break;
+                const Vec2 a0 = dense[worst - half], b0 = dense[worst + half];
+                if (!chordClear(a0, b0)) continue;
+                std::vector<Vec2> out(dense.begin(), dense.begin() + static_cast<std::ptrdiff_t>(worst - half + 1));
+                const int m = std::max(1, static_cast<int>(std::ceil((b0 - a0).length() / 20.0)));
+                for (int j = 1; j < m; ++j) out.push_back(a0 + (b0 - a0) * (static_cast<double>(j) / m));
+                out.insert(out.end(), dense.begin() + static_cast<std::ptrdiff_t>(worst + half), dense.end());
+                // round the chord's ends into the road: a local moving average over the stretch around the cut
+                // only (the rest of the ring is left exactly as routed), kept if it stays off water and cities
+                const std::size_t lo = worst > half + 30 ? worst - half - 30 : 1;
+                const std::size_t hi = std::min(out.size() - 1, worst + 30 + static_cast<std::size_t>(m));
+                std::vector<Vec2> rounded = out;
+                for (int pass = 0; pass < 4; ++pass) {
+                    std::vector<Vec2> prev = rounded;
+                    for (std::size_t q = lo; q < hi; ++q) {
+                        Vec2 acc(0, 0);
+                        int cnt = 0;
+                        for (int d = -6; d <= 6; ++d) {
+                            const long long i2 = static_cast<long long>(q) + d;
+                            if (i2 < 0 || i2 >= static_cast<long long>(prev.size())) continue;
+                            acc = acc + prev[static_cast<std::size_t>(i2)];
+                            ++cnt;
+                        }
+                        rounded[q] = acc * (1.0 / cnt);
+                    }
+                }
+                bool ok = true;
+                for (std::size_t q = lo; q < hi; ++q)
+                    if (w.water(rounded[q].x, rounded[q].y) || inLimits(rounded[q])) { ok = false; break; }
+                dense = ok ? rounded : out;
+                hopeless.assign(dense.size(), 0);
+                ++cuts;
+                done = true;
+            }
+            if (!done) hopeless[worst] = 1;
+        }
+        // KINKS: a chord whose rounding had to be refused (it would have run into water or a city) meets the road
+        // with a corner -- 35 degrees in one 20 m step, which a 200 m radius census averages away (and the ramp
+        // that merged along it inherited a 34 cm step). Relax every vertex turning more than 6 degrees toward its
+        // neighbours' midpoint, a little at a time, wherever that stays off the water and out of the cities.
+        auto vertexTurn = [&](std::size_t q) {
+            const Vec2 a0 = dense[q] - dense[q - 1], a1 = dense[q + 1] - dense[q];
+            const double la = a0.length(), lb = a1.length();
+            if (la < 1e-6 || lb < 1e-6) return 0.0;
+            return std::acos(std::clamp((a0.x * a1.x + a0.y * a1.y) / (la * lb), -1.0, 1.0));
+        };
+        const double kKink = 3.0 * 3.14159265358979 / 180.0;   // per 20 m step: a ~380 m radius, the freeway minimum
+        int relaxed = 0;
+        for (int it = 0; it < 400; ++it) {
+            bool moved = false;
+            for (std::size_t q = 1; q + 1 < dense.size(); ++q) {
+                if (vertexTurn(q) <= kKink) continue;
+                const Vec2 to = (dense[q - 1] + dense[q + 1]) * 0.5;
+                const Vec2 nq = dense[q] + (to - dense[q]) * 0.5;
+                if (w.water(nq.x, nq.y) || inLimits(nq)) continue;
+                dense[q] = nq;
+                moved = true;
+                ++relaxed;
+            }
+            if (!moved) break;
+        }
+        double tightest = 1e9, sharpest = 0.0;
+        for (std::size_t q = 0; q < dense.size(); ++q) tightest = std::min(tightest, radiusAt(dense, q));
+        for (std::size_t q = 1; q + 1 < dense.size(); ++q) sharpest = std::max(sharpest, vertexTurn(q));
+        std::fprintf(stderr, "[freeway] hairpins cut: %d, kinks relaxed %d times; tightest turn now radius %.0f m, sharpest corner %.1f deg\n",
+                     cuts, relaxed, tightest, sharpest * 180.0 / 3.14159265358979);
+    }
     std::vector<std::vector<Vec2>> routes;
     if (dense.size() > 10 && (ring.front() - ring.back()).length() < 60.0) {
         // closed: open it where it is farthest from every crossing street
@@ -898,6 +1009,38 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
     } else if (dense.size() > 1) {
         dense.push_back(ring.back());
         routes.push_back(dense);
+    }
+    // THE TIGHTEST TURNS (#89, Glenn: "the freeway has a hairpin turn near one of the towns"): the heading
+    // change over every 200 m of the ring, as the radius it implies, the worst few named by the nearest place
+    for (const std::vector<Vec2>& route : routes) {
+        struct Bend { double radius; Vec2 at; };
+        std::vector<Bend> bends;
+        const int h = 5;   // 5 x 20 m either side
+        for (std::size_t q = h; q + h < route.size(); ++q) {
+            const Vec2 a0 = route[q] - route[q - h], a1 = route[q + h] - route[q];
+            const double la = a0.length(), lb = a1.length();
+            if (la < 1e-6 || lb < 1e-6) continue;
+            const double c = std::clamp((a0.x * a1.x + a0.y * a1.y) / (la * lb), -1.0, 1.0);
+            const double turn = std::acos(c);
+            bends.push_back({turn > 1e-6 ? (la + lb) / turn : 1e9, route[q]});
+        }
+        std::sort(bends.begin(), bends.end(), [](const Bend& x, const Bend& y) { return x.radius < y.radius; });
+        std::vector<Bend> worst;
+        for (const Bend& b : bends) {
+            bool near = false;
+            for (const Bend& o2 : worst) if ((o2.at - b.at).length() < 400.0) near = true;
+            if (!near) worst.push_back(b);
+            if (worst.size() >= 6) break;
+        }
+        for (const Bend& b : worst) {
+            std::string place = "?";
+            double pd = 1e30;
+            for (std::size_t k = 0; k < w.sites.size(); ++k) {
+                const double d = (w.sites[k].at - b.at).length();
+                if (d < pd) { pd = d; place = w.sites[k].name; }
+            }
+            std::fprintf(stderr, "[freeway] tight turn: radius %.0f m at (%.0f, %.0f), %.0f m from %s\n", b.radius, b.at.x, b.at.y, pd, place.c_str());
+        }
     }
     // along a route, where a point is (its station)
     auto stationOn = [](const std::vector<Vec2>& route, const Vec2& p) {
@@ -925,6 +1068,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
         dop.clearance = 7.0;              // the crossing road passes under, the freeway on its embankment
         dop.rampHalf = 4.5 / 2 + 2.5;     // one 4.5 m lane, 2.5 m shoulders
         dop.gRamp = 0.09;
+        dop.rampPeak = 0.06;   // #40: a ramp's steepest stretch 6%, not ~7.8% ("Short on-ramps are steep")
         dop.ground = ground;
         // THE DECK AS IT WILL BE BUILT: the lanes builder's own profile for this route (its freeway class:
         // a 200 m window at 6%), lifted to the underpass clearance over each road that crosses it and
@@ -952,8 +1096,29 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
                         const Vec2 rh = r * (1.0 / std::max(1e-9, r.length()));
                         double zx = -1e30;
                         for (int q = -5; q <= 5; ++q) { const Vec2 y = x + rh * (5.0 * q); zx = std::max(zx, w.heightAt(y.x, y.y)); }
-                        tents.push_back({sProf[j] + (sProf[j + 1] - sProf[j]) * u, zx + 7.6});
+                        // 8.4: the scene floors an underpass at 8.2 over the ground and the builder's clearance lift
+                        // measures from the street's smoothed profile, a little higher again (7.6 left ramps short)
+                        tents.push_back({sProf[j] + (sProf[j + 1] - sProf[j]) * u, zx + 8.4});
                     }
+            }
+            // ...and over WATER, as the scene floors it (island_scene.cpp riverFloors: a carriageway within 10 m of a
+            // river, 12 m either side of this centreline, or near a lake, is held at the water + 6 m). Missing here,
+            // a ramp by a river viaduct was sized for the ground and had 14.6 m to climb in 50 m -- a 30% ramp.
+            if (w.hydro) {
+                for (std::size_t q = 0; q + 1 < route.size(); ++q) {
+                    const double segLen = (route[q + 1] - route[q]).length();
+                    const int m = std::max(1, static_cast<int>(std::ceil(segLen / 8.0)));
+                    for (int j = 0; j < m; ++j) {
+                        const double u = static_cast<double>(j) / m;
+                        const Vec2 p = route[q] + (route[q + 1] - route[q]) * u;
+                        double level = 0;
+                        double water = -1e30;
+                        if (w.hydro->distanceToRiver(p.x, p.y, 60.0, &level) < 22.0 && std::isfinite(level)) water = level;
+                        const double lake = w.hydro->lakeLevelAt(p.x, p.y, 18.0);
+                        if (std::isfinite(lake)) water = std::max(water, lake);
+                        if (water > -1e29) tents.push_back({sProf[q] + segLen * u, water + 6.0});
+                    }
+                }
             }
             const double gd = roads::lanes::kDesignGrade * 0.06;
             dop.deck = [sProf, zProf, tents, gd](double st) {

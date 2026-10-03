@@ -19,6 +19,7 @@
 
 #include "engine/lot_grow_setup.h"
 #include "engine/procgen/city/city_lots.h"
+#include <functional>
 #include "engine/procgen/city/polygon.h"
 #include "engine/procgen/city/road_network.h"
 #include "engine/procgen/terrain_field.h"
@@ -52,6 +53,12 @@ struct CityGrowInputs {
     LotGroundWithFn groundWith;
     double groundMeshCell = 0.0;
     const Vec2* enterableAt = nullptr;   // the spawn building grows enterable (ADR-0080)
+    // The ground already carries the streets (a lane city's earthwork field): no block planes or terraces
+    // -- the smooth field IS the grade (Glenn: "not a huge fan of the terraced terrain look").
+    bool smoothGround = false;
+    // The height of the street in front of a building (lanesStreetHeight): its pad takes it (LotParams).
+    std::function<bool(Real, Real, Real*)> streetHeight;
+    std::function<bool(Real, Real)> nearFreeway;   // lanesNearFreeway (LotParams)
 };
 
 // `setupOut` (optional) receives the parameters the grow ran with — the loader

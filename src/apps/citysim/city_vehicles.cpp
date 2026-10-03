@@ -1,4 +1,6 @@
 #include "city_vehicles.h"
+#include "../../engine/interact_broker.h"
+#include "../../engine/interaction.h"   // engine::Seated
 
 #include "../../engine/asset_manager.h"
 #include "../../engine/components.h"       // Transform, Vehicle, Renderable, InVehicle
@@ -120,6 +122,72 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // registered FIRST, so on the frame the player presses enter next to an
     // AMBIENT car, we promote it here and VehicleSystem (later this frame) finds
     // a real, unoccupied Vehicle within reach and seats the player as usual.
+    // THE OFFER (the interaction broker, E): the nearest ambient car in reach, four times a second -- a real
+    // Vehicle in reach is VehicleSystem's offer. The broker's command comes back to VehicleSystem, which presses
+    // enter_vehicle; that press is what promotes the car below.
+    if (city_.built() && !ctx.actions.pressed("enter_vehicle")) {
+        scanT_ -= ctx.frameDelta;
+        if (scanT_ <= 0) {
+            scanT_ = 0.25;
+            ambientAgent_ = -1;
+            Entity pl;
+            Vec3 pp;
+            ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform& t, engine::ControlledBy&) {
+                if (!pl.valid()) { pl = e; pp = t.position; }
+            });
+            if (pl.valid() && !ctx.world.has<engine::InVehicle>(pl)) {
+                bool real = false;
+                ctx.world.each<Transform, Vehicle>([&](Entity, Transform& t, Vehicle&) {
+                    const Real dx = t.position.x - pp.x, dz = t.position.z - pp.z;
+                    if (dx * dx + dz * dz <= kCommandeerRadius * kCommandeerRadius) real = true;
+                });
+                const auto& ag = city_.sim().agents();
+                Real bestD2 = kCommandeerRadius * kCommandeerRadius;
+                int best = -1;
+                for (int i = 0; i < static_cast<int>(ag.size()) && !real; ++i) {
+                    const Agent& a = ag[static_cast<std::size_t>(i)];
+                    if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || a.playerControlled) continue;
+                    const Real dx = a.pos.x - pp.x, dz = a.pos.y - pp.z;
+                    if (dx * dx + dz * dz <= bestD2) { bestD2 = dx * dx + dz * dz; best = i; }
+                }
+                ambientAgent_ = best;
+            }
+        }
+        // THE DRIVER'S SEAT, where the car is this frame (Glenn: "we'd have to be pointing at the seat that we
+        // want"): the offer sits on it, beside CityPlayerTransitSystem's passenger seats, so looking at the driver's
+        // side takes the car and looking at another seat rides along
+        haveAmbient_ = false;
+        if (ambientAgent_ >= 0) {
+            engine::Mat4 pose;
+            std::vector<Vec3> seats;
+            Vec3 gp;
+            Vec2 gh;
+            if (city_.carSeatsOf(ambientAgent_, &pose, &seats)) {
+                ambientAt_ = pose.transformPoint(seats[0]) + Vec3(0, 0.35, 0);
+                haveAmbient_ = true;
+            } else if (city_.agentWorldPose(ambientAgent_, gp, gh)) {
+                ambientAt_ = gp + Vec3(0, 0.9, 0);
+                haveAmbient_ = true;
+            }
+        }
+        if (haveAmbient_) {
+            Entity pl;
+            ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) {
+                if (!pl.valid()) pl = e;
+            });
+            if (pl.valid() && !ctx.world.has<engine::InVehicle>(pl) && !ctx.world.has<engine::Seated>(pl)) {
+                engine::InteractOffer o;
+                o.provider = "vehicle";
+                o.name = "driver's seat";
+                o.tap = "take the car";
+                o.anchor = ambientAt_;
+                o.reach = kCommandeerRadius;
+                o.needsSight = false;
+                engine::offerInteraction(ctx.world, pl, o);
+            }
+        }
+        return;
+    }
     if (!ctx.actions.pressed("enter_vehicle")) return;
     if (!city_.built()) return;
     World& world = ctx.world;
@@ -218,6 +286,27 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
 
     Vehicle v;
     v.config = configFromBody(body, city_.carWheels(a.vehicle));
+
+    // GLASS AND CABIN as body parts pinned to the chassis (as vehicle_spec does for a spawned car). The ambient
+    // car drew them as instance groups keyed to the agent, which stop drawing the moment it is released -- Glenn
+    // got into a jeep and looked straight through the empty shell at the road.
+    auto addPart = [&](engine::MeshHandle mh, float opacity, float roughness, float metallic) {
+        if (!mh.valid()) return;
+        Entity pe = world.create();
+        world.add<Transform>(pe, t);
+        world.add<PrevTransform>(pe, PrevTransform{t});
+        Renderable pr;
+        pr.mesh = mh;
+        ctx.assets.retain(mh);
+        pr.material.albedo = Vec3(1, 1, 1);
+        pr.material.metallic = metallic;
+        pr.material.roughness = roughness;
+        pr.material.opacity = opacity;
+        world.add<Renderable>(pe, pr);
+        v.bodyParts.push_back(pe);
+    };
+    addPart(city_.carGlassMesh(a.vehicle), 0.30f, 0.06f, 0.0f);
+    addPart(city_.carCabinMesh(a.vehicle), 1.0f, 0.9f, 0.0f);
 
     // LAMPS from the recipe's markers, for the same reason the wheels come from
     // its layout: without them VehicleSystem places four lenses at guessed

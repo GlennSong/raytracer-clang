@@ -369,6 +369,39 @@ SurfSample evalCarpet(double u, double v, uint32_t seed) {
     return s;
 }
 
+// FURNITURE (buildings M4b). WOOD GRAIN: long, fine, slightly wavy grain lines down v, a few darker latewood
+// streaks and the odd ray fleck; satin, almost flat -- a sanded, oiled top, not siding boards. Pale neutral: the
+// piece's vertex colour is the species.
+SurfSample evalWoodGrain(double u, double v, uint32_t seed) {
+    SurfSample s;
+    const double warp = 0.06 * (wrapFbm(u, v, 2, 3, seed + 9u) - 0.5);
+    const double lines = wrapNoise(u + warp, v * 0.08, 64, seed);            // stretched along v: grain lines
+    const double streak = wrapFbm(u + warp * 2.0, v * 0.1, 9, 2, seed + 4u);
+    const double fleck = smooth(0.82, 0.92, wrapNoise(u * 2.0, v * 6.0, 48, seed + 21u));
+    const double tone = 0.86 + 0.16 * (lines - 0.5) - 0.18 * smooth(0.55, 0.75, streak) + 0.06 * fleck;
+    s.albedo = Vec3(1.0, 0.97, 0.92) * tone;
+    s.h = 0.5 + 0.02 * (lines - 0.5);
+    s.rough = 0.9 + 0.08 * (lines - 0.5);   // times the material's roughness (the shader multiplies): satin, not lacquer
+    return s;
+}
+// FABRIC: a plain weave -- warp and weft threads crossing over and under -- with a little slub; matte, the
+// threads' crowns catching the light.
+SurfSample evalFabric(double u, double v, uint32_t seed) {
+    SurfSample s;
+    const int threads = 64;
+    const double x = u * threads, y = v * threads;
+    const int ix = static_cast<int>(std::floor(x)), iy = static_cast<int>(std::floor(y));
+    const double fx = x - ix, fy = y - iy;
+    const bool warpOver = ((ix + iy) & 1) == 0;
+    const double warpH = std::sin(3.14159265 * fx), weftH = std::sin(3.14159265 * fy);
+    const double slub = wrapFbm(u, v, 6, 2, seed);
+    const double crown = warpOver ? warpH : weftH;
+    s.h = 0.5 + 0.18 * crown + 0.05 * (slub - 0.5);
+    s.albedo = Vec3(1, 1, 1) * (0.80 + 0.16 * crown + 0.08 * (slub - 0.5));
+    s.rough = 0.92;
+    return s;
+}
+
 SurfSample evalSurface(Surface s, double u, double v, uint32_t seed) {
     switch (s) {
         case Surface::Brick:           return evalBrick(u, v, seed);
@@ -386,6 +419,8 @@ SurfSample evalSurface(Surface s, double u, double v, uint32_t seed) {
         case Surface::FanTop:          return evalFanTop(u, v, seed);
         case Surface::Marble:          return evalMarble(u, v, seed);
         case Surface::Carpet:          return evalCarpet(u, v, seed);
+        case Surface::WoodGrain:       return evalWoodGrain(u, v, seed);
+        case Surface::Fabric:          return evalFabric(u, v, seed);
         default:                       return SurfSample{};
     }
 }
@@ -472,6 +507,8 @@ double surfaceWorldTileSize(Surface surface) {
         case Surface::FanTop:          return 1.2;   // one fan per tile (disc bakes own UVs)
         case Surface::Marble:          return 2.4;   // broad veined slabs
         case Surface::Carpet:          return 1.6;
+        case Surface::WoodGrain:       return 0.5;   // the kit's UVs are 2 per metre: one tile per half metre
+        case Surface::Fabric:          return 0.5;
         default:                       return 2.0;
     }
 }

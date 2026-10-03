@@ -131,7 +131,10 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
     // smoothed profile, not the raw ground, and at the mountain foot it stood a metre or more higher
     // + 25 m for the ramp's first stretch, still within reach of the carriageway it leaves, which
     // the builder does not count as free run either
-    auto runFor = [&](double climb) { return std::fabs(climb) * 1.15 / o.gRamp * 1.5 + 40.0; };
+    const double peak = o.rampPeak > 0.0 ? o.rampPeak : o.gRamp / 1.15;
+    // x1.2: the planned deck still runs a little under the built one (the builder smooths and agrees its profile
+    // after); without it 5 of 44 island ramps came out 2-15% short of their climb
+    auto runFor = [&](double climb) { return std::fabs(climb) * 1.2 / peak * 1.5 + 40.0; };
 
     // A ramp's spine, in its direction of travel. It starts on the auxiliary lane (the builder
     // replaces the first/last point with the exact gore), eases out to the band over `diverge`
@@ -244,8 +247,14 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
             // free run, then the part within reach of the landing street: the level approach
             // across the street's half-width, or the shift and the run along the frontage road
             const double arrive = p.cross ? o.landing : o.shift + o.along;
-            double L = std::max(runFor(deckZ(p.sTerm) - groundAt(p.term)), o.diverge) + arrive;
-            L = std::max(runFor(deckZ(p.sTerm + away * L) - groundAt(p.term)), o.diverge) + arrive;   // the deck's height at the gore, not the street
+            // THE SHORTEST RAMP LONG ENOUGH FOR THE CLIMB AT ITS OWN GORE (#40): the deck falls away from the
+            // crossing it bridges, so the climb depends on the length. Two fixed-point steps (the climb at the
+            // crossing, then at that long ramp's gore) landed on the short answer -- 165 m for a gore 14.8 m up,
+            // a 15% ramp by the builder's own check. Scan out until the run covers the climb where it ends.
+            const double zTermG = groundAt(p.term);
+            double L = std::max(runFor(deckZ(p.sTerm) - zTermG), o.diverge) + arrive;   // the upper bound: the peak's climb
+            for (double Ltry = o.diverge + arrive; Ltry < L; Ltry += 10.0)
+                if (Ltry >= std::max(runFor(deckZ(p.sTerm + away * Ltry) - zTermG), o.diverge) + arrive) { L = Ltry; break; }
             p.sGore = p.sTerm + away * L;
             const double lead = p.off ? o.decel + o.taperOff : o.aux + o.taperOn;
             const double lo = std::min({p.sGore, p.sGore + away * lead, p.sTerm}), hi = std::max({p.sGore, p.sGore + away * lead, p.sTerm});

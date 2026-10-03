@@ -13,6 +13,7 @@
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
@@ -962,6 +963,56 @@ std::string optStrField(lua_State* L, int idx, const char* key, const char* def)
 
 }  // namespace
 
+// top = "screen" | "sloped" | ... (buildings M2): the tower's top, emitTowerTop. Read for a plain building and
+// again over a recipe's params, so a script can try every top on one tower.
+// ATTACHED buildings: party = {{nx, nz, at}, ...} -- each a party line, its outward normal and offset
+// dot(normal, point); back_door / fire_escape the rear's service door and steel stair.
+static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
+    lua_getfield(L, idx, "party");
+    if (lua_istable(L, -1)) {
+        p.partyWalls = 0;
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n && p.partyWalls < 2; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) {
+                Real v[3] = {0, 0, 0};
+                for (int j = 0; j < 3; ++j) {
+                    lua_rawgeti(L, -1, j + 1);
+                    v[j] = lua_isnumber(L, -1) ? static_cast<Real>(lua_tonumber(L, -1)) : Real(0);
+                    lua_pop(L, 1);
+                }
+                const Vec2 nn(v[0], v[1]);
+                if (nn.length() > 1e-6) {
+                    p.partyN[p.partyWalls] = normalize(nn);
+                    p.partyAt[p.partyWalls] = v[2];
+                    ++p.partyWalls;
+                }
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    // big_box = 1..4 picks a big-box store's chain (warehouse club, electronics, home improvement, discount)
+    if (p.bigBox) {
+        const int chain = static_cast<int>(optField(L, idx, "big_box", 0.0));
+        if (chain >= 1 && chain <= 4) dressBigBox(p, chain, p.seed);
+    }
+    p.backDoor = optBoolField(L, idx, "back_door", p.backDoor);
+    p.fireEscape = optBoolField(L, idx, "fire_escape", p.fireEscape);
+}
+
+static void readTopField(lua_State* L, int idx, BuildingParams& p) {
+    lua_getfield(L, idx, "top");
+    if (lua_isstring(L, -1)) {
+        static const char* names[9] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
+                                       "antennas", "mast"};
+        const std::string t = lua_tostring(L, -1);
+        for (int i = 0; i < 9; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
+    }
+    lua_pop(L, 1);
+}
+
+
 // Overlay variant: reads the table's fields ONTO `p`, leaving everything the
 // table doesn't mention untouched — the style book applies recipe overrides
 // through this, so a book entry of { roof = "hip" } changes only the roof.
@@ -1064,8 +1115,15 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     lua_getfield(L, idx, "envelope");
     if (lua_isstring(L, -1)) {
         const std::string e = lua_tostring(L, -1);
-        p.envelope = e == "street_wall_setback" ? BuildingParams::Envelope::StreetWallSetback
-                                                : BuildingParams::Envelope::None;
+        using E = BuildingParams::Envelope;
+        p.envelope = e == "street_wall_setback" ? E::StreetWallSetback
+                   : e == "sky_exposure" ? E::SkyExposure
+                   : e == "taper" ? E::Taper
+                   : e == "slab" ? E::Slab
+                   : e == "feathered" ? E::Feathered
+                   : e == "twist" ? E::Twist
+                   : e == "stack" ? E::Stack
+                                  : E::None;
     }
     lua_pop(L, 1);
     p.baseFloors = static_cast<int>(optField(L, idx, "base_floors", p.baseFloors));
@@ -1074,6 +1132,39 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.stepDepth  = static_cast<Real>(optField(L, idx, "step_depth", p.stepDepth));
     p.towerFrac  = static_cast<Real>(optField(L, idx, "tower_frac", p.towerFrac));
     p.towerFloor = static_cast<int>(optField(L, idx, "tower_floor", p.towerFloor));
+    // NYC variety: sky_ratio (the plane's slope), taper_top, chamfer_top, feather_from, twist_deg, stack_shift;
+    // the curtain style: glass = "auto"|"blue"|"green"|"bronze"|"smoke"|"silver"|"clear"|"gold"|"teal"|"copper",
+    // mullions = "steel"|"bronze"|"black"|"silver"|"white", fins (every N bays, 0 none), curtain_bay (m),
+    // spandrel (0 = floor-to-ceiling glass .. ~0.45 ribbon windows).
+    p.skyRatio    = static_cast<Real>(optField(L, idx, "sky_ratio", p.skyRatio));
+    p.taperTop    = static_cast<Real>(optField(L, idx, "taper_top", p.taperTop));
+    p.chamferTop  = static_cast<Real>(optField(L, idx, "chamfer_top", p.chamferTop));
+    p.featherFrom = static_cast<Real>(optField(L, idx, "feather_from", p.featherFrom));
+    p.twistDeg    = static_cast<Real>(optField(L, idx, "twist_deg", p.twistDeg));
+    p.stackShift  = static_cast<Real>(optField(L, idx, "stack_shift", p.stackShift));
+    p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
+    p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));
+    p.spandrelFrac = static_cast<Real>(optField(L, idx, "spandrel", p.spandrelFrac));
+    lua_getfield(L, idx, "glass");
+    if (lua_isstring(L, -1)) {
+        static const char* names[10] = {"auto", "blue", "green", "bronze", "smoke", "silver", "clear", "gold",
+                                        "teal", "copper"};
+        const std::string g = lua_tostring(L, -1);
+        for (int i = 0; i < 10; ++i) if (g == names[i]) p.glassTint = static_cast<uint8_t>(i);
+    }
+    lua_pop(L, 1);
+    readTopField(L, idx, p);
+    p.windowGroup = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "window_group", p.windowGroup)), 1, 3));
+    p.verticals = optBoolField(L, idx, "verticals", p.verticals);
+    p.residential = optBoolField(L, idx, "residential", p.residential);   // apartments inside (buildings B)
+    readAttachedFields(L, idx, p);
+    lua_getfield(L, idx, "mullions");
+    if (lua_isstring(L, -1)) {
+        static const char* names[5] = {"steel", "bronze", "black", "silver", "white"};
+        const std::string m = lua_tostring(L, -1);
+        for (int i = 0; i < 5; ++i) if (m == names[i]) p.mullionTone = static_cast<uint8_t>(i);
+    }
+    lua_pop(L, 1);
     // The core (M5): core = "auto" | "never" | "always".
     lua_getfield(L, idx, "core");
     if (lua_isstring(L, -1)) {
@@ -1164,9 +1255,45 @@ int l_building_grow_parts(lua_State* L) {
 // closed polygon — the lot's own shape — optionally inset by `setback`, grown
 // with the same elements as grow_parts and returned as named parts. Tiers via
 // setback_floors/setback_every give the base/shaft/capital stack.
-int l_building_grow_plan_parts(lua_State* L) {
-    BuildingParams p = readBuildingParams(L, 1);
-    Poly2 plan;
+// Push a building's parts to Lua as { {part = "glass", mesh = ...}, ... } (named by PartId).
+static int pushNamedParts(lua_State* L, const std::vector<RenderMesh>& partsIn) {
+    // Every part by name, in PartId order (materialIndexFor is the ordinal); a draped slot keeps its base name.
+    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
+                                       "ground", "detail", "brick", "concrete",
+                                       "stucco", "metal", "wood",
+                                       "siding", "path", "foliage", "vent", "utility", "fan", "shingle",
+                                       "glass_lit", "interior", "interior_floor", "interior_tile",
+                                       "interior_marble", "interior_carpet", "beacon", "beacon_glow",
+                                       "beacon_haze", "lit_band", "glass_clear", "furniture",
+                                       "furniture_wood", "furniture_fabric", "furniture_metal", "furniture_ceramic"};
+    lua_newtable(L);
+    int cnt = 0;
+    for (const RenderMesh& part : partsIn) {
+        if (part.vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(part));
+        lua_setfield(L, -2, "mesh");
+        const int mi = part.materialIndex;
+        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames) /
+                                                             sizeof(kPartNames[0])))
+                               ? kPartNames[mi] : "wall";
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++cnt);
+    }
+    return 1;
+}
+
+// The arguments grow_plan_parts and grow_floor share: the params, the `plan` polygon (optionally inset by
+// `setback`), and -- with recipe = "name" -- the architect's own recipe on that plan (seed, coreness), which sets
+// `grown_floors` on the argument table.
+static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
+    p = readBuildingParams(L, 1);
+    // recipe = "name": the architect's own recipe (seed, coreness 0..1), grown as a lot at the city would grow
+    // it on this plan -- a lineup shows exactly what the city builds (NYC variety, 2026-09-30).
+    lua_getfield(L, 1, "recipe");
+    const std::string recipeName = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
     lua_getfield(L, 1, "plan");
     if (lua_istable(L, -1)) {
         const int n = static_cast<int>(lua_rawlen(L, -1));
@@ -1184,27 +1311,81 @@ int l_building_grow_plan_parts(lua_State* L) {
     lua_pop(L, 1);
     const Real setback = static_cast<Real>(optField(L, 1, "setback", 0.0));
     if (setback > 0 && plan.size() >= 3) plan = inset(plan, setback);
-    BuildingMesh bm = growPlanBuilding(plan, p);
-    static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
-                                       "ground", "detail", "brick", "concrete",
-                                       "stucco", "metal", "wood",
-                                       "siding", "path", "foliage"};
-    lua_newtable(L);
-    int cnt = 0;
-    for (const RenderMesh& part : bm.parts) {
-        if (part.vertices.empty()) continue;
-        lua_newtable(L);
-        pushMesh(L, std::make_shared<RenderMesh>(part));
-        lua_setfield(L, -2, "mesh");
-        const int mi = part.materialIndex;
-        const char* name = (mi >= 0 && mi < static_cast<int>(sizeof(kPartNames) /
-                                                             sizeof(kPartNames[0])))
-                               ? kPartNames[mi] : "wall";
-        lua_pushstring(L, name);
-        lua_setfield(L, -2, "part");
-        lua_rawseti(L, -2, ++cnt);
+    if (!recipeName.empty() && plan.size() >= 3) {
+        const OBB2 ob = orientedBoundingBox(plan);
+        BuildingRecipe rc;
+        if (!architectRecipeByName(recipeName, static_cast<uint32_t>(optField(L, 1, "seed", 1.0)),
+                                   static_cast<Real>(optField(L, 1, "coreness", 1.0)),
+                                   2 * std::min(ob.half[0], ob.half[1]), area(plan), rc))
+        {
+            luaL_error(L, "building: unknown recipe '%s'", recipeName.c_str());   // raises; never returns
+            return;
+        }
+        p = rc.params;
+        p.openDoorway = true;
+        readTopField(L, 1, p);   // a script may try another top on the recipe's tower
+        readAttachedFields(L, 1, p);   // ...or stand it against its neighbours
+        lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
+        lua_setfield(L, 1, "grown_floors");
     }
-    return 1;
+}
+
+int l_building_grow_plan_parts(lua_State* L) {
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    BuildingMesh bm = growPlanBuilding(plan, p);
+    return pushNamedParts(L, bm.parts);
+}
+
+// building.grow_floor{ plan = ..., recipe = "condo_tower" | params..., storey = k, cutaway = 2.6 } -> parts
+// ONE STOREY'S INTERIOR (buildings B, the floor lab): the rooms, walls, floors and the furniture (expanded from its
+// placements into the finish parts), the storey's floor at y = 0, everything above `cutaway` metres dropped so a
+// camera sees the plan from above. The review tool for the apartment and office plans.
+int l_building_grow_floor(lua_State* L) {
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.grow_floor: needs a plan");
+    const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+    const int k = std::clamp(static_cast<int>(optField(L, 1, "storey", 1.0)), 0, static_cast<int>(sps.size()) - 1);
+    const Real cut = static_cast<Real>(optField(L, 1, "cutaway", 2.6));
+    p.openDoorway = true;
+    BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, k, k + 1);
+    const Real y0 = sps[static_cast<std::size_t>(k)].y0;
+    // The furniture, into its finish parts.
+    static const PartId kFinish[kFurnMatCount] = {PartId::FurnitureWood, PartId::FurnitureFabric, PartId::Furniture,
+                                                  PartId::FurnitureMetal, PartId::FurnitureCeramic, PartId::LitBand};
+    std::vector<RenderMesh> parts = bm.parts;
+    auto partFor = [&](PartId id) -> RenderMesh& {
+        for (RenderMesh& m : parts) if (m.materialIndex == static_cast<int>(id)) return m;
+        parts.emplace_back();
+        parts.back().materialIndex = static_cast<int>(id);
+        return parts.back();
+    };
+    for (const PlacedPiece& pp : bm.furniture) {
+        const FurniturePiece& kit = furniturePiece(static_cast<Piece>(pp.piece), pp.variant);
+        for (int f = 0; f < kFurnMatCount; ++f) {
+            const RenderMesh& m = kit.mesh[static_cast<std::size_t>(f)];
+            if (m.vertices.empty()) continue;
+            RenderMesh t = m;
+            MeshBuilder::transform(t, pp.xform);
+            MeshBuilder::append(partFor(kFinish[f]), t);
+        }
+    }
+    // Down to the storey's floor; drop what is above the cut.
+    for (RenderMesh& m : parts) {
+        for (Vertex& v : m.vertices) v.position.y -= y0;
+        std::vector<uint32_t> keep;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Real lo = std::min({m.vertices[m.indices[i]].position.y, m.vertices[m.indices[i + 1]].position.y,
+                                      m.vertices[m.indices[i + 2]].position.y});
+            if (lo > cut) continue;
+            keep.insert(keep.end(), {m.indices[i], m.indices[i + 1], m.indices[i + 2]});
+        }
+        m.indices.swap(keep);
+    }
+    return pushNamedParts(L, parts);
 }
 
 // building.height{...} -> number : the grown height in metres (no mesh). Cheap
@@ -1232,6 +1413,46 @@ Vec3 optVec3Field(lua_State* L, int idx, const char* key, Vec3 fallback) {
 
 // streetfurniture.lamp{ height=, pole_radius=, head_size={x,y,z},
 //   pole_color={r,g,b}, head_color={r,g,b} } -> mesh (built at the origin).
+// furniture.piece{ name = "office_chair", variant = 0 } -> { {part = "furniture_fabric", mesh = ...}, ...,
+// size = {w, h, d} }. THE FURNITURE KIT (buildings M4b, procgen/furniture_kit.h): a modelled piece by name, one
+// mesh per finish -- the part names a script maps to its materials. Piece space: x across, z out from the wall,
+// y up. furniture.pieces() lists the names.
+int l_furniture_piece(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const std::string name = optStrField(L, 1, "name", "desk");
+    Piece pc;
+    if (!furniturePieceByName(name, pc)) return luaL_error(L, "furniture.piece: unknown piece '%s'", name.c_str());
+    const uint32_t variant = static_cast<uint32_t>(optField(L, 1, "variant", 0.0));
+    const FurniturePiece& fp = furniturePiece(pc, variant);
+    static const char* kMatParts[kFurnMatCount] = {"furniture_wood", "furniture_fabric", "furniture",
+                                                   "furniture_metal", "furniture_ceramic", "lit_band"};
+    lua_newtable(L);
+    int n = 0;
+    for (int k = 0; k < kFurnMatCount; ++k) {
+        if (fp.mesh[static_cast<std::size_t>(k)].vertices.empty()) continue;
+        lua_newtable(L);
+        pushMesh(L, std::make_shared<RenderMesh>(fp.mesh[static_cast<std::size_t>(k)]));
+        lua_setfield(L, -2, "mesh");
+        lua_pushstring(L, kMatParts[k]);
+        lua_setfield(L, -2, "part");
+        lua_rawseti(L, -2, ++n);
+    }
+    lua_newtable(L);
+    lua_pushnumber(L, fp.size.x); lua_rawseti(L, -2, 1);
+    lua_pushnumber(L, fp.size.y); lua_rawseti(L, -2, 2);
+    lua_pushnumber(L, fp.size.z); lua_rawseti(L, -2, 3);
+    lua_setfield(L, -2, "size");
+    return 1;
+}
+int l_furniture_pieces(lua_State* L) {
+    lua_newtable(L);
+    for (int i = 0; i < kPieceCount; ++i) {
+        lua_pushstring(L, furniturePieceName(static_cast<Piece>(i)));
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
 int l_furniture_lamp(lua_State* L) {
     LampParams p;
     if (lua_istable(L, 1)) {
@@ -3560,6 +3781,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"grow", l_building_grow},
         {"grow_parts", l_building_grow_parts},
         {"grow_plan_parts", l_building_grow_plan_parts},
+        {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},
     };
@@ -3573,6 +3795,14 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kFurnitureFns);
     lua_setglobal(L, "streetfurniture");
+
+    static const luaL_Reg kInteriorFurnitureFns[] = {
+        {"piece", l_furniture_piece},
+        {"pieces", l_furniture_pieces},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kInteriorFurnitureFns);
+    lua_setglobal(L, "furniture");
 
     static const luaL_Reg kModelFns[] = {
         {"new", l_model_new},

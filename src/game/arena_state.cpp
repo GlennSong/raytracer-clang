@@ -13,6 +13,9 @@
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
 #include "../engine/systems/elevator_system.h"
+#include "../engine/systems/interaction_system.h"
+#include "../engine/systems/interact_broker_system.h"
+#include "../engine/systems/tool_cycle_system.h"
 #include "../engine/systems/beacon_light_system.h"
 #include "../engine/systems/terrain_lod_system.h"
 #include "../engine/systems/residency_system.h"
@@ -36,6 +39,11 @@
 #include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/debug_draw_system.h"
 #include "../engine/systems/audio_system.h"
+#include "../engine/systems/water_ambience_system.h"
+#include "../engine/systems/underwater_system.h"
+#ifdef RT_ENABLE_PHYSICS
+#include "../engine/systems/footstep_system.h"
+#endif
 #include "../engine/audio/sfx.h"
 #include "../engine/systems/camera_panel_system.h"
 #include "../engine/systems/planet_lab_system.h"
@@ -218,6 +226,11 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
+    addSystem<InteractionSystem>();       // sit / lie on furniture (the furniture library, M1)
+    // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
+    // all in when it picks the focus (engine/interact_broker.h).
+    addSystem<InteractBrokerSystem>(&physSys);
+    addSystem<ToolCycleSystem>();   // LB / RB step through the tools (slot_1..4)
 #else
     addSystem<ResidencySystem>();
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
@@ -227,12 +240,17 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // to the renderer as the locomotion-base hint. Must stay after every
     // other camera writer and before RenderSystem. Inert without a headset.
     addSystem<XrCameraSystem>();
+    addSystem<UnderwaterSystem>();   // the camera under a water surface -> the composite's underwater look (#58)
     addSystem<RenderSystem>();
     addSystem<DebugDrawSystem>();   // ctx.debug lines on top of the scene (ADR-0067)
     // After the camera systems so the listener follows this frame's view.
     auto& audioSys = addSystem<AudioSystem>();   // AudioSource/PlaySound -> AudioEngine (ADR-0069)
     // Procedural clips + Collision -> impact cues (ADR-0071).
     addSystem<ArenaSoundSystem>(audioSys);
+#ifdef RT_ENABLE_PHYSICS
+    addSystem<FootstepSystem>(physSys);    // footsteps by surface, jump + landing, grass swish (#62-#64)
+#endif
+    addSystem<WaterAmbienceSystem>();      // surf along the coast, rivers running (#65)
     addSystem<CameraPanelSystem>(camSys);
     addSystem<PlanetLabSystem>();     // Debug > Planet Lab (RT_ENABLE_IMGUI)
 }
@@ -362,7 +380,7 @@ void ArenaState::onEnter(FrameContext& ctx) {
     // ControlledBy). Collected first, then tagged, so we never add a component
     // mid-iteration (World::each contract, ADR-0006).
     ctx.actions.bindButton("fire", MouseButton::Left);
-    ctx.actions.bindButton("fire", GamepadButton::RightBumper);
+    ctx.actions.bindButton("fire", GamepadAxis::RightTrigger);   // RT: LB / RB cycle the tools
     ctx.actions.bindButton("slot_1", KeyCode::Num1);   // bare hands (start here)
     ctx.actions.bindButton("slot_2", KeyCode::Num2);   // draw the gun
     {

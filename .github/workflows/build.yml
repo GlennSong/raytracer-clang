@@ -44,7 +44,11 @@ jobs:
       - name: Build (engine + viewer + Vulkan shaders)
         run: cmake --build build
 
+      # The heavy levels (a minute+ each, cold) run nightly (levels-nightly.yml): with them level_tests never
+      # finished inside ctest's 30 minutes, and CI was red on a timeout instead of a finding.
       - name: Tests
+        env:
+          RT_LEVEL_TESTS_SKIP_HEAVY: "1"
         run: ctest --test-dir build --output-on-failure
 
   macos-metal:
@@ -69,7 +73,11 @@ jobs:
       - name: Assert the Metal viewer was built
         run: test -f build/viewer
 
+      # The heavy levels (a minute+ each, cold) run nightly (levels-nightly.yml): with them level_tests never
+      # finished inside ctest's 30 minutes, and CI was red on a timeout instead of a finding.
       - name: Tests
+        env:
+          RT_LEVEL_TESTS_SKIP_HEAVY: "1"
         run: ctest --test-dir build --output-on-failure
 
       # Metal shaders are runtime-compiled (newLibraryWithSource), so a .metal

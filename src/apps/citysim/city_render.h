@@ -252,6 +252,12 @@ public:
     // in that body frame: seat hip points, door floor points, floor height.
     // False when the agent is not a see-into vehicle.
     bool busFrame(int agent, engine::Mat4* pose) const;
+    // A CAR'S SEATS (Glenn, 2026-10-02: "a way to detect which part of the car you get into so you can be a
+    // passenger (backseat, frontseat passenger) or the driver ... we'd have to be pointing at the seat that we
+    // want"): an ambient car's drawn pose and its seat hips in the body frame -- [0] the driver's, [1] the front
+    // passenger's (the driver's mirrored), then the two rear seats when the body is long enough to have them.
+    // False for a bus, a parked or released agent, or a body that publishes no driver seat.
+    bool carSeatsOf(int agent, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
     const std::vector<engine::Vec3>& busSeats() const;
     const std::vector<engine::Vec3>& busDoors() const;
     engine::Real busFloorY() const;   // body-local floor height
@@ -373,6 +379,11 @@ public:
                             static_cast<int>(carChassis_.size())) %
                            static_cast<int>(carChassis_.size())];
     }
+    // That car's GLASS and CABIN, for a commandeered car: the chassis is the shell alone (no glass, no cabin, and the
+    // shell's underside culls from inside), so without these the player sat in an empty frame over the road. The
+    // cabin is invalid for a see-into body (bus, convertible), whose cabin is part of its chassis.
+    engine::MeshHandle carGlassMesh(int slot) const { return slotOf(carGlassMesh_, slot); }
+    engine::MeshHandle carCabinMesh(int slot) const { return slotOf(carCabinMesh_, slot); }
     // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
     // back to four lenses at GUESSED chassis corners when a Vehicle carries no
     // markers — which sat harmlessly on top of the old box car's baked lamp
@@ -397,6 +408,11 @@ public:
     }
 
 private:
+    static engine::MeshHandle slotOf(const std::vector<engine::MeshHandle>& v, int slot) {
+        if (v.empty()) return engine::MeshHandle{};
+        const int n = static_cast<int>(v.size());
+        return v[static_cast<std::size_t>(((slot % n) + n) % n)];
+    }
     // How many car variants were actually BUILT — the Lua fleet's length when a
     // level ships recipes, the built-in table's size otherwise. Agent-to-group
     // mapping must wrap by this and not by the C++ colour table, or a fleet of
@@ -473,10 +489,15 @@ private:
     int loadStreak_ = 0;
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
+    engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
     engine::Entity roadMarkGroup_;     // stop bars + lane-turn arrows (R6c)
+public:
+    // Did this bridge draw its own stop bars and arrows? Not over a builder that painted them (#39).
+    bool drewRoadMarkings() const { return roadMarkGroup_.valid(); }
+private:
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
     // Car lamps (ADR-0065 follow-up): one emissive instance group per lamp kind.
     engine::Entity headlightGroup_{};  // white, forward
@@ -504,6 +525,7 @@ private:
     // near the player draws clear glass + cabin + driver instead of the opaque glass (the near swap).
     std::vector<engine::Entity> carGlassOpaqueGroups_;
     std::vector<engine::Entity> carInteriorGroups_;
+    std::vector<engine::MeshHandle> carGlassMesh_, carCabinMesh_;
     std::vector<char> carSeeInto_;
     // The agents drawn see-through this bake (nearest the player, with hysteresis).
     std::unordered_set<int> nearSwap_;

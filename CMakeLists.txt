@@ -130,6 +130,12 @@ add_library(engine_core STATIC
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
+    src/engine/procgen/city/furniture.cpp
+    src/engine/procgen/furniture_kit.cpp
+    src/engine/procgen/furniture_library.cpp
+    src/engine/interaction.cpp
+    src/engine/interact_broker.cpp
+    src/engine/furniture_draw.cpp
     src/engine/procgen/city/patch_fabric.cpp
     src/engine/procgen/city/city_footprint.cpp
     src/engine/procgen/city/arterial_skeleton.cpp
@@ -208,6 +214,7 @@ add_library(engine_core STATIC
     src/engine/anim/skin_import.cpp
     src/engine/audio/audio_engine.cpp
     src/engine/audio/sfx.cpp
+    src/engine/audio/sfx_ground.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/xr_camera_system.cpp
@@ -220,10 +227,15 @@ add_library(engine_core STATIC
     src/engine/systems/building_interior_system.cpp
     src/engine/systems/door_system.cpp
     src/engine/systems/elevator_system.cpp
+    src/engine/systems/interaction_system.cpp
+    src/engine/systems/interact_broker_system.cpp
+    src/engine/systems/tool_cycle_system.cpp
     src/engine/systems/beacon_light_system.cpp
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp
     src/engine/systems/grass_system.cpp
+    src/engine/systems/water_ambience_system.cpp
+    src/engine/systems/underwater_system.cpp
     src/engine/systems/flashlight_system.cpp
     src/engine/residency.cpp
     src/engine/occlusion.cpp
@@ -280,7 +292,15 @@ endif()
 #
 # The usual reason to gate a submodule feature does not apply: the branch below
 # already runs `git submodule update --init` when third_party/imgui is missing.
-option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" ON)
+# The WEB build is the exception: its WebGPU renderer has no ImGui draw backend and viewer_web links
+# no platform backend, so ON there failed at link (ImGui_ImplGlfw_* undefined) from the day the default
+# flipped (e89ced6b) -- every Deploy Web run since 2026-08-17.
+if(EMSCRIPTEN)
+    set(RT_IMGUI_DEFAULT OFF)
+else()
+    set(RT_IMGUI_DEFAULT ON)
+endif()
+option(RT_ENABLE_IMGUI "Build with the Dear ImGui debug UI" ${RT_IMGUI_DEFAULT})
 if(RT_ENABLE_IMGUI)
     set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
     if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
@@ -377,6 +397,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
         src/engine/scripting/vehicle_spec.cpp
+        src/engine/scripting/furniture_library_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -786,6 +807,7 @@ add_executable(run_tests
     tests/test_site_plan.cpp
     tests/test_core_plan.cpp
     tests/test_room_plan.cpp
+    tests/test_furniture.cpp
     tests/test_alignment.cpp
     tests/test_surface_field.cpp
     tests/test_architect.cpp
@@ -809,7 +831,8 @@ if(RT_ENABLE_SCRIPTING)
         tests/test_gun_script.cpp
         tests/test_flora.cpp
         tests/test_agent_goals.cpp
-        tests/test_vehicle_body.cpp)
+        tests/test_vehicle_body.cpp
+        tests/test_interaction.cpp)
     # Lets the gun test read the actual shipped assets/scripts/gun.lua.
     target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
@@ -989,6 +1012,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
+        src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
@@ -1418,6 +1442,7 @@ if(Qt6_FOUND)
         src/editor_app/property_inspector.cpp
         src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
+        src/editor_app/level_cache_panel.cpp
         src/game/arena_state.cpp
     )
     target_compile_options(editor_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -1510,9 +1535,11 @@ if(Qt6_FOUND)
         tests/test_property_inspector_qt.cpp
         tests/test_city_planner_qt.cpp
         tests/test_bake_dialog_qt.cpp
+        tests/test_level_cache_panel_qt.cpp
         src/editor_app/property_inspector.cpp
         src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
+        src/editor_app/level_cache_panel.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders
     )
     target_compile_options(editor_qt_tests PRIVATE -Wall -Wextra)

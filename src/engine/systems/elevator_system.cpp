@@ -1,10 +1,12 @@
 #include "elevator_system.h"
+#include "../interact_broker.h"
 
 #include "physics_system.h"
 #include "../components.h"
 #include "../world.h"
 #include "../../log.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../audio/sfx.h"
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -27,6 +29,13 @@ constexpr Real kWallMid = -0.075;    // the leaf slides inside the 0.15 m wall
 Quat yawOf(const CoreShaft& hw) {
     // A box's local +Z along the shaft's v (the facing convention yaw = atan2(dir.x, dir.z)).
     return Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(hw.frame.v.x, hw.frame.v.y));
+}
+
+// The landing door of hoistway `i` on `storey`, mid-height (where a sound is heard from).
+Vec3 doorAtImpl(const CorePlan& core, const std::vector<Real>& storeyY, std::size_t i, int storey) {
+    const CoreShaft& hw = core.hoistways[i];
+    const int k = std::max(0, std::min(static_cast<int>(storeyY.size()) - 1, storey));
+    return hw.at(hw.doorX, -0.2, storeyY[static_cast<std::size_t>(k)] + 1.4);
 }
 
 long long leafKey(int storey, int hoistway, bool left) {
@@ -59,17 +68,74 @@ RenderMaterial cabWall() {
 }  // namespace
 
 void ElevatorSystem::onStart(FrameContext& ctx) {
-    ctx.actions.bindButton("elevator_call", KeyCode::E);
-    ctx.actions.setActionContext("elevator_call", engine::InputContext::OnFoot);
+    // E is the interaction broker's (interact_broker.h): the lift OFFERS its call / go, and acts on the command.
     ctx.actions.bindButton("elevator_floor_up", KeyCode::Up);
     ctx.actions.bindButton("elevator_floor_down", KeyCode::Down);
+    ctx.actions.bindButton("elevator_floor_ground", KeyCode::Left);
+    ctx.actions.bindButton("elevator_floor_top", KeyCode::Right);
+    ctx.actions.bindButton("elevator_fast", KeyCode::LeftShift);
+    // ...and on a controller (Glenn, 2026-10-02: "use the arrow keys on the dpad to select floors"): the D-pad
+    // picks, left trigger held for ten at a time.
+    ctx.actions.bindButton("elevator_floor_up", GamepadButton::DpadUp);
+    ctx.actions.bindButton("elevator_floor_down", GamepadButton::DpadDown);
+    ctx.actions.bindButton("elevator_floor_ground", GamepadButton::DpadLeft);
+    ctx.actions.bindButton("elevator_floor_top", GamepadButton::DpadRight);
+    ctx.actions.bindButton("elevator_fast", GamepadAxis::LeftTrigger);
+    // The sounds, made once (engine/audio/sfx.h).
+    audioReady_ = ctx.audio.ready();
+    if (audioReady_) {
+        const uint32_t rate = ctx.audio.sampleRate();
+        auto clip = [&](const std::vector<float>& pcm) { return ctx.audio.createClip(pcm.data(), pcm.size(), 1, rate); };
+        clipButton_ = clip(sfx::elevatorButton(rate, 3));
+        clipDoors_ = clip(sfx::elevatorDoors(rate, 5));
+        clipDingUp_ = clip(sfx::elevatorDing(true, rate, 7));
+        clipDingDown_ = clip(sfx::elevatorDing(false, rate, 7));
+        clipHum_ = clip(sfx::elevatorHum(rate, 9));
+    }
 }
 
 void ElevatorSystem::update(FrameContext& ctx) {
-    // Edges are frame-rate events; fixedUpdate consumes them.
-    if (ctx.actions.pressed("elevator_call")) callEdge_ = true;
-    if (ctx.actions.pressed("elevator_floor_up")) ++floorDelta_;
-    if (ctx.actions.pressed("elevator_floor_down")) --floorDelta_;
+    // THE BROKER'S COMMAND (E at the lift) and this frame's OFFER: at a hoistway door, call that cab; in a cab,
+    // go to the floor picked (or open the doors at this one). Edges latch for fixedUpdate.
+    {
+        Entity player;
+        ctx.world.each<Transform, ControlledBy>([&](Entity e, Transform&, ControlledBy&) { if (!player.valid()) player = e; });
+        InteractCommand cmd;
+        if (player.valid() && takeInteractCommand(ctx.world, player, "elevator", cmd)) callEdge_ = true;
+        if (player.valid() && !ctx.world.has<InVehicle>(player) && (status_.inCab || status_.atDoor)) {
+            InteractOffer o;
+            o.provider = "elevator";
+            o.name = "elevator";
+            o.anchor = status_.anchor;
+            o.inVolume = true;
+            o.needsSight = false;
+            if (status_.inCab)
+                o.tap = status_.moving ? std::string() : status_.selected != status_.floor
+                                                              ? "go to floor " + std::to_string(status_.selected)
+                                                              : "open the doors";
+            else
+                o.tap = "call the lift";
+            if (!o.tap.empty()) offerInteraction(ctx.world, player, o);
+        }
+    }
+    // THE FLOOR PICKER: a press steps one floor (ten with Shift); held, it repeats after 0.35 s and speeds up
+    // to ~30 floors a second; Left / Right go straight to the ground / the top.
+    const int stepN = ctx.actions.held("elevator_fast") ? 10 : 1;
+    const Real fdt = std::max(0.0, std::min(ctx.frameDelta, 0.1));
+    auto picker = [&](const char* action, Real& hold, int sign) {
+        if (ctx.actions.pressed(action)) { floorDelta_ += sign * stepN; hold = 0; repeatAcc_ = 0; return; }
+        if (!ctx.actions.held(action)) { hold = -1; return; }
+        if (hold < 0) return;
+        hold += fdt;
+        if (hold < 0.35) return;
+        const Real rate = 8.0 + 22.0 * std::min(Real(1), (hold - 0.35) / 1.5);   // floors a second
+        repeatAcc_ += rate * fdt;
+        while (repeatAcc_ >= 1.0) { floorDelta_ += sign * stepN; repeatAcc_ -= 1.0; }
+    };
+    picker("elevator_floor_up", holdUp_, 1);
+    picker("elevator_floor_down", holdDown_, -1);
+    if (ctx.actions.pressed("elevator_floor_ground")) floorDelta_ -= 100000;
+    if (ctx.actions.pressed("elevator_floor_top")) floorDelta_ += 100000;
     // The control channel's `elevator call` / `elevator pick <n>` (application.cpp).
     if (ctx.settings.getDouble("elevator.call", 0.0) != 0.0) {
         callEdge_ = true;
@@ -97,6 +163,32 @@ void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
     if (!found) { callEdge_ = false; floorDelta_ = 0; status_ = Status{}; return; }
     PhysicsWorld* phys = physics_ ? &physics_->physicsWorld() : nullptr;
     step(ctx.world, phys, ctx.assets, player, ctx.clock.fixedStep(), callEdge_, floorDelta_, feetDrop);
+    // THE SOUNDS: this step's events, and the rider's cab humming with its speed.
+    if (audioReady_) {
+        for (const SfxEvent& ev : sfx_) {
+            AudioPlayParams pp;
+            pp.bus = AudioBus::Sfx;
+            switch (ev.kind) {
+                case Sfx::Button: pp.volume = 0.6f; ctx.audio.play(clipButton_, pp); break;
+                case Sfx::Doors: pp.volume = 0.7f; ctx.audio.playAt(clipDoors_, ev.at, 18.0f, pp); break;
+                case Sfx::DingUp: pp.volume = 0.8f; ctx.audio.playAt(clipDingUp_, ev.at, 30.0f, pp); break;
+                case Sfx::DingDown: pp.volume = 0.8f; ctx.audio.playAt(clipDingDown_, ev.at, 30.0f, pp); break;
+            }
+        }
+        const float hum = status_.inCab ? static_cast<float>(std::min(Real(1), status_.speed / SPEED)) : 0.0f;
+        if (hum > 0.01f && !humVoice_.valid()) {
+            AudioPlayParams pp;
+            pp.loop = true; pp.volume = 0.0f; pp.bus = AudioBus::Sfx;
+            humVoice_ = ctx.audio.play(clipHum_, pp);
+        }
+        if (humVoice_.valid()) {
+            if (hum <= 0.01f) { ctx.audio.stop(humVoice_); humVoice_ = AudioVoiceHandle{}; }
+            else {
+                ctx.audio.setVoiceVolume(humVoice_, 0.15f + 0.45f * hum);
+                ctx.audio.setVoicePitch(humVoice_, 0.85f + 0.3f * hum);
+            }
+        }
+    }
     // The CAB LIGHT: a warm point in each cab, staged with the interior room
     // lights (BuildingInteriorSystem clears that list earlier in the frame).
     // Without it the cab was lit by its ceiling panel's emission alone —
@@ -122,6 +214,53 @@ void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
     }
     callEdge_ = false;
     floorDelta_ = 0;
+}
+
+Vec3 ElevatorSystem::doorAt(const Bank& b, std::size_t i, int storey) {
+    return doorAtImpl(b.core, b.storeyY, i, storey);
+}
+
+// THE HALL LANTERNS (Glenn: "above it arrows that show which way it's going"): over every hoistway door on the
+// player's storey, an up lamp and a down lamp, lit while that cab travels that way, dark at rest.
+void ElevatorSystem::syncLamps(World& world, AssetManager& assets, Bank& b, int playerStorey) {
+    const int n = static_cast<int>(b.storeyY.size());
+    if (n == 0) return;
+    const int s = std::max(0, std::min(n - 1, playerStorey));
+    for (std::size_t i = 0; i < b.core.hoistways.size() && i < b.cabs.size(); ++i) {
+        if (b.lamps.size() <= i) {
+            std::array<Lamp, 2> pair;
+            for (int k = 0; k < 2; ++k) {
+                pair[static_cast<std::size_t>(k)].mesh = assets.acquirePrimitive("box", Vec3(0.12, 0.07, 0.02));
+                Entity e = world.create();
+                world.add<Transform>(e, Transform{});
+                world.add<PrevTransform>(e, PrevTransform{Transform{}});
+                Renderable rd;
+                rd.mesh = pair[static_cast<std::size_t>(k)].mesh;
+                rd.drawClass = DrawClass::Structure;
+                rd.drawDistance = 60.0;
+                world.add<Renderable>(e, rd);
+                pair[static_cast<std::size_t>(k)].entity = e;
+            }
+            b.lamps.push_back(pair);
+        }
+        const CoreShaft& hw = b.core.hoistways[i];
+        const Cab& cab = b.cabs[i];
+        const bool moving = cab.state == CabState::Moving;
+        const Real y = b.storeyY[static_cast<std::size_t>(s)] - 0.05 + hw.doorHeight + 0.18;
+        for (int k = 0; k < 2; ++k) {
+            Lamp& l = b.lamps[i][static_cast<std::size_t>(k)];
+            if (Transform* t = world.get<Transform>(l.entity)) {
+                t->position = hw.at(hw.doorX, -0.17, y + (k == 0 ? 0.06 : -0.06));
+                t->orientation = yawOf(hw);
+                if (PrevTransform* pt = world.get<PrevTransform>(l.entity)) pt->value = *t;
+            }
+            if (Renderable* r = world.get<Renderable>(l.entity)) {
+                const bool lit = moving && ((k == 0 && cab.dir > 0) || (k == 1 && cab.dir < 0));
+                r->material.albedo = lit ? Vec3(0.9, 0.9, 0.9) : Vec3(0.12, 0.12, 0.13);
+                r->material.emission = lit ? (k == 0 ? Vec3(0.4, 2.2, 0.8) : Vec3(2.4, 0.9, 0.3)) : Vec3(0, 0, 0);
+            }
+        }
+    }
 }
 
 int ElevatorSystem::storeyOf(const Bank& b, Real y, Real feetDrop) {
@@ -243,6 +382,11 @@ void ElevatorSystem::releaseBank(World& world, PhysicsWorld* phys, AssetManager&
         if (world.alive(kv.second.entity)) world.destroy(kv.second.entity);
         assets.releaseMesh(kv.second.mesh);
     }
+    for (auto& pair : it->second.lamps)
+        for (Lamp& l : pair) {
+            if (world.alive(l.entity)) world.destroy(l.entity);
+            assets.releaseMesh(l.mesh);
+        }
     banks_.erase(it);
 }
 
@@ -342,6 +486,7 @@ void ElevatorSystem::syncLeaves(World& world, PhysicsWorld* phys, AssetManager& 
 void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets, const Vec3& player,
                           Real dt, bool call, int floorDelta, Real feetDrop) {
     status_ = Status{};
+    sfx_.clear();
     const CityBuildings* cb = nullptr;
     world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
     if (!cb || cb->records.empty()) {
@@ -397,6 +542,7 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
     if (inCab >= 0) {
         Cab& cab = b.cabs[static_cast<std::size_t>(inCab)];
         if (floorDelta != 0) b.selected = std::max(0, std::min(n - 1, b.selected + floorDelta));
+        if (floorDelta != 0 || call) sfx_.push_back({Sfx::Button, player});
         if (call) {
             if (b.selected != cab.floor) {
                 cab.target = b.selected;
@@ -408,31 +554,24 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
     } else {
         b.selected = f;
         if (call && atDoor >= 0) {
-            // The nearest cab that is not moving, or one moving THROUGH this
-            // storey on its way (it stops here first); a cab moving away is
-            // never turned around mid-shaft (it would flip its velocity and
-            // drop its rider). When every cab is busy the call waits for the
-            // next press.
+            // THE CAB IN FRONT OF YOU (Glenn: "when I stand in front of the elevator to call it it doesn't call that
+            // elevator"): a hall call is that hoistway's. A cab moving through this storey on its way stops here; one
+            // moving away finishes its trip and comes back (pending) -- never turned round mid-shaft (it would flip
+            // its velocity and drop its rider).
+            sfx_.push_back({Sfx::Button, player});
+            Cab& c = b.cabs[static_cast<std::size_t>(atDoor)];
             const Real yHere = b.storeyY[static_cast<std::size_t>(f)];
-            int best = -1;
-            Real bestD = 1e30;
-            for (std::size_t i = 0; i < b.cabs.size(); ++i) {
-                const Cab& c = b.cabs[i];
-                if (c.state == CabState::Moving) {
-                    const Real yT = b.storeyY[static_cast<std::size_t>(std::max(0, std::min(n - 1, c.target)))];
-                    const bool onTheWay = (yHere - c.y) * (yT - c.y) > 0 && std::fabs(yHere - c.y) < std::fabs(yT - c.y);
-                    if (!onTheWay) continue;
-                }
-                // Ties go to the hoistway the player is standing at: a hall call
-                // opens the door in front of them, not the bank's first cab.
-                const Real d = std::fabs(c.y - yHere) + (c.state == CabState::Moving ? 0 : 0.01) +
-                               (static_cast<int>(i) == atDoor ? 0 : 0.02);
-                if (d < bestD) { bestD = d; best = static_cast<int>(i); }
-            }
-            if (best >= 0) {
-                Cab& c = b.cabs[static_cast<std::size_t>(best)];
+            if (c.state == CabState::Moving) {
+                const Real yT = b.storeyY[static_cast<std::size_t>(std::max(0, std::min(n - 1, c.target)))];
+                const bool onTheWay = (yHere - c.y) * (yT - c.y) > 0 && std::fabs(yHere - c.y) < std::fabs(yT - c.y);
+                if (onTheWay) { c.pending = c.target; c.target = f; }
+                else c.pending = f;
+            } else {
                 c.target = f;
-                if (c.floor == f && (c.state == CabState::Idle || c.state == CabState::Closing)) c.state = CabState::Opening;
+                if (c.floor == f && (c.state == CabState::Idle || c.state == CabState::Closing)) {
+                    c.state = CabState::Opening;
+                    sfx_.push_back({Sfx::Doors, doorAt(b, static_cast<std::size_t>(atDoor), f)});
+                }
                 else if (c.floor == f && c.state == CabState::Open) c.dwell = DWELL_S;
                 else if (c.state == CabState::Open || c.state == CabState::Opening) c.state = CabState::Closing;
             }
@@ -447,6 +586,7 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
         switch (cab.state) {
             case CabState::Idle:
                 cab.vel = 0;
+                if (cab.target == cab.floor && cab.pending >= 0) { cab.target = cab.pending; cab.pending = -1; }
                 if (cab.target != cab.floor) cab.state = CabState::Moving;
                 break;
             case CabState::Opening:
@@ -456,7 +596,11 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
             case CabState::Open:
                 if (static_cast<int>(i) == inCab) cab.dwell = std::max(cab.dwell, Real(1.0));
                 cab.dwell -= dt;
-                if (cab.dwell <= 0 || cab.target != cab.floor) cab.state = CabState::Closing;
+                if (cab.dwell <= 0 && cab.pending >= 0 && cab.target == cab.floor) { cab.target = cab.pending; cab.pending = -1; }
+                if (cab.dwell <= 0 || cab.target != cab.floor) {
+                    cab.state = CabState::Closing;
+                    sfx_.push_back({Sfx::Doors, doorAt(b, i, cab.floor)});
+                }
                 break;
             case CabState::Closing:
                 cab.doorT = std::max(Real(0), cab.doorT - dt / DOOR_S);
@@ -468,12 +612,17 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
                 const Real allowed = std::sqrt(std::max(Real(0), 2.0 * ACCEL * std::fabs(d)));
                 cab.vel = std::min({SPEED, allowed, cab.vel + ACCEL * dt});
                 Real stepY = cab.vel * dt;
+                cab.dir = d >= 0 ? 1 : -1;
                 if (stepY >= std::fabs(d)) {
                     cab.y = yTarget;
                     cab.vel = 0;
                     cab.floor = cab.target;
                     cab.state = CabState::Opening;
                     cab.doorT = 0;
+                    // The ARRIVAL: the chime (rising for an up car), then the doors.
+                    const Vec3 at = doorAt(b, i, cab.floor);
+                    sfx_.push_back({cab.dir > 0 ? Sfx::DingUp : Sfx::DingDown, at});
+                    sfx_.push_back({Sfx::Doors, at});
                 } else {
                     cab.y += dir * stepY;
                 }
@@ -484,15 +633,23 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
         placeCab(world, phys, b, cab, b.core.hoistways[i], dt);
     }
     syncLeaves(world, phys, assets, b, f, dt);
+    syncLamps(world, assets, b, f);
 
     status_.inCab = inCab >= 0;
     status_.atDoor = atDoor >= 0;
+    if (inCab >= 0) {
+        status_.anchor = doorAt(b, static_cast<std::size_t>(inCab), 0);
+        status_.anchor.y = b.cabs[static_cast<std::size_t>(inCab)].y + 1.4;   // the door, riding with the cab
+    } else if (atDoor >= 0) {
+        status_.anchor = doorAt(b, static_cast<std::size_t>(atDoor), f);    // the door, 1.4 m up
+    }
     status_.floors = n;
     status_.selected = b.selected;
     if (inCab >= 0) {
         const Cab& cab = b.cabs[static_cast<std::size_t>(inCab)];
         status_.floor = cab.floor;
         status_.moving = cab.state == CabState::Moving;
+        status_.speed = cab.vel;
     } else {
         status_.floor = f;
         status_.moving = anyMoving;
@@ -510,9 +667,15 @@ void ElevatorSystem::render(FrameContext& ctx) {
     if (status_.inCab) {
         ImGui::Text("ELEVATOR   floor %d of %d", status_.floor, status_.floors - 1);
         if (status_.moving) ImGui::Text("moving to %d", status_.selected);
-        else ImGui::Text("Up / Down: pick floor %d      E: go", status_.selected);
+        else {
+            ImGui::Text("floor %d", status_.selected);
+            if (ctx.actions.gamepadInUse())
+                ImGui::Text("D-pad Up / Down: pick (hold to run, LT: 10)   Left / Right: ground / top");
+            else
+                ImGui::Text("Up / Down: pick (hold to run, Shift: 10)   Left / Right: ground / top");
+        }
     } else {
-        ImGui::Text("ELEVATOR   floor %d      E: call", status_.floor);
+        ImGui::Text("ELEVATOR   floor %d", status_.floor);
     }
     ImGui::End();
 #else
@@ -521,6 +684,7 @@ void ElevatorSystem::render(FrameContext& ctx) {
 }
 
 void ElevatorSystem::onStop(FrameContext& ctx) {
+    if (humVoice_.valid()) { ctx.audio.stop(humVoice_); humVoice_ = AudioVoiceHandle{}; }
     PhysicsWorld* phys = physics_ ? &physics_->physicsWorld() : nullptr;
     std::vector<std::size_t> keys;
     for (const auto& kv : banks_) keys.push_back(kv.first);

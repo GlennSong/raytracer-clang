@@ -372,3 +372,89 @@ TEST_CASE(rock_seat_follows_the_slope_without_burying_or_floating) {
     }
 }
 
+
+// #57 (Glenn: "There's a wall along one of the rivers ... the wall has no thickness"). The quay is a wall with
+// a section now: the face toward the water, a coping on top, a back face into the bank, caps where a run ends.
+// Every triangle is wound to face along its own normal (drawn from the side it faces, culled from behind).
+TEST_CASE(quay_wall_has_a_top_and_a_back_and_faces_the_way_it_is_wound) {
+    auto ground = [](double x, double z) {
+        return -0.04 * x + 6.0 * std::sin(z * 0.004) + 4.0 * std::sin(x * 0.006 + z * 0.003);
+    };
+    engine::HydroParams hp;
+    hp.half = 600; hp.cell = 8; hp.seaLevel = 0; hp.riverArea = 60000;
+    auto hy = engine::Hydrology::build(ground, hp);
+    engine::RenderMesh coping;
+    const engine::RenderMesh q = hy->quayMesh([](double, double) { return true; }, ground, 0.8, &coping);
+    CHECK(!q.indices.empty());
+    CHECK(!coping.indices.empty());
+    // RECTILINEAR (Glenn: "brick texture but then sloped tops ... It should be rectilinear"): every top face is level
+    // -- the coping's top and the wall's own top are horizontal, whatever the bank does
+    int slopedTops = 0, copeTops = 0;
+    for (const engine::RenderMesh* m : {&q, static_cast<const engine::RenderMesh*>(&coping)})
+        for (std::size_t i = 0; i + 2 < m->indices.size(); i += 3) {
+            const engine::Vertex& A = m->vertices[m->indices[i]];
+            if (A.normal.y < 0.9) continue;
+            const double y0 = A.position.y, y1 = m->vertices[m->indices[i + 1]].position.y, y2 = m->vertices[m->indices[i + 2]].position.y;
+            if (std::fabs(y0 - y1) > 1e-6 || std::fabs(y0 - y2) > 1e-6) ++slopedTops;
+            if (m == &coping) ++copeTops;
+        }
+    std::printf("    quay: %d coping tops, %d sloped tops\n", copeTops, slopedTops);
+    CHECK(copeTops > 0);
+    CHECK(slopedTops == 0);
+    int up = 0, front = 0, back = 0, misWound = 0, tris = 0;
+    for (std::size_t i = 0; i + 2 < q.indices.size(); i += 3) {
+        const engine::Vertex& A = q.vertices[q.indices[i]];
+        const engine::Vertex& B = q.vertices[q.indices[i + 1]];
+        const engine::Vertex& C = q.vertices[q.indices[i + 2]];
+        const engine::Vec3 w = engine::cross(B.position - A.position, C.position - A.position);
+        if (w.length() < 1e-9) continue;
+        ++tris;
+        if (engine::dot(w, A.normal) <= 0) ++misWound;
+        if (A.normal.y > 0.9) ++up;
+        else if (std::fabs(A.normal.y) < 0.1) {
+            // toward the water or the bank: does a step along the normal bring the face nearer the river?
+            const engine::Vec3 c = (A.position + B.position + C.position) * (1.0 / 3.0);
+            const double here = hy->distanceToRiver(c.x, c.z, 60.0);
+            const double ahead = hy->distanceToRiver(c.x + A.normal.x * 0.3, c.z + A.normal.z * 0.3, 60.0);
+            ++(ahead < here ? front : back);
+        }
+    }
+    std::printf("    quay: %d triangles, %d coping, %d toward the water, %d toward the bank (end caps among them), %d mis-wound\n",
+                tris, up, front, back, misWound);
+    CHECK(misWound == 0);
+    CHECK(up > 0);              // a top
+    CHECK(front > 0 && back >= front * 3 / 4);   // a back face behind the front (caps land on either side)
+}
+
+// #93 (Glenn: "The tree cards aren't lit well. I can tell they're the cards. ... Normal maps?"): the impostor's
+// normal picture carries the crown's shape in the card's frame -- its left half faces left, its right half
+// right, its top up -- so the far card lights like the tree, not like a sheet.
+TEST_CASE(impostor_normals_carry_the_crown_shape) {
+    const RealTree tree = realTree(RealSpecies::Oak, 7, 12.0);
+    const TextureData fol = realFoliageTexture(RealSpecies::Oak, 128, 7);
+    const int w = 96, h = 192;
+    std::vector<uint8_t> col(static_cast<std::size_t>(w) * h * 4), nrm(col.size());
+    renderImpostor(tree, fol, false, w, h, 3.0, col.data(), w * 4, nrm.data());
+    double leftX = 0, rightX = 0, topY = 0, lowY = 0;
+    int nl = 0, nr = 0, nt = 0, nb = 0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4;
+            if (col[i + 3] < 128) continue;   // the silhouette only
+            const double nx = nrm[i] / 255.0 * 2 - 1, ny = nrm[i + 1] / 255.0 * 2 - 1, nz = nrm[i + 2] / 255.0 * 2 - 1;
+            CHECK(nz > 0.15);                                  // never facing into the card
+            if (x < w / 2 - 8) { leftX += nx; ++nl; }
+            if (x > w / 2 + 8) { rightX += nx; ++nr; }
+            if (y < h / 5) { topY += ny; ++nt; }
+            if (y > h / 3 && y < h / 2) { lowY += ny; ++nb; }
+        }
+    CHECK(nl > 50 && nr > 50 && nt > 20 && nb > 20);
+    leftX /= std::max(1, nl); rightX /= std::max(1, nr); topY /= std::max(1, nt); lowY /= std::max(1, nb);
+    std::printf("    [impostor normals] left x %.2f, right x %.2f; crown top y %.2f, lower crown y %.2f\n", leftX, rightX, topY, lowY);
+    CHECK(leftX < -0.1 && rightX > 0.1);   // the crown's sides face outward
+    CHECK(topY > lowY);                    // its top faces up more than its underside
+    // no normal picture asked for: the colour is exactly as before
+    std::vector<uint8_t> col2(col.size());
+    renderImpostor(tree, fol, false, w, h, 3.0, col2.data(), w * 4);
+    CHECK(col2 == col);
+}

@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "watch_scripts": true,
+  "player": {
+    "position": [
+      150.0,
+      1.2,
+      70.0
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.4
+    },
+    "friction": 0.5
+  },
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "name": "big_box_lab",
+  "entities": [
+    {
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [
+        150.0,
+        -0.5,
+        -40.0
+      ],
+      "size": [
+        460.0,
+        0.4,
+        240.0
+      ],
+      "material": {
+        "albedo": [
+          0.45,
+          0.45,
+          0.43
+        ],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0,
+        "emission": [
+          0,
+          0,
+          0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 2,
+      "name": "stores",
+      "shape": "script",
+      "file": "big_box_lab.lua",
+      "seed": 1,
+      "opts": {
+        "seed": 1
+      }
+    }
+  ]
+}

@@ -149,7 +149,7 @@ TEST_CASE(ring_freeway_signs_say_which_ramp_goes_where_and_how_far) {
             for (const auto& r : s.legend["rows"]) { const int d = std::stoi(r[1].get<std::string>()); CHECK(d >= last); last = d; }
         }
     }
-    CHECK(entrances == 6);    // one per on-ramp
+    CHECK(entrances == 12);   // two per on-ramp: one for the traffic from each way along the road (#91)
     CHECK(distances == 6);    // one after each on-ramp
     CHECK(advances > 0);
     // at each interchange its two ramps are signed for two directions AND two different places
@@ -235,4 +235,29 @@ TEST_CASE(road_signs_never_stand_on_another_roads_pavement) {
         for (double k : {-1.0, 0.0, 1.0}) CHECK(std::fabs((s.at + side * (2.0 * k)).x) >= 5.0);   // every post off the pass
     }
     CHECK(signs[1].at.x == 40.0 && signs[1].at.y == 50.0);   // the clear one did not move
+}
+
+// #92: "Signs that hang overhead a freeway are buried in the road". A gantry over a carriageway on a viaduct
+// 20 m up (the ground function answers the deck on it, the field 20 m below off it): its board stands 5.6 m
+// clear of the deck, and its uprights stand on the deck, not on the field.
+TEST_CASE(a_gantry_on_a_viaduct_stands_on_the_deck_and_clears_it) {
+    const Font* font = signFont();
+    CHECK(font != nullptr);
+    if (!font) return;
+    IslandSign s;
+    s.kind = "exit";
+    s.at = Vec2(0, 0);
+    s.facing = Vec2(0, -1);
+    s.mount = "overhead";
+    s.legend = {{"arrow", "up-left"}, {"dests", {"#2", "Ashford"}}, {"exit", "12"}};
+    const RoadSignAtlas one = bakeRoadSignAtlas({s}, *font, {}, 40.0, 1024);
+    const double deckY = 20.0, deckHalf = 11.5;
+    auto deckFirst = [&](double x, double) { return std::fabs(x) <= deckHalf ? deckY : 0.0; };
+    const RoadSignMeshes m = buildRoadSignMeshes({s}, one, deckFirst, 11.0);
+    double panelLo = 1e9, steelLo = 1e9;
+    for (const auto& p : m.panels) for (const auto& v : p.mesh.vertices) panelLo = std::min(panelLo, double(v.position.y));
+    for (const auto& p : m.steel) for (const auto& v : p.mesh.vertices) steelLo = std::min(steelLo, double(v.position.y));
+    std::printf("    [gantry] deck %.1f: board bottom %.2f, lowest steel %.2f\n", deckY, panelLo, steelLo);
+    CHECK(panelLo >= deckY + 5.5);   // clears the traffic
+    CHECK(steelLo >= deckY - 0.5);   // uprights on the deck, not columns from the field
 }

@@ -6,6 +6,9 @@
 #include "../camera/follow_camera_controller.h"
 #include "../physics/physics_world.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace engine {
 
 class PhysicsSystem;
@@ -46,6 +49,43 @@ struct FallRespawnTracker {
         else if (!hasGrounded) ++failedRespawns;
         lastSafeY = spawnY;
         hasGrounded = false;
+    }
+};
+
+// MOMENTUM IN THE AIR (#83, Glenn: "If I let go of space my momentum doesn't continue. I drop straight
+// down."). On the ground the keys ARE the horizontal velocity; in the air the body keeps what it left the
+// ground with, and the keys only nudge it -- at most `airAccel` m/s^2 toward what they ask, and nothing
+// at all when none is held. Pure, for tests.
+inline Vec3 airborneVelocity(const Vec3& carried, const Vec3& input, Real dt, Real airAccel = 4.0) {
+    const Real inLen = std::sqrt(input.x * input.x + input.z * input.z);
+    if (inLen < 1e-4) return Vec3(carried.x, 0, carried.z);
+    Vec3 dv(input.x - carried.x, 0, input.z - carried.z);
+    const Real dl = std::sqrt(dv.x * dv.x + dv.z * dv.z), cap = airAccel * dt;
+    if (dl > cap) dv = dv * (cap / dl);
+    return Vec3(carried.x + dv.x, 0, carried.z + dv.z);
+}
+
+// SWIMMING (#43). Water deeper than kSwimDepth at the feet floats the player: the eyes held just above the
+// surface with a slow bob, swim pace, jump to rise, crouch to dive; let go and the water brings you back
+// up. Walking out happens by itself: shallower than kWadeDepth with the bed under the feet.
+struct SwimState {
+    static constexpr Real kSwimDepth = 1.3;    // water above the feet that lifts you off them (chest deep)
+    static constexpr Real kWadeDepth = 1.05;   // ...and shallow enough to stand again
+    static constexpr Real kSpeed = 2.2;        // m/s, a steady crawl
+    static constexpr Real kEyeAbove = 0.25;    // eyes this far above the surface, afloat
+    bool swimming = false;
+    // depth: water surface minus the feet (<= 0 on dry land); touching: the capsule is on something.
+    bool update(Real depth, bool touching) {
+        if (!swimming && depth > kSwimDepth) swimming = true;
+        else if (swimming && depth < kWadeDepth && touching) swimming = false;
+        return swimming;
+    }
+    // Vertical speed: toward the floating height (a buoyant spring, bobbing), or up/down on request.
+    static Real verticalSpeed(Real centreY, Real floatY, bool rise, bool dive, Real t) {
+        if (dive) return -1.6;
+        const Real bob = 0.05 * std::sin(t * 1.7);
+        const Real toward = std::clamp((floatY + bob - centreY) * 2.2, Real(-1.4), Real(1.3));
+        return rise ? std::max(toward, centreY < floatY - 0.1 ? Real(1.6) : toward) : toward;
     }
 };
 
@@ -100,6 +140,7 @@ private:
     // is unchanged — shoulders don't narrow), and the pace penalty.
     static constexpr Real kCrouchHalfScale = 0.35;
     static constexpr Real kCrouchSpeedScale = 0.4;
+    static constexpr Real kRunSpeedScale = 1.9;   // Shift / L3 held
     // Snap the character back to spawn (shared by the automatic safety net and
     // the manual R key; both must reset the fall tracker the same way).
     void respawn(CharacterId characterId, bool manual);
@@ -109,6 +150,13 @@ private:
     FallRespawnTracker fall;
     Vec3 lastBodyPos_{0, 0, 0};   // where physics left the player last step
     bool haveLastBodyPos_ = false;
+    Vec3 airVel_{0, 0, 0};        // horizontal velocity carried through the air (airborneVelocity)
+    SwimState swim_;              // afloat in deep water (#43)
+    Real swimClock_ = 0;
+    Real swimLevel_ = 0;          // the surface of the water the player is in
+public:
+    bool swimming() const { return swim_.swimming; }
+private:
 };
 
 }  // namespace engine

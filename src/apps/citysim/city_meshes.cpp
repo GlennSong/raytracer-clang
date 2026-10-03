@@ -1,4 +1,5 @@
 #include "city_meshes.h"
+#include "../../engine/procgen/vehicle/occupant.h"   // the seated manikin (M5)
 
 #include "../../engine/mesh_builder.h"
 
@@ -84,6 +85,19 @@ void addQuadXZ(engine::RenderMesh& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
 }  // namespace
 
 int personOutfitCount() { return kNumOutfits - 1; }   // last slot = the player's
+
+engine::RenderMesh buildSeatedPersonMesh(int outfit) {
+    const PersonOutfit& o = kOutfits[((outfit % kNumOutfits) + kNumOutfits) % kNumOutfits];
+    engine::OccupantParams op;
+    op.hipToHeel = 0.45;       // a bench or a chair
+    op.sittingHeight = 0.86;
+    op.backAngle = 8.0;        // sitting up
+    op.armReach = 20.0;        // hands in the lap
+    op.shirt = o.shirt;
+    op.trousers = o.pants;
+    op.skin = o.skin;
+    return engine::buildSeatedOccupant(op);
+}
 int playerOutfit() { return kNumOutfits - 1; }
 
 Real walkPoseSwing(int pose) {

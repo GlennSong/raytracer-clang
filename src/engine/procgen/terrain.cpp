@@ -73,6 +73,7 @@ struct FlattenAccum {
     double base;
     double result;
     double bestW = 0.0;
+    int bestPriority = std::numeric_limits<int>::min();   // the feather that owns an outside point
     bool insideAny = false;
     int insidePriority = std::numeric_limits<int>::min();
     double insideMin = std::numeric_limits<double>::max();
@@ -99,10 +100,15 @@ struct FlattenAccum {
         d -= dilate;
         if (d >= r.falloff) return;
         // Closeness weight: the nearest footprint owns an outside point (its edge
-        // treatment dominates the feather/batter of a farther one).
+        // treatment dominates the feather/batter of a farther one) -- among footprints of the SAME
+        // priority. A higher one's feather outranks a nearer lower one's, as its inside does: a
+        // building pad clipped short of its block's edge left the wall standing in the pad's
+        // feather, and a nearer TERRACE (grade, -1) feathered its higher step over it --
+        // island_8_nature's hill towns, 88 buildings buried by up to 3.8 m.
         double w = 1.0 - smoothstep(0.0, r.falloff, d);
-        if (w <= bestW) return;
+        if (r.priority < bestPriority || (r.priority == bestPriority && w <= bestW)) return;
         bestW = w;
+        bestPriority = r.priority;
         if (r.falloffMode == TerrainFlatten::Falloff::DaylightBatter) {
             // Earthwork cross-section: leave the deck edge (planeY is constant
             // across the corridor, so it reads the deck height at this station) on

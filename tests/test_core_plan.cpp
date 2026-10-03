@@ -367,6 +367,8 @@ TEST_CASE(core_window_grow_cost_is_bounded) {
     // 10380 once arched openings and wall finishes landed. That is 86% of
     // the cap — the next storey of content needs a real budget, not a
     // bigger number here.
+    // FURNITURE (buildings M4b) does not count here: the kit's pieces are drawn INSTANCED (PlacedPiece), so a
+    // furnished floor adds transforms, not merged triangles -- re-measured 10 940 with every office furnished.
     CHECK(tris < 12000);
     CHECK(col.indices.size() / 3 < 10000);
     (void)ms;   // printed, not asserted: wall-clock on a shared desktop is not a gate
@@ -407,4 +409,99 @@ TEST_CASE(lobby_gets_a_desk_and_call_buttons) {
     };
     CHECK(trisAt(col0, 1.15, 1.25) >= 2);
     CHECK(trisAt(col5, 4.5 + 4 * 3.2 + 1.15, 4.5 + 4 * 3.2 + 1.25) == 0);
+}
+
+// #60 (Glenn: "in some buildings there's a flattened reception desk and it clips into the stairs"). Over
+// towers of several sizes and aspects, turned through several angles, with the entrance on every edge: every
+// lobby piece has its full footprint (the desk's width is square to the way it faces -- it ran along the
+// core's axis and collapsed to a line where the door lay along that axis), none overlaps the core (its stair
+// shafts included), and all stand inside the plan.
+namespace {
+bool overlapsConvex(const Poly2& A, const Poly2& B) {
+    for (const Poly2* P : {&A, &B})
+        for (std::size_t i = 0; i < P->size(); ++i) {
+            const Vec2 e = (*P)[(i + 1) % P->size()] - (*P)[i];
+            const Vec2 ax(-e.y, e.x);
+            Real a0 = 1e300, a1 = -1e300, b0 = 1e300, b1 = -1e300;
+            for (const Vec2& q : A) { const Real t = dot(q, ax); a0 = std::min(a0, t); a1 = std::max(a1, t); }
+            for (const Vec2& q : B) { const Real t = dot(q, ax); b0 = std::min(b0, t); b1 = std::max(b1, t); }
+            if (a1 <= b0 + 1e-6 || b1 <= a0 + 1e-6) return false;
+        }
+    return true;
+}
+Real areaOf(const Poly2& p) { Real a = 0; for (std::size_t i = 0; i < p.size(); ++i) a += p[i].x * p[(i + 1) % p.size()].y - p[(i + 1) % p.size()].x * p[i].y; return std::fabs(a) * 0.5; }
+}  // namespace
+
+TEST_CASE(lobby_desks_have_their_size_clear_the_core_and_stay_inside) {
+    BuildingParams p;
+    p.floors = 30;
+    p.openDoorway = true;
+    p.walkableGround = true;
+    int lobbies = 0, dressed = 0, flat = 0, onCore = 0, outside = 0;
+    for (const Vec2 dims : {Vec2(40, 40), Vec2(60, 30), Vec2(30, 60), Vec2(45, 28), Vec2(80, 40)})
+        for (int turn = 0; turn < 6; ++turn) {
+            const Real a = turn * 0.5236;   // 30 degrees
+            const Vec2 ax(std::cos(a), std::sin(a)), ay(-std::sin(a), std::cos(a));
+            Poly2 plan;
+            for (const Vec2 q : {Vec2(0, 0), Vec2(dims.x, 0), Vec2(dims.x, dims.y), Vec2(0, dims.y)})
+                plan.push_back(ax * q.x + ay * q.y);
+            for (std::size_t edge = 0; edge < plan.size(); ++edge) {
+                const CorePlan core = coreFor(plan, p, edge);
+                if (!core.valid) continue;
+                ++lobbies;
+                const std::vector<LobbyPiece> pieces = lobbyDressing(plan, edge, core);
+                if (!pieces.empty()) ++dressed;
+                for (const LobbyPiece& pc : pieces) {
+                    const Poly2 fp = pc.footprint();
+                    if (areaOf(fp) < pc.w * pc.d * 0.99) ++flat;
+                    if (overlapsConvex(fp, core.rect())) ++onCore;
+                    for (const Vec2& q : fp) if (!pointInPolygon(plan, q)) { ++outside; break; }
+                }
+            }
+        }
+    std::printf("    %d lobbies, %d dressed; pieces flattened %d, on the core %d, outside the plan %d\n", lobbies, dressed,
+                flat, onCore, outside);
+    CHECK(lobbies > 20);
+    CHECK(flat == 0 && onCore == 0 && outside == 0);
+    CHECK(dressed * 2 > lobbies);   // most lobbies still get their desk
+}
+
+// THE STAIRWELL FACES THE STAIRWELL (Glenn, 2026-09-30: "in the building stairwells the wall separating the stairs
+// seems to have inverted normals"). Every drywall and stair face whose centre lies inside a stair shaft must face
+// INTO the shaft: a probe a few cm along its normal stays inside the shaft's rectangle.
+TEST_CASE(stairwell_faces_point_into_the_stairwell) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(20, true);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    RenderMesh col;
+    const BuildingMesh bm = growInterior(plan, p, 0.0, &col, 3, 6);
+    int checked = 0, wrong = 0;
+    for (const CoreStair& st : core.stairs) {
+        const Poly2 r = st.shaft.rect();
+        Poly2 inner = r;   // 3 cm in from the shaft's edges: the skins themselves lie ON the edge
+        const Vec2 c = centroid(r);
+        for (Vec2& v : inner) v = v + normalize(c - v) * 0.03;
+        for (const RenderMesh& part : bm.parts) {
+            if (part.materialIndex == static_cast<int>(PartId::GlassClear)) continue;
+            for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                const Vertex& A = part.vertices[part.indices[i]];
+                const Vertex& B = part.vertices[part.indices[i + 1]];
+                const Vertex& C = part.vertices[part.indices[i + 2]];
+                const Vec3 m = (A.position + B.position + C.position) * (1.0 / 3.0);
+                if (!pointInPolygon(inner, Vec2(m.x, m.z))) continue;
+                const Vec3 n = A.normal;
+                if (std::fabs(n.y) > 0.5) continue;   // treads, decks and soffits: not walls
+                ++checked;
+                const Vec3 probe = m + n * 0.02;
+                if (!pointInPolygon(r, Vec2(probe.x, probe.z))) {
+                    ++wrong;
+                    if (wrong <= 4) std::printf("    [stair] outward face at %.2f %.2f %.2f n %.2f %.2f\n", m.x, m.y, m.z, n.x, n.z);
+                }
+            }
+        }
+    }
+    std::printf("    [stair] %d wall faces inside the stair shafts, %d facing out\n", checked, wrong);
+    CHECK(checked > 0);
+    CHECK(wrong == 0);
 }
