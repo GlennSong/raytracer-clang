@@ -11,6 +11,9 @@
 #include "../src/engine/scripting/vehicle_spec.h"       // loadVehicleSpec (ride-height gate)
 
 #include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <tuple>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -589,4 +592,95 @@ TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
     CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));        // a kit body
     CHECK(loadFleetCarBody(v.vm, 12, classicBody, &err));   // a classic body
     CHECK(!kitBody.mesh.vertices.empty() && !classicBody.mesh.vertices.empty());
+}
+
+// #42 (Glenn, 2026-10-03: "I can see through the bottom of some cars and also the classic van/suv has a polygon
+// missing in the roof. Not sure if that's supposed to be a sunroof"): the classic bodies' windscreen and backlight
+// bands lay along the FLAT roof (SUV 0.85 m2 of roof glass, van 1.29, no forward-facing screen at all). No body
+// may carry glass lying flat in its roof, and every body has a floor. (Open edges are printed, not gated: the
+// classic shell cuts real apertures its inner skin closes, so they are not holes; RT_HOLE_DUMP=<slot> lists them.)
+TEST_CASE(fleet_bodies_have_no_roof_glass_and_a_floor) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    CHECK(selectFleet(v.vm, "fleet_mixed", &err));
+    const int n = fleetSlotCount(v.vm);
+    for (int s = 0; s < n; ++s) {
+        CarBodyRecipe b;
+        if (!loadFleetCarBody(v.vm, s, b, &err)) continue;
+        // weld by position, count each undirected edge
+        std::map<std::tuple<long, long, long>, int> ids;
+        auto id = [&](const Vec3& p) {
+            const auto k = std::make_tuple(std::lround(p.x * 2000), std::lround(p.y * 2000), std::lround(p.z * 2000));
+            auto it = ids.find(k);
+            if (it != ids.end()) return it->second;
+            const int nid = static_cast<int>(ids.size());
+            ids[k] = nid;
+            return nid;
+        };
+        std::map<std::pair<int, int>, int> edges;
+        std::map<std::pair<int, int>, Vec3> edgeAt;
+        Real top = -1e9, bottom = 1e9;
+        auto add = [&](const RenderMesh& m) {
+            for (const Vertex& vx : m.vertices) { top = std::max(top, vx.position.y); bottom = std::min(bottom, vx.position.y); }
+            for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+                const Vec3 P[3] = {m.vertices[m.indices[i]].position, m.vertices[m.indices[i + 1]].position,
+                                   m.vertices[m.indices[i + 2]].position};
+                const int I[3] = {id(P[0]), id(P[1]), id(P[2])};
+                for (int e = 0; e < 3; ++e) {
+                    const int a = I[e], c = I[(e + 1) % 3];
+                    if (a == c) continue;
+                    const auto key = std::make_pair(std::min(a, c), std::max(a, c));
+                    ++edges[key];
+                    edgeAt[key] = (P[e] + P[(e + 1) % 3]) * 0.5;
+                }
+            }
+        };
+        add(b.chassis.vertices.empty() ? b.mesh : b.chassis);
+        add(b.glass);
+        int open = 0, roofOpen = 0, lowOpen = 0;
+        for (const auto& [k, c] : edges) {
+            if (c != 1) continue;
+            ++open;
+            const Real y = edgeAt[k].y;
+            if (y > bottom + 0.8 * (top - bottom)) ++roofOpen;
+            if (y < bottom + 0.35 * (top - bottom)) ++lowOpen;
+        }
+        // a floor: an up-facing triangle low in the body, inside the shell or the cabin
+        bool floor = false;
+        for (const RenderMesh* m : {&b.mesh, &b.interior})
+            for (std::size_t i = 0; i + 2 < m->indices.size() && !floor; i += 3) {
+                const Vec3 A = m->vertices[m->indices[i]].position, B = m->vertices[m->indices[i + 1]].position,
+                           C = m->vertices[m->indices[i + 2]].position;
+                const Vec3 nrm = cross(B - A, C - A);
+                const Real y = (A.y + B.y + C.y) / 3;
+                if (nrm.length() > 1e-9 && std::fabs(nrm.y) / nrm.length() > 0.8 && y > bottom + 0.15 &&
+                    y < bottom + 0.45 * (top - bottom) && std::fabs((A.x + B.x + C.x) / 3) < b.size.x * 0.3)
+                    floor = true;
+            }
+        if (std::getenv("RT_HOLE_DUMP") && std::atoi(std::getenv("RT_HOLE_DUMP")) == s)
+            for (const auto& [k, c] : edges)
+                if (c == 1) std::printf("      open %.3f %.3f %.3f\n", edgeAt[k].x, edgeAt[k].y, edgeAt[k].z);
+        // the glass by which way it faces: a flat pane on the roof is a sunroof nobody asked for
+        Real gTop = 0, gFront = 0, gRear = 0, gSide = 0;
+        for (std::size_t i = 0; i + 2 < b.glass.indices.size(); i += 3) {
+            const Vec3 A = b.glass.vertices[b.glass.indices[i]].position, B = b.glass.vertices[b.glass.indices[i + 1]].position,
+                       C = b.glass.vertices[b.glass.indices[i + 2]].position;
+            Vec3 nrm = cross(B - A, C - A);
+            const Real area = nrm.length() * 0.5;
+            if (area < 1e-9) continue;
+            nrm = nrm * (1.0 / (2 * area));
+            if (std::fabs(nrm.y) > 0.9) gTop += area;
+            else if (nrm.z > 0.3) gFront += area;
+            else if (nrm.z < -0.3) gRear += area;
+            else gSide += area;
+        }
+        std::printf("      glass m2 (both faces): flat %.2f  front %.2f  rear %.2f  side %.2f\n", gTop, gFront, gRear, gSide);
+        CHECK(gTop < 0.3);                 // no sunroof (a raked pane near its top edge may tip past 26 deg)
+        CHECK(gFront + gRear > 0.3);       // and the screens are still there
+        std::printf("    slot %2d %-10s open edges %4d (roof %3d, low %3d)  floor %s  interior %s  see-into %d\n", s,
+                    b.className.c_str(), open, roofOpen, lowOpen, floor ? "yes" : "NO", b.interior.vertices.empty() ? "-" : "yes",
+                    b.seeInto ? 1 : 0);
+        CHECK(floor);
+    }
 }

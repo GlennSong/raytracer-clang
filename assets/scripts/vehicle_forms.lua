@@ -116,8 +116,10 @@ function forms.backlight(c)
   local boxes = c.box_count or 3
   if c.form == "bus" then return { -0.4995, -0.4905 } end
   if c.form == "pickup" then return { -0.14, -0.07 } end     -- small cab rear window
-  if c.form == "suv" then return { -0.44, -0.31 } end
-  if boxes == 1 then return { -0.47, -0.40 } end
+  -- (the SUV and the one-box van: on the steep tail, not the flat roof -- car_mesh keeps top-run glass to raked
+  -- cells (over ~22 deg), and these bands used to lie along the roof, a sunroof nobody asked for, #42)
+  if c.form == "suv" then return { -0.499, -0.425 } end
+  if boxes == 1 then return { -0.499, -0.43 } end
   if boxes == 2 then return { -0.47, -0.33 } end
   return { -0.40, -0.24 }
 end
