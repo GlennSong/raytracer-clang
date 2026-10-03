@@ -189,7 +189,7 @@
     <div class="row"><span>Day/night cycle</span><button id="dncycle">on</button></div>
     <div class="row"><span>Time <span id="dnclock">—</span></span><input id="dntime" type="range" aria-label="Time of day" min="0" max="1000" value="350" style="flex:1"></div>
     <div class="row"><span>Auto-advance</span><button id="dnplay">off</button></div>
-    <div class="row"><span>Speed</span><input id="dnspeed" type="range" aria-label="Day/night speed" min="0" max="200" value="20" style="flex:1"></div>
+    <div class="row"><span>Day (min)</span><input id="dnspeed" type="range" aria-label="Day length in real minutes" min="1" max="120" value="30" style="flex:1"></div>
     </details>
     <details class="sec"><summary>View / Tone</summary>
     <div class="row"><span>Tone map</span><button id="tonemap">ACES</button></div>
@@ -240,10 +240,10 @@
       // Cache-bust the engine binary with a BUILD token, not a per-visit one:
       // the ?v= changes only when the wasm bytes change, so repeat visits hit the
       // browser/CDN cache (~1.6 MB saved per load) while a deploy still busts.
-      // 65cc0ad8b754 is replaced with the wasm content hash by the CMake copy
+      // 8c6377b07a8f is replaced with the wasm content hash by the CMake copy
       // step (cmake/inject_build_id.cmake). Serving the raw source (placeholder
       // intact, e.g. python3 -m http.server from web/) falls back to Date.now().
-      const BUILD = '65cc0ad8b754';
+      const BUILD = '8c6377b07a8f';
       const V = BUILD.indexOf('RT_BUILD') >= 0 ? Date.now() : BUILD;
       try {
         await new Promise((res, rej) => {
@@ -482,7 +482,7 @@
         dnCycleB.classList.toggle('on', dnCycleOn); dnCycleB.textContent = dnCycleOn ? 'on' : 'off'; };
       dnCycleB.classList.add('on');
       let dnPlayOn = false; const dnPlayB = $('dnplay'), dnspeed = $('dnspeed');
-      const applySpeed = () => env(1, dnPlayOn ? dnspeed.value / 1000 : 0);
+      const applySpeed = () => env(1, dnPlayOn ? Number(dnspeed.value) : 0);   // real minutes per loop
       dnPlayB.onclick = () => { dnPlayOn = !dnPlayOn; env(2, dnPlayOn ? 0 : 1); applySpeed();
         dnPlayB.classList.toggle('on', dnPlayOn); dnPlayB.textContent = dnPlayOn ? 'on' : 'off'; };
       dnspeed.addEventListener('input', applySpeed);

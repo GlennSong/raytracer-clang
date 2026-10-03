@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<!--
+  "How the City Is Built" — a tour of the procedural generation pipeline that
+  turns a one-line recipe into a full town on terrain. Companion to
+  city-sim.html ("How the City Thinks", the agent AI) and buildings.html ("How
+  Buildings Are Grown", the shape grammar). Self-contained: no external scripts
+  or fonts. Facts come from docs/decisions.md ADR-0038/0044/0056/0066 and the
+  src/engine/procgen/city sources — keep them in sync with the code.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How the City Is Built — Raytracer Engine</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #0c1016; color: #dfe9f3;
+      font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 80px; }
+    a { color: #8ec5ff; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    h2 { font-size: 19px; margin: 34px 0 10px; color: #bcd; }
+    .lede { color: #9fb4c9; font-size: 15px; margin: 0; }
+    .nav { margin-bottom: 8px; font-size: 14px; }
+    p, li { color: #c6d4e2; font-size: 15px; }
+    code { background: #131c27; border: 1px solid #22303f; border-radius: 5px;
+      padding: 1px 5px; font: 13px ui-monospace, monospace; color: #b9e0ff; }
+    .diagram { margin: 20px 0 8px; background: #0a0e14; border: 1px solid #1f2a37;
+      border-radius: 12px; padding: 12px; overflow-x: auto; }
+    .cap { color: #7f93a8; font-size: 13px; margin: 0 0 4px; }
+    .steps { counter-reset: step; margin: 18px 0 6px; }
+    .steps .s { position: relative; background: #131a24; border: 1px solid #1f2a37;
+      border-radius: 10px; padding: 13px 16px 13px 52px; margin-bottom: 10px; }
+    .steps .s::before { counter-increment: step; content: counter(step);
+      position: absolute; left: 12px; top: 13px; width: 26px; height: 26px;
+      border-radius: 50%; background: #0c2036; border: 1px solid #235a7a;
+      color: #8ec5ff; font-weight: 800; font-size: 14px; text-align: center;
+      line-height: 25px; }
+    .steps .s h3 { margin: 0 0 5px; font-size: 15px; color: #cfe4ff; }
+    .steps .s p { margin: 0; font-size: 14px; color: #9db0c4; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px; }
+    .grid .b { background: #131a24; border: 1px solid #1f2a37; border-radius: 10px; padding: 13px 15px; }
+    .grid .b h3 { margin: 0 0 6px; font-size: 15px; color: #cfe4ff; }
+    .grid .b p { margin: 0; font-size: 13.5px; color: #93a6ba; }
+    .grid .b b { color: #b9cde2; }
+    .chip { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .4px;
+      color: #cbe3ff; background: #0c2036; border: 1px solid #274b66; border-radius: 6px;
+      padding: 2px 8px; margin: 0 4px 6px 0; }
+    footer { margin-top: 40px; color: #64768a; font-size: 13px; }
+    .try { margin: 22px 0 6px; padding: 16px 18px; border-radius: 12px;
+      background: linear-gradient(135deg, #10233a, #14182a); border: 1px solid #2f6a86; }
+    .try p { margin: 0 0 8px; color: #d8e6f5; font-size: 15px; }
+    .try p:last-child { margin-bottom: 0; }
+    kbd { background: #1a2634; border: 1px solid #2c3d50; border-bottom-width: 2px;
+      border-radius: 5px; padding: 1px 7px; font: 13px ui-monospace, monospace; color: #cfe4ff; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav"><a href="index.html">← all scenes</a> ·
+      <a href="buildings.html">how buildings are grown</a> ·
+      <a href="city-sim.html">how the city thinks</a></div>
+    <h1>How the City Is Built</h1>
+    <p class="lede">The living city is not modeled — it is <em>grown</em> from a
+      one-line recipe. A seed and a handful of numbers become a road network,
+      that network encloses blocks, those blocks are cut into lots, and every
+      lot asks an architect what belongs there. The whole town is deterministic:
+      the same recipe rebuilds the same city, every time, on any machine.</p>
+
+    <h2>The pipeline, end to end</h2>
+    <p class="cap">Each stage is pure geometry — no rendering, no physics — so
+      the entire city is unit-tested headless (ADR-0038).</p>
+    <div class="diagram">
+      <svg viewBox="0 0 780 132" width="100%" role="img"
+           aria-label="Pipeline: recipe to road graph to blocks to lots to buildings, all conformed to terrain"
+           font-family="system-ui, sans-serif">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="#3b6ea5"/>
+          </marker>
+        </defs>
+        <g text-anchor="middle">
+          <rect x="8"   y="34" width="120" height="46" rx="9" fill="#153042" stroke="#2f6a86"/>
+          <text x="68"  y="54" fill="#dfe9f3" font-size="13" font-weight="600">Recipe</text>
+          <text x="68"  y="70" fill="#8fa6bd" font-size="10.5">seed + knobs</text>
+
+          <rect x="166" y="34" width="120" height="46" rx="9" fill="#122033" stroke="#284563"/>
+          <text x="226" y="54" fill="#dfe9f3" font-size="13" font-weight="600">Road graph</text>
+          <text x="226" y="70" fill="#8fa6bd" font-size="10.5">nodes + edges</text>
+
+          <rect x="324" y="34" width="120" height="46" rx="9" fill="#122033" stroke="#284563"/>
+          <text x="384" y="54" fill="#dfe9f3" font-size="13" font-weight="600">Blocks</text>
+          <text x="384" y="70" fill="#8fa6bd" font-size="10.5">enclosed faces</text>
+
+          <rect x="482" y="34" width="120" height="46" rx="9" fill="#122033" stroke="#284563"/>
+          <text x="542" y="54" fill="#dfe9f3" font-size="13" font-weight="600">Lots</text>
+          <text x="542" y="70" fill="#8fa6bd" font-size="10.5">parcels</text>
+
+          <rect x="640" y="34" width="124" height="46" rx="9" fill="#1a2a1f" stroke="#356b45"/>
+          <text x="702" y="54" fill="#dfe9f3" font-size="13" font-weight="600">Buildings</text>
+          <text x="702" y="70" fill="#8fa6bd" font-size="10.5">shape grammar</text>
+
+          <path d="M130 57 L164 57"  stroke="#3b6ea5" stroke-width="1.6" marker-end="url(#ar)"/>
+          <path d="M288 57 L322 57"  stroke="#3b6ea5" stroke-width="1.6" marker-end="url(#ar)"/>
+          <path d="M446 57 L480 57"  stroke="#3b6ea5" stroke-width="1.6" marker-end="url(#ar)"/>
+          <path d="M604 57 L638 57"  stroke="#3b6ea5" stroke-width="1.6" marker-end="url(#ar)"/>
+
+          <rect x="166" y="98" width="598" height="26" rx="7" fill="#0a1622" stroke="#274b66"/>
+          <text x="465" y="115" fill="#7fb0d8" font-size="11.5">all of it conformed to the CDLOD terrain — roads carve it, buildings sit on graded pads</text>
+          <path d="M226 84 L226 96" stroke="#274b66" stroke-width="1.4"/>
+          <path d="M702 84 L702 96" stroke="#274b66" stroke-width="1.4"/>
+        </g>
+      </svg>
+    </div>
+
+    <h2>1 · The recipe</h2>
+    <p>A generated road is one JSON block — a <code>"generate"</code> recipe
+      (ADR-0056). The living city's is barely a dozen numbers:</p>
+    <p>
+      <span class="chip">radius 170</span>
+      <span class="chip">arterials 3</span>
+      <span class="chip">block_size 82</span>
+      <span class="chip">curviness 0.22</span>
+      <span class="chip">artery_width 13</span>
+      <span class="chip">street_width 7</span>
+      <span class="chip">seed 5</span>
+    </p>
+    <p>That is the entire authored input for the streets. Everything below is
+      derived. Because the recipe — not the baked geometry — is what's saved, the
+      city stays editable: widen a road, drag a node, or press the
+      <b>Rebuild road graph</b> button in the debug panel and the whole town
+      regrows from a fresh seed, roads and buildings together.</p>
+
+    <h2>2 · Growing the road network</h2>
+    <p>The recipe builds a district graph, which is then cleaned into a single
+      connected, well-formed street network. Each pass exists because its
+      absence produced a visible defect:</p>
+    <div class="steps">
+      <div class="s">
+        <h3>Planarize + degree cap</h3>
+        <p>Every crossing becomes a shared node; no junction carries more than
+          four arms. Capping runs <em>last</em> — planarizing can lift a node
+          past the cap when a street tees into it.</p>
+      </div>
+      <div class="s">
+        <h3>Merge short edges</h3>
+        <p>Crossings that land within ~14&nbsp;m fold into one junction; a stub
+          too short to merge is stretched to a drivable length. No more
+          two-metre "roads" between intersections.</p>
+      </div>
+      <div class="s">
+        <h3>Warp into curves</h3>
+        <p>A domain-warp bends the rigid grid into organic sweeping streets
+          (<code>curviness</code> controls how much), so the town reads as grown
+          rather than graph-paper.</p>
+      </div>
+      <div class="s">
+        <h3>Open acute junctions, then prune razors</h3>
+        <p>A relaxation rotates arms apart so tight corners stay weldable; any
+          pair still tighter than ~20°, which relaxation can't fix, loses its
+          shorter arm — a clean cul-de-sac beats a razor-thin sidewalk crotch.</p>
+      </div>
+      <div class="s">
+        <h3>Kill hairpins</h3>
+        <p>A through-corner sharper than ~52° would fold the stroked carriageway
+          over itself; those are relaxed toward their chord until drivable.</p>
+      </div>
+    </div>
+    <p>The cleaned graph is then <em>stroked</em> into a real carriageway — an
+      in-house polygon-join engine unions the road ribbons, rounds the junction
+      corners, and lays curbs, sidewalks, lane markings, and crosswalks
+      (ADR-0056). Sidewalk bands miter at corners by turn direction, so nothing
+      z-fights or leaves a gap.</p>
+
+    <h2>3 · Blocks and lots</h2>
+    <p>The enclosed faces of the road graph are the city <b>blocks</b>. The town
+      rim has no enclosed faces, so rectangular <b>edge blocks</b> are
+      synthesized on the open side of boundary roads — otherwise the outskirts
+      would stay bare. Each block interior (inset by road half-width + sidewalk)
+      is then <b>parcelled</b> into lots: a recursive subdivision that yields a
+      mix of frontages, from deep suburban plots to tight downtown slivers and
+      the occasional flatiron wedge.</p>
+
+    <h2>4 · The architect</h2>
+    <p>Placement is not random. A radial <b>district map</b> tags every point of
+      the city, and each lot asks the architect what belongs there:</p>
+    <div class="grid">
+      <div class="b"><h3>Financial</h3><p>The core. Glass towers and office
+        slabs, their height peaking on a <b>coreness</b> falloff so the skyline
+        is a cluster, not one lonely spike.</p></div>
+      <div class="b"><h3>Commercial</h3><p>Mixed-use shopfronts, brick retail,
+        mid-rise offices, hotels — packed frontages with retail ground floors.</p></div>
+      <div class="b"><h3>Residential</h3><p>Yard houses, duplexes, terraced
+        rowhouses, walk-up apartments — set back on their lots with lawns.</p></div>
+      <div class="b"><h3>Old Town</h3><p>A seeded historic quarter: small dense
+        parcels, masonry, the tightest frontages in the city.</p></div>
+      <div class="b"><h3>Industrial</h3><p>Metal sheds and industrial offices
+        with roller bay doors, on the periphery.</p></div>
+      <div class="b"><h3>Landmarks</h3><p>Placed by <b>quota</b>, not chance: one
+        courthouse on the best central lot, a capitol with a dome, schools and a
+        hospital in the residential ring, plus police, fire, market, and a
+        university — each on a lot that fits it.</p></div>
+    </div>
+    <p>The result is a coherent town: a dense financial core fading through
+      commercial midtown into leafy residential edges, with civic landmarks
+      standing where a planner would actually put them.</p>
+
+    <h2>5 · Sitting the city on terrain</h2>
+    <p>The city drapes onto real CDLOD terrain (ADR-0044). Ordering matters: the
+      city is grown <em>before</em> the ground is meshed, so it can hand back
+      cut/fill footprints the terrain is then built around. Roads carve a graded
+      corridor that follows the hills at a walkable grade; each building stamps a
+      <b>flat pad</b> at its entrance-side grade, so the ground meets the walls
+      level and the front door meets the sidewalk it faces. Coarse terrain tiles
+      sample those footprints dilated by half a cell, so a narrow road can't slip
+      between samples and let the hill poke through the asphalt.</p>
+
+    <div class="try">
+      <p><b>See it in layers.</b> Open <a href="viewer.html?level=grown">the
+        grown city</a> and press <kbd>`</kbd> for the debug panel. The
+        <b>Render layers</b> section toggles Roads, Buildings, and Simulation
+        independently — turn them off to watch the bare terrain, the graded road
+        corridors, and the building pads underneath.</p>
+      <p>Then read <a href="buildings.html">how each building is grown</a> from
+        the shape grammar, or <a href="city-sim.html">how the city thinks</a>
+        once the cars and pedestrians move in.</p>
+    </div>
+
+    <footer>
+      Source and the full decision log:
+      <a href="https://github.com/glennsong/raytracer-clang">glennsong/raytracer-clang</a>
+      — see <code>docs/decisions.md</code> ADR-0038 (city generation), ADR-0056
+      (road system), ADR-0044 (terrain conforming), and ADR-0066 (the Living
+      City) for the reasoning behind each stage.
+    </footer>
+  </div>
+</body>
+</html>
