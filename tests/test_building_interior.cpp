@@ -513,3 +513,128 @@ TEST_CASE(character_climbs_the_fire_escape_from_the_yard) {
     CHECK_APPROX(pos.y, st[2].y0 + 1.1, 0.25);
     world.shutdown();
 }
+
+// A CAMPUS BUILDING'S STAIR, WALKED (Glenn, 2026-10-03: "The stairwells are inaccessible the way they are"): from the
+// ground floor's corridor to the floor before the first step, up the flight, and off it onto the first floor's
+// corridor -- in a teaching hall, the library and a residence hall. The stair hall used to be cut round the WELL
+// only (the hole over the flight's top), which walled off the flight's foot.
+TEST_CASE(character_climbs_a_campus_stair_from_the_corridor) {
+    const Poly2 plans[3] = {{{-26, -11}, {26, -11}, {26, 11}, {-26, 11}}, {{-20, -12}, {20, -12}, {20, 12}, {-20, 12}},
+                            {{-27, -7.5}, {27, -7.5}, {27, 7.5}, {-27, 7.5}}};
+    for (int campus = 1; campus <= 3; ++campus) {
+        BuildingParams p;
+        p.floors = 3; p.campus = static_cast<uint8_t>(campus); p.core = 1; p.walkableGround = true; p.openDoorway = true;
+        p.seed = 9;
+        const Poly2& plan = plans[campus - 1];
+        const InteriorLayout il = interiorLayout(plan, p, entranceEdgeFor(plan, p));
+        CHECK(il.hasStair);
+        if (!il.hasStair) continue;
+        RenderMesh collider;
+        growInterior(plan, p, 0.0, &collider);
+        PhysicsWorld world;
+        world.initialize();
+        world.addBox(Vec3(80, 0.5, 80), Vec3(0, -0.5, 0), Quat::identity(), BodyMotion::Static);
+        std::vector<Vec3> verts;
+        for (const Vertex& v : collider.vertices) verts.push_back(v.position);
+        std::vector<uint32_t> idx = collider.indices;
+        const std::size_t oneSided = idx.size();
+        for (std::size_t i = 0; i + 2 < oneSided; i += 3) { idx.push_back(idx[i]); idx.push_back(idx[i + 2]); idx.push_back(idx[i + 1]); }
+        world.addMesh(verts, idx, Vec3(), 0.85);
+        // start on the corridor's centre line at the plan's middle, the same side as the stair foot
+        const Vec2 u = il.stairDir, nrm(-u.y, u.x);
+        const Vec2 foot = il.stairFoot;
+        // the corridor runs the long axis through the plan's centre line: start 8 m along it past the stair, walk
+        // along it to level with the floor before the first step, then turn in to the stair
+        const Vec2 before = foot - u * 1.0;
+        const Vec2 start = u * 8.0;
+        const Vec2 turn = u * dot(before, u);
+        CharacterId c = world.addCharacter(0.8, 0.3, Vec3(start.x, 1.2, start.y));
+        world.optimizeBroadPhase();
+        walk(world, c, Vec3(), 60);
+        auto walkTo = [&](Real tx, Real tz, int maxFrames) {
+            for (int i = 0; i < maxFrames; ++i) {
+                const Vec3 q = world.characterPosition(c);
+                const Real dx = tx - q.x, dz = tz - q.z, len = std::sqrt(dx * dx + dz * dz);
+                if (len < 0.15) break;
+                world.moveCharacter(c, Vec3(dx / len * 1.2, 0, dz / len * 1.2), 1.0 / 60.0);
+            }
+        };
+        walkTo(turn.x, turn.y, 1200);
+        walkTo(before.x, before.y, 1200);
+        Vec3 q = world.characterPosition(c);
+        const bool reachedFoot = std::hypot(q.x - before.x, q.z - before.y) < 0.4;
+        const Vec2 top = foot + u * (il.run + 1.2);
+        walkTo(top.x, top.y, 1600);
+        q = world.characterPosition(c);
+        std::printf("    [campus %d] start (%.1f, %.1f) -> before the foot %s -> top at y %.2f\n", campus, start.x, start.y,
+                    reachedFoot ? "reached" : "NOT reached", q.y);
+        CHECK(reachedFoot);
+        CHECK(q.y > 3.0);   // on the first floor
+        world.shutdown();
+    }
+}
+
+// THE LECTURE HALL'S AISLE, WALKED (Glenn, 2026-10-03: "there should be stairs that allow you to access the raised
+// auditorium chairs"): from the front of the hall up an aisle stair, two 9 cm steps a tier, to the back row's height.
+#include "../src/engine/procgen/furniture_kit.h"
+#include "../src/engine/procgen/furniture_library.h"
+#include "../src/engine/scripting/furniture_library_lua.h"
+TEST_CASE(character_climbs_the_lecture_hall_aisle_to_the_back_row) {
+    ensureFurnitureLibraryLoaded();
+    const Poly2 plan = {{-26, -11}, {26, -11}, {26, 11}, {-26, 11}};
+    BuildingParams p;
+    p.floors = 3; p.campus = 1; p.core = 1; p.walkableGround = true; p.openDoorway = true; p.seed = 9;
+    RenderMesh collider;
+    const BuildingMesh bm = growInterior(plan, p, 0.0, &collider, 0, 1);
+    // the aisle steps of one aisle: the column (same x along the hall) with the most tiers
+    struct Step { Vec2 at; Vec2 z; int tier; };
+    std::vector<Step> steps;
+    for (const PlacedPiece& pp : bm.furniture)
+        if (pp.piece == static_cast<uint8_t>(Piece::AisleStep))
+            steps.push_back({Vec2(pp.xform.m[0][3], pp.xform.m[2][3]), Vec2(pp.xform.m[0][2], pp.xform.m[2][2]),
+                             static_cast<int>((pp.variant >> 5) & 7u)});
+    std::printf("    [aisle] library %zu programs; %zu pieces on the floor, %zu aisle steps\n",
+                FurnitureLibrary::global().programCount(), bm.furniture.size(), steps.size());
+    CHECK(steps.size() >= 4);
+    if (steps.size() < 4) return;
+    std::vector<Step> col;
+    for (const Step& a : steps) {
+        std::vector<Step> c;
+        for (const Step& b : steps)
+            if (std::fabs(dot(b.at - a.at, Vec2(a.z.y, -a.z.x))) < 0.2) c.push_back(b);
+        if (c.size() > col.size()) col = c;
+    }
+    std::sort(col.begin(), col.end(), [](const Step& a, const Step& b) { return a.tier < b.tier; });
+    const int topTier = col.back().tier;
+    PhysicsWorld world;
+    world.initialize();
+    world.addBox(Vec3(80, 0.5, 80), Vec3(0, -0.5, 0), Quat::identity(), BodyMotion::Static);
+    std::vector<Vec3> verts;
+    for (const Vertex& v : collider.vertices) verts.push_back(v.position);
+    std::vector<uint32_t> idx = collider.indices;
+    const std::size_t oneSided = idx.size();
+    for (std::size_t i = 0; i + 2 < oneSided; i += 3) { idx.push_back(idx[i]); idx.push_back(idx[i + 2]); idx.push_back(idx[i + 1]); }
+    world.addMesh(verts, idx, Vec3(), 0.85);
+    // the step's footprint centre: half its depth out along its z, half its width along its x... the piece's origin
+    // is the back-centre of its footprint (x centred, z from 0 to 1)
+    auto centre = [](const Step& s) { return s.at + s.z * 0.5; };
+    const Vec2 start = centre(col.front()) - (centre(col.back()) - centre(col.front())) * (1.5 / std::max(1, topTier));
+    CharacterId c = world.addCharacter(0.8, 0.3, Vec3(start.x, 1.2, start.y));
+    world.optimizeBroadPhase();
+    walk(world, c, Vec3(), 60);
+    for (const Step& s : col) {
+        const Vec2 t = centre(s);
+        for (int i = 0; i < 400; ++i) {
+            const Vec3 q = world.characterPosition(c);
+            const Real dx = t.x - q.x, dz = t.y - q.z, len = std::sqrt(dx * dx + dz * dz);
+            if (len < 0.15) break;
+            world.moveCharacter(c, Vec3(dx / len * 1.0, 0, dz / len * 1.0), 1.0 / 60.0);
+        }
+    }
+    const Vec3 q = world.characterPosition(c);
+    const Real feet = q.y - 1.1;   // the capsule centre stands 1.1 m over the floor (the ground walk above)
+    std::printf("    [aisle] %zu steps in the aisle, top tier %d (%.2f m): feet at %.2f m\n", col.size(), topTier, topTier * 0.18, feet);
+    CHECK(topTier >= 3);
+    CHECK(feet > topTier * 0.18 - 0.12);
+    world.shutdown();
+}

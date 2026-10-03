@@ -59,6 +59,52 @@ struct Furnisher {
     std::vector<Box2> taken;   // door swings and placed footprints
     std::vector<Box2> doorways;   // the door swings alone (a picture keeps clear of them)
     std::vector<Box2> tall;       // footprints of pieces that stand up the wall (no picture over them)
+    // THE ROOM'S REAL WALLS, per side, in that side's own coordinate (the Placement t): the stretches an interior
+    // wall actually runs along, and its doorways. A picture hangs only on a wall (Glenn, 2026-10-03: "they need to
+    // be hung in places on the wall that have room. Some ... were hung in doorways or over windows"): the window wall
+    // is the facade, not a partition, and an open plan's side has no wall at all.
+    std::vector<std::pair<Real, Real>> wallSpan[4], doorGap[4];
+
+    void learnWalls(const std::vector<RoomWall>& walls) {
+        const Real tol = 0.25;
+        for (const RoomWall& w : walls) {
+            const Vec2 a = f.local(w.a), b = f.local(w.b);
+            for (int sd = 0; sd < 4; ++sd) {
+                // the side's line and its t coordinate (left end seen from inside), as Placement::roomAt lays it
+                auto onSide = [&](const Vec2& q) {
+                    switch (sd) {
+                        case 0: return std::fabs(q.y) < tol;
+                        case 1: return std::fabs(q.x - f.W) < tol;
+                        case 2: return std::fabs(q.y - f.D) < tol;
+                        default: return std::fabs(q.x) < tol;
+                    }
+                };
+                auto tOf = [&](const Vec2& q) {
+                    switch (sd) {
+                        case 0: return q.x;
+                        case 1: return q.y;
+                        case 2: return f.W - q.x;
+                        default: return f.D - q.y;
+                    }
+                };
+                if (!onSide(a) || !onSide(b)) continue;
+                const Real ta = tOf(a), tb = tOf(b);
+                wallSpan[sd].push_back({std::min(ta, tb), std::max(ta, tb)});
+                if (w.doorAt >= 0) {
+                    const Real td = ta + (tb - ta) * w.doorAt;
+                    doorGap[sd].push_back({td - kRoomDoorW * 0.5 - 0.25, td + kRoomDoorW * 0.5 + 0.25});
+                }
+            }
+        }
+    }
+    // Is [t0, t1] on side `sd` solid wall, clear of every doorway?
+    bool onWall(int sd, Real t0, Real t1) const {
+        bool covered = false;
+        for (const auto& sp : wallSpan[sd]) covered = covered || (sp.first <= t0 + 1e-6 && sp.second >= t1 - 1e-6);
+        if (!covered) return false;
+        for (const auto& g : doorGap[sd]) if (g.first < t1 && t0 < g.second) return false;
+        return true;
+    }
 
     // A kit piece in the footprint's frame: its centre `x` along the wall, `z` out, turned to face +z (into the
     // room) or, with `facing` false, back toward the wall (a chair at its desk).
@@ -73,6 +119,11 @@ struct Furnisher {
         PlacedPiece pp;
         pp.piece = static_cast<uint8_t>(pc);
         pp.variant = variant;
+        if (const FurnitureAsset* fa = FurnitureLibrary::global().find(pc); fa && fa->variety > 0) {
+            const uint32_t h = static_cast<uint32_t>(std::lround(a.x * 13.0)) * 73856093u ^
+                               static_cast<uint32_t>(std::lround(a.y * 13.0)) * 19349663u;
+            pp.variant = (variant & 31u) | ((mix32(h) % static_cast<uint32_t>(fa->variety)) << 5);
+        }
         Mat4& M = pp.xform;
         M.m[0][0] = X.x; M.m[1][0] = 0; M.m[2][0] = X.z;
         M.m[0][1] = 0;   M.m[1][1] = 1; M.m[2][1] = 0;
@@ -80,7 +131,7 @@ struct Furnisher {
         M.m[0][3] = a.x; M.m[1][3] = y0 + yOff; M.m[2][3] = a.y;
         out.push_back(pp);
         dress(pc, M);
-        const FurniturePiece& kit = furniturePiece(pc, variant);
+        const FurniturePiece& kit = furniturePiece(pc, pp.variant);
         if (!kit.solid || !collider) return;
         // The footprint box, the piece's height.
         const Real hw = kit.size.x * 0.5;
@@ -210,8 +261,9 @@ struct Furnisher {
             const Real len = (s == 0 || s == 2) ? f.W : f.D;
             if (w > len - 0.6) continue;
             const Real free = len - w - 0.2;
-            for (Real k : {0.5, 0.3, 0.7}) {
+            for (Real k : {0.5, 0.3, 0.7, 0.15, 0.85}) {
                 Placement c{&f, s, 0.1 + free * k, w, 0.3};
+                if (!onWall(s, c.t - 0.1, c.t + w + 0.1)) continue;
                 const Box2 fp = c.footprint();
                 bool clear = true;
                 for (const Box2& b : doorways) if (overlaps(fp, b, 0.05)) clear = false;
@@ -219,7 +271,8 @@ struct Furnisher {
                 if (!clear) continue;
                 const uint32_t keep = variant;
                 variant = artVariant;
-                put(c, what, w * 0.5, 0.0);
+                // on the wall's FACE, not its centre line (a whiteboard was hung inside the partition)
+                put(c, what, w * 0.5, kRoomWallT * 0.5 + 0.005);
                 variant = keep;
                 return true;
             }
@@ -354,7 +407,8 @@ struct ProgramRun {
             }
             case FurnStep::Kind::Hang: {
                 const Piece pc = pickOf(st.pick, 0, 0);
-                if (pc != Piece::Count) prevPlaced = F.hang(sidesOf(st), F.variant, pc);
+                const uint32_t v = st.style2 >= 0 ? (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(st.style2) << 5) : F.variant;
+                if (pc != Piece::Count) prevPlaced = F.hang(sidesOf(st), v, pc);
                 return;
             }
             case FurnStep::Kind::Counter: {
@@ -414,6 +468,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         F.f.W = du.length(); F.f.D = dv.length();
         if (F.f.W < 1.8 || F.f.D < 1.8) continue;
         F.f.u = du * (1.0 / F.f.W); F.f.v = dv * (1.0 / F.f.D);
+        F.learnWalls(rp.walls);
         for (const Vec2& dp : doors) {
             const Vec2 l = F.f.local(dp);
             if (l.x < -0.4 || l.x > F.f.W + 0.4 || l.y < -0.4 || l.y > F.f.D + 0.4) continue;

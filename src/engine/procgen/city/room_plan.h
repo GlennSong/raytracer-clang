@@ -133,7 +133,8 @@ PlateTopology plateTopologyFor(const Poly2& storeyPlan, const BuildingParams& pa
 RoomPlan roomPlan(const Poly2& storeyPlan, const BuildingParams& params, const CorePlan& core,
                   std::size_t blankEdge, Real inset, int storey,
                   const Poly2& stairWell = Poly2{},
-                  std::size_t entranceEdge = static_cast<std::size_t>(-1));
+                  std::size_t entranceEdge = static_cast<std::size_t>(-1),
+                  const Vec2& stairFoot = Vec2(1e30, 1e30));
 
 // WALKABILITY (Glenn, 2026-09-15: "it might help if there's an algorithm to
 // determine if the entire floor is walkable which could be used for

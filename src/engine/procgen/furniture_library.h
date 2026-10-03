@@ -63,6 +63,9 @@ struct FurnitureAsset {
     // a wardrobe's doors, the side of a bed you get in from. The placer reserves it with the footprint.
     Real clearFront = 0, clearSide = 0;
     std::vector<FurnAnchor> anchors;
+    // VARIETY (the campus): > 0, each placement takes one of this many designs by where it stands (the style bits),
+    // not the room's -- a library's bookcases are not all the same bookcase
+    int variety = 0;
 };
 
 // ROOM PROGRAMS (M3b, Glenn 2026-10-03: "go ahead with the furniture tags"): what a room of each kind holds, as

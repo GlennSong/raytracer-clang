@@ -956,7 +956,7 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     // THE SHOPS of a storefront face: its bays grouped into units of two or three, each with its own door, the
     // building's entrance bay and its neighbours kept for the lobby. Seeded by the face's own corner, so the
     // facade, its far tier and the interior read the same shops.
-    if (L.retailish && p.groundRetail && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid) {
+    if (L.retailish && p.groundRetail && !p.campus && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid) {   // (a campus building: no shops)
         uint32_t h = positionHash(fr.bl + Vec3(0.13, 0.0, 0.29)) ^ static_cast<uint32_t>(p.seed);
         auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
         const int lobby = mode == FacadeMode::Entrance ? centreBay : -100;
@@ -4438,7 +4438,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
         // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
         RoomPlan rp = ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
-                    : ki == 0 ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
+                    : ki == 0 && !params.campus ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
                                              il.hasStair ? il.well : Poly2{},
                                              il.hasStair ? il.stairFoot : Vec2(1e30, 1e30))
                               : RoomPlan{};
@@ -4446,7 +4446,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             rp = roomPlan(spk.plan, params, core,
                           il.hasStair ? il.edge : static_cast<std::size_t>(-1),
                           interiorInset(params), ki,
-                          il.hasStair ? il.well : Poly2{}, entranceEdge);
+                          il.hasStair ? il.well : Poly2{}, entranceEdge,
+                          il.hasStair ? il.stairFoot : Vec2(1e30, 1e30));
         if (rp.walls.empty()) continue;
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));

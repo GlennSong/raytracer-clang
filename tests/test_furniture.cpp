@@ -407,9 +407,22 @@ TEST_CASE(campus_buildings_have_their_rooms_and_furniture) {
             CHECK(il.hasStair);
             if (!il.hasStair) continue;
             const Real inset = std::max(p.wallThickness, Real(0.55));
-            const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, entrance), il.edge, inset, storey, il.well, entrance);
+            const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, entrance), il.edge, inset, storey, il.well, entrance,
+                                         il.stairFoot);
             CHECK(!rp.rooms.empty());
-            CHECK(floorIsWalkable(rp, plan, centroid(il.well), il.well));
+            // every room is reached from the floor just before the stair's first step, and that floor -- and the
+            // flight's foot -- is the stair hall's, not inside a room (Glenn: "The stairwells are inaccessible": the hall
+            // was cut round the well only, the hole over the flight's top, and the foot stood behind its wall)
+            CHECK(floorIsWalkable(rp, plan, il.stairFoot - il.stairDir * 1.0, il.well));
+            for (const Vec2& q : {il.stairFoot, il.stairFoot - il.stairDir * 1.0})
+                for (const Room& r : rp.rooms) {
+                    Poly2 rr = r.rect;
+                    ensureCCW(rr);
+                    if (pointInPolygon(rr, q)) {
+                        std::printf("    stair foot inside a room: campus %d storey %d at (%.2f, %.2f)\n", campus, storey, q.x, q.y);
+                        CHECK(false);
+                    }
+                }
             for (const Room& r : rp.rooms) ++kinds[static_cast<std::size_t>(r.kind)];
             std::vector<PlacedPiece> out;
             RenderMesh col;
@@ -431,4 +444,65 @@ TEST_CASE(campus_buildings_have_their_rooms_and_furniture) {
         CHECK(c(pc) > 0);
     CHECK(c(Piece::SchoolChair) >= c(Piece::SchoolDesk));   // every desk has its chair (dorm desks too)
     CHECK(c(Piece::SingleBed) == 2 * k(RoomKind::Dorm));    // two singles a dorm room
+}
+
+// WALL ART ON WALLS (Glenn, 2026-10-03: "mirrors on the wall and paintings ... need to be hung in places on the wall
+// that have room. Some of them in the residential areas I noticed were hung in doorways or over windows"): every
+// picture and whiteboard is against an interior wall -- never the window wall (the facade, not a partition) or an
+// open side -- and clear of that wall's doorway.
+TEST_CASE(pictures_hang_on_real_walls_clear_of_doors) {
+    UseShippedFurniture shipped;
+    int hung = 0, offWall = 0, inDoor = 0;
+    auto check = [&](const RoomPlan& rp, const std::vector<PlacedPiece>& out) {
+        for (const PlacedPiece& pp : out) {
+            if (pp.piece != static_cast<uint8_t>(Piece::Picture) && pp.piece != static_cast<uint8_t>(Piece::Whiteboard)) continue;
+            ++hung;
+            const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+            bool against = false, door = false;
+            for (const RoomWall& w : rp.walls) {
+                const Vec2 d = w.b - w.a;
+                const Real L = d.length();
+                if (L < 1e-6) continue;
+                const Real t = dot(at - w.a, d) / (L * L);
+                if (t < -0.01 || t > 1.01) continue;
+                const Vec2 q = w.a + d * t;
+                if ((q - at).length() > kRoomWallT * 0.5 + 0.08) continue;
+                against = true;
+                if (w.doorAt >= 0 && std::fabs(t - w.doorAt) * L < kRoomDoorW * 0.5 + 0.3) door = true;
+            }
+            if (!against) ++offWall;
+            if (door) ++inDoor;
+        }
+    };
+    for (const Poly2& plan : {Poly2{{0, 0}, {44, 0}, {44, 32}, {0, 32}}, Poly2{{0, 0}, {36, 0}, {36, 36}, {0, 36}}})
+        for (uint32_t seed = 1; seed <= 6; ++seed) {
+            BuildingParams p;
+            p.floors = 24; p.walkableGround = true; p.openDoorway = true; p.seed = seed * 31; p.residential = true;
+            const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+            if (!core.valid) continue;
+            const RoomPlan rp = roomPlan(plan, p, core, static_cast<std::size_t>(-1), std::max(p.wallThickness, Real(0.55)), 4);
+            std::vector<PlacedPiece> out;
+            RenderMesh col;
+            emitFurniture(out, &col, rp, 0.0, p.seed, 3.0);
+            check(rp, out);
+        }
+    for (int campus = 1; campus <= 3; ++campus)
+        for (int storey : {0, 1}) {
+            const Poly2 plan = {{0, 0}, {52, 0}, {52, 22}, {0, 22}};
+            BuildingParams p;
+            p.floors = 4; p.campus = static_cast<uint8_t>(campus); p.core = 1; p.walkableGround = true; p.openDoorway = true; p.seed = 9;
+            const std::size_t e = entranceEdgeFor(plan, p);
+            const InteriorLayout il = interiorLayout(plan, p, e);
+            if (!il.hasStair) continue;
+            const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, e), il.edge, std::max(p.wallThickness, Real(0.55)), storey,
+                                         il.well, e, il.stairFoot);
+            std::vector<PlacedPiece> out;
+            RenderMesh col;
+            emitFurniture(out, &col, rp, 0.0, p.seed, 3.2);
+            check(rp, out);
+        }
+    std::printf("    [wall art] %d hung, %d off any wall, %d in a doorway\n", hung, offWall, inDoor);
+    CHECK(hung > 20);
+    CHECK(offWall == 0);
+    CHECK(inDoor == 0);
 }

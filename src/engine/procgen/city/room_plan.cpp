@@ -645,7 +645,7 @@ static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params,
 // (double-loaded) -- or, on a plate too narrow for two, one row off a corridor along the back facade. The stair's
 // hall is cut out of the band it stands in, facade to corridor, so the stair opens onto the corridor.
 static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
-                           int storey) {
+                           int storey, const Vec2& stairFoot) {
     RoomPlan rp;
     rp.topology = PlateTopology::Apartments;
     rp.office = false;
@@ -664,6 +664,17 @@ static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, co
         const Vec2 d = q - o;
         s0 = std::min(s0, dot(d, ua)); s1 = std::max(s1, dot(d, ua));
         t0 = std::min(t0, dot(d, va)); t1 = std::max(t1, dot(d, va));
+    }
+    // THE WHOLE FLIGHT, not just the well (Glenn, 2026-10-03: "The stairwells are inaccessible the way they are"):
+    // the well is the hole over the flight's UPPER part, so a hall cut round it alone stood the flight's foot --
+    // and the floor you step onto it from -- behind the hall's closing wall. The hall reaches the foot and 1.4 m
+    // beyond it.
+    if (stairFoot.x < 1e29) {
+        const Vec2 d = stairFoot - o;
+        const Real fs = dot(d, ua), ft = dot(d, va);
+        const Real wellMid = (s0 + s1) * 0.5;
+        if (fs < wellMid) s0 = std::min(s0, fs - 1.4); else s1 = std::max(s1, fs + 1.4);
+        t0 = std::min(t0, ft); t1 = std::max(t1, ft);
     }
     s0 -= 1.0; s1 += 1.0;
     // The bands: {P, depth from the window wall to the corridor front}. Band 0 faces +va and runs along +ua (its
@@ -726,7 +737,7 @@ static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, co
 //   LIBRARY (2)                each run of the ground floor one READING room; the floors above, the STACKS.
 //   RESIDENCE HALL (3)         two-bed DORM rooms (3.6 m), a shared bath every eighth, a lounge by the stair.
 static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
-                           int storey) {
+                           int storey, const Vec2& stairFoot) {
     RoomPlan rp;
     rp.topology = PlateTopology::Apartments;
     rp.office = params.campus != 3;
@@ -744,6 +755,17 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
         const Vec2 d = q - o;
         s0 = std::min(s0, dot(d, ua)); s1 = std::max(s1, dot(d, ua));
         t0 = std::min(t0, dot(d, va)); t1 = std::max(t1, dot(d, va));
+    }
+    // THE WHOLE FLIGHT, not just the well (Glenn, 2026-10-03: "The stairwells are inaccessible the way they are"):
+    // the well is the hole over the flight's UPPER part, so a hall cut round it alone stood the flight's foot --
+    // and the floor you step onto it from -- behind the hall's closing wall. The hall reaches the foot and 1.4 m
+    // beyond it.
+    if (stairFoot.x < 1e29) {
+        const Vec2 d = stairFoot - o;
+        const Real fs = dot(d, ua), ft = dot(d, va);
+        const Real wellMid = (s0 + s1) * 0.5;
+        if (fs < wellMid) s0 = std::min(s0, fs - 1.4); else s1 = std::max(s1, fs + 1.4);
+        t0 = std::min(t0, ft); t1 = std::max(t1, ft);
     }
     s0 -= 1.0; s1 += 1.0;
     struct Band { std::function<Vec2(Real, Real)> P; Real vFront; Real t0, t1; bool alongPlus; };
@@ -781,14 +803,16 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
             // the rooms of this run: {width, kind}, laid from r0; the last takes the remainder
             struct Seg { Real w; RoomKind kind; };
             std::vector<Seg> want;
-            const Real len = r1 - r0;
+            // RESTROOMS beside the stair: a teaching hall's 3.6 m room carved off the run's end by the stair hall --
+            // never a whole room turned into one (it took a 15 m lecture hall: a toilet and a vanity in a hall)
+            const bool byStair = stairHere && runs.size() == 2;
+            const bool restroom = byStair && ri == 0 && params.campus == 1 && r1 - r0 >= 3.6 + 6.5;
+            const Real len = r1 - r0 - (restroom ? 3.6 : 0.0);
             auto fill = [&](Real target, Real minW, RoomKind kind) {
                 int n = std::max(1, static_cast<int>(len / target));
                 while (n > 1 && len / n < minW) --n;
                 for (int k = 0; k < n; ++k) want.push_back({len / n, kind});
             };
-            // the run beside the stair hall's corridor end: its first room a bath (restrooms / a shared bath)
-            const bool byStair = stairHere && runs.size() == 2;
             switch (params.campus) {
                 case 1:   // teaching hall
                     if (storey == 0 && bi == 0 && D >= 8.0) fill(13.0 + 3.0 * rnd(), 10.0, RoomKind::Lecture);
@@ -811,7 +835,7 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                     }
                     break;
             }
-            if (byStair && ri == 0 && params.campus != 2 && !want.empty() && want.back().w >= 3.0) want.back().kind = RoomKind::Bath;
+            if (restroom) want.push_back({3.6, RoomKind::Bath});
             roomNo += static_cast<int>(want.size());
             Real x = r0;
             for (std::size_t k = 0; k < want.size(); ++k) {
@@ -1123,7 +1147,7 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
 
 RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core,
                   std::size_t blankEdge, Real inset, int storey,
-                  const Poly2& stairWell, std::size_t entranceEdge) {
+                  const Poly2& stairWell, std::size_t entranceEdge, const Vec2& stairFoot) {
     const PlateTopology topo = plateTopologyFor(planIn, params, core);
     if (topo == PlateTopology::Apartments) {
         // Walk it from the corridor in front of the core's doors; a floor that fails falls back to the ring.
@@ -1145,7 +1169,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     if (params.campus && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
-        RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey);
+        RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey, stairFoot);
         cp.finish = interiorFinishFor(params);
         if (!cp.rooms.empty() && floorIsWalkable(cp, planIn, centroid(stairWell), stairWell)) return cp;
         if (std::getenv("RT_CAMPUS_DEBUG"))
@@ -1154,7 +1178,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     if (walkupShape && params.residential && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
         // A WALK-UP's floor: apartments off a corridor from the stair, walked from the stair's foot. A narrow plate
         // (one dwelling a floor) that is long enough for two takes a single-loaded corridor instead.
-        RoomPlan wu = walkupPlan(planIn, params, stairWell, inset, storey);
+        RoomPlan wu = walkupPlan(planIn, params, stairWell, inset, storey, stairFoot);
         wu.finish = interiorFinishFor(params);
         if (!wu.rooms.empty() && floorIsWalkable(wu, planIn, centroid(stairWell), stairWell)) return wu;
     }

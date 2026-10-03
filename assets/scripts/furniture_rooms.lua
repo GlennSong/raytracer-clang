@@ -137,10 +137,21 @@ furniture_rooms.classroom = {
 }
 
 furniture_rooms.lecture_hall = {
-  { wall = { 0.8, 0.6 }, sides = { 2 }, pick = "lectern" },
-  { hang = "whiteboard", sides = { 2, 1, 3 } },
-  -- rows of six on their risers, stepping up toward the windows (the back), an aisle down each side
-  { grid = { 3.4, 1.0 }, aisle = { 0.9, 0.0 }, tiers = true, pick = { family = "seating", tags = { "lecture" } } },
+  -- THE STAGE (Glenn: "more space for the lecturn and maybe a table next to the lecturn"): a 6.4 x 3.2 m front kept
+  -- clear of seats, the lectern off-centre, a table beside it; the big board behind (style 4: 4 m wide)
+  { wall = { 6.4, 3.2 }, sides = { 2 },
+    set = {
+      { pick = "lectern", x = 2.0, z = 0.9 },
+      { pick = { family = "surface", tags = { "office" } }, x = 4.3, z = 0.7, fit = { 1.6, 0.8 } },
+    } },
+  { hang = "whiteboard", style = 4, sides = { 2, 1, 3 } },
+  -- rows of six on their risers, stepping up toward the windows (the back); beside every block of rows its aisle
+  -- STAIR, two steps a tier, so each row is reached on foot
+  { grid = { 4.3, 1.0 }, aisle = { 0.0, 0.0 }, tiers = true,
+    set = {
+      { pick = "aisle_step", x = 0.45 },
+      { pick = { family = "seating", tags = { "lecture" } }, x = 2.6 },
+    } },
 }
 
 furniture_rooms.lab = {
@@ -176,5 +187,7 @@ furniture_rooms.dorm = {
       { pick = { family = "surface", tags = { "classroom" } }, x = 0.45, z = 0.0 },
       { pick = { family = "seating", tags = { "classroom" } }, x = 0.45, z = 1.15, faces = "wall" },
     } },
-  { wall = { 1.2, 0.6 }, sides = { 1, 3 }, count = 2, tall = true, clear = 0.7, pick = { family = "storage", tags = { "bedroom" } } },
+  { wall = { 1.2, 0.6 }, sides = { 1, 3 }, count = 2, tall = true, clear = 0.7, pick = { family = "storage", tags = { "dorm" } } },
 }
+-- (a DORM is its own room kind and program, apart from a home's bedroom: its pieces are picked by the "dorm" tag --
+-- singles, not the double; a wardrobe each -- so the two can change independently)

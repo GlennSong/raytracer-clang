@@ -140,7 +140,7 @@ furniture_library = {
     clearance = { front = 0.9 },
     anchors = { { id = "worktop", at = { 0.0, 0.90, 0.32 }, w = 0.45, d = 0.4, accepts = { "kitchen", "bowl", "plant" }, chance = 0.35 } },
   },
-  wardrobe = { family = "storage", tags = { "bedroom" }, clearance = { front = 0.7 } },
+  wardrobe = { family = "storage", tags = { "bedroom", "dorm" }, clearance = { front = 0.7 } },
   kitchen_tall = { family = "storage", tags = { "kitchen" }, clearance = { front = 0.9 } },
   filing_cabinet = { family = "storage", tags = { "office" }, clearance = { front = 0.6 } },
   -- WHAT THE ROOM PROGRAMS PICK BY (furniture_rooms.lua, M3b): every other piece a room holds, its family and tags.
@@ -178,10 +178,11 @@ furniture_library = {
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.19, 0.22 }, look = { 0, -0.08, 1 }, exit = { 0, 0, 0.9 } } },
   },
   lecture_row = { family = "seating", tags = { "lecture" } },
+  aisle_step = { family = "fixture", tags = { "lecture", "stair" } },
   lectern = { family = "fixture", tags = { "lecture" } },
   lab_bench = { family = "surface", tags = { "lab" } },
   reading_table = { family = "surface", tags = { "library" } },
-  bookcase = { family = "storage", tags = { "books", "library" } },
+  bookcase = { family = "storage", tags = { "books", "library" }, variety = 8 },
   -- THE GOODS: small things the dressing pass stands on anchors, by their tags
   desk_lamp = { family = "goods", tags = { "desk", "lamp" } },
   potted_plant = { family = "goods", tags = { "plant" } },

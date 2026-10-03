@@ -60,6 +60,7 @@ bool readFurnitureLibrary(ScriptVM& vm, FurnitureLibrary& out, std::string* err)
         }
         lua_pop(L, 1);
         if (a.spots.size() > 32) { lua_settop(L, base); return fail(err, name + ": more than 32 spots"); }
+        a.variety = static_cast<int>(numField(L, t, "variety", 0.0));
         lua_getfield(L, t, "clearance");   // {front = m, side = m}
         if (lua_istable(L, -1)) {
             a.clearFront = numField(L, lua_gettop(L), "front", 0.0);
@@ -262,7 +263,7 @@ bool readStep(lua_State* L, int t, FurnStep& st, const std::string& where, std::
         Real rn = 0, cw = 0;
         if (readPair(L, t, "run", rn, cw)) { st.runN = static_cast<int>(rn); st.crossW = cw; }
     }
-    st.style2 = static_cast<int>(numField(L, t, "short_style", -1.0));
+    st.style2 = static_cast<int>(numField(L, t, "short_style", numField(L, t, "style", -1.0)));
     lua_getfield(L, t, "set");
     if (lua_istable(L, -1)) {
         const int sv = lua_gettop(L), n = static_cast<int>(luaL_len(L, sv));
