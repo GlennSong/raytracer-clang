@@ -1167,6 +1167,82 @@ void recipeUniversity(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     out.name = "university";
 }
 
+// THE CAMPUS's three buildings (the university campus, milestone 2). All stair buildings (core 1): their floors
+// are rooms either side of a corridor (campusPlan), and none has shops.
+// The TEACHING HALL: collegiate red brick, tall storeys (4.2 m: lecture halls want the height), wide multi-pane
+// windows under band hoods, quoined corners, a portico over steps, a hipped slate roof.
+void recipeTeachingHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.campus = 1;
+    p.core = 1;
+    p.floors = rng.irange(2, 3);
+    p.groundHeight = 4.6;
+    p.floorHeight = 4.2;
+    p.groundRetail = false;
+    p.pilasters = false;
+    dress(p, FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.window.lightsX = 3;
+    p.window.lightsY = 3;
+    p.quoins = true;
+    p.portico = 4;
+    p.entranceSteps = true;
+    p.roofStyle = BuildingParams::RoofStyle::Hip;
+    p.roofPitch = 0.45;
+    out.placeType = "civic";
+    out.name = "teaching_hall";
+}
+
+// The LIBRARY: warm sandstone, a tall reading-room storey whose round-headed windows rise under arches, pilasters
+// between the bays, a broad six-column portico over steps, and a dome over the reading room.
+void recipeCampusLibrary(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.campus = 2;
+    p.core = 1;
+    p.floors = 2;
+    p.groundHeight = 7.0;
+    p.floorHeight = 4.0;
+    p.groundRetail = false;
+    p.pilasters = true;
+    dress(p, FacadeStyle::Sandstone, rng);
+    // warm buff stone, always (the style's palette can roll a painted colour; a library is stone)
+    p.wallColor = Vec3(0.80, 0.72, 0.57) * static_cast<Real>(rng.range(0.94, 1.04));
+    p.trimColor = Vec3(0.90, 0.86, 0.76);
+    p.window.head = OpeningStyle::Head::Round;
+    p.window.hood = OpeningStyle::Hood::Arch;
+    p.window.lightsX = 2;
+    p.window.lightsY = 4;
+    p.quoins = true;
+    p.portico = 6;
+    p.entranceSteps = true;
+    p.dome = rng.unit() < 0.6;
+    out.placeType = "civic";
+    out.name = "campus_library";
+}
+
+// The RESIDENCE HALL: plainer -- darker brick, four or five storeys of ordinary bedroom windows (one to a dorm
+// room), a gabled roof, a simple entrance without a portico.
+void recipeResidenceHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.campus = 3;
+    p.core = 1;
+    p.floors = rng.irange(4, 5);
+    p.groundRetail = false;
+    p.pilasters = false;
+    p.residential = true;
+    dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::None;
+    p.window.lightsX = 1;
+    p.window.lightsY = 2;
+    p.entranceSteps = true;
+    p.roofStyle = BuildingParams::RoofStyle::Gable;
+    p.roofPitch = 0.5;
+    out.placeType = "home";
+    out.name = "residence_hall";
+}
+
 // The CHURCH: one tall gabled nave, arched windows, and the BELL TOWER
 // steeple rising through the roof — the neighbourhood's vertical accent.
 void recipeChurch(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
@@ -1334,6 +1410,9 @@ const NamedRecipe kRecipeRegistry[] = {
     {"market_hall", recipeMarketHall},
     {"capitol", recipeCapitol},
     {"university", recipeUniversity},
+    {"teaching_hall", recipeTeachingHall},
+    {"campus_library", recipeCampusLibrary},
+    {"residence_hall", recipeResidenceHall},
     {"church", recipeChurch},
     {"library", recipeLibrary},
     {"museum", recipeMuseum},
