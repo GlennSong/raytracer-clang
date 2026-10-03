@@ -15,7 +15,11 @@ class ScriptVM;
 // verbs or spot ids are errors, so a typo cannot silently drop a seat.
 bool readFurnitureLibrary(ScriptVM& vm, FurnitureLibrary& out, std::string* err = nullptr);
 
-// Run Lua `source` (the library file's text) in a fresh sandboxed VM and read it.
+// The room programs (the VM's `furniture_rooms` global, furniture_rooms.lua) into `out`; absent is not an error.
+bool readRoomPrograms(ScriptVM& vm, FurnitureLibrary& out, std::string* err = nullptr);
+
+// Run Lua `source` (the library file's text, optionally followed by the room programs') in a fresh sandboxed VM and
+// read both.
 bool loadFurnitureLibrarySource(const std::string& source, FurnitureLibrary& out, std::string* err = nullptr);
 
 // FurnitureLibrary::global() from assets/scripts/furniture_library.lua, once per process (later calls return the

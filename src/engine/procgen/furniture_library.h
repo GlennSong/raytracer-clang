@@ -65,6 +65,60 @@ struct FurnitureAsset {
     std::vector<FurnAnchor> anchors;
 };
 
+// ROOM PROGRAMS (M3b, Glenn 2026-10-03: "go ahead with the furniture tags"): what a room of each kind holds, as
+// DATA (assets/scripts/furniture_rooms.lua), each piece asked for by what it is -- a family and tags -- rather
+// than by name, so a new piece described with the right tags turns up in the rooms it suits with no code.
+//
+// A PICK is either a named piece, or a family plus tags: every described piece of that family carrying ALL the
+// tags and fitting the slot (its footprint within `fit`, the slot it goes in), the largest that fits winning
+// (ties by the room's hash). A wardrobe and a nightstand are both bedroom storage; the slot decides which.
+struct FurnPick {
+    Piece piece = Piece::Count;          // a named piece (Count: pick by family + tags)
+    std::string family;
+    std::vector<std::string> tags;
+    bool valid() const { return piece != Piece::Count || !family.empty(); }
+};
+
+// One piece of a step's SET, in the footprint's frame: x along the wall from the footprint's left end, z out from
+// the wall, y up; `facing` false turns it back toward the wall (a chair at its desk). `fitW`/`fitD` the slot a
+// tag pick must fit (0: the step's footprint).
+struct FurnMember {
+    FurnPick pick;
+    Real x = 0, z = 0, y = 0;
+    bool facing = true;
+    Real fitW = 0, fitD = 0;
+};
+
+struct FurnStep {
+    enum class Kind : uint8_t { Wall, Grid, Counter, Hang, OneOf };
+    Kind kind = Kind::Wall;
+    FurnPick pick;                       // Wall without a set, Grid, Hang
+    Real w = 0, d = 0;                   // the footprint against the wall (along x out)
+    std::vector<int> sides;              // walls to try, in order (0 the window wall, 2 opposite, 1/3 the ends)
+    std::vector<int> ringSides;          // ...in a ring floor's room, when different
+    bool longFirst = false;              // sides = the room's long walls first
+    bool opposite = false;               // sides = opposite the previous step's wall (and only if it placed)
+    bool tall = false;                   // stands up the wall: no picture over it
+    Real clear = 0;                      // floor kept free in front (the piece's own clearance first, if described)
+    int countMin = 1, countMax = 1;      // how many; `countPer` > 0: one per that many metres of the room's W
+    Real countPer = 0;
+    Real minW = 0;                       // only in a room wider (W) than this
+    std::vector<FurnMember> set;         // the pieces placed at each footprint (empty: `pick`, centred)
+    // Grid: cells w x d in rows from the window wall, aisles between; d2 > 0 a shorter cell where a full one does
+    // not fit, built with style2 (the piece's style bits) -- an office pod of four where six will not go
+    Real aisleX = 0, aisleZ = 0, d2 = 0;
+    int style2 = -1;
+    // Counter: a run of 0.6 m modules on the longest wall: the roles' pieces and the pattern placing them
+    std::string pattern;                 // "kitchen" | "kitchenette"
+    FurnPick base, sink, hob, tallUnit, wallUnit;
+    std::vector<FurnStep> alternatives;  // OneOf: one per building, by its hash
+};
+
+struct RoomProgram {
+    std::string name;
+    std::vector<FurnStep> steps;
+};
+
 class FurnitureLibrary {
 public:
     void clear();
@@ -74,6 +128,14 @@ public:
     // GOODS (M3): the described pieces of family "goods" carrying any of `tags`, in piece order.
     std::vector<Piece> goodsFor(const std::vector<std::string>& tags) const;
     std::size_t size() const;
+    // THE PICK: the piece `p` names, or the best-fitting described piece of its family and tags for a w x d slot.
+    // Count when nothing qualifies (the step is skipped).
+    Piece pick(const FurnPick& p, Real w, Real d, uint32_t hash) const;
+    // The room programs, by name (office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
+    // bath). nullptr: none loaded -- the room is left empty.
+    void setProgram(RoomProgram prog);
+    const RoomProgram* program(const std::string& name) const;
+    std::size_t programCount() const { return programs_.size(); }
 
     // The process-wide library the runtime reads (the interaction system, the interior system); loaded once from
     // assets/scripts/furniture_library.lua by the scripting layer (furniture_library_lua.h).
@@ -82,6 +144,7 @@ public:
 private:
     std::array<FurnitureAsset, kPieceCount> assets_{};
     std::array<bool, kPieceCount> has_{};
+    std::vector<RoomProgram> programs_;
 };
 
 // May `v` start, with `taken` the spots in use?

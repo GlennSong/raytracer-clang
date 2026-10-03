@@ -228,6 +228,120 @@ struct Furnisher {
     }
 };
 
+// The program a room of `kind` runs (furniture_rooms.lua); "" for the kinds still furnished in code (shops: by trade).
+const char* programFor(RoomKind kind) {
+    switch (kind) {
+        case RoomKind::Office: return "office";
+        case RoomKind::Bed: return "bedroom";
+        case RoomKind::Flat: return "flat";
+        case RoomKind::Living: return "living";
+        case RoomKind::Kitchen: return "kitchen";
+        case RoomKind::OpenPlan: return "open_plan";
+        case RoomKind::Meeting: return "meeting";
+        case RoomKind::Kitchenette: return "kitchenette";
+        case RoomKind::Closet: return "closet";
+        case RoomKind::Bath: return "bath";
+        default: return "";
+    }
+}
+
+// RUN A ROOM PROGRAM (M3b): each step in order, every piece picked from the library by name or by family + tags.
+struct ProgramRun {
+    Furnisher& F;
+    const FurnitureLibrary& lib;
+    bool ring;
+    std::vector<int> longFirst;
+    uint32_t hb, hr;
+    bool prevPlaced = false;
+    int prevSide = 0;
+
+    std::vector<int> sidesOf(const FurnStep& st) const {
+        if (st.opposite) return {(prevSide + 2) % 4};
+        if (ring && !st.ringSides.empty()) return st.ringSides;
+        if (st.longFirst) return longFirst;
+        if (!st.sides.empty()) return st.sides;
+        return {0, 1, 2, 3};
+    }
+    Piece pickOf(const FurnPick& p, Real w, Real d) const { return lib.pick(p, w, d, hr); }
+
+    void run(const FurnStep& st) {
+        Placement p;
+        switch (st.kind) {
+            case FurnStep::Kind::OneOf:
+                run(st.alternatives[(hb >> 13) % st.alternatives.size()]);
+                return;
+            case FurnStep::Kind::Wall: {
+                if (st.opposite && !prevPlaced) return;
+                if (st.minW > 0 && !(F.f.W > st.minW)) { prevPlaced = false; return; }
+                const Piece single = st.set.empty() ? pickOf(st.pick, st.w, st.d) : Piece::Count;
+                if (st.set.empty() && single == Piece::Count) { prevPlaced = false; return; }
+                const Piece lead = st.set.empty() ? single : pickOf(st.set.front().pick,
+                    st.set.front().fitW > 0 ? st.set.front().fitW : st.w, st.set.front().fitD > 0 ? st.set.front().fitD : st.d);
+                const Real clear = st.clear > 0 ? Furnisher::clearOf(lead, st.clear) : 0;
+                int n = st.countMin;
+                if (st.countPer > 0)
+                    n = std::clamp(static_cast<int>(std::floor((F.f.W - 1e-6) / st.countPer)), st.countMin, st.countMax);
+                const std::vector<int> sides = sidesOf(st);
+                bool any = false;
+                for (int k = 0; k < n; ++k) {
+                    if (!F.place(st.w, st.d, sides, p, st.tall, clear)) break;
+                    any = true;
+                    prevSide = p.side;
+                    if (st.set.empty()) { F.put(p, single, st.w * 0.5, 0.0); continue; }
+                    for (const FurnMember& m : st.set) {
+                        const Piece pc = pickOf(m.pick, m.fitW > 0 ? m.fitW : st.w, m.fitD > 0 ? m.fitD : st.d);
+                        if (pc != Piece::Count) F.put(p, pc, m.x, m.z, m.facing, m.y);
+                    }
+                }
+                prevPlaced = any;
+                return;
+            }
+            case FurnStep::Kind::Grid: {
+                const Piece pc = pickOf(st.pick, st.w, std::max(st.d, st.d2));
+                if (pc == Piece::Count) return;
+                const uint32_t v2 = st.style2 >= 0 ? (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(st.style2) << 5) : 0u;
+                prevPlaced = F.fill(pc, st.w, st.d, st.aisleX, st.aisleZ, st.d2, v2) > 0;
+                return;
+            }
+            case FurnStep::Kind::Hang: {
+                const Piece pc = pickOf(st.pick, 0, 0);
+                if (pc != Piece::Count) prevPlaced = F.hang(sidesOf(st), F.variant, pc);
+                return;
+            }
+            case FurnStep::Kind::Counter: {
+                const bool kitchen = st.pattern == "kitchen";
+                const Real wall = kitchen ? std::max(F.f.W, F.f.D) : F.f.W;
+                const int mods = std::clamp(static_cast<int>((wall - (kitchen ? 1.0 : 0.6)) / 0.6), 2, 6);
+                const Piece base = pickOf(st.base, 0.6, st.d), sink = pickOf(st.sink, 0.6, st.d);
+                const Piece hob = st.hob.valid() ? pickOf(st.hob, 0.6, st.d) : Piece::Count;
+                const Piece tallU = st.tallUnit.valid() ? pickOf(st.tallUnit, 0.6, st.d) : Piece::Count;
+                const Piece wallU = st.wallUnit.valid() ? pickOf(st.wallUnit, 0.6, st.d) : Piece::Count;
+                const Real clear = st.clear > 0 ? Furnisher::clearOf(base, st.clear) : 0;
+                prevPlaced = false;
+                if (!F.place(mods * 0.6, st.d, sidesOf(st), p, st.tall, clear)) return;
+                prevPlaced = true;
+                prevSide = p.side;
+                for (int i = 0; i < mods; ++i) {
+                    const Real x = 0.3 + i * 0.6;
+                    Piece pc = base;
+                    if (kitchen) {
+                        // the fridge tower at one end, the sink mid-run, the hob at the far end; a wall cupboard over
+                        // every base
+                        if (i == 0 && mods >= 4 && tallU != Piece::Count) pc = tallU;
+                        else if (i == mods / 2) pc = sink;
+                        else if ((i == mods - 1 || (mods == 2 && i == 0)) && hob != Piece::Count) pc = hob;
+                    } else {
+                        pc = i == 0 && tallU != Piece::Count ? tallU : i == 1 ? sink : base;
+                    }
+                    F.put(p, pc, x, 0.0);
+                    if (wallU != Piece::Count && pc != tallU) F.put(p, wallU, x, 0.0);
+                }
+                return;
+            }
+        }
+    }
+};
+
 }  // namespace
 
 void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const RoomPlan& rp, Real y0, uint32_t seed,
@@ -275,99 +389,14 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         const bool ring = rp.topology == PlateTopology::Ring;
         const std::vector<int> longFirst = F.f.W >= F.f.D ? std::vector<int>{0, 2, 1, 3} : std::vector<int>{1, 3, 0, 2};
         Placement p;
-        switch (room.kind) {
-            case RoomKind::Office: {
-                // The DESK backs onto the window with its chair in front, facing it, and the monitor on top.
-                const int desks = F.f.W > 6.8 ? 2 : 1;
-                for (int k = 0; k < desks; ++k) {
-                    if (!F.place(1.6, 1.6, ring ? std::vector<int>{0, 1, 3} : longFirst, p)) break;
-                    F.put(p, Piece::Desk, 0.8, 0.0);
-                    F.put(p, Piece::Monitor, 0.8, 0.12, true, 0.75);
-                    F.put(p, Piece::OfficeChair, 0.8, 1.55, false);
-                }
-                if (F.place(0.46, 0.6, {1, 3, 2}, p, true, Furnisher::clearOf(Piece::FilingCabinet, 0.6))) F.put(p, Piece::FilingCabinet, 0.23, 0.0);
-                if (F.f.W > 5.5 && F.place(0.9, 0.9, {2, 1, 3}, p)) F.put(p, Piece::Planter, 0.45, 0.0);
-                break;
-            }
-            case RoomKind::Flat:
-            case RoomKind::Bed: {
-                // The BED, head to a wall, between two nightstands.
-                if (F.place(2.6, 2.12, ring ? std::vector<int>{1, 3, 0} : longFirst, p)) {
-                    F.put(p, Piece::Nightstand, 0.25, 0.0);
-                    F.put(p, Piece::Bed, 1.3, 0.0);
-                    F.put(p, Piece::Nightstand, 2.35, 0.0);
-                }
-                if (room.kind == RoomKind::Flat) {
-                    if (F.place(2.16, 1.75, {2, 0, 1, 3}, p)) {
-                        F.put(p, Piece::Sofa, 1.08, 0.0);
-                        F.put(p, Piece::CoffeeTable, 1.08, 1.15);
-                    }
-                } else if (F.place(1.2, 0.6, {1, 3, 0, 2}, p, true, Furnisher::clearOf(Piece::Wardrobe, 0.7))) {
-                    F.put(p, Piece::Wardrobe, 0.6, 0.0);
-                }
-                break;
-            }
-            case RoomKind::Living: {
-                Placement sofa;
-                if (F.place(2.16, 1.75, longFirst, sofa)) {
-                    F.put(sofa, Piece::Sofa, 1.08, 0.0);
-                    F.put(sofa, Piece::Rug, 1.08, 0.75);
-                    F.put(sofa, Piece::CoffeeTable, 1.08, 1.15);
-                    const int opp = (sofa.side + 2) % 4;
-                    if (F.place(1.6, 0.42, {opp}, p, true, Furnisher::clearOf(Piece::TvUnit, 0.8))) F.put(p, Piece::TvUnit, 0.8, 0.0);
-                }
-                if (F.place(0.84, 0.84, {1, 3, 0, 2}, p)) F.put(p, Piece::LoungeChair, 0.42, 0.0);
-                break;
-            }
-            case RoomKind::Kitchen: {
-                // The COUNTER RUN: as many 0.6 m modules as the longest free wall takes (2 to 6), the fridge tower
-                // at one end, the sink and the hob among the base units, a wall cupboard over each base.
-                const Real wall = std::max(F.f.W, F.f.D);
-                const int mods = std::clamp(static_cast<int>((wall - 1.0) / 0.6), 2, 6);
-                if (F.place(mods * 0.6, 0.64, longFirst, p, true, Furnisher::clearOf(Piece::KitchenBase, 0.9))) {
-                    for (int i = 0; i < mods; ++i) {
-                        const Real x = 0.3 + i * 0.6;
-                        Piece pc = Piece::KitchenBase;
-                        if (i == 0 && mods >= 4) pc = Piece::KitchenTall;
-                        else if (i == mods / 2) pc = Piece::KitchenSink;
-                        else if (i == mods - 1 || (mods == 2 && i == 0)) pc = Piece::KitchenHob;
-                        F.put(p, pc, x, 0.0);
-                        if (pc != Piece::KitchenTall) F.put(p, Piece::KitchenWall, x, 0.0);
-                    }
-                }
-                if (F.place(1.4, 1.85, {0, 1, 2, 3}, p)) {
-                    F.put(p, Piece::DiningTable, 0.7, 0.5);
-                    F.put(p, Piece::DiningChair, 0.7, 0.0 + 0.0, true);
-                    F.put(p, Piece::DiningChair, 0.7, 1.85, false);
-                }
-                break;
-            }
-            case RoomKind::OpenPlan: {
-                // Benching pods or cubicles, by the building (one style a building).
-                if ((hb >> 13) & 1u) F.fill(Piece::Cubicle, 2.4, 2.4, 0.2, 1.6);
-                else F.fill(Piece::DeskPod, 3.1, 4.8, 1.3, 1.6, 3.2, (F.variant & ~(7u << 5)) | (4u << 5));   // six, else four
-                break;
-            }
-            case RoomKind::Meeting: {
-                Placement m;
-                if (F.place(3.0, 2.4, {0, 2}, m)) F.put(m, Piece::MeetingTable, 1.5, 0.0);
-                F.hang({1, 3}, F.variant, Piece::Whiteboard);
-                break;
-            }
-            case RoomKind::Kitchenette: {
-                const int mods = std::clamp(static_cast<int>((F.f.W - 0.6) / 0.6), 2, 6);
-                if (F.place(mods * 0.6, 0.64, {2, 0}, p, true))
-                    for (int i = 0; i < mods; ++i) {
-                        const Piece pc = i == 0 ? Piece::KitchenTall : i == 1 ? Piece::KitchenSink : Piece::KitchenBase;
-                        F.put(p, pc, 0.3 + i * 0.6, 0.0);
-                    }
-                if (F.place(1.4, 1.85, {0, 1, 3}, p)) {
-                    F.put(p, Piece::DiningTable, 0.7, 0.5);
-                    F.put(p, Piece::DiningChair, 0.7, 0.0, true);
-                    F.put(p, Piece::DiningChair, 0.7, 1.85, false);
-                }
-                break;
-            }
+        const RoomProgram* prog = FurnitureLibrary::global().program(programFor(room.kind));
+        if (prog) {
+            ProgramRun run{F, FurnitureLibrary::global(), ring, longFirst, hb, hr};
+            for (const FurnStep& st : prog->steps) run.run(st);
+        } else if (room.kind == RoomKind::Shop) {
+            // SHOPS are furnished by their trade, still in code (the program steps cannot yet say "runs of gondolas
+            // with cross aisles" or "checkout lanes either side of the doors"). Every other kind is a room program.
+            switch (room.kind) {
             case RoomKind::Shop: {
                 // A SHOP by its trade (Glenn: "these small shops"); side 0 is the shopfront.
                 auto along = [&](Piece pc, Real w, Real d, const std::vector<int>& sides, int count) {
@@ -493,18 +522,10 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 }
                 break;
             }
-            case RoomKind::Closet: {
-                if (F.place(1.2, 0.5, longFirst, p, true)) F.put(p, Piece::Shelving, 0.6, 0.0);
-                break;
+                default: break;
             }
-            case RoomKind::Bath: {
-                if (F.place(1.7, 0.75, longFirst, p, false, 0.6)) F.put(p, Piece::Bathtub, 0.85, 0.0);
-                if (F.place(0.4, 0.7, {1, 3, 0, 2}, p, false, 0.6)) F.put(p, Piece::Toilet, 0.2, 0.0);
-                if (F.place(0.8, 0.5, {0, 1, 2, 3}, p, false, 0.6)) F.put(p, Piece::Vanity, 0.4, 0.0);
-                break;
-            }
-            default: break;
         }
+        // (no program and not a shop: the library is not loaded, and the room stays empty -- the furniture is data)
         // THE LIGHTS (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes from"):
         // a working room -- office, open plan, meeting room, kitchenette, shop -- a grid of panels every 2.4 m
         // along its long side; a home's room, a round fitting in its middle (a long hall, one every 4 m).

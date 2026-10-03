@@ -21,8 +21,9 @@ namespace {
 
 FurnitureLibrary shippedLibrary() {
     std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/scripts/furniture_library.lua");
+    std::ifstream r(std::string(RT_SOURCE_DIR) + "/assets/scripts/furniture_rooms.lua");   // and the room programs
     std::stringstream ss;
-    ss << f.rdbuf();
+    ss << f.rdbuf() << "\n" << r.rdbuf();
     FurnitureLibrary lib;
     std::string err;
     const bool ok = loadFurnitureLibrarySource(ss.str(), lib, &err);
@@ -178,6 +179,8 @@ TEST_CASE(the_interaction_marker_projects_onto_the_screen) {
 // looking at it, the offer is to sit.
 TEST_CASE(you_can_sit_on_the_toilet) {
     const FurnitureLibrary lib = shippedLibrary();
+    const FurnitureLibrary keep = FurnitureLibrary::global();
+    FurnitureLibrary::global() = lib;   // the rooms are furnished from its programs
     const Poly2 plan = {{0, 0}, {44, 0}, {44, 32}, {0, 32}};
     BuildingParams p;
     p.floors = 24; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = 33;
@@ -204,6 +207,7 @@ TEST_CASE(you_can_sit_on_the_toilet) {
     std::printf("    [toilet] %d toilets on the floor, %d offer a seat\n", toilets, offered);
     CHECK(toilets > 0);
     CHECK(offered == toilets);
+    FurnitureLibrary::global() = keep;
 }
 
 // OUTDOOR PIECES (M2): the lot pass places a bench by its back's centre and the way it faces; the transform must

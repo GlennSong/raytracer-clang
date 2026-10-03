@@ -1,4 +1,5 @@
 #include "furniture_library.h"
+#include <cmath>
 
 namespace engine {
 
@@ -19,6 +20,49 @@ bool verbByName(const std::string& name, Verb& out) {
 void FurnitureLibrary::clear() {
     assets_ = {};
     has_ = {};
+    programs_.clear();
+}
+
+Piece FurnitureLibrary::pick(const FurnPick& p, Real w, Real d, uint32_t hash) const {
+    if (p.piece != Piece::Count) return p.piece;
+    Piece best = Piece::Count;
+    Real bestArea = -1;
+    uint32_t bestKey = 0;
+    for (int i = 0; i < kPieceCount; ++i) {
+        if (!has_[static_cast<std::size_t>(i)]) continue;
+        const FurnitureAsset& a = assets_[static_cast<std::size_t>(i)];
+        if (a.family != p.family) continue;
+        bool all = true;
+        for (const std::string& want : p.tags) {
+            bool hit = false;
+            for (const std::string& t : a.tags) hit = hit || t == want;
+            all = all && hit;
+        }
+        if (!all) continue;
+        const Vec3 sz = furniturePiece(static_cast<Piece>(i), 0).size;
+        if (w > 0 && sz.x > w + 0.05) continue;   // it must fit the slot
+        if (d > 0 && sz.z > d + 0.05) continue;
+        const Real area = sz.x * sz.z;
+        const uint32_t key = (hash ^ (static_cast<uint32_t>(i) * 2654435761u)) >> 7;
+        if (area > bestArea + 1e-6 || (std::fabs(area - bestArea) <= 1e-6 && key > bestKey)) {
+            best = static_cast<Piece>(i);
+            bestArea = area;
+            bestKey = key;
+        }
+    }
+    return best;
+}
+
+void FurnitureLibrary::setProgram(RoomProgram prog) {
+    for (RoomProgram& r : programs_)
+        if (r.name == prog.name) { r = std::move(prog); return; }
+    programs_.push_back(std::move(prog));
+}
+
+const RoomProgram* FurnitureLibrary::program(const std::string& name) const {
+    for (const RoomProgram& r : programs_)
+        if (r.name == name) return &r;
+    return nullptr;
 }
 
 void FurnitureLibrary::set(FurnitureAsset a) {

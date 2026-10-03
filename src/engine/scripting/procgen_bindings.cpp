@@ -1,4 +1,5 @@
 #include "procgen_bindings.h"
+#include "furniture_library_lua.h"
 
 #include "procgen_mesh.h"
 #include "lua_state.h"
@@ -1351,6 +1352,7 @@ int l_building_grow_floor(lua_State* L) {
     const int k = std::clamp(static_cast<int>(optField(L, 1, "storey", 1.0)), 0, static_cast<int>(sps.size()) - 1);
     const Real cut = static_cast<Real>(optField(L, 1, "cutaway", 2.6));
     p.openDoorway = true;
+    ensureFurnitureLibraryLoaded();   // the rooms are furnished from furniture_rooms.lua (M3b)
     BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, k, k + 1);
     const Real y0 = sps[static_cast<std::size_t>(k)].y0;
     // The furniture, into its finish parts.

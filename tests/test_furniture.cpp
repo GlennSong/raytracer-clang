@@ -13,6 +13,36 @@
 
 using namespace engine;
 
+#include "../src/engine/procgen/furniture_library.h"
+#include "../src/engine/scripting/furniture_library_lua.h"
+#include <fstream>
+#include <sstream>
+
+namespace {
+std::string readScript(const char* name) {
+    std::ifstream in(std::string(RT_SOURCE_DIR) + "/assets/scripts/" + name);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+// the shipped library, with or without its room programs
+FurnitureLibrary shippedFurniture(bool programs) {
+    FurnitureLibrary lib;
+    std::string err;
+    const std::string src = readScript("furniture_library.lua") + (programs ? "\n" + readScript("furniture_rooms.lua") : "");
+    const bool ok = loadFurnitureLibrarySource(src, lib, &err);
+    if (!ok) std::printf("    furniture load: %s\n", err.c_str());
+    CHECK(ok);
+    return lib;
+}
+// The shipped library and room programs as the process-wide library for one test (rooms are furnished from it).
+struct UseShippedFurniture {
+    FurnitureLibrary saved = FurnitureLibrary::global();
+    UseShippedFurniture() { FurnitureLibrary::global() = shippedFurniture(true); }
+    ~UseShippedFurniture() { FurnitureLibrary::global() = saved; }
+};
+}  // namespace
+
 // Every piece, in a spread of variants: geometry in at least one finish, every vertex finite and inside the
 // footprint it declares (a little slack for handles and rounded edges), standing on the floor.
 TEST_CASE(every_furniture_piece_is_modelled_inside_its_footprint) {
@@ -50,6 +80,7 @@ TEST_CASE(every_furniture_piece_is_modelled_inside_its_footprint) {
 // An office floor is furnished: workstations across the open plan and desks in the corner offices, every piece
 // inside the plate, none in a doorway's swing, drawn as placements (not merged triangles).
 TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {
+    UseShippedFurniture shipped;   // rooms are furnished from furniture_rooms.lua
     const Poly2 plan = {{0, 0}, {40, 0}, {40, 30}, {0, 30}};
     BuildingParams p;
     p.floors = 20; p.curtainWall = true; p.walkableGround = true; p.openDoorway = true; p.seed = 21;
@@ -84,6 +115,7 @@ TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {
 // one a hall, a bath and a living room at least, the rooms inside the plate and clear of each other, the floor
 // walkable from the corridor -- and furnished: beds, closets with shelving, pictures on the walls.
 TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
+    UseShippedFurniture shipped;   // rooms are furnished from furniture_rooms.lua
     for (const Poly2& plan : {Poly2{{0, 0}, {44, 0}, {44, 32}, {0, 32}}, Poly2{{0, 0}, {36, 0}, {36, 36}, {0, 36}}}) {
         BuildingParams p;
         p.floors = 24; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = 33;
@@ -252,4 +284,103 @@ TEST_CASE(a_big_box_store_has_its_sign_checkouts_and_stock) {
         CHECK(inDoorway == 0);
         CHECK(!col.indices.empty());
     }
+}
+
+
+// THE ROOM PROGRAMS (M3b): home and office rooms are furnished from furniture_rooms.lua, every piece picked by what
+// it is. (Before the hand-written cases were deleted, the programs matched them exactly: 180 floors, 37,560 pieces,
+// none different.) Without the programs those rooms stay empty -- the furniture is data -- and with them every
+// kind gets its pieces: desks and chairs, beds between nightstands, sofas, kitchens, bathrooms, office pods.
+TEST_CASE(room_programs_furnish_every_home_and_office_room) {
+    const FurnitureLibrary withPrograms = shippedFurniture(true), without = shippedFurniture(false);
+    CHECK(withPrograms.programCount() >= 10);
+    CHECK(without.programCount() == 0);
+    const FurnitureLibrary saved = FurnitureLibrary::global();
+    struct Case { Poly2 plan; bool residential, curtain; int core; };
+    const Case cases[] = {
+        {{{0, 0}, {40, 0}, {40, 30}, {0, 30}}, false, true, 0},
+        {{{0, 0}, {34, 0}, {34, 26}, {0, 26}}, false, false, 0},
+        {{{0, 0}, {44, 0}, {44, 32}, {0, 32}}, true, false, 0},
+        {{{0, 0}, {36, 0}, {36, 36}, {0, 36}}, true, false, 0},
+        {{{0, 0}, {26, 0}, {26, 15}, {0, 15}}, true, false, 1},
+        {{{0, 0}, {30, 0}, {30, 10.5}, {0, 10.5}}, true, false, 1},
+    };
+    std::array<int, kPieceCount> with{}, bare{};
+    int plans = 0;
+    for (const Case& c : cases)
+        for (uint32_t seed = 1; seed <= 6; ++seed)
+            for (int floor : {1, 3, 6}) {
+                BuildingParams p;
+                p.floors = c.core == 1 ? 5 : 20; p.curtainWall = c.curtain; p.walkableGround = true; p.openDoorway = true;
+                p.seed = seed * 7919u; p.residential = c.residential; p.core = c.core;
+                const std::size_t entrance = entranceEdgeFor(c.plan, p);
+                const Real inset = std::max(p.wallThickness, Real(0.55));
+                RoomPlan rp;
+                if (c.core == 1) {
+                    const InteriorLayout il = interiorLayout(c.plan, p, entrance);
+                    if (!il.hasStair) continue;
+                    rp = roomPlan(c.plan, p, coreFor(c.plan, p, entrance), il.edge, inset, std::min(floor, 4), il.well, entrance);
+                } else {
+                    const CorePlan core = coreFor(c.plan, p, entrance);
+                    if (!core.valid) continue;
+                    rp = roomPlan(c.plan, p, core, static_cast<std::size_t>(-1), inset, floor);
+                }
+                ++plans;
+                for (int pass = 0; pass < 2; ++pass) {
+                    std::vector<PlacedPiece> out;
+                    RenderMesh col;
+                    FurnitureLibrary::global() = pass == 0 ? withPrograms : without;
+                    emitFurniture(out, &col, rp, 20.0, p.seed + floor, 22.8);
+                    for (const PlacedPiece& pp : out) ++(pass == 0 ? with : bare)[pp.piece];
+                }
+            }
+    FurnitureLibrary::global() = saved;
+    auto n = [&](const std::array<int, kPieceCount>& t, Piece pc) { return t[static_cast<std::size_t>(pc)]; };
+    std::printf("    [programs] %d floors: desks %d, office chairs %d, beds %d, nightstands %d, wardrobes %d, sofas %d, "
+                "sinks %d, toilets %d, pods %d, cubicles %d, meeting tables %d\n", plans, n(with, Piece::Desk),
+                n(with, Piece::OfficeChair), n(with, Piece::Bed), n(with, Piece::Nightstand), n(with, Piece::Wardrobe),
+                n(with, Piece::Sofa), n(with, Piece::KitchenSink), n(with, Piece::Toilet), n(with, Piece::DeskPod),
+                n(with, Piece::Cubicle), n(with, Piece::MeetingTable));
+    CHECK(plans > 30);
+    for (Piece pc : {Piece::Desk, Piece::OfficeChair, Piece::Bed, Piece::Wardrobe, Piece::Sofa, Piece::KitchenSink,
+                     Piece::Toilet, Piece::Bathtub, Piece::MeetingTable})
+        CHECK(n(with, pc) > 0);
+    CHECK(n(with, Piece::Nightstand) == 2 * n(with, Piece::Bed));       // a nightstand each side of every bed
+    CHECK(n(with, Piece::OfficeChair) == n(with, Piece::Desk));         // a chair at every desk
+    CHECK(n(with, Piece::DeskPod) + n(with, Piece::Cubicle) > 0);
+    for (Piece pc : {Piece::Desk, Piece::Bed, Piece::Sofa, Piece::Toilet, Piece::DeskPod, Piece::Cubicle})
+        CHECK(n(bare, pc) == 0);                                          // the furniture is data
+}
+
+// A PICK BY TAGS chooses by what fits: bedroom storage is a nightstand in a nightstand's slot and a wardrobe in a
+// wardrobe's; a new piece described with the right family and tags is picked with no code.
+TEST_CASE(a_tag_pick_takes_the_largest_described_piece_that_fits_the_slot) {
+    const FurnitureLibrary lib = shippedFurniture(true);
+    FurnPick store;
+    store.family = "storage";
+    store.tags = {"bedroom"};
+    CHECK(lib.pick(store, 0.5, 0.5, 1) == Piece::Nightstand);
+    CHECK(lib.pick(store, 1.2, 0.6, 1) == Piece::Wardrobe);
+    FurnPick seat;
+    seat.family = "seating";
+    seat.tags = {"living"};
+    CHECK(lib.pick(seat, 2.16, 1.0, 1) == Piece::Sofa);
+    CHECK(lib.pick(seat, 0.84, 0.84, 1) == Piece::LoungeChair);
+    FurnPick none;
+    none.family = "seating";
+    none.tags = {"no_such_room"};
+    CHECK(lib.pick(none, 3, 3, 1) == Piece::Count);
+    // a new office chair, described: an office's chair slot now has a choice (the largest that fits)
+    FurnitureLibrary more = lib;
+    FurnitureAsset extra;
+    extra.piece = Piece::LoungeChair;
+    extra.family = "seating";
+    extra.tags = {"living", "lobby", "study", "office"};
+    more.set(extra);
+    FurnPick office;
+    office.family = "seating";
+    office.tags = {"office"};
+    CHECK(lib.pick(office, 0.7, 0.7, 1) == Piece::OfficeChair);
+    CHECK(more.pick(office, 0.9, 0.9, 1) == Piece::LoungeChair);   // it fits, and it is bigger
+    CHECK(more.pick(office, 0.7, 0.7, 1) == Piece::OfficeChair);   // ...but not in a desk chair's slot
 }

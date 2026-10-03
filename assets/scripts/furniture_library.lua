@@ -143,6 +143,22 @@ furniture_library = {
   wardrobe = { family = "storage", tags = { "bedroom" }, clearance = { front = 0.7 } },
   kitchen_tall = { family = "storage", tags = { "kitchen" }, clearance = { front = 0.9 } },
   filing_cabinet = { family = "storage", tags = { "office" }, clearance = { front = 0.6 } },
+  -- WHAT THE ROOM PROGRAMS PICK BY (furniture_rooms.lua, M3b): every other piece a room holds, its family and tags.
+  -- A program asks for "seating tagged office" or "storage tagged bedroom", and the slot's size settles which.
+  monitor = { family = "appliance", tags = { "office", "study" } },
+  rug = { family = "decor", tags = { "living", "floor" } },
+  planter = { family = "decor", tags = { "plant", "office", "lobby" } },
+  picture = { family = "decor", tags = { "art" } },
+  kitchen_sink = { family = "fixture", tags = { "kitchen" } },
+  kitchen_hob = { family = "appliance", tags = { "kitchen" } },
+  kitchen_wall = { family = "storage", tags = { "kitchen", "wall" } },
+  bathtub = { family = "fixture", tags = { "bathroom" } },
+  vanity = { family = "fixture", tags = { "bathroom" } },
+  shelving = { family = "storage", tags = { "closet" } },
+  meeting_table = { family = "surface", tags = { "meeting" } },
+  whiteboard = { family = "fixture", tags = { "meeting", "classroom" } },
+  cubicle = { family = "surface", tags = { "office", "open_plan" } },
+  desk_pod = { family = "surface", tags = { "office", "open_plan" } },
   -- THE GOODS: small things the dressing pass stands on anchors, by their tags
   desk_lamp = { family = "goods", tags = { "desk", "lamp" } },
   potted_plant = { family = "goods", tags = { "plant" } },
