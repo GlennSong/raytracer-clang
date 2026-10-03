@@ -5260,20 +5260,33 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             grid_.query(a.pos, kPedBodyMin + 4.0, pairScratch_);
             for (int gj : pairScratch_) {
                 const std::size_t j = static_cast<std::size_t>(gj);
-                if (j <= i) continue;
+                if (j == i) continue;
                 Agent& b = agents_[j];
-                if (b.mode != Agent::Mode::Pedestrian || !b.moving ||
-                    b.far())
-                    continue;
+                if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
+                // A person STANDING or SITTING out on the street holds their ground too: the walker steps round
+                // them. (Only walker pairs were separated, so a walker could brush through someone standing at
+                // a stop or sitting on a bench -- the one overlapping pair macOS CI caught.) Walker pairs are
+                // visited once (j > i); a still body never runs this loop, so it is visited from every walker.
+                const bool still = !b.moving && pedVisible(gj);
+                if (!still && (!b.moving || j <= i)) continue;
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
                 if (d > 1e-4 && d < kPedBodyMin) {
-                    Real push = (kPedBodyMin - d) * 0.5;
-                    a.pos.x += dx / d * push; a.pos.y += dy / d * push;
-                    b.pos.x -= dx / d * push; b.pos.y -= dy / d * push;
+                    if (still) {
+                        const Real push = kPedBodyMin - d;
+                        a.pos.x += dx / d * push; a.pos.y += dy / d * push;
+                    } else {
+                        Real push = (kPedBodyMin - d) * 0.5;
+                        a.pos.x += dx / d * push; a.pos.y += dy / d * push;
+                        b.pos.x -= dx / d * push; b.pos.y -= dy / d * push;
+                    }
                 } else if (d <= 1e-4) {
-                    a.pos.x += kPedBodyMin * 0.5;
-                    b.pos.x -= kPedBodyMin * 0.5;
+                    if (still) {
+                        a.pos.x += kPedBodyMin;
+                    } else {
+                        a.pos.x += kPedBodyMin * 0.5;
+                        b.pos.x -= kPedBodyMin * 0.5;
+                    }
                 }
             }
         }
