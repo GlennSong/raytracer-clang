@@ -298,6 +298,9 @@ struct LotPlanDebug {
     int attachedBuilt = 0;   // buildings grown with at least one party wall
     std::vector<Vec2> attachedAt;   // a few of them, for the log's teleport hint
     int bigBoxBlocks = 0;            // whole blocks given to a big-box store and its parking lot
+    int campusBlocks = 0;            // blocks given to a university campus (its halls round a quad)
+    int sportsBlocks = 0;            // the campus's sports field (a block of its own, near it)
+    std::vector<Vec2> campusAt;      // where (the block's centre)
     std::vector<Vec2> bigBoxAt;
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill

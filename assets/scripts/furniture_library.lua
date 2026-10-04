@@ -179,6 +179,8 @@ furniture_library = {
   },
   lecture_row = { family = "seating", tags = { "lecture" } },
   aisle_step = { family = "fixture", tags = { "lecture", "stair" } },
+  -- the sports field's stand: three tiers of four seats, each its own place to sit (built in a loop, below)
+  bleacher = { family = "seating", tags = { "outdoor", "sports" }, spots = {}, verbs = {} },
   lectern = { family = "fixture", tags = { "lecture" } },
   lab_bench = { family = "surface", tags = { "lab" } },
   reading_table = { family = "surface", tags = { "library" } },
@@ -197,3 +199,18 @@ furniture_library = {
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.12, 0.36 }, look = { 0, -0.1, 1 }, exit = { 0, 0, 1.05 } } },
   },
 }
+
+-- THE BLEACHER's seats: tier t (0 front), four seats along the plank, each a spot with its own sit verb
+do
+  local b = furniture_library.bleacher
+  for t = 0, 2 do
+    local y, z = 0.45 + 0.42 * t, 2.05 - 0.72 * t
+    for i = 0, 3 do
+      local x = -2.1 + 1.4 * i
+      local id = "t" .. t .. "s" .. i
+      b.spots[#b.spots + 1] = { id = id, at = { x, y + 0.02, z } }
+      b.verbs[#b.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, y + 0.72, z - 0.05 }, look = { 0, -0.1, 1 },
+                               exit = { x, 0, 2.9 } }   -- down to the ground in front of the stand
+    end
+  end
+end

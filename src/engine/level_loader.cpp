@@ -4015,6 +4015,9 @@ bool LevelLoader::load(const std::string& path,
                                    levelGround, freewayROWp, lotGroundWith,
                                    lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
             for (const engine::LotBuilding& lb : preLots.lots) {
+                if (std::getenv("RT_CAMPUS_DEBUG") && (lb.recipe == "sports_field" || lb.recipe == "campus_quad"))
+                    std::fprintf(stderr, "[campus draw] %s at (%.0f, %.0f) type %s padMesh %zu verts, %zu outdoor pieces\n", lb.recipe.c_str(),
+                                 lb.site.x, lb.site.y, lb.type.c_str(), lb.padMesh.vertices.size(), lb.furniture.size());
                 if (lb.type == "park" || lb.type == "green") {
                     if (lb.recipe == "plaza" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
                     continue;

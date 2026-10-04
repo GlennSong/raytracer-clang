@@ -1020,6 +1020,25 @@ FurniturePiece build(Piece p, uint32_t variant) {
             }
             break;
         }
+        case Piece::Bleacher: {
+            // A SPORTS FIELD'S STAND: three tiers of aluminium bench planks rising away from the pitch (+z faces it),
+            // footboards between, a galvanised frame of uprights and raked stringers, a rail along the back.
+            k.out.size = {6.0, 2.1, 2.6};
+            k.out.solid = false;
+            const Vec3 alu(0.78, 0.80, 0.82), galv(0.55, 0.57, 0.60);
+            for (int t = 0; t < 3; ++t) {
+                const double seatY = 0.45 + 0.42 * t, z = 2.05 - 0.72 * t;
+                k.box(F::Metal, {0, seatY, z}, {6.0, 0.05, 0.28}, 0.008, alu, 1);                        // the seat plank
+                k.box(F::Metal, {0, seatY - 0.40, z + 0.30}, {6.0, 0.04, 0.32}, 0.006, alu * 0.92, 1);   // the footboard
+            }
+            for (double x : {-2.85, -0.95, 0.95, 2.85}) {
+                k.rod(F::Metal, {x, 0.0, 2.25}, {x, 0.45, 2.25}, 0.03, galv, 8);    // front leg
+                k.rod(F::Metal, {x, 0.0, 0.40}, {x, 1.95, 0.40}, 0.03, galv, 8);    // rear leg
+                k.rod(F::Metal, {x, 0.43, 2.25}, {x, 1.30, 0.40}, 0.025, galv, 8);  // raked stringer
+            }
+            k.rod(F::Metal, {-3.0, 1.95, 0.40}, {3.0, 1.95, 0.40}, 0.025, galv, 8);   // the back rail
+            break;
+        }
         case Piece::Lectern: {
             k.out.size = {0.70, 1.15, 0.55};
             k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
@@ -1121,7 +1140,7 @@ const char* const kPieceNames[kPieceCount] = {
     "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase",
     "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair", "ceiling_light",
     "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug",
-    "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step"};
+    "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step", "bleacher"};
 
 }  // namespace
 

@@ -1906,4 +1906,27 @@ BuildingRecipe architectBigBox(uint32_t seed) {
     return out;
 }
 
+BuildingRecipe architectCampus(int role, uint32_t seed) {
+    Hash rng(seed * 2654435761u ^ 0x5eed0c47u);
+    BuildingRecipe out;
+    out.params.seed = rng.next();
+    RecipeCtx cx;
+    switch (role) {
+        case 1: recipeTeachingHall(out, rng, cx); break;
+        case 2: recipeCampusLibrary(out, rng, cx); break;
+        case 3: recipeResidenceHall(out, rng, cx); break;
+        case 5:
+            out.massing = BuildingRecipe::Massing::Park;
+            out.placeType = "park";
+            out.name = "sports_field";
+            break;
+        default:
+            out.massing = BuildingRecipe::Massing::Park;
+            out.placeType = "park";
+            out.name = "campus_quad";
+            break;
+    }
+    return out;
+}
+
 }  // namespace engine

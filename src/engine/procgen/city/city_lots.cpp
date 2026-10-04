@@ -431,6 +431,125 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
     g.color = Vec3(1, 1, 1);   // vertex colours carry the lawn/path look
 }
 
+// THE CAMPUS SPORTS FIELD (Glenn: "sports fields"): a football pitch on the block's grass -- mown in stripes, its
+// lines painted (touch and goal lines, halfway line and centre circle, penalty and goal areas, the spots), goals at
+// each end -- and along one touchline BLEACHERS you can sit on. Ground-relative, like a park: the host lays it on the
+// finished terrain. False (nothing laid) when the block cannot hold a 50 x 34 m pitch.
+static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, std::vector<RenderMesh>* outParts) {
+    const OBB2 ob = orientedBoundingBox(poly);
+    const int la = ob.longAxis();
+    const Vec2 ua = ob.axis[la], va = ob.axis[1 - la], c = ob.center;
+    // the pitch, as big as the block takes (a full one is 105 x 68), with room for the stand on one side
+    Real PL = std::min(Real(105), 2 * ob.half[la] - 14), PW = std::min(Real(68), 2 * ob.half[1 - la] - 22);
+    // a point on the pitch: x along its length, z across, from the centre; the pitch sits 3 m off-centre, away from
+    // the stand
+    const Vec2 pc = c - va * 3.0;
+    auto P = [&](Real x, Real z, Real y) { const Vec2 q = pc + ua * x + va * z; return Vec3(q.x, y, q.y); };
+    // smaller until it fits: a block's corners are its streets' rounded junctions
+    auto fits = [&]() {
+        for (const Vec3& q : {P(-PL / 2 - 3, -PW / 2 - 3, 0), P(PL / 2 + 3, -PW / 2 - 3, 0), P(PL / 2 + 3, PW / 2 + 9, 0), P(-PL / 2 - 3, PW / 2 + 9, 0)})
+            if (!pointInPolygon(poly, Vec2(q.x, q.z))) return false;
+        return true;
+    };
+    const Real PL0 = PL, PW0 = PW;
+    while ((PL >= 50 && PW >= 34) && !fits()) { PL -= 3.0; PW -= 2.0; }
+    if (std::getenv("RT_CAMPUS_DEBUG"))
+        std::printf("[sports field] pad %zu verts, box %.1f x %.1f: pitch %.1f x %.1f -> %.1f x %.1f\n", poly.size(),
+                    2 * ob.half[la], 2 * ob.half[1 - la], PL0, PW0, PL, PW);
+    if (PL < 50 || PW < 34) return false;   // a training pitch at the least
+    const Real s = PW / 68.0;   // the markings scale with the width (a small pitch, a small box)
+    RenderMesh m;
+    const Vec3 up(0, 1, 0);
+    auto quad = [&](Real x0, Real z0, Real x1, Real z1, Real y, const Vec3& col) {
+        MeshBuilder::emitQuad(m, P(x0, z0, y), P(x1, z0, y), P(x1, z1, y), P(x0, z1, y), up, col);
+    };
+    // the turf: a margin round the pitch, then the pitch mown in stripes across its length
+    // (raised a little: from a distance the terrain's coarser tiles stand a few centimetres proud of the leaf mesh
+    // the turf is laid on)
+    quad(-PL / 2 - 3, -PW / 2 - 3, PL / 2 + 3, PW / 2 + 3, 0.06, Vec3(0.26, 0.47, 0.22));
+    const int stripes = 12;
+    for (int i = 0; i < stripes; ++i) {
+        const Real x0 = -PL / 2 + PL * i / stripes, x1 = -PL / 2 + PL * (i + 1) / stripes;
+        quad(x0, -PW / 2, x1, PW / 2, 0.07, (i % 2) ? Vec3(0.30, 0.55, 0.26) : Vec3(0.27, 0.50, 0.23));
+    }
+    // the lines: 12 cm white
+    const Real lw = 0.12, ly = 0.08;
+    const Vec3 white(0.93, 0.93, 0.90);
+    auto lineX = [&](Real x0, Real x1, Real z) { quad(x0, z - lw / 2, x1, z + lw / 2, ly, white); };
+    auto lineZ = [&](Real x, Real z0, Real z1) { quad(x - lw / 2, z0, x + lw / 2, z1, ly, white); };
+    lineX(-PL / 2, PL / 2, -PW / 2); lineX(-PL / 2, PL / 2, PW / 2);   // the touchlines
+    lineZ(-PL / 2, -PW / 2, PW / 2); lineZ(PL / 2, -PW / 2, PW / 2);   // the goal lines
+    lineZ(0, -PW / 2, PW / 2);                                        // halfway
+    auto ring = [&](Real cx, Real r, Real a0, Real a1) {
+        const int n = 40;
+        for (int i = 0; i < n; ++i) {
+            const Real t0 = a0 + (a1 - a0) * i / n, t1 = a0 + (a1 - a0) * (i + 1) / n;
+            const Vec2 d0(std::cos(t0), std::sin(t0)), d1(std::cos(t1), std::sin(t1));
+            MeshBuilder::emitQuad(m, P(cx + d0.x * (r - lw / 2), d0.y * (r - lw / 2), ly), P(cx + d1.x * (r - lw / 2), d1.y * (r - lw / 2), ly),
+                                  P(cx + d1.x * (r + lw / 2), d1.y * (r + lw / 2), ly), P(cx + d0.x * (r + lw / 2), d0.y * (r + lw / 2), ly), up, white);
+        }
+    };
+    ring(0, 9.15 * s, 0, 6.2832);                                     // the centre circle
+    quad(-0.15, -0.15, 0.15, 0.15, ly, white);                         // the centre spot
+    for (int end : {-1, 1}) {
+        const Real gx = end * PL / 2;
+        for (const auto& [depth, half] : {std::pair<Real, Real>{16.5 * s, 20.15 * s}, std::pair<Real, Real>{5.5 * s, 9.16 * s}}) {
+            const Real ix = gx - end * depth;
+            lineX(std::min(gx, ix), std::max(gx, ix), -half);
+            lineX(std::min(gx, ix), std::max(gx, ix), half);
+            lineZ(ix, -half, half);
+        }
+        const Real spot = gx - end * 11.0 * s;
+        quad(spot - 0.12, -0.12, spot + 0.12, 0.12, ly, white);
+        // the arc at the edge of the box (outside it): centred on the spot, radius 9.15
+        const Real a = std::acos(std::clamp((16.5 * s - 11.0 * s) / (9.15 * s), Real(-1), Real(1)));
+        if (end < 0) ring(spot, 9.15 * s, -a, a); else ring(spot, 9.15 * s, 3.14159265 - a, 3.14159265 + a);
+    }
+    // THE GOALS: white posts 7.32 m apart, a 2.44 m crossbar, a net frame sloping back
+    BuildingMesh kit;
+    const Vec3 post(0.95, 0.95, 0.93), net(0.82, 0.82, 0.80);
+    for (int end : {-1, 1}) {
+        const Real gx = end * PL / 2;
+        const Vec3 along(va.x, 0, va.y), out(ua.x * end, 0, ua.y * end);
+        auto box = [&](const Vec3& o, const Vec3& size, const Vec3& col) {
+            emitBox(kit, Scope{o, {along, up, out}, size}, PartId::Trim, col);
+        };
+        const Vec3 g0 = P(gx, -3.66, 0);
+        box(g0 + along * -0.06, Vec3(0.12, 2.44, 0.12), post);
+        box(P(gx, 3.66, 0) + along * -0.06, Vec3(0.12, 2.44, 0.12), post);
+        box(g0 + along * -0.06 + up * 2.44, Vec3(7.44, 0.12, 0.12), post);
+        box(g0 + out * 1.8 + up * 0.0, Vec3(0.05, 1.2, 0.05), net);              // the net's back posts
+        box(P(gx, 3.66, 0) + out * 1.8, Vec3(0.05, 1.2, 0.05), net);
+        box(g0 + out * 1.8 + up * 1.15, Vec3(7.32, 0.05, 0.05), net);
+    }
+    appendKit(kit, outParts, /*draped=*/true);
+    // THE STAND: bleachers along the +va touchline, facing the pitch, set back 4 m from the line
+    const int stands = std::max(1, static_cast<int>(PL * 0.5 / 6.4));
+    for (int k = 0; k < stands; ++k) {
+        const Real x = -6.4 * (stands - 1) * 0.5 + 6.4 * k;
+        const Vec2 back = pc + ua * x + va * (PW / 2 + 4.0 + 2.6);
+        g.furniture.push_back(outdoorPiece(Piece::Bleacher, posHash(back) ^ seed, back, va * -1.0, 0.02, true));
+    }
+    // TREES round the field, never on it: spots along the ends and the far touchline, outside the pitch and its
+    // margin (a park without spots gets trees scattered anywhere by the host)
+    Hash rng(seed ^ 0x5b07u);
+    for (int k = 0; k < 40 && g.treeSpots.size() < 10; ++k) {
+        const Real side = rng.unit();
+        Vec2 tp;
+        if (side < 0.5) tp = pc + ua * ((rng.unit() < 0.5 ? -1 : 1) * (PL / 2 + 6 + rng.unit() * 4)) + va * ((rng.unit() - 0.5) * PW);
+        else tp = pc + ua * ((rng.unit() - 0.5) * PL) - va * (PW / 2 + 6 + rng.unit() * 3);
+        if (!pointInPolygon(poly, tp)) continue;
+        bool clear = true;
+        for (std::size_t i = 0; i < poly.size() && clear; ++i)   // 2.5 m in from the block's edge
+            if (distToSeg(tp, poly[i], poly[(i + 1) % poly.size()]) < 2.5) clear = false;
+        for (const Vec3& o : g.treeSpots) if ((Vec2(o.x, o.z) - tp).length() < 5.0) clear = false;
+        if (clear) g.treeSpots.push_back(Vec3(tp.x, rng.range(0.9, 1.3), tp.y));
+    }
+    g.padMesh = std::move(m);
+    g.color = Vec3(1, 1, 1);
+    return true;
+}
+
 // A paved pad that FITS beneath a freeway deck: an asphalt lot with painted
 // stalls for a PARKING lot, or a concrete yard with equipment cabinets + a post
 // fence for a UTILITY lot. Draped on the terrain with a curb skirt so it never
@@ -2562,6 +2681,114 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 bigBoxCentres.push_back(centroid(foot));
             }
         }
+        // THE UNIVERSITY CAMPUS (Glenn: "a university campus over blocks (library, classrooms, offices, dorms, quads,
+        // sports fields)"): one a city, on a big, near-rectangular residential or commercial block between downtown
+        // and the edge. Its halls stand in a strip along each long side -- teaching halls, the library, a residence
+        // hall -- and between them the QUAD, a green with paths, trees and benches.
+        if ((bf.tag == DistrictTag::Residential || bf.tag == DistrictTag::Commercial) && dbg->campusBlocks < 1 &&
+            !(lots.size() == 1 && (lots.front().wholeBlock || lots.front().bigBox))) {
+            const OBB2 fb = orientedBoundingBox(foot);
+            const int la = fb.longAxis();
+            const Vec2 ua = fb.axis[la], va = fb.axis[1 - la];
+            const Real L = fb.half[la], W = fb.half[1 - la];
+            const Real blockA = std::fabs(area(foot));
+            const Real core = corenessAt(centroid(foot));
+            Hash cRng(mix(bf.pp.seed, 0xCA4905u));
+            const char* why = 2 * W < 72 ? "narrow" : 2 * L < 90 ? "short" : 2 * L > 260 ? "long"
+                            : blockA <= 0.70 * 4 * L * W ? "not rectangular" : core >= 0.7 ? "downtown"
+                            : padOnCarriageway(foot) ? "carriageway" : "";
+            (void)cRng;
+            bool ok = !*why;
+            if (ok && p.ground) {
+                Real lo = 1e30, hi = -1e30;
+                for (const Vec2& v : foot) { const Real g = p.ground(v.x, v.y); lo = std::min(lo, g); hi = std::max(hi, g); }
+                ok = hi - lo <= p.maxPadRelief;
+                if (!ok) why = "relief";
+            }
+            for (std::size_t i = 0; i < foot.size() && ok && nearFreeway; ++i) if (nearFreeway(foot[i])) { ok = false; why = "freeway"; }
+            std::vector<Lot> campus;
+            // pulled in from the block's box until every hall lies inside it (a lane block's edges are its streets'
+            // curves, so the box's corners are often outside)
+            for (Real m : {3.0, 6.0, 9.5, 13.0}) if (ok) {
+                campus.clear();
+                if (2 * W - 2 * m < 60 || 2 * L - 2 * m < 80) break;
+                const Vec2 c = fb.center;
+                const Real gap = 7.0;
+                const Real d = std::clamp(2 * W * 0.27, Real(17), Real(24));
+                auto rect = [&](Real u0, Real u1, Real v0, Real v1) {
+                    Poly2 r = {c + ua * u0 + va * v0, c + ua * u1 + va * v0, c + ua * u1 + va * v1, c + ua * u0 + va * v1};
+                    ensureCCW(r);
+                    return r;
+                };
+                // a hall at the block's end SHORTENS its outer end until it is inside -- the block's corners are its
+                // streets' rounded junctions, which clip a rectangle's outer corner however far it is pulled in
+                auto in = [&](const Vec2& q) { return pointInPolygon(foot, q) && pointInPolygon(footBeforePush, q); };
+                auto add = [&](Real u0, Real u1, Real v0, Real v1, uint8_t role, const Vec2& front) {
+                    for (int k = 0; k < 15; ++k) {
+                        const bool end0 = in(c + ua * u0 + va * v0) && in(c + ua * u0 + va * v1);
+                        const bool end1 = in(c + ua * u1 + va * v0) && in(c + ua * u1 + va * v1);
+                        if (end0 && end1) break;
+                        if (!end0) u0 += 2.0;
+                        if (!end1) u1 -= 2.0;
+                    }
+                    const Poly2 r = rect(u0, u1, v0, v1);
+                    for (const Vec2& q : r) if (!in(q)) return false;
+                    if (u1 - u0 < 24.0) return false;   // a hall too short for its rooms
+                    Lot l;
+                    l.footprint = r;
+                    l.area = std::fabs(area(r));
+                    l.campus = role;
+                    l.frontage = front;
+                    l.district = lots.empty() ? 0 : lots.front().district;
+                    campus.push_back(std::move(l));
+                    return true;
+                };
+                const Real uA = -L + m, uB = L - m;
+                // the strip along +va: a teaching hall and the library; along -va: a teaching hall and a residence hall
+                const bool fits = add(uA, -gap * 0.5, W - m - d, W - m, 1, va) && add(gap * 0.5, uB, W - m - d, W - m, 2, va) &&
+                                  add(uA, -gap * 0.5, -W + m, -W + m + d, 1, va * -1.0) &&
+                                  add(gap * 0.5, uB, -W + m, -W + m + d, 3, va * -1.0) &&
+                                  add(uA, uB, -W + m + d + 2.0, W - m - d - 2.0, 4, va);
+                if (fits) break;
+            }
+            if (ok && campus.size() != 5) { ok = false; why = "a hall would leave the block"; }
+            if (std::getenv("RT_CAMPUS_DEBUG"))
+                std::printf("[campus?] %s %.0f x %.0f core %.2f -> %s\n", districtName(bf.tag), 2 * L, 2 * W, core, ok ? "YES" : why);
+            if (ok) {
+                lots = std::move(campus);
+                ++dbg->campusBlocks;
+                dbg->campusAt.push_back(centroid(foot));
+            }
+        }
+        // THE CAMPUS SPORTS FIELD: once the campus stands, the first block within 500 m that holds a pitch (and its
+        // stand) becomes the field -- one lot, the pitch sculpted in pass C (sculptSportsField).
+        if (dbg->campusBlocks > 0 && dbg->sportsBlocks < 1 && !(lots.size() == 1 && (lots.front().wholeBlock || lots.front().bigBox)) &&
+            !(lots.size() > 0 && lots.front().campus) && (bf.tag == DistrictTag::Residential || bf.tag == DistrictTag::Commercial)) {
+            const OBB2 fb = orientedBoundingBox(foot);
+            const Real shortS = 2 * std::min(fb.half[0], fb.half[1]), longS = 2 * std::max(fb.half[0], fb.half[1]);
+            bool ok = (centroid(foot) - dbg->campusAt.front()).length() < 500 && shortS >= 66 && longS >= 78 &&
+                      std::fabs(area(foot)) > 0.70 * shortS * longS && !padOnCarriageway(foot);
+            if (ok && p.ground) {
+                Real lo = 1e30, hi = -1e30;
+                for (const Vec2& v : foot) { const Real gr = p.ground(v.x, v.y); lo = std::min(lo, gr); hi = std::max(hi, gr); }
+                ok = hi - lo <= p.maxPadRelief;
+            }
+            for (std::size_t i = 0; i < foot.size() && ok && nearFreeway; ++i) if (nearFreeway(foot[i])) ok = false;
+            if (std::getenv("RT_CAMPUS_DEBUG"))
+                std::printf("[sports?] %.0f x %.0f, %.0f m from the campus -> %d\n", longS, shortS,
+                            (centroid(foot) - dbg->campusAt.front()).length(), ok ? 1 : 0);
+            if (ok) {
+                Lot field;
+                field.footprint = foot;
+                field.area = std::fabs(area(foot));
+                field.campus = 5;
+                field.district = lots.empty() ? 0 : lots.front().district;
+                lots.clear();
+                lots.push_back(std::move(field));
+                ++dbg->sportsBlocks;
+                dbg->campusAt.push_back(centroid(foot));
+            }
+        }
         // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each
         // other"): in an old town or a commercial block, a lot's SIDE line that a neighbouring lot shares (the
         // same street run's next slot) is a party line -- the building stands on it, blank against its
@@ -2569,7 +2796,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         if ((bf.tag == DistrictTag::OldTown || bf.tag == DistrictTag::Commercial) && lots.size() >= 2)
             for (std::size_t ai = 0; ai < lots.size(); ++ai) {
                 Lot& A = lots[ai];
-                if (A.court || A.wholeBlock) continue;
+                if (A.court || A.wholeBlock || A.campus) continue;
                 Poly2 pa = A.footprint;
                 ensureCCW(pa);
                 for (std::size_t i = 0; i < pa.size() && A.partyCount < 2; ++i) {
@@ -2581,7 +2808,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     if (std::fabs(dot(nrm, normalize(A.frontage))) > 0.5) continue;   // a front or rear line
                     bool shared = false;
                     for (std::size_t bi = 0; bi < lots.size() && !shared; ++bi) {
-                        if (bi == ai || lots[bi].court || lots[bi].wholeBlock) continue;
+                        if (bi == ai || lots[bi].court || lots[bi].wholeBlock || lots[bi].campus) continue;
                         const Poly2& pb = lots[bi].footprint;
                         for (std::size_t j = 0; j < pb.size() && !shared; ++j) {
                             const Vec2 c = pb[j], e = pb[(j + 1) % pb.size()];
@@ -2908,7 +3135,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         const std::vector<int> placed =
             planLandmarks(lmc, p.center, p.innerRadius);
         for (std::size_t ci = 0; ci < cands.size(); ++ci)
-            cands[ci].landmark = cands[ci].lot.bigBox ? -1 : placed[ci];   // a big-box block keeps its store
+            cands[ci].landmark = cands[ci].lot.bigBox || cands[ci].lot.campus ? -1 : placed[ci];   // a big-box block keeps its store, a campus its halls
     }
 
     // ---- PASS C: grow every lot (landmarks use their PLACED recipes) --------
@@ -3019,7 +3246,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                 }
             }
-            if (cand.landmark < 0 && !lot.wholeBlock && rng.unit() > buildChance) {
+            if (cand.landmark < 0 && !lot.wholeBlock && !lot.campus && rng.unit() > buildChance) {
                 dbg->rejChance++;
                 emitGreen(); continue;   // plaza / gap (landmarks always build)
             }
@@ -3346,6 +3573,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const Real coreness = corenessAt(b.site);
             BuildingRecipe rec =
                 lot.bigBox ? architectBigBox(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
+                lot.campus ? architectCampus(lot.campus, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 cand.landmark >= 0
                     ? architectLandmark(static_cast<LandmarkKind>(cand.landmark),
                                         shortSide, area(site),
@@ -3372,11 +3600,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.pad = pushPolyClearOfRoads(lot.footprint); b.pad = padClearOrEmpty(b.pad);
                 (void)padCoversRoad(b.pad); (void)padOnCarriageway(b.pad);
                 if (b.pad.empty()) continue;   // road-locked sliver: no park
-                sculptPark(b, b.pad, b.height, meshGround,
-                           mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
-                           outParts, nullptr,
-                           p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
+                if (rec.name != "sports_field" ||
+                    !sculptSportsField(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts))
+                    sculptPark(b, b.pad, b.height, meshGround,
+                               mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),
+                               outParts, nullptr,
+                               p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
                 pruneTreeSpotsIntoRoad(b.treeSpots);
+                if (std::getenv("RT_CAMPUS_DEBUG") && lot.campus)
+                    std::printf("[campus lot] role %d %s padMesh %zu verts\n", lot.campus, rec.name.c_str(), b.padMesh.vertices.size());
                 out.push_back(std::move(b));
                 continue;
             }
@@ -4287,6 +4519,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             blockArea > 1.0 ? 100.0 * builtArea / blockArea : 0.0;
         for (const Vec2& a : dbg->bigBoxAt)
             LOG_INFO << "[citylots] big-box store -> teleport " << static_cast<int>(a.x) << " " << static_cast<int>(a.y);
+        for (std::size_t i = 0; i < dbg->campusAt.size(); ++i)
+            LOG_INFO << "[citylots] university " << (i == 0 ? "campus" : "sports field") << " -> teleport "
+                     << static_cast<int>(dbg->campusAt[i].x) << " " << static_cast<int>(dbg->campusAt[i].y);
         for (const Vec2& a : dbg->attachedAt)
             LOG_INFO << "[citylots] attached walk-up with a fire escape -> teleport " << static_cast<int>(a.x) << " "
                      << static_cast<int>(a.y);

@@ -192,6 +192,9 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
 // lot in front). BuildingParams::bigBox names the chain: 1 warehouse club, 2 electronics, 3 home improvement,
 // 4 discount store.
 BuildingRecipe architectBigBox(uint32_t seed);
+// THE CAMPUS's buildings by role (Lot::campus): 1 a teaching hall, 2 the library, 3 a residence hall, 4 the QUAD (a
+// green with paths, trees and benches; Massing::Park), 5 the SPORTS FIELD (a pitch, goals, bleachers).
+BuildingRecipe architectCampus(int role, uint32_t seed);
 // The chain's look on `p` (walls, cladding, the band's colour) and p.bigBox = chain.
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed);
 
