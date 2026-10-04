@@ -598,3 +598,65 @@ TEST_CASE(students_sit_in_the_lecture_rows_and_sleep_in_the_dorm_beds) {
     CHECK(alongBed == lying);
     CHECK(onMattress == lying);
 }
+
+// A HALL WITH A NOTCH (Glenn: "one of the school buildings has the auditorium and classrooms clipped through the back
+// wall and half outside"): metro_v2_test's second teaching hall is a 36 x 10.6 m bar with a 12 m wide, 3.7 m deep
+// recess in one long side. Every room and every piece of furniture stays inside the plan, and it still has its
+// lecture hall.
+TEST_CASE(a_campus_hall_with_a_notch_keeps_its_rooms_inside) {
+    UseShippedFurniture shipped;
+    Poly2 plan = {{-576.20, 403.99}, {-546.73, 425.65}, {-552.98, 434.16}, {-554.99, 432.68},
+                  {-552.81, 429.70}, {-562.66, 422.46}, {-564.85, 425.44}, {-582.46, 412.50}};
+    for (Vec2& q : plan) q = q - Vec2(-564.0, 419.0);
+    Poly2 ccw = plan;
+    ensureCCW(ccw);
+    // inside, or within a wall's thickness of the plan's edge
+    auto inside = [&](const Vec2& q) {
+        if (pointInPolygon(ccw, q)) return true;
+        for (std::size_t i = 0; i < ccw.size(); ++i) {
+            const Vec2 a = ccw[i], b = ccw[(i + 1) % ccw.size()], ab = b - a;
+            const Real t = std::max(Real(0), std::min(Real(1), dot(q - a, ab) / ab.lengthSquared()));
+            if ((a + ab * t - q).length() < 0.15) return true;
+        }
+        return false;
+    };
+    int rooms = 0, roomsOut = 0, pieces = 0, piecesOut = 0, lecture = 0;
+    for (int storey : {0, 1, 2}) {
+        BuildingParams p;
+        p.floors = 3; p.campus = 1; p.core = 1; p.walkableGround = true; p.openDoorway = true; p.seed = 41;
+        const std::size_t entrance = entranceEdgeFor(plan, p);
+        const InteriorLayout il = interiorLayout(plan, p, entrance);
+        if (!il.hasStair) continue;
+        const Real inset = std::max(p.wallThickness, Real(0.55));
+        const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, entrance), il.edge, inset, storey, il.well, entrance,
+                                     il.stairFoot);
+        for (const Room& r : rp.rooms) {
+            ++rooms;
+            lecture += r.kind == RoomKind::Lecture;
+            bool out = false;
+            for (const Vec2& q : r.rect) out = out || !inside(q);
+            for (std::size_t i = 0; i < r.rect.size() && !out; ++i)   // the notch's corners never inside a room
+                for (const Vec2& v : ccw) {
+                    Poly2 rr = r.rect;
+                    ensureCCW(rr);
+                    const Vec2 c = centroid(rr);
+                    if (pointInPolygon(rr, v + (c - v) * 0.02)) out = true;
+                }
+            roomsOut += out;
+        }
+        std::vector<PlacedPiece> outP;
+        RenderMesh col;
+        emitFurniture(outP, &col, rp, 0.0, p.seed + storey, 3.2);
+        for (const PlacedPiece& pp : outP) {
+            ++pieces;
+            const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+            piecesOut += !inside(at);
+        }
+    }
+    std::printf("    [notch] %d rooms (%d lecture), %d reaching outside; %d pieces, %d outside\n", rooms, lecture, roomsOut,
+                pieces, piecesOut);
+    CHECK(rooms >= 3);   // the notch sits near one end: one long run a floor, the lecture hall on the ground
+    CHECK(roomsOut == 0);
+    CHECK(piecesOut == 0);
+    CHECK(lecture == 1);
+}

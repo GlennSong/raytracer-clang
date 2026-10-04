@@ -2476,7 +2476,9 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
                 for (const auto& kv : hist) std::fprintf(stderr, " %s x%d", engine::furniturePieceName(static_cast<engine::Piece>(kv.first)), kv.second);
                 double x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
                 for (const Vec2& q : r.plan) { x0 = std::min(x0, q.x); x1 = std::max(x1, q.x); z0 = std::min(z0, q.y); z1 = std::max(z1, q.y); }
-                std::fprintf(stderr, " | plan bbox %.1f x %.1f\n", x1 - x0, z1 - z0);
+                std::fprintf(stderr, " | plan bbox %.1f x %.1f |", x1 - x0, z1 - z0);
+                for (const Vec2& q : r.plan) std::fprintf(stderr, " (%.2f, %.2f)", q.x, q.y);
+                std::fprintf(stderr, "\n");
             }
         }
         if (it->second == kNoPlace) return;

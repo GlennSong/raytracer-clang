@@ -820,6 +820,39 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
             const Real a = b.alongPlus ? s0 + hl : hl - s1, c = b.alongPlus ? s1 + hl : hl - s0;
             runs = {{inset, a}, {c, 2 * hl - inset}};
         }
+        // A PLAN THAT IS NOT ITS BOX (a notch in a long side -- an entrance recess -- or a trimmed end): the run is
+        // cut wherever the band's depth leaves the plan, as it is round the stair. (Laid in the box regardless, a
+        // hall's lecture theatre and classrooms ran out through the notch's walls, half outside.)
+        if (planIn.size() != 4) {
+            Poly2 pl = planIn;
+            ensureCCW(pl);
+            auto colOk = [&](Real x) {
+                for (Real v : {vIn + 0.05, (vIn + b.vFront) * 0.5, b.vFront - 0.05})
+                    if (!pointInPolygon(pl, b.P(x, v))) return false;
+                return true;
+            };
+            std::vector<std::pair<Real, Real>> cut;
+            constexpr Real kStep = 0.25;
+            for (const auto& r : runs) {
+                Real x = r.first;
+                while (x < r.second) {
+                    while (x < r.second && !colOk(x)) x += kStep;
+                    const Real start = x;
+                    while (x < r.second && colOk(std::min(x + kStep, r.second))) x += kStep;
+                    const Real end = std::min(x, r.second);
+                    if (end - start >= 3.4) cut.push_back({start, end});
+                    x += kStep;
+                }
+            }
+            if (std::getenv("RT_CAMPUS_DEBUG")) {
+                std::fprintf(stderr, "[campus cut] storey %d band %zu hl %.1f:", storey, bi, hl);
+                for (const auto& r : runs) std::fprintf(stderr, " [%.1f %.1f]", r.first, r.second);
+                std::fprintf(stderr, " ->");
+                for (const auto& r : cut) std::fprintf(stderr, " [%.1f %.1f]", r.first, r.second);
+                std::fprintf(stderr, "\n");
+            }
+            runs = cut;
+        }
         for (std::size_t ri = 0; ri < runs.size(); ++ri) {
             const Real r0 = runs[ri].first, r1 = runs[ri].second;
             if (r1 - r0 < 3.4) continue;
