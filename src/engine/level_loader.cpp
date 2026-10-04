@@ -4020,6 +4020,8 @@ bool LevelLoader::load(const std::string& path,
                                  lb.site.x, lb.site.y, lb.type.c_str(), lb.padMesh.vertices.size(), lb.furniture.size());
                 if (lb.type == "park" || lb.type == "green") {
                     if (lb.recipe == "plaza" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
+                    // a mown pitch and its track: no wild grass or weeds on them (the island's meadow grew through)
+                    if (lb.recipe == "sports_field" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
                     continue;
                 }
                 if (lb.pavedLot.size() >= 3) sealedLotPolys->push_back(lb.pavedLot);

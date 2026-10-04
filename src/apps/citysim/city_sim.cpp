@@ -2401,25 +2401,39 @@ int CitySim::pickCampusSeat(Agent& a, Vec2 here) {
 }
 
 void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
-    PlaceId hall = kNoPlace, teach = kNoPlace, lib = kNoPlace;
+    // Every hall of each kind: the quad block's residence hall and the dorm block's, both teaching halls.
+    std::vector<PlaceId> halls, teach;
+    PlaceId lib = kNoPlace;
     for (const Place& p : places.places()) {
-        if (p.campus == 3 && hall == kNoPlace) hall = p.id;
-        if (p.campus == 1 && teach == kNoPlace) teach = p.id;
+        if (p.campus == 3) halls.push_back(p.id);
+        if (p.campus == 1) teach.push_back(p.id);
         if (p.campus == 2 && lib == kNoPlace) lib = p.id;
     }
-    if (hall == kNoPlace || teach == kNoPlace) return;
-    const int hn = graph.nearestNode(places[hall].entrance), tn = graph.nearestNode(places[teach].entrance);
-    if (hn < 0 || tn < 0 || hn == tn) return;
-    const engine::Route there = engine::findRoute(graph, hn, tn, /*onFoot=*/true);
-    if (!there.valid() || !engine::findRoute(graph, tn, hn, true).valid()) return;
-    Real walk = 0;
-    for (int li : there.links) walk += graph.links[static_cast<std::size_t>(li)].length;
-    const int ln = lib != kNoPlace ? graph.nearestNode(places[lib].entrance) : -1;
+    if (halls.empty() || teach.empty()) return;
     auto doorOf = [&](PlaceId id) { const Place& p = places[id]; return p.entrance + (p.site - p.entrance) * 0.4; };
+    // the halls a student can live in: routable to every teaching hall and back on foot
+    struct Hall { PlaceId id; int node; int beds; };
+    std::vector<Hall> live;
+    std::vector<std::pair<PlaceId, int>> classes;
+    for (PlaceId t : teach) {
+        const int tn = graph.nearestNode(places[t].entrance);
+        if (tn >= 0) classes.push_back({t, tn});
+    }
+    if (classes.empty()) return;
+    for (PlaceId h : halls) {
+        const int hn = graph.nearestNode(places[h].entrance);
+        if (hn < 0) continue;
+        bool ok = true;
+        for (const auto& c : classes)
+            ok = ok && c.second != hn && engine::findRoute(graph, hn, c.second, true).valid() &&
+                 engine::findRoute(graph, c.second, hn, true).valid();
+        if (ok) live.push_back({h, hn, places[h].capacity > 0 ? places[h].capacity : 150});
+    }
+    if (live.empty()) return;
+    const int ln = lib != kNoPlace ? graph.nearestNode(places[lib].entrance) : -1;
 
-    // WHO: walkers only (a student has no car), never a bus or a cab's driver, chosen by their own bits so
-    // the same city always has the same students. As many as the hall has beds, and never more than a
-    // quarter of the walkers.
+    // WHO: walkers only (a student has no car), never a bus or a cab's driver, chosen by their own bits so the same
+    // city always has the same students. As many as the halls have beds, never more than a quarter of the walkers.
     std::vector<std::pair<uint32_t, int>> cand;
     int walkers = 0;
     for (std::size_t i = 0; i < agents_.size(); ++i) {
@@ -2430,23 +2444,33 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
         k ^= k >> 15; k *= 0x165667b1u; k ^= k >> 13;
         cand.push_back({k, static_cast<int>(i)});
     }
-    const int beds = places[hall].capacity > 0 ? places[hall].capacity : 150;
+    int beds = 0;
+    for (const Hall& h : live) beds += h.beds;
     const int want = std::min(beds, walkers / 4);
     if (want <= 0) return;
     std::partial_sort(cand.begin(), cand.begin() + want, cand.end());
+    std::size_t hall = 0;
+    int inHall = 0;
     for (int c = 0; c < want; ++c) {
+        while (inHall >= live[hall].beds * want / std::max(1, beds) + 1 && hall + 1 < live.size()) { ++hall; inHall = 0; }   // halls fill in proportion
+        ++inHall;
+        const Hall& H = live[hall];
         Agent& a = agents_[static_cast<std::size_t>(cand[static_cast<std::size_t>(c)].second)];
         a.role = Agent::Role::Student;
-        a.homePlace = hall; a.home = hn; a.homeDoor = doorOf(hall);
-        a.restNode = hn; a.pos = a.homeDoor; a.indoors = true;
-        if (!graph.outLinks[static_cast<std::size_t>(hn)].empty())
-            a.heading = graph.direction(graph.outLinks[static_cast<std::size_t>(hn)][0]);
-        a.workPlace = teach; a.work = tn; a.workDoor = doorOf(teach);
+        a.homePlace = H.id; a.home = H.node; a.homeDoor = doorOf(H.id);
+        a.restNode = H.node; a.pos = a.homeDoor; a.indoors = true;
+        if (!graph.outLinks[static_cast<std::size_t>(H.node)].empty())
+            a.heading = graph.direction(graph.outLinks[static_cast<std::size_t>(H.node)][0]);
+        const auto& cl = classes[(a.brain >> 9) % classes.size()];   // which hall their course is taught in
+        a.workPlace = cl.first; a.work = cl.second; a.workDoor = doorOf(cl.first);
         a.shopPlace = lib; a.shop = ln; a.shopDoor = lib != kNoPlace ? doorOf(lib) : a.workDoor;
         // The first class at 8:30-10, the last out at 16:00-18:30.
         const Real u0 = static_cast<Real>((a.brain >> 5) & 0xFF) / 255.0, u1 = static_cast<Real>((a.brain >> 17) & 0xFF) / 255.0;
         a.departWork = 8.5 + 1.5 * u0;
         a.departHome = 16.0 + 2.5 * u1;
+        const engine::Route there = engine::findRoute(graph, H.node, cl.second, true);
+        Real walk = 0;
+        for (int li : there.links) walk += graph.links[static_cast<std::size_t>(li)].length;
         a.commuteSeconds = walk / std::max(Real(0.1), kWalkSpeed * a.speedFactor);
     }
 }

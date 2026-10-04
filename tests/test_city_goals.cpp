@@ -319,3 +319,32 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     CHECK(inLibrary >= 10);
     CHECK(backHome >= 50);
 }
+
+// THE DORM BLOCK (campus gap pass): with two residence halls the students fill both, in proportion to their beds, and
+// their courses are spread over every teaching hall.
+TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 20, 400, 21);
+    PlaceMap places;
+    for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+    places.add(PlaceType::Office, Vec2(0, 330), nav, 9, 17);
+    const PlaceId h1 = places.add(PlaceType::Home, Vec2(-120, 60), nav, 0, 24, 30);
+    const PlaceId h2 = places.add(PlaceType::Home, Vec2(200, -150), nav, 0, 24, 20);
+    const PlaceId t1 = places.add(PlaceType::Civic, Vec2(60, 120), nav);
+    const PlaceId t2 = places.add(PlaceType::Civic, Vec2(-60, 200), nav);
+    places.setCampus(h1, 3); places.setCampus(h2, 3); places.setCampus(t1, 1); places.setCampus(t2, 1);
+    sim.assignPlaces(places, nav);
+    int in1 = 0, in2 = 0, at1 = 0, at2 = 0;
+    for (const Agent& a : sim.agents()) {
+        if (a.role != Agent::Role::Student) continue;
+        in1 += a.homePlace == h1; in2 += a.homePlace == h2;
+        at1 += a.workPlace == t1; at2 += a.workPlace == t2;
+    }
+    std::printf("    [halls] %d students: %d + %d in the halls, %d + %d in the teaching halls\n", sim.studentCount(), in1, in2,
+                at1, at2);
+    CHECK(sim.studentCount() == 50);
+    CHECK(in1 + in2 == 50);
+    CHECK(std::abs(in1 - 30) <= 1 && std::abs(in2 - 20) <= 1);
+    CHECK(at1 >= 15 && at2 >= 15);
+}

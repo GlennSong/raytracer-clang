@@ -300,7 +300,9 @@ struct LotPlanDebug {
     int bigBoxBlocks = 0;            // whole blocks given to a big-box store and its parking lot
     int campusBlocks = 0;            // blocks given to a university campus (its halls round a quad)
     int sportsBlocks = 0;            // the campus's sports field (a block of its own, near it)
+    int dormBlocks = 0;              // the campus's dorm block (residence halls round a courtyard, near it)
     std::vector<Vec2> campusAt;      // where (the block's centre)
+    std::vector<std::string> campusWhat;   // what each campusAt is ("campus", "sports field", "dorms")
     std::vector<Vec2> bigBoxAt;
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
