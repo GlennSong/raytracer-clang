@@ -134,6 +134,7 @@ add_library(engine_core STATIC
     src/engine/procgen/furniture_kit.cpp
     src/engine/procgen/furniture_library.cpp
     src/engine/interaction.cpp
+    src/engine/interior_occupants.cpp
     src/engine/interact_broker.cpp
     src/engine/furniture_draw.cpp
     src/engine/procgen/city/patch_fabric.cpp

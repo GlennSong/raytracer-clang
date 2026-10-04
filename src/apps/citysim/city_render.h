@@ -490,6 +490,17 @@ private:
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
+    // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
+    // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.
+    engine::Entity indoorSitGroup_, indoorBodyGroup_;
+    void stepIndoors(engine::World& world, Real dt);
+    Real indoorAcc_ = 1.0;
+    std::unordered_map<int, PlaceId> buildingPlace_;        // record index -> its place (kNoPlace: none)
+    std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
+    int indoorDrawn_ = 0;
+public:
+    int indoorDrawn() const { return indoorDrawn_; }
+private:
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)

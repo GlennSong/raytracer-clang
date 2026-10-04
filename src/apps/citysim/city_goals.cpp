@@ -28,6 +28,7 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Depot: return "depot";
         case GoalTarget::Lunch: return "lunch";
         case GoalTarget::Outing: return "outing";
+        case GoalTarget::Campus: return "campus";
         default: return "none";
     }
 }
@@ -180,6 +181,34 @@ GoalTable strollerGoals() {
     t.addTransition("OutAndAbout", GoalEvent::DwellDone, "Outing");
     t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
     t.addTransition("ReturnHome", GoalEvent::NoRoute, "OutAndAbout");
+    t.setEntry("AtHome");
+    return t;
+}
+
+GoalTable studentGoals() {
+    GoalTable t;
+    // State names and labels mirror the schedule's (AtHome, AtWork, ...) so a
+    // clock jump seats a student by the same activity-label rule as anyone.
+    t.addState("AtHome", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
+    t.addState("ToClass", GoalAction::GoTo, GoalTarget::Work, Activity::Commuting);
+    // A class is about an hour; the break after it ends in the next one.
+    t.addState("InClass", GoalAction::Rest, GoalTarget::None, Activity::AtWork, 0.9);
+    t.addState("Break", GoalAction::GoTo, GoalTarget::Campus, Activity::Outing);
+    // The stop sets its own length (a library session is longer than a sit on
+    // the quad -- pickCampusBreak); this is only the fallback.
+    t.addState("OnBreak", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.25);
+    t.addState("ReturnHome", GoalAction::GoTo, GoalTarget::Home, Activity::Returning);
+    t.addTransition("AtHome", GoalEvent::DepartWork, "ToClass");
+    t.addTransition("ToClass", GoalEvent::Arrived, "InClass");
+    t.addTransition("ToClass", GoalEvent::NoRoute, "AtHome");
+    t.addTransition("InClass", GoalEvent::DepartHome, "ReturnHome");
+    t.addTransition("InClass", GoalEvent::DwellDone, "Break");
+    t.addTransition("Break", GoalEvent::Arrived, "OnBreak");
+    t.addTransition("Break", GoalEvent::NoRoute, "InClass");
+    t.addTransition("OnBreak", GoalEvent::DepartHome, "ReturnHome");
+    t.addTransition("OnBreak", GoalEvent::DwellDone, "ToClass");
+    t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
+    t.addTransition("ReturnHome", GoalEvent::NoRoute, "OnBreak");
     t.setEntry("AtHome");
     return t;
 }

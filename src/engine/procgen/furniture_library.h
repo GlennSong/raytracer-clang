@@ -23,7 +23,8 @@
 
 namespace engine {
 
-enum class Verb : uint8_t { Sit, Lie, Count };
+// Stand: at a lectern, a counter -- the body upright at the spot, facing the verb's look.
+enum class Verb : uint8_t { Sit, Lie, Stand, Count };
 const char* verbName(Verb v);
 bool verbByName(const std::string& name, Verb& out);
 
@@ -66,7 +67,14 @@ struct FurnitureAsset {
     // VARIETY (the campus): > 0, each placement takes one of this many designs by where it stands (the style bits),
     // not the room's -- a library's bookcases are not all the same bookcase
     int variety = 0;
+    // RISE (the lecture hall): metres a placement's spots climb per unit of its style bits -- a lecture row's seats
+    // stand on its tier's riser, 0.18 m a tier. Folded into the piece's transform when its set is made
+    // (interactXform), so every spot, eye and exit is on the riser.
+    Real rise = 0;
 };
+
+// The transform a placed piece's spots are read in: its own, raised by the asset's rise times its style bits.
+Mat4 interactXform(const FurnitureAsset* a, const Mat4& xform, uint32_t variant);
 
 // ROOM PROGRAMS (M3b, Glenn 2026-10-03: "go ahead with the furniture tags"): what a room of each kind holds, as
 // DATA (assets/scripts/furniture_rooms.lua), each piece asked for by what it is -- a family and tags -- rather

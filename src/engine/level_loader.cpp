@@ -5769,7 +5769,8 @@ bool LevelLoader::load(const std::string& path,
                     engine::spawnFurnitureGroups(world, assets, &renderer, outdoorDraw, list, Vec3(0.80, 0.78, 0.75), 150.0, made);
                     engine::Interactables set;
                     for (const engine::PlacedPiece& pp : list)
-                        if (flib.interactive(static_cast<engine::Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+                        if (flib.interactive(static_cast<engine::Piece>(pp.piece)))
+                            set.pieces.push_back({pp.piece, engine::interactXform(flib.find(static_cast<engine::Piece>(pp.piece)), pp.xform, pp.variant), 0});
                     if (!set.pieces.empty()) {
                         set.refreshBounds();
                         seats += set.pieces.size();
@@ -5907,6 +5908,18 @@ bool LevelLoader::load(const std::string& path,
                     p.type = lb.type;
                     p.x = static_cast<float>(lb.site.x);
                     p.z = static_cast<float>(lb.site.y);
+                    // THE UNIVERSITY (campus milestone 4): its halls, quad and field by recipe, so
+                    // the citysim can house students in the residence hall and send them to class.
+                    // Beds: one student per ~45 m2 of floor (a dorm room, its share of the corridor, the
+                    // bathrooms and lounge -- measured against the beds campusPlan furnishes).
+                    if (lb.recipe == "teaching_hall") p.campus = 1;
+                    else if (lb.recipe == "campus_library") p.campus = 2;
+                    else if (lb.recipe == "residence_hall") {
+                        p.campus = 3;
+                        const double storeys = std::max(1.0, std::floor(static_cast<double>(lb.height) / 3.3));
+                        p.capacity = static_cast<int>(engine::area(lb.plan) * storeys / 45.0);
+                    } else if (lb.recipe == "campus_quad") p.campus = 4;
+                    else if (lb.recipe == "sports_field") p.campus = 5;
                     // The real door (ADR-0080): first unit that has one --
                     // the citysim snaps this place's entrance from a step
                     // outside it instead of from the centroid.
@@ -5918,6 +5931,9 @@ bool LevelLoader::load(const std::string& path,
                         p.ez = static_cast<float>(d0.foot.y + d0.normal.y * 1.5);
                         break;
                     }
+                    if (p.campus && std::getenv("RT_CAMPUS_DEBUG"))
+                        std::fprintf(stderr, "[campus place] %s role %d door (%.1f, %.1f) site (%.1f, %.1f) floor y %.2f beds %d\n",
+                                     lb.recipe.c_str(), p.campus, p.ex, p.ez, p.x, p.z, static_cast<double>(lb.baseY), p.capacity);
                     cfg.places.push_back(std::move(p));
                 }
 

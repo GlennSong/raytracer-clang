@@ -89,6 +89,9 @@ struct Place {
     // cafe's 6:30-19:00 is when customers come, not a 13-hour day for staff.
     bool authoredHours = true;
     std::string name;      // optional authored label ("Al's Diner"); may be empty
+    // The university (campus milestone 4): 1 teaching hall, 2 library, 3 residence
+    // hall, 4 quad, 5 sports field; 0 = not campus. Students live, study and sit here.
+    uint8_t campus = 0;
 
     // Is this place open at in-world hour `clock` (0..24)? Handles a window that
     // wraps midnight (openHour > closeHour, e.g. a 20→4 late shop).
@@ -119,6 +122,9 @@ public:
     const Place& operator[](PlaceId id) const { return places_[id]; }
     void setAuthoredHours(PlaceId id, bool on) {
         if (id < places_.size()) places_[id].authoredHours = on;
+    }
+    void setCampus(PlaceId id, uint8_t role) {
+        if (id < places_.size()) places_[id].campus = role;
     }
 
     // All place ids of a given type, in insertion order. Empty if none.

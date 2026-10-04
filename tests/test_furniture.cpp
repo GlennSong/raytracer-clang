@@ -506,3 +506,95 @@ TEST_CASE(pictures_hang_on_real_walls_clear_of_doors) {
     CHECK(offWall == 0);
     CHECK(inDoor == 0);
 }
+
+// PEOPLE INSIDE (campus milestone 4): the teaching hall's lecture hall seats its students on the rows -- each body on
+// a seat of its row's riser (the spot raised by its tier), no two on one seat, a lecturer standing at the lectern
+// facing the hall -- and at night the residence hall's students lie in its beds.
+#include "../src/engine/interior_occupants.h"
+TEST_CASE(students_sit_in_the_lecture_rows_and_sleep_in_the_dorm_beds) {
+    UseShippedFurniture shipped;
+    const FurnitureLibrary& lib = FurnitureLibrary::global();
+    auto setFor = [&](int campus, const Poly2& plan, int storey) {
+        BuildingParams p;
+        p.floors = 4; p.campus = static_cast<uint8_t>(campus); p.core = 1; p.walkableGround = true;
+        p.openDoorway = true; p.seed = 41;
+        const std::size_t entrance = entranceEdgeFor(plan, p);
+        const InteriorLayout il = interiorLayout(plan, p, entrance);
+        const Real inset = std::max(p.wallThickness, Real(0.55));
+        const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, entrance), il.edge, inset, storey, il.well, entrance,
+                                     il.stairFoot);
+        std::vector<PlacedPiece> out;
+        RenderMesh col;
+        emitFurniture(out, &col, rp, 0.0, p.seed + storey, 3.2);
+        Interactables set;
+        for (const PlacedPiece& pp : out)
+            if (lib.interactive(static_cast<Piece>(pp.piece)))
+                set.pieces.push_back({pp.piece, interactXform(lib.find(static_cast<Piece>(pp.piece)), pp.xform, pp.variant), 0});
+        return set;
+    };
+    // the teaching hall's ground storey: the lecture hall is there (campus_buildings_have_their_rooms_and_furniture)
+    Interactables hall = setFor(1, {{0, 0}, {52, 0}, {52, 22}, {0, 22}}, 0);
+    OccupantPlan cls;
+    cls.people = 40; cls.lecturer = true; cls.seed = 7;
+    const std::vector<Occupant> occ = planOccupants(hall, lib, cls);
+    int rowSeats = 0, raised = 0, standing = 0, shared = 0, faceHall = 0;
+    std::vector<uint32_t> held(hall.pieces.size(), 0);
+    for (const Occupant& o : occ) {
+        if (held[o.piece] & o.spots) ++shared;
+        held[o.piece] |= o.spots;
+        const InteractPiece& ip = hall.pieces[o.piece];
+        const Vec3 at(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
+        if (static_cast<Piece>(ip.piece) == Piece::LectureRow) {
+            ++rowSeats;
+            const Real seatTop = piecePoint(ip.xform, Vec3(0, 0.48, 0)).y;   // already raised by the tier
+            if (std::fabs(at.y - seatTop) < 1e-6 && at.y > 0.6) ++raised;
+            // seated facing +z of the row (toward the board), like the row's own seats
+            const Vec3 f = pieceDir(o.at, Vec3(0, 0, 1)), rowF = pieceDir(ip.xform, Vec3(0, 0, 1));
+            if (f.x * rowF.x + f.z * rowF.z > 0.95) ++faceHall;
+        }
+        if (o.pose == Occupant::Pose::Stand) {
+            ++standing;
+            CHECK(static_cast<Piece>(ip.piece) == Piece::Lectern);
+        }
+    }
+    std::printf("    [class] %zu placed of 40: %d in the lecture rows (%d up on a tier, %d facing the board), %d at the lectern, "
+                "%d shared\n", occ.size(), rowSeats, raised, faceHall, standing, shared);
+    CHECK(static_cast<int>(occ.size()) == 40);
+    CHECK(standing == 1);
+    CHECK(shared == 0);
+    CHECK(rowSeats >= 20);
+    CHECK(raised >= 5);
+    CHECK(faceHall == rowSeats);
+    // a seat the player holds is left alone
+    {
+        Interactables h2 = hall;
+        for (InteractPiece& ip : h2.pieces) ip.taken = ~0u;
+        CHECK(planOccupants(h2, lib, cls).empty());
+    }
+
+    // the residence hall at night: in bed, on their backs, along the bed
+    Interactables dorm = setFor(3, {{0, 0}, {54, 0}, {54, 15}, {0, 15}}, 1);
+    OccupantPlan night;
+    night.people = 12; night.night = true; night.seed = 3;
+    int lying = 0, alongBed = 0, onMattress = 0;
+    for (const Occupant& o : planOccupants(dorm, lib, night)) {
+        if (o.pose != Occupant::Pose::Lie) continue;
+        ++lying;
+        const InteractPiece& ip = dorm.pieces[o.piece];
+        CHECK(static_cast<Piece>(ip.piece) == Piece::SingleBed);
+        // the body's up (+y) runs along the bed toward the pillow (-z); the whole 1.8 m body on the mattress (z 0.07
+        // to 2.01), its back on it
+        const Vec3 up = pieceDir(o.at, Vec3(0, 1, 0)), toPillow = pieceDir(ip.xform, Vec3(0, 0, -1));
+        if (up.x * toPillow.x + up.y * toPillow.y + up.z * toPillow.z > 0.99) ++alongBed;
+        const Vec3 crown = piecePoint(o.at, Vec3(0, 0.9, 0)), soles = piecePoint(o.at, Vec3(0, -0.9, 0));
+        const Mat4 inv = ip.xform.inverse();
+        const Vec3 cz = piecePoint(inv, crown), sz = piecePoint(inv, soles);
+        const Vec3 mid(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
+        if (cz.z > 0.07 && sz.z < 2.01 && std::fabs(mid.y - (piecePoint(ip.xform, Vec3(0, 0.5, 0)).y + 0.13)) < 1e-6)
+            ++onMattress;
+    }
+    std::printf("    [dorm] %d asleep, %d along the bed, %d on the mattress\n", lying, alongBed, onMattress);
+    CHECK(lying == 12);
+    CHECK(alongBed == lying);
+    CHECK(onMattress == lying);
+}

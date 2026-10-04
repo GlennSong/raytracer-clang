@@ -7,6 +7,7 @@ const char* verbName(Verb v) {
     switch (v) {
         case Verb::Sit: return "sit";
         case Verb::Lie: return "lie";
+        case Verb::Stand: return "stand";
         default: return "?";
     }
 }
@@ -101,6 +102,15 @@ std::size_t FurnitureLibrary::size() const {
 FurnitureLibrary& FurnitureLibrary::global() {
     static FurnitureLibrary lib;
     return lib;
+}
+
+}  // namespace engine
+
+namespace engine {
+
+Mat4 interactXform(const FurnitureAsset* a, const Mat4& xform, uint32_t variant) {
+    if (!a || a->rise == 0) return xform;
+    return xform * Mat4::translate(0, a->rise * static_cast<Real>((variant >> 5) & 7u), 0);
 }
 
 }  // namespace engine

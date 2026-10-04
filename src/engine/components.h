@@ -652,6 +652,11 @@ struct AuthoredPlace {
     // keeps the legacy centroid snap.
     bool hasEntrance = false;
     float ex = 0, ez = 0;
+    // The university (Lot::campus): 1 teaching hall, 2 library, 3 residence hall, 4 quad,
+    // 5 sports field; 0 = not campus. `capacity` is how many live there (the residence
+    // hall's beds); 0 = no limit.
+    uint8_t campus = 0;
+    int capacity = 0;
     // Optional building (Living City Phase 4): when width/depth/height are all > 0
     // the loader spawns a static box STRUCTURE of this footprint at the site, so
     // the place IS a building you can walk up to (its door snaps to the sidewalk).

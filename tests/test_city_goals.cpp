@@ -247,3 +247,75 @@ TEST_CASE(outings_sometimes_sit_on_a_bench_and_get_up_again) {
         CHECK(sim.agents()[static_cast<std::size_t>(s.occupant)].tripSeat == static_cast<int>(&s - sim.seats().data()));
     }
 }
+
+// CAMPUS LIFE (campus milestone 4): a city with a university houses students in its residence hall -- as many as
+// it has beds -- and runs their day on the student table: to class in the teaching hall, a break (the library, a
+// bench on the quad, lunch), back to class, and home to the hall in the evening.
+TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 20, 400, 21);
+    PlaceMap places;
+    for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
+    places.add(PlaceType::Cafe, Vec2(120, -40), nav, 7, 19);
+    const PlaceId hall = places.add(PlaceType::Home, Vec2(-120, 60), nav, 0, 24, 60);
+    const PlaceId teach = places.add(PlaceType::Civic, Vec2(60, 120), nav);
+    const PlaceId lib = places.add(PlaceType::Civic, Vec2(-40, 200), nav);
+    const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 130), nav);
+    places.setCampus(hall, 3); places.setCampus(teach, 1); places.setCampus(lib, 2); places.setCampus(quad, 4);
+    std::vector<CitySim::SeatSpot> seats;
+    for (int i = 0; i < 8; ++i) {   // benches round the quad
+        CitySim::SeatSpot s;
+        s.pos = places[quad].site + Vec2(-21.0 + i * 6.0, (i % 2) ? 12.0 : -12.0);
+        s.face = Vec2(0, (i % 2) ? -1.0 : 1.0);
+        s.hip = 0.47;
+        seats.push_back(s);
+    }
+    sim.setSeats(seats);
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(6.0);
+
+    CHECK(sim.studentCount() == 60);   // the hall's beds (fewer than a quarter of the 400 walkers)
+    const int hallNode = nav.nearestNode(places[hall].entrance);
+    int homeless = 0, othersInHall = 0;
+    for (const Agent& a : sim.agents()) {
+        if (a.role == Agent::Role::Student) homeless += a.home != hallNode || a.homePlace != hall;
+        else othersInHall += a.homePlace == hall;
+    }
+    CHECK(homeless == 0);
+    CHECK(othersInHall == 0);   // the hall is the students' alone
+
+    int inClass = 0, onBench = 0, inLibrary = 0, backHome = 0, peakOut = 0;
+    std::vector<uint8_t> sawClass(sim.agents().size(), 0), sawBreak(sim.agents().size(), 0);
+    const int teachNode = nav.nearestNode(places[teach].entrance), libNode = nav.nearestNode(places[lib].entrance);
+    for (int i = 0; i < 30000 && sim.timeOfDay() < 22.5; ++i) {
+        sim.step(0.5, 0.002);
+        const auto& ag = sim.agents();
+        int out = 0;
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            const Agent& a = ag[k];
+            if (a.role != Agent::Role::Student) continue;
+            if (a.indoors && a.restNode == teachNode && a.activity == Activity::AtWork) sawClass[k] = 1;
+            if (sim.seatedOn(static_cast<int>(k))) { sawBreak[k] |= 1; }
+            if (a.indoors && a.restNode == libNode) sawBreak[k] |= 2;
+            out += a.moving ? 1 : 0;
+        }
+        peakOut = std::max(peakOut, out);
+    }
+    for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+        const Agent& a = sim.agents()[k];
+        if (a.role != Agent::Role::Student) continue;
+        inClass += sawClass[k];
+        onBench += (sawBreak[k] & 1) ? 1 : 0;
+        inLibrary += (sawBreak[k] & 2) ? 1 : 0;
+        backHome += a.indoors && a.restNode == hallNode;
+    }
+    std::printf("    [students] %d students: %d went to class, %d sat on the quad, %d studied in the library, %d home by "
+                "%.1f h; at most %d walking at once\n",
+                sim.studentCount(), inClass, onBench, inLibrary, backHome, sim.timeOfDay(), peakOut);
+    CHECK(inClass >= 50);
+    CHECK(onBench >= 5);
+    CHECK(inLibrary >= 10);
+    CHECK(backHome >= 50);
+}

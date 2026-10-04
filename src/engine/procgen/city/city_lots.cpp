@@ -2188,6 +2188,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // buildings wait for elevators (roadmap).
         if (bp.walkableGround && bp.groundBays <= 0) {
             if (!bp.curtainWall && bp.floors <= 3) return true;
+            // THE UNIVERSITY's halls climb by their own stair (campusPlan), however many storeys: the residence
+            // hall's four or five were shut, so its students had nowhere to be seen (campus M4)
+            if (bp.campus) return true;
             // TALL buildings open when a CORE fits (skyscrapers v2 M5): the
             // stairwells and the elevator bank make every floor reachable,
             // and a curtain wall is as enterable as any other (its entrance

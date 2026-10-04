@@ -354,8 +354,10 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         const FurnitureLibrary& lib = FurnitureLibrary::global();
         Interactables set;
         for (const PlacedPiece& pp : bm.furniture)
-            if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+            if (lib.interactive(static_cast<Piece>(pp.piece)))
+                set.pieces.push_back({pp.piece, interactXform(lib.find(static_cast<Piece>(pp.piece)), pp.xform, pp.variant), 0});
         if (!set.pieces.empty()) {
+            set.building = static_cast<int>(key);   // whose people sit here (the citysim's indoor occupants)
             set.refreshBounds();
             Entity ie = world.create();
             world.add<Interactables>(ie, std::move(set));

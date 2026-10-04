@@ -61,6 +61,7 @@ bool readFurnitureLibrary(ScriptVM& vm, FurnitureLibrary& out, std::string* err)
         lua_pop(L, 1);
         if (a.spots.size() > 32) { lua_settop(L, base); return fail(err, name + ": more than 32 spots"); }
         a.variety = static_cast<int>(numField(L, t, "variety", 0.0));
+        a.rise = numField(L, t, "rise", 0.0);
         lua_getfield(L, t, "clearance");   // {front = m, side = m}
         if (lua_istable(L, -1)) {
             a.clearFront = numField(L, lua_gettop(L), "front", 0.0);

@@ -20,6 +20,9 @@
 #include <imgui.h>                                   // Living City debug section
 #endif
 #include "../../engine/procgen/vehicle/occupant.h"   // people seated on the bus
+#include "../../engine/interior_occupants.h"         // people inside a streamed interior (campus M4)
+#include "../../engine/procgen/furniture_kit.h"
+#include "../../engine/procgen/city/building_records.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
@@ -31,6 +34,7 @@
 #endif
 
 #include <algorithm>
+#include <map>
 #include <sstream>
 #include <chrono>
 #include <cstdlib>
@@ -404,9 +408,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             closeH = k.closeHour;
             synthetic = true;
         }
-        const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), nav_, openH, closeH, 0,
+        const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), nav_, openH, closeH, ap.capacity,
                                         ap.name, ap.hasEntrance ? &doorHint : nullptr);
         if (synthetic) places_.setAuthoredHours(pid, false);
+        if (ap.campus) places_.setCampus(pid, ap.campus);
     }
 
     // DENSITY population (roads-v2.1 4c): -1 counts are computed from the
@@ -1069,6 +1074,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         InstanceGroup g; g.mesh = assets->acquireMesh(buildSeatedPersonMesh(0), "city:ped_seated"); g.material = pedMaterial();
         g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
         world.add<InstanceGroup>(pedSeatedGroup_, g);
+        indoorSitGroup_ = world.create();
+        world.add<InstanceGroup>(indoorSitGroup_, g);
+        indoorBodyGroup_ = world.create();
+        InstanceGroup b = g;
+        b.mesh = pedMesh;
+        world.add<InstanceGroup>(indoorBodyGroup_, b);
     }
     for (int s = 0; s < 3; ++s) {
         signalGroups_[s] = world.create();
@@ -2428,8 +2439,115 @@ void CityRenderSystem::syncGroups(World& world) {
     syncCarLamps(world);
 }
 
+// PEOPLE INSIDE (campus M4). The sim rests an indoor agent at its place's door, undrawn; a streamed interior's
+// furniture set says where in the building a body can be. Once a second: count who is indoors at each streamed
+// building's place, and put that many on its seats and beds (planOccupants -- the same seats for the same count, so
+// a refresh adds or removes people rather than shuffling them), marking the spots taken so the player is not
+// offered someone's seat.
+void CityRenderSystem::stepIndoors(World& world, Real dt) {
+    indoorAcc_ += dt;
+    if (indoorAcc_ < 1.0) return;
+    indoorAcc_ = 0;
+    InstanceGroup* sit = indoorSitGroup_.valid() ? world.get<InstanceGroup>(indoorSitGroup_) : nullptr;
+    InstanceGroup* body = indoorBodyGroup_.valid() ? world.get<InstanceGroup>(indoorBodyGroup_) : nullptr;
+    if (!sit || !body) return;
+    sit->transforms.clear();
+    body->transforms.clear();
+    indoorDrawn_ = 0;
+    const engine::CityBuildings* cb = nullptr;
+    world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& c) { cb = &c; });
+    struct Inside { engine::Interactables* set; int building; PlaceId place; Vec2 door; int people = 0; };
+    std::vector<Inside> inside;
+    world.each<engine::Interactables>([&](Entity, engine::Interactables& set) {
+        if (set.building < 0 || !cb || set.building >= static_cast<int>(cb->records.size())) return;
+        auto it = buildingPlace_.find(set.building);
+        if (it == buildingPlace_.end()) {   // the place whose site is inside this building's plan
+            const engine::BuildingRecord& r = cb->records[static_cast<std::size_t>(set.building)];
+            PlaceId found = kNoPlace;
+            for (const Place& p : places_.places())
+                if (r.plan.size() >= 3 && engine::pointInPolygon(r.plan, p.site)) { found = p.id; break; }
+            it = buildingPlace_.emplace(set.building, found).first;
+            if (std::getenv("RT_CAMPUS_DEBUG"))
+            {
+                std::fprintf(stderr, "[indoors] building %d (%s, campus %d, %d floors, %zu plan pts, %zu pieces) -> place %d:", set.building,
+                             r.recipe.c_str(), r.params.campus, r.params.floors, r.plan.size(), set.pieces.size(), found == kNoPlace ? -1 : static_cast<int>(found));
+                std::map<int, int> hist;
+                for (const engine::InteractPiece& ip : set.pieces) ++hist[ip.piece];
+                for (const auto& kv : hist) std::fprintf(stderr, " %s x%d", engine::furniturePieceName(static_cast<engine::Piece>(kv.first)), kv.second);
+                double x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+                for (const Vec2& q : r.plan) { x0 = std::min(x0, q.x); x1 = std::max(x1, q.x); z0 = std::min(z0, q.y); z1 = std::max(z1, q.y); }
+                std::fprintf(stderr, " | plan bbox %.1f x %.1f\n", x1 - x0, z1 - z0);
+            }
+        }
+        if (it->second == kNoPlace) return;
+        const Place& p = places_[it->second];
+        // the door an indoor agent rests at (CitySim::assignPlaces' doorOf)
+        inside.push_back({&set, set.building, it->second, p.entrance + (p.site - p.entrance) * 0.4});
+    });
+    // who is in: indoors, at rest, at that door
+    if (!inside.empty())
+        for (const Agent& a : sim_.agents()) {
+            if (!a.indoors || a.moving) continue;
+            for (Inside& in : inside)
+                if ((a.pos - in.door).lengthSquared() < 0.25) { ++in.people; break; }
+        }
+    const engine::FurnitureLibrary& lib = engine::FurnitureLibrary::global();
+    const Real h = sim_.clockHours();
+    for (Inside& in : inside) {
+        engine::Interactables& set = *in.set;
+        std::vector<uint32_t>& held = indoorHeld_[in.building];
+        held.resize(set.pieces.size(), 0);
+        for (std::size_t i = 0; i < set.pieces.size(); ++i) set.pieces[i].taken &= ~held[i];   // ours back first
+        std::fill(held.begin(), held.end(), 0u);
+        engine::OccupantPlan plan;
+        plan.people = in.people;
+        plan.night = (h >= 22.5 || h < 6.5) && places_[in.place].type == PlaceType::Home;   // asleep at home, not at work
+        plan.lecturer = cb->records[static_cast<std::size_t>(in.building)].params.campus == 1 && in.people > 0 && !plan.night;
+        plan.seed = static_cast<uint32_t>(in.building);
+        const std::vector<engine::Occupant> occ = engine::planOccupants(set, lib, plan);
+        for (const engine::Occupant& o : occ) {
+            set.pieces[o.piece].taken |= o.spots;
+            held[o.piece] |= o.spots;
+            (o.pose == engine::Occupant::Pose::Sit ? sit : body)->transforms.push_back(o.at);
+            ++indoorDrawn_;
+        }
+        if (std::getenv("RT_CAMPUS_DEBUG")) {
+            const Place& p = places_[in.place];
+            int lie = 0, stand = 0, lecterns = 0;
+            for (const engine::InteractPiece& ip : set.pieces) lecterns += ip.piece == static_cast<uint8_t>(engine::Piece::Lectern);
+            for (const engine::Occupant& o : occ) { lie += o.pose == engine::Occupant::Pose::Lie; stand += o.pose == engine::Occupant::Pose::Stand; }
+            std::fprintf(stderr, "[indoors] %.2f h building %d (%s campus %d at %.0f %.0f): %d inside, %zu placed (%d lying, %d standing) on %zu pieces, %d lecterns\n",
+                         h, in.building, placeTypeName(p.type), p.campus, p.site.x, p.site.y, in.people, occ.size(), lie, stand, set.pieces.size(), lecterns);
+            // a place to stand and look at the first of each pose: in front of the body, eye height, looking back
+            bool done[3] = {false, false, false};
+            for (const engine::Occupant& o : occ) {
+                const int k = static_cast<int>(o.pose);
+                if (done[k]) continue;
+                done[k] = true;
+                const Vec3 at(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
+                Vec3 f = engine::pieceDir(o.at, o.pose == engine::Occupant::Pose::Lie ? Vec3(1, 0, 0) : Vec3(0, 0, 1));
+                f.y = 0;
+                f = normalize(f);
+                const Vec3 eye = at + f * 2.2;
+                const double yaw = std::atan2(-f.x, f.z) * 57.29577951308232;   // camera? convention: atan2(fwd.x, -fwd.z)
+                std::fprintf(stderr, "[indoors view] building %d pose %d at %.2f %.2f %.2f look from %.2f %.2f %.2f yaw %.1f\n",
+                             in.building, k, at.x, at.y, at.z, eye.x, eye.y, eye.z, yaw);
+            }
+        }
+    }
+    refreshBounds(sit);   // a group with no bounds is culled whole
+    refreshBounds(body);
+    // a building released since: forget what we held there
+    for (auto it = indoorHeld_.begin(); it != indoorHeld_.end();) {
+        bool live = false;
+        for (const Inside& in : inside) live = live || in.building == it->first;
+        it = live ? std::next(it) : indoorHeld_.erase(it);
+    }
+}
+
 void CityRenderSystem::step(World& world, Real dt) {
     if (!built_) return;
+    stepIndoors(world, dt);
     // WHERE ARE THE BUSES (print-only, RT_PRINT_BUSES=1). Same idea as
     // RT_PRINT_CORES: transit vehicles drive a loop across the whole city, so
     // finding one to look at by standing at a stop and waiting is a matter of
@@ -2841,6 +2959,7 @@ const char* agentRoleName(Agent::Role r) {
         case Agent::Role::Commuter:   return "Commuter";
         case Agent::Role::Shopkeeper: return "Shopkeeper";
         case Agent::Role::Stroller:   return "Stroller";
+        case Agent::Role::Student:    return "Student";
         default:                      return "?";
     }
 }

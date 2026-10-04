@@ -47,7 +47,12 @@ TEST_CASE(the_furniture_library_describes_its_pieces_sanely) {
         const FurnitureAsset* a = lib.find(static_cast<Piece>(i));
         if (!a) continue;
         const Vec3 sz = furniturePiece(static_cast<Piece>(i), 0).size;
-        for (const FurnSpot& s : a->spots) {
+        uint32_t standOnly = 0;   // a STAND spot is on the floor beside the piece (behind a lectern), not on it
+        for (const FurnVerb& v : a->verbs) if (v.verb == Verb::Stand) standOnly |= v.spots;
+        for (const FurnVerb& v : a->verbs) if (v.verb != Verb::Stand) standOnly &= ~v.spots;
+        for (std::size_t si = 0; si < a->spots.size(); ++si) {
+            const FurnSpot& s = a->spots[si];
+            if (standOnly & (1u << si)) { CHECK(std::fabs(s.at.y) < 1e-6); continue; }
             CHECK(std::fabs(s.at.x) <= sz.x * 0.5 + 0.05);
             CHECK(s.at.z >= 0 && s.at.z <= sz.z + 0.05);
             CHECK(s.at.y > 0.3 && s.at.y <= sz.y);
@@ -55,9 +60,9 @@ TEST_CASE(the_furniture_library_describes_its_pieces_sanely) {
         for (const FurnVerb& v : a->verbs) {
             Real top = 0;
             for (std::size_t k = 0; k < a->spots.size(); ++k) if (v.spots & (1u << k)) top = std::max(top, a->spots[k].at.y);
-            CHECK(v.eye.y > top + (v.verb == Verb::Sit ? 0.5 : 0.15));
+            CHECK(v.eye.y > top + (v.verb == Verb::Sit ? 0.5 : v.verb == Verb::Stand ? 1.4 : 0.15));
             CHECK(std::fabs(v.exit.y) < 1e-6);
-            CHECK(std::fabs(v.exit.x) > sz.x * 0.5 || v.exit.z > sz.z);   // off the piece
+            CHECK(std::fabs(v.exit.x) > sz.x * 0.5 || v.exit.z > sz.z || v.exit.z < 0);   // off the piece
         }
     }
 }

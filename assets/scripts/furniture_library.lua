@@ -177,13 +177,21 @@ furniture_library = {
     spots = { { id = "seat", at = seat(0, 0.47, 0.26) } },
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.19, 0.22 }, look = { 0, -0.08, 1 }, exit = { 0, 0, 0.9 } } },
   },
-  lecture_row = { family = "seating", tags = { "lecture" } },
+  -- six tip-up seats on the row's riser (rise: the spots climb 0.18 m a tier with the style bits); built below
+  lecture_row = { family = "seating", tags = { "lecture" }, rise = 0.18, spots = {}, verbs = {} },
   aisle_step = { family = "fixture", tags = { "lecture", "stair" } },
   -- the sports field's stand: three tiers of four seats, each its own place to sit (built in a loop, below)
   bleacher = { family = "seating", tags = { "outdoor", "sports" }, spots = {}, verbs = {} },
-  lectern = { family = "fixture", tags = { "lecture" } },
+  -- the lecturer's place: behind it, between it and the board, facing the hall
+  lectern = {
+    family = "fixture", tags = { "lecture" },
+    spots = { { id = "stand", at = { 0, 0, -0.32 } } },
+    verbs = { { verb = "stand", label = "stand at the lectern", spots = { "stand" }, eye = { 0, 1.62, -0.30 },
+                look = { 0, -0.15, 1 }, exit = { 0, 0, -0.75 } } },
+  },
   lab_bench = { family = "surface", tags = { "lab" } },
-  reading_table = { family = "surface", tags = { "library" } },
+  -- eight chairs, four a side, part of the piece; built below
+  reading_table = { family = "surface", tags = { "library" }, spots = {}, verbs = {} },
   bookcase = { family = "storage", tags = { "books", "library" }, variety = 8 },
   -- THE GOODS: small things the dressing pass stands on anchors, by their tags
   desk_lamp = { family = "goods", tags = { "desk", "lamp" } },
@@ -199,6 +207,36 @@ furniture_library = {
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.12, 0.36 }, look = { 0, -0.1, 1 }, exit = { 0, 0, 1.05 } } },
   },
 }
+
+-- THE LECTURE ROW's seats: six along the row, each its own place to sit, facing the board (+z); you get up into the
+-- row's own aisle stair beside it (-x), at the riser's height
+do
+  local r = furniture_library.lecture_row
+  for i = 0, 5 do
+    local x = -1.4 + i * 0.56
+    local id = "s" .. i
+    r.spots[#r.spots + 1] = { id = id, at = { x, 0.48, 0.40 } }
+    r.verbs[#r.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.20, 0.36 }, look = { 0, -0.12, 1 },
+                             exit = { -1.95, 0, 0.6 } }
+  end
+end
+
+-- THE READING TABLE's chairs: four a side at x = -0.9 .. 0.9, the near side (z 0.28) facing +z across the table,
+-- the far side (z 1.72) facing back
+do
+  local r = furniture_library.reading_table
+  for side = 0, 1 do
+    local z = side == 0 and 0.28 or 1.72
+    local f = side == 0 and 1 or -1
+    for i = 0, 3 do
+      local x = -0.9 + 0.6 * i
+      local id = (side == 0 and "n" or "f") .. i
+      r.spots[#r.spots + 1] = { id = id, at = { x, 0.49, z } }
+      r.verbs[#r.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.20, z + f * 0.06 }, look = { 0, -0.25, f },
+                               exit = { x - 0.32, 0, z - f * 0.30 } }
+    end
+  end
+end
 
 -- THE BLEACHER's seats: tier t (0 front), four seats along the plank, each a spot with its own sit verb
 do

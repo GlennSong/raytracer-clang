@@ -52,6 +52,7 @@ bool parseTarget(const std::string& s, GoalTarget& out) {
     if (s == "depot") { out = GoalTarget::Depot; return true; }
     if (s == "lunch") { out = GoalTarget::Lunch; return true; }
     if (s == "outing") { out = GoalTarget::Outing; return true; }
+    if (s == "campus") { out = GoalTarget::Campus; return true; }
     return false;
 }
 

@@ -495,10 +495,10 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 const Real d = (st->pos - sm.tierCenter()).length();
                 if (d < bestD) { bestD = d; seatAt = st->pos; }
             }
-        char b[320];
-        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f)",
+        char b[400];
+        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d",
                       walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
-                      tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y);
+                      tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount());
         ctx.settings.setString("walkers.telemetry", b);
         tel_ = Telemetry{};
     }

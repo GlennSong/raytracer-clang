@@ -84,7 +84,9 @@ struct Agent {
     // a Commuter keeps office hours; a Shopkeeper opens their shop before it opens
     // and closes it after; a Stroller has no job and spends the day at a park.
     // Assigned in assignPlaces from the agent's workplace + its own brain bits.
-    enum class Role : uint8_t { Commuter, Shopkeeper, Stroller, Count };
+    // A Student (campus milestone 4) lives in the university's residence hall and
+    // spends the day between classes in the teaching hall and breaks on campus.
+    enum class Role : uint8_t { Commuter, Shopkeeper, Stroller, Student, Count };
     Role role = Role::Commuter;
 
     // HOW THIS AGENT IS MOVING RIGHT NOW. Nearly everything that reads `mode`
@@ -1109,6 +1111,7 @@ public:
         int node = -1;
         engine::Vec2 door;
         Real openHour = 0, closeHour = 24;
+        uint8_t campus = 0;   // Place::campus: 1 teaching hall, 2 library, 3 residence, 4 quad, 5 field
         bool openAt(Real h) const {
             if (openHour == closeHour) return true;
             if (openHour < closeHour) return h >= openHour && h < closeHour;
@@ -1116,6 +1119,8 @@ public:
         }
     };
     const std::vector<Venue>& venues() const { return venues_; }
+    // How many agents assignPlaces made students (0 without a campus with a residence and a teaching hall).
+    int studentCount() const { return students_; }
     // SEATS out in the city (the furniture library, M5; Glenn: benches you can sit on -- and so can everyone
     // else): one per place a body sits, its floor point, the way it faces, its seat height, the path node it is
     // reached from (setSeats finds it) and who has it. A stroller's outing may be a sit on one.
@@ -1178,6 +1183,9 @@ public:
     // the build stream is unchanged). Call AFTER build()/setWander with the same
     // graph; a no-op when `places` has no homes. `graph` must be the built one.
     void assignPlaces(const PlaceMap& places, const engine::NavGraph& graph);
+    // The university's students (campus milestone 4): walkers moved into the residence hall, with class
+    // in the teaching hall and the library for study. Part of assignPlaces (and so of its cache).
+    void assignStudents(const PlaceMap& places, const engine::NavGraph& graph);
     // THE POPULATION CACHE (Glenn: "could we assign the job and home for each agent offline and save/load
     // that information?"). What assignPlaces decides for each agent -- home, job, errand stop, role, hours,
     // commute, starting pose -- plus its commute statistics, written to `<dir>/<key>.pop` keyed by a hash
@@ -1269,6 +1277,7 @@ private:
         if (isBus(i)) return busTable_;
         if (isTaxi(i)) return taxiTable_;
         if (outingStroller(a)) return strollerTable_;
+        if (student(a)) return studentTable_;
         return goalsFor(a.archetype);
     }
     const GoalTable& tableFor(const Agent& a) const {
@@ -1276,6 +1285,7 @@ private:
         if (isBus(i)) return busTable_;
         if (isTaxi(i)) return taxiTable_;
         if (outingStroller(a)) return strollerTable_;
+        if (student(a)) return studentTable_;
         return a.archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
     }
     // A walker with the day off runs the outing table (strollerGoals); a
@@ -1284,7 +1294,11 @@ private:
         return !wander_ && a.role == Agent::Role::Stroller &&
                a.archetype == Agent::Mode::Pedestrian && !venues_.empty();
     }
+    bool student(const Agent& a) const { return !wander_ && a.role == Agent::Role::Student; }
     int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
+    int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
+    // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.
+    int pickCampusSeat(Agent& a, engine::Vec2 here);
     int pickLunch(Agent& a, int origin);    // GoalTarget::Lunch  -> a node, or -1
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
@@ -1487,6 +1501,8 @@ private:
     // scripting builds may replace them at load via setGoalTables.
     GoalTable goalPed_ = defaultScheduleGoals();
     GoalTable strollerTable_ = strollerGoals();
+    GoalTable studentTable_ = studentGoals();
+    int students_ = 0;
     std::vector<Venue> venues_;
     std::vector<SeatSpot> seats_;
     void releaseSeat(Agent& a);

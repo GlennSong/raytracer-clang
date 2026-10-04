@@ -741,13 +741,32 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
     RoomPlan rp;
     rp.topology = PlateTopology::Apartments;
     rp.office = params.campus != 3;
-    if (planIn.size() != 4 || well.size() < 3) return rp;
+    if (planIn.size() < 4 || well.size() < 3) return rp;
     const OBB2 ob = orientedBoundingBox(planIn);
     const int la = ob.longAxis();
     const Vec2 ua = ob.axis[la];
     const Vec2 va(ua.y, -ua.x);
-    const Real hl = ob.half[la], hw = ob.half[1 - la];
-    const Vec2 o = ob.center;
+    Real hl = ob.half[la];
+    const Real hw = ob.half[1 - la];
+    Vec2 o = ob.center;
+    // A TRIMMED HALL (its outer end cut to fit a rounded block corner -- 8 corners, not 4): the rooms are laid in
+    // the box, so each end of it is drawn in until both its corners are inside the plan. (Such a hall fell through
+    // to the apartment plan: beds and sofas in a teaching hall.)
+    if (planIn.size() != 4) {
+        Poly2 pl = planIn;
+        ensureCCW(pl);
+        Real e0 = -hl, e1 = hl;   // the box's ends along ua
+        auto inside = [&](Real s) {
+            for (Real t : {hw - 0.05, -hw + 0.05})
+                if (!pointInPolygon(pl, o + ua * s + va * t)) return false;
+            return true;
+        };
+        for (int k = 0; k < 80 && !inside(e0 + 0.05); ++k) e0 += 0.25;
+        for (int k = 0; k < 80 && !inside(e1 - 0.05); ++k) e1 -= 0.25;
+        if (e1 - e0 < 8.0) return rp;
+        o = o + ua * ((e0 + e1) * 0.5);
+        hl = (e1 - e0) * 0.5;
+    }
     const Real kCorr = 2.4;
     const bool twoSides = 2 * hw >= 2 * (inset + 5.0) + kCorr;
     Real s0 = 1e9, s1 = -1e9, t0 = 1e9, t1 = -1e9;
@@ -787,6 +806,10 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
     uint32_t h = static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 131 + 7);
     auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
     int roomNo = 0;
+    // THE LECTURE HALL: the ground floor's first run long enough for one (10.5 m: the stage, the aisle, a block of
+    // rows), on whichever side of the corridor has it -- the stair's side is often cut too short. The city's halls
+    // are single-loaded, their rooms ~7 m deep: deep enough for the stage and three tiers
+    bool lectureDone = false;
     for (std::size_t bi = 0; bi < bands.size(); ++bi) {
         const Band& b = bands[bi];
         const Real vIn = inset, D = b.vFront - vIn;
@@ -815,8 +838,12 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
             };
             switch (params.campus) {
                 case 1:   // teaching hall
-                    if (storey == 0 && bi == 0 && D >= 8.0) fill(13.0 + 3.0 * rnd(), 10.0, RoomKind::Lecture);
-                    else fill(8.5, 6.5, RoomKind::Classroom);
+                    if (storey == 0 && !lectureDone && D >= 6.5 && len >= 10.5) {   // 6.5 deep: the stage and three tiers
+                        fill(13.0 + 3.0 * rnd(), 10.0, RoomKind::Lecture);
+                        lectureDone = true;
+                    } else {
+                        fill(8.5, 6.5, RoomKind::Classroom);
+                    }
                     if (storey > 0)
                         for (std::size_t k = 0; k < want.size(); ++k)
                             if ((roomNo + static_cast<int>(k)) % 3 == 2) want[k].kind = RoomKind::Lab;
@@ -836,6 +863,9 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                     break;
             }
             if (restroom) want.push_back({3.6, RoomKind::Bath});
+            if (std::getenv("RT_CAMPUS_DEBUG") && storey == 0)
+                std::fprintf(stderr, "[campus plan] campus %d band %zu run %zu: D %.1f len %.1f stair %d -> %zu rooms, first kind %d\n",
+                             params.campus, bi, ri, D, len, stairHere ? 1 : 0, want.size(), want.empty() ? -1 : static_cast<int>(want[0].kind));
             roomNo += static_cast<int>(want.size());
             Real x = r0;
             for (std::size_t k = 0; k < want.size(); ++k) {
@@ -1166,7 +1196,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     const OBB2 plateBox = orientedBoundingBox(planIn);
     const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
     const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
-    if (params.campus && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
+    if (params.campus && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
         RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey, stairFoot);
@@ -1174,6 +1204,10 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         if (!cp.rooms.empty() && floorIsWalkable(cp, planIn, centroid(stairWell), stairWell)) return cp;
         if (std::getenv("RT_CAMPUS_DEBUG"))
             std::fprintf(stderr, "[campus] storey %d: %zu rooms, NOT walkable\n", storey, cp.rooms.size());
+        // never an apartment floor in a university hall: open floor, unfurnished, rather than beds in a classroom
+        RoomPlan open;
+        open.finish = interiorFinishFor(params);
+        return open;
     }
     if (walkupShape && params.residential && !core.valid && planIn.size() == 4 && stairWell.size() >= 3) {
         // A WALK-UP's floor: apartments off a corridor from the stair, walked from the stair's foot. A narrow plate

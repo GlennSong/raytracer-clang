@@ -32,6 +32,7 @@ struct InteractPiece {
 
 struct Interactables {
     std::vector<InteractPiece> pieces;
+    int building = -1;   // a streamed interior's CityBuildings record index; -1 = the outdoor cells
     Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // world bounds of the pieces' origins (the cheap first test)
     void refreshBounds();
 };

@@ -45,8 +45,10 @@ enum class GoalAction : uint8_t {
 // who brought lunch: the trip does not start and NoRoute fires).
 // Outing: somewhere near to go next -- a park, a cafe, a store, a supermarket,
 // a civic building, or just a walk round the block (CitySim::pickOuting).
+// Campus: a student's break between classes -- the library, a bench on the quad
+// or a bleacher by the pitch, a walk across the quad, lunch (CitySim::pickCampusBreak).
 enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop, Stop, Depot,
-                                  Lunch, Outing };
+                                  Lunch, Outing, Campus };
 
 // The events CitySim EMITS at fixed points — the full trigger vocabulary a
 // table may transition on. Emission lives in C++ (clock windows, arrival,
@@ -133,6 +135,10 @@ GoalTable wanderGoals(bool driver);
 // park, cafe, store, a walk round the block -- each with a pause, until the
 // outing window closes and they head home. The Stroller role's table.
 GoalTable strollerGoals();
+// A STUDENT's day (campus milestone 4): from the residence hall to class in the
+// teaching hall, a break between classes, back to class, until the day's window
+// closes and they go back to the hall.
+GoalTable studentGoals();
 // A TAXI's day: cruise until dispatched, collect, deliver, cruise again.
 GoalTable taxiGoals();
 // A BUS's day: drive the loop, for ever. One state.

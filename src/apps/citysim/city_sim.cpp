@@ -696,7 +696,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 1;   // bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 2;   // bump when assignPlaces' rules or this record change
 struct Fnv {
     uint64_t h = 1469598103934665603ull;
     void bytes(const void* p, std::size_t n) {
@@ -726,7 +726,11 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; }
     if (places.empty() || graph.nodeCount() == 0) return;
 
-    const std::vector<PlaceId>& homes = places.ofType(PlaceType::Home);
+    // The university's residence hall is the STUDENTS' home (below), not one more house in the pool.
+    std::vector<PlaceId> homes;
+    for (PlaceId id : places.ofType(PlaceType::Home))
+        if (places[id].campus != 3) homes.push_back(id);
+    if (homes.empty()) homes = places.ofType(PlaceType::Home);
     const std::vector<PlaceId>& parks = places.ofType(PlaceType::Park);
     // A "job" is a workplace place: shop / office / civic (a park is not a job).
     std::vector<PlaceId> jobs;
@@ -771,6 +775,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         v.door = doorOf(p.id);
         v.openHour = p.openHour;
         v.closeHour = p.closeHour;
+        v.campus = p.campus;
         if (v.node >= 0) venues_.push_back(v);
     }
 
@@ -796,7 +801,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
         for (const Place& p : places.places()) {
             k.pod(p.id); k.pod(p.type); k.vec(p.site); k.vec(p.entrance); k.pod(p.entranceLink); k.real(p.entranceT);
-            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours);
+            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours); k.pod(p.campus);
         }
         for (std::size_t i = 0; i < agents_.size(); ++i) {
             const Agent& a = agents_[i];
@@ -1190,6 +1195,9 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
     }
 
+    // STUDENTS are decided with everyone else, so a cache hit restores them too.
+    assignStudents(places, graph);
+
     measureCommute(graph);
     PopTail tail;
     std::memset(&tail, 0, sizeof tail);
@@ -1222,6 +1230,8 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         if (out) { std::filesystem::rename(tmp, popPath, ec); popCache_.saved = !ec; }
     }
     }   // decided (not read from the cache)
+    students_ = 0;
+    for (const Agent& a : agents_) students_ += a.role == Agent::Role::Student ? 1 : 0;
 
     // Seed the surface-level social graph: agents sharing a workplace are
     // coworkers; those sharing a home are neighbors (housemates).
@@ -1777,12 +1787,13 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     // trip across town can take the bus like any other. A trip resumed after a
     // bus leg keeps the destination it chose (outingTo).
     int chosen = -1;
-    if (s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch) {
+    if (s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch || s.target == GoalTarget::Campus) {
         if (a.outingTo >= 0) {
             chosen = a.outingTo;
         } else {
             chosen = s.target == GoalTarget::Outing ? pickOuting(a, origin)
-                                                     : pickLunch(a, origin);
+                     : s.target == GoalTarget::Lunch ? pickLunch(a, origin)
+                                                     : pickCampusBreak(a, origin);
             a.outingTo = chosen;
         }
     } else {
@@ -1837,6 +1848,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
             break;
         case GoalTarget::Outing:
         case GoalTarget::Lunch:
+        case GoalTarget::Campus:
             if (chosen >= 0 && chosen != origin) {
                 startTrip(a, origin, chosen, fromRest);
                 started = a.moving;
@@ -2327,6 +2339,116 @@ int CitySim::pickOuting(Agent& a, int origin) {
         return venues_[static_cast<std::size_t>(a.tripVenue)].node;
     }
     return -1;
+}
+
+// A STUDENT'S BREAK between classes (campus milestone 4): a session in the
+// library, a sit on a bench on the quad or a bleacher by the pitch, a walk
+// across the quad -- and at midday, lunch out like anyone. Sets tripVenue or
+// tripSeat; -1 = no stop (the table's NoRoute row: straight back to class).
+int CitySim::pickCampusBreak(Agent& a, int origin) {
+    a.tripVenue = -1;
+    releaseSeat(a);
+    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
+    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
+    const Real h = clockHours_;
+    const uint32_t roll = rnd() % 100u;
+    if (h >= 11.5 && h < 13.5 && roll < 45u) {
+        const int lunch = pickLunch(a, origin);
+        if (lunch >= 0) return lunch;
+    }
+    if (roll < 75u) {   // somewhere to sit outside (the bleachers too, a short walk off)
+        const int st = pickCampusSeat(a, here);
+        if (st >= 0) { a.tripSeat = st; return seats_[static_cast<std::size_t>(st)].node; }
+    }
+    // The library, or the quad itself.
+    int lib = -1, quad = -1;
+    Real libD = 1e30, quadD = 1e30;
+    for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
+        const Venue& v = venues_[static_cast<std::size_t>(i)];
+        if ((v.campus != 2 && v.campus != 4) || v.node == origin) continue;
+        const Real d2 = (nav_->nodes[static_cast<std::size_t>(v.node)] - here).lengthSquared();
+        if (v.campus == 2 && d2 < libD) { libD = d2; lib = i; }
+        if (v.campus == 4 && d2 < quadD) { quadD = d2; quad = i; }
+    }
+    const int pick = (lib >= 0 && (roll % 3u != 0u || quad < 0)) ? lib : quad;
+    if (pick < 0) return -1;
+    a.tripVenue = pick;
+    return venues_[static_cast<std::size_t>(pick)].node;
+}
+
+int CitySim::pickCampusSeat(Agent& a, Vec2 here) {
+    // a free seat within 120 m of the quad or the field, one of the nearest six to here
+    std::vector<std::pair<Real, int>> c;
+    for (int i = 0; i < static_cast<int>(seats_.size()); ++i) {
+        const SeatSpot& s = seats_[static_cast<std::size_t>(i)];
+        if (s.occupant >= 0) continue;
+        bool onCampus = false;
+        for (const Venue& v : venues_) {
+            if (v.campus != 4 && v.campus != 5) continue;
+            if ((v.door - s.pos).lengthSquared() < 120.0 * 120.0) { onCampus = true; break; }
+        }
+        if (!onCampus) continue;
+        const Real d2 = (s.pos - here).lengthSquared();
+        if (d2 > 600.0 * 600.0) continue;
+        c.push_back({d2, i});
+    }
+    if (c.empty()) return -1;
+    const std::size_t k = std::min<std::size_t>(6, c.size());
+    std::partial_sort(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(k), c.end());
+    const int pick = c[rnd() % static_cast<uint32_t>(k)].second;
+    seats_[static_cast<std::size_t>(pick)].occupant = indexOf(a);
+    return pick;
+}
+
+void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
+    PlaceId hall = kNoPlace, teach = kNoPlace, lib = kNoPlace;
+    for (const Place& p : places.places()) {
+        if (p.campus == 3 && hall == kNoPlace) hall = p.id;
+        if (p.campus == 1 && teach == kNoPlace) teach = p.id;
+        if (p.campus == 2 && lib == kNoPlace) lib = p.id;
+    }
+    if (hall == kNoPlace || teach == kNoPlace) return;
+    const int hn = graph.nearestNode(places[hall].entrance), tn = graph.nearestNode(places[teach].entrance);
+    if (hn < 0 || tn < 0 || hn == tn) return;
+    const engine::Route there = engine::findRoute(graph, hn, tn, /*onFoot=*/true);
+    if (!there.valid() || !engine::findRoute(graph, tn, hn, true).valid()) return;
+    Real walk = 0;
+    for (int li : there.links) walk += graph.links[static_cast<std::size_t>(li)].length;
+    const int ln = lib != kNoPlace ? graph.nearestNode(places[lib].entrance) : -1;
+    auto doorOf = [&](PlaceId id) { const Place& p = places[id]; return p.entrance + (p.site - p.entrance) * 0.4; };
+
+    // WHO: walkers only (a student has no car), never a bus or a cab's driver, chosen by their own bits so
+    // the same city always has the same students. As many as the hall has beds, and never more than a
+    // quarter of the walkers.
+    std::vector<std::pair<uint32_t, int>> cand;
+    int walkers = 0;
+    for (std::size_t i = 0; i < agents_.size(); ++i) {
+        const Agent& a = agents_[i];
+        if (a.archetype != Agent::Mode::Pedestrian || isBus(static_cast<int>(i)) || isTaxi(static_cast<int>(i))) continue;
+        ++walkers;
+        uint32_t k = a.brain * 0x27d4eb2fu;
+        k ^= k >> 15; k *= 0x165667b1u; k ^= k >> 13;
+        cand.push_back({k, static_cast<int>(i)});
+    }
+    const int beds = places[hall].capacity > 0 ? places[hall].capacity : 150;
+    const int want = std::min(beds, walkers / 4);
+    if (want <= 0) return;
+    std::partial_sort(cand.begin(), cand.begin() + want, cand.end());
+    for (int c = 0; c < want; ++c) {
+        Agent& a = agents_[static_cast<std::size_t>(cand[static_cast<std::size_t>(c)].second)];
+        a.role = Agent::Role::Student;
+        a.homePlace = hall; a.home = hn; a.homeDoor = doorOf(hall);
+        a.restNode = hn; a.pos = a.homeDoor; a.indoors = true;
+        if (!graph.outLinks[static_cast<std::size_t>(hn)].empty())
+            a.heading = graph.direction(graph.outLinks[static_cast<std::size_t>(hn)][0]);
+        a.workPlace = teach; a.work = tn; a.workDoor = doorOf(teach);
+        a.shopPlace = lib; a.shop = ln; a.shopDoor = lib != kNoPlace ? doorOf(lib) : a.workDoor;
+        // The first class at 8:30-10, the last out at 16:00-18:30.
+        const Real u0 = static_cast<Real>((a.brain >> 5) & 0xFF) / 255.0, u1 = static_cast<Real>((a.brain >> 17) & 0xFF) / 255.0;
+        a.departWork = 8.5 + 1.5 * u0;
+        a.departHome = 16.0 + 2.5 * u1;
+        a.commuteSeconds = walk / std::max(Real(0.1), kWalkSpeed * a.speedFactor);
+    }
 }
 
 // Lunch OUT: a walker at work, in its shift, goes to one of the few nearest
@@ -4353,7 +4475,9 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             // An OUTING or LUNCH stop: in through the door, for as long as
             // that kind of place keeps people -- or, at a park, outside.
             const Venue& v = venues_[static_cast<std::size_t>(a.tripVenue)];
-            switch (v.type) {
+            if (v.campus == 2) a.restDwell = jitter(0.5, 1.2);         // a session in the library
+            else if (v.campus == 4) a.restDwell = jitter(0.1, 0.3);    // a while on the quad
+            else switch (v.type) {
                 case PlaceType::Cafe:        a.restDwell = jitter(0.25, 0.5); break;
                 case PlaceType::Restaurant:  a.restDwell = jitter(0.5, 1.0); break;
                 case PlaceType::Supermarket: a.restDwell = jitter(0.2, 0.4); break;
