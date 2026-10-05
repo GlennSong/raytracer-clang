@@ -17,7 +17,7 @@ constexpr std::size_t kBuildingParamsSize = 496;   // 432 before the party walls
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 10, kLotsVersion = 8, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 10, kLotsVersion = 9, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -102,6 +102,7 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         putPoly(w, lb.pavedLot); w.put<double>(lb.paveY);
         putPoly(w, lb.lot);
         putPoly(w, lb.padBound);
+        putPolys(w, lb.sealed);   // lots v9: a park's paths and plazas (no grass on them)
     }
 }
 
@@ -130,6 +131,7 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         if (!getPoly(r, lb.pavedLot) || !r.get(lb.paveY)) return false;
         if (!getPoly(r, lb.lot)) return false;
         if (!getPoly(r, lb.padBound)) return false;
+        if (!getPolys(r, lb.sealed)) return false;
     }
     return r.ok();
 }

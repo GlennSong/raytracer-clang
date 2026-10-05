@@ -213,7 +213,36 @@
     "size": 2760,
     "snowLine": 230,
     "tiltX": -0.045,
-    "warp": 0.35
+    "warp": 0.35,
+    "groundCover": {
+      "beachHeight": 3,
+      "dirt": [
+        0.12,
+        0.085,
+        0.05
+      ],
+      "dirtPatches": 0.15,
+      "grass": [
+        0.055,
+        0.085,
+        0.018
+      ],
+      "grassDry": [
+        0.1,
+        0.1,
+        0.04
+      ],
+      "mountainHeight": 300,
+      "rock": [
+        0.15,
+        0.14,
+        0.12
+      ],
+      "rockSlopeDeg": 42,
+      "seed": 5,
+      "snowHeight": 720,
+      "uplandHeight": 90
+    }
   },
   "vegetation": {
     "clearMargin": 4.0,
@@ -278,5 +307,62 @@
     "region": 1900,
     "roughness": 0.04,
     "seaLevel": -5.0
-  }
+  },
+  "grass": {
+    "blades": 18,
+    "cardRadius": 320,
+    "cardSpacing": 1.6,
+    "clumpRadius": 0.22,
+    "fadeEnd": 60,
+    "fadeStart": 44,
+    "height": 0.55,
+    "lean": 0.35,
+    "maxSlopeDeg": 32,
+    "nearRadius": 24,
+    "patchiness": 0.35,
+    "radius": 62,
+    "rootColor": [
+      0.018,
+      0.032,
+      0.008
+    ],
+    "seed": 7,
+    "spacing": 0.3,
+    "tipColor": [
+      0.1,
+      0.14,
+      0.03
+    ],
+    "variantTint": 0.18,
+    "width": 0.045
+  },
+  "grassLayers": [
+    {
+      "where": "lawn",
+      "blades": 20,
+      "height": 0.13,
+      "width": 0.032,
+      "lean": 0.2,
+      "spacing": 0.24,
+      "clumpRadius": 0.2,
+      "nearRadius": 24,
+      "radius": 60,
+      "fadeStart": 44,
+      "fadeEnd": 60,
+      "cardRadius": 300,
+      "cardSpacing": 1.4,
+      "rootColor": [
+        0.022,
+        0.045,
+        0.012
+      ],
+      "tipColor": [
+        0.1,
+        0.17,
+        0.045
+      ],
+      "variantTint": 0.08,
+      "seed": 71
+    }
+  ]
 }

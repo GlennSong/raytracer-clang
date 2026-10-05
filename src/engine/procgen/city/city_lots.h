@@ -118,6 +118,9 @@ struct LotBuilding {
     // loader turns them into thin wall colliders (drive feedback: "Parks
     // also have no collision detection").
     std::vector<std::pair<Vec2, Vec2>> fenceSegs;
+    // SEALED GROUND on a park (the quad, a park's walks): its paths and plazas, world XZ -- the host keeps grass off
+    // them (a meadow grew over every path once the grass came to the city).
+    std::vector<Poly2> sealed;
     // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
     std::vector<BuildingUnit> units;
     // SITE PLAN (skyscrapers v2, ADR-0086): the lot's ground around the

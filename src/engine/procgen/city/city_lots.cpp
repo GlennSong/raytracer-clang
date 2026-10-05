@@ -158,6 +158,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
                               Vec3(n2.x, 0, n2.y), pathCol * 0.85);
     }
 
+    g.sealed.push_back(Poly2(rim, rim + PN));   // the plaza: no grass on it
     // Walking-path SPOKES: from the plaza out to the midpoints of the longest
     // lot edges — the desire lines to the surrounding sidewalks.
     struct Spoke { Vec2 a, b; };
@@ -183,6 +184,10 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             std::min(Real(3.0), std::max(Real(1.2), meshCell * Real(0.75)));
         const int segs =
             std::max(1, static_cast<int>((len - r0 * 0.85) / segLen));
+        {   // sealed: no grass on the walk
+            const Vec2 pe = p0 + dir * (len - r0 * 0.85);
+            g.sealed.push_back({p0 - perp * hw, p0 + perp * hw, pe + perp * hw, pe - perp * hw});
+        }
         for (int s = 0; s < segs; ++s) {
             Vec2 q0 = p0 + dir * ((len - r0 * 0.85) * s / segs);
             Vec2 q1 = p0 + dir * ((len - r0 * 0.85) * (s + 1) / segs);
@@ -429,6 +434,183 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
 
     g.padMesh = std::move(m);
     g.color = Vec3(1, 1, 1);   // vertex colours carry the lawn/path look
+}
+
+// THE QUAD (campus gap pass; Glenn: "make it look cool"): the green between the halls as a collegiate quad, not a
+// park -- a paved round at its centre with a FOUNTAIN, a broad stone walk down its length and one across it (out
+// through the gaps between the halls to the streets), diagonal walks to its corners, an avenue of trees down the
+// long walk, lamps between them, benches round the fountain and along the walk, flower beds in the round's corners.
+// No fence. Ground-relative like a park; the walks and the round are SEALED (no grass on them).
+static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::vector<RenderMesh>* outParts, Real meshCell,
+                       const std::function<bool(const Vec2&)>& street, bool crossWalks) {
+    const OBB2 ob = orientedBoundingBox(poly);
+    const int la = ob.longAxis();
+    const Vec2 ua = ob.axis[la], va(ua.y, -ua.x), c = ob.center;
+    const Real hl = ob.half[la], hw = ob.half[1 - la];
+    Hash rng(mix(seed, 0x0A0Du));
+    RenderMesh m;
+    BuildingMesh kit;
+    const Vec3 up(0, 1, 0);
+    // (a weathered limestone: the first, lighter cut read as paper in the sun)
+    const Vec3 stone(0.56, 0.53, 0.48), stoneDark(0.42, 0.40, 0.37), water(0.16, 0.27, 0.32);
+    const Real py = 0.05;   // the walks stand just proud of the lawn
+    auto Q = [&](Real u, Real v) { return c + ua * u + va * v; };
+    auto inside = [&](const Vec2& q) { return pointInPolygon(poly, q); };
+    const Real segLen = std::min(Real(3.0), std::max(Real(1.2), meshCell * Real(0.75)));
+    // a walk from a to b, `w` wide: a ribbon jointed every terrain cell (it is draped), sealed
+    auto walk = [&](Vec2 a, Vec2 b, Real w, const Vec3& col) {
+        const Vec2 d = b - a;
+        const Real L = d.length();
+        if (L < 0.5) return;
+        const Vec2 dir = d * (1.0 / L), perp(-dir.y, dir.x);
+        const int n = std::max(1, static_cast<int>(L / segLen));
+        for (int i = 0; i < n; ++i) {
+            const Vec2 q0 = a + dir * (L * i / n), q1 = a + dir * (L * (i + 1) / n);
+            MeshBuilder::emitQuad(m, Vec3(q0.x - perp.x * w / 2, py, q0.y - perp.y * w / 2), Vec3(q0.x + perp.x * w / 2, py, q0.y + perp.y * w / 2),
+                                  Vec3(q1.x + perp.x * w / 2, py, q1.y + perp.y * w / 2), Vec3(q1.x - perp.x * w / 2, py, q1.y - perp.y * w / 2), up, col);
+        }
+        g.sealed.push_back({a - perp * (w / 2), a + perp * (w / 2), b + perp * (w / 2), b - perp * (w / 2)});
+    };
+    // a paved disc, sealed -- in RINGS a terrain cell apart: it is draped, and a fan from its centre to a 7 m rim
+    // hung its middle 0.4 m over a sloping courtyard
+    auto discInto = [&](RenderMesh& m, const Vec2& o, Real r, Real y, const Vec3& col, bool seal) {
+        const int n = 32, rings = std::max(1, static_cast<int>(std::ceil(r / segLen)));
+        Poly2 rimP;
+        for (int k = 0; k < n; ++k) {
+            const Real a0 = 6.2831853 * k / n, a1 = 6.2831853 * (k + 1) / n;
+            const Vec2 d0(std::cos(a0), std::sin(a0)), d1(std::cos(a1), std::sin(a1));
+            for (int ri = 0; ri < rings; ++ri) {
+                const Real r0 = r * ri / rings, r1 = r * (ri + 1) / rings;
+                const Vec2 p00 = o + d0 * r0, p01 = o + d1 * r0, p10 = o + d0 * r1, p11 = o + d1 * r1;
+                if (ri == 0) MeshBuilder::emitTri(m, Vec3(o.x, y, o.y), Vec3(p10.x, y, p10.y), Vec3(p11.x, y, p11.y), up, col);
+                else MeshBuilder::emitQuad(m, Vec3(p00.x, y, p00.y), Vec3(p10.x, y, p10.y), Vec3(p11.x, y, p11.y), Vec3(p01.x, y, p01.y), up, col);
+            }
+            rimP.push_back(o + d0 * r);
+        }
+        if (seal) g.sealed.push_back(rimP);
+    };
+    auto disc = [&](const Vec2& o, Real r, Real y, const Vec3& col, bool seal) { discInto(m, o, r, y, col, seal); };
+    auto box = [&](const Vec2& at, Real y, const Vec2& along, const Vec3& size, PartId part, const Vec3& col) {
+        const Vec3 t(along.x, 0, along.y), n(-along.y, 0, along.x);
+        emitBox(kit, Scope{Vec3(at.x, y, at.y) - t * (size.x * 0.5) - n * (size.z * 0.5), {t, up, n}, size}, part, col);
+    };
+
+    // THE ROUND and its FOUNTAIN
+    const Real R = std::clamp(std::min(hw, hl) * 0.42, Real(5.5), Real(8.5));
+    disc(c, R, py + 0.005, stone, true);
+    disc(c, R - 0.5, py + 0.01, stoneDark * 1.08, false);   // a darker inlaid band ...
+    disc(c, R - 0.9, py + 0.015, stone, false);             // ... inside the round's edge
+    const Real fr = R * 0.42;   // the basin
+    for (int k = 0; k < 28; ++k) {   // its rim: stone blocks round a circle
+        const Real a = 6.2831853 * (k + 0.5) / 28;
+        const Vec2 d(std::cos(a), std::sin(a));
+        box(c + d * fr, py, Vec2(-d.y, d.x), Vec3(6.2831853 * fr / 28 + 0.04, 0.48, 0.38), PartId::Trim, stone * 0.95);
+    }
+    // the water: with the fountain's stone (Trim), not the walks' surface -- 0.36 m up inside its rim it is not a
+    // walk standing proud of the lawn
+    RenderMesh pool;
+    discInto(pool, c, fr - 0.18, py + 0.36, water, false);
+    box(c, py, ua, Vec3(1.3, 0.55, 1.3), PartId::Trim, stone * 0.9);          // the plinth
+    box(c, py + 0.55, ua, Vec3(0.5, 1.35, 0.5), PartId::Trim, stone);        // the column
+    box(c, py + 1.9, ua, Vec3(1.9, 0.16, 1.9), PartId::Trim, stone * 0.95);   // the upper bowl ...
+    box(c, py + 2.06, ua, Vec3(1.6, 0.03, 1.6), PartId::Trim, water * 1.3);   // ... its water
+    box(c, py + 2.06, ua, Vec3(0.22, 0.55, 0.22), PartId::Trim, stone);      // the finial
+
+    // THE WALKS run on past the quad until they meet the SIDEWALK (Glenn: "those ribbons should go to the edges where
+    // it meets the sidewalk"): from `from` along `dir`, at least to `minLen`, then on in half-metre steps until the
+    // next would be street, 30 m at most
+    auto toStreet = [&](const Vec2& from, const Vec2& dir, Real minLen) {
+        Real t = minLen;
+        if (street)
+            while (t < minLen + 30.0 && !street(from + dir * (t + 0.5))) t += 0.5;
+        return from + dir * t;
+    };
+    const Real wMain = 3.0, wDiag = 2.0;
+    // down the length, and across through the halls' gap -- not in a dorm block's courtyard, whose halls run its whole
+    // length (the walks went through them)
+    for (const Vec2& d : {ua, ua * -1.0, va, va * -1.0}) {
+        if (!crossWalks && std::fabs(dot(d, va)) > 0.5) continue;
+        const Vec2 from = c + d * (R - 0.3);
+        const Real span = std::fabs(dot(d, ua)) > 0.5 ? hl : hw;
+        walk(from, toStreet(from, d, span - (R - 0.3)), wMain, stone);
+    }
+    // THE FAN (Glenn liked it): two walks each way from the round, spreading toward the quad's ends -- on a long
+    // narrow quad a sunburst about the long walk -- out to the street there
+    std::vector<std::pair<Vec2, Vec2>> diags;
+    for (int su : {-1, 1})
+        for (int sv : {-1, 1}) {
+            const Vec2 aim = Q(su * hl, sv * hw * 0.65);
+            const Vec2 dir = normalize(aim - c);
+            const Vec2 from = c + dir * (R - 0.3);
+            const Vec2 to = toStreet(from, dir, (aim - from).length());
+            walk(from, to, wDiag, stone * 0.97);
+            diags.push_back({from, to});
+        }
+    auto offWalks = [&](const Vec2& q, Real clear) {
+        if ((q - c).length() < R + clear) return false;
+        if (std::fabs(dot(q - c, va)) < wMain / 2 + clear) return false;   // the long walk
+        if (crossWalks && std::fabs(dot(q - c, ua)) < wMain / 2 + clear) return false;   // the cross walk
+        for (const auto& d : diags) if (distToSeg(q, d.first, d.second) < wDiag / 2 + clear) return false;
+        return inside(q);
+    };
+
+    // BENCHES round the fountain, between the walks, facing it
+    for (int k = 0; k < 16; ++k) {
+        const Real a = 6.2831853 * (k + 0.5) / 16;
+        const Vec2 d(std::cos(a), std::sin(a));
+        const Vec2 bp = c + d * (R - 0.75);
+        bool clear = std::fabs(dot(bp - c, va)) > wMain / 2 + 1.1 && (!crossWalks || std::fabs(dot(bp - c, ua)) > wMain / 2 + 1.1);
+        for (const auto& dg : diags) clear = clear && distToSeg(bp, dg.first, dg.second) > wDiag / 2 + 1.1;
+        if (clear) g.furniture.push_back(outdoorPiece(Piece::Bench, posHash(bp) ^ seed, bp + d * 0.33, Vec2(-d.x, -d.y), 0.02, true));
+    }
+    // FLOWER BEDS in the round's corners, just outside it between the walks
+    const Vec3 bloom[4] = {{0.72, 0.22, 0.26}, {0.82, 0.68, 0.20}, {0.56, 0.32, 0.66}, {0.90, 0.88, 0.84}};
+    for (int k = 0; k < 8; ++k) {
+        const Real a = 6.2831853 * (k + 0.5) / 8;
+        const Vec2 d(std::cos(a), std::sin(a));
+        const Vec2 fp = c + d * (R + 1.6);
+        if (!offWalks(fp, 1.0)) continue;
+        const Vec2 t(-d.y, d.x);
+        box(fp, 0.0, t, Vec3(2.6, 0.22, 1.1), PartId::Trim, stone * 0.9);
+        emitSoftBox(kit, Scope{Vec3(fp.x, 0.22, fp.y) - Vec3(t.x, 0, t.y) * 1.2 - Vec3(d.x, 0, d.y) * 0.45,
+                               {Vec3(t.x, 0, t.y), up, Vec3(d.x, 0, d.y)}, Vec3(2.4, 0.3, 0.9)},
+                    PartId::Foliage, bloom[(k + (rng.next() & 3u)) & 3u], 0u);
+    }
+    // THE AVENUE: trees down both sides of the long walk, lamps between them, benches facing the walk
+    const Real off = wMain / 2 + 2.2;
+    const Real step = 8.0;
+    int idx = 0;
+    for (Real u = R + 4.0; u < hl - 2.5; u += step, ++idx)
+        for (int su : {-1, 1})
+            for (int sv : {-1, 1}) {
+                const Vec2 tp = Q(su * u, sv * off);
+                if (offWalks(tp, 1.2)) g.treeSpots.push_back(Vec3(tp.x, rng.range(1.0, 1.25), tp.y));
+                const Vec2 mid = Q(su * (u + step / 2), sv * (off - 0.4));
+                if (u + step / 2 > hl - 3.0 || !offWalks(mid, 0.8)) continue;
+                if (idx % 2 == 0) {   // a lamp
+                    box(mid, 0.0, ua, Vec3(0.14, 3.4, 0.14), PartId::Metal, Vec3(0.07, 0.07, 0.08));
+                    box(mid, 3.4, ua, Vec3(0.34, 0.46, 0.34), PartId::Trim, Vec3(0.95, 0.88, 0.66));
+                    box(mid, 3.86, ua, Vec3(0.44, 0.06, 0.44), PartId::Metal, Vec3(0.07, 0.07, 0.08));
+                } else {              // a bench, its back to the trees, facing the walk
+                    const Vec2 face = va * static_cast<Real>(-sv);
+                    g.furniture.push_back(outdoorPiece(Piece::Bench, posHash(mid) ^ seed, mid - face * 0.33, face, 0.02, true));
+                }
+            }
+    // a few trees out on the lawns, clear of the walks
+    for (int k = 0; k < 40 && g.treeSpots.size() < 40; ++k) {
+        const Vec2 tp = Q((rng.unit() * 2 - 1) * (hl - 3), (rng.unit() * 2 - 1) * (hw - 3));
+        if (!offWalks(tp, 2.5)) continue;
+        bool clear = true;
+        for (const Vec3& o : g.treeSpots) clear = clear && (Vec2(o.x, o.z) - tp).length() > 7.0;
+        if (clear && rng.unit() < 0.5) g.treeSpots.push_back(Vec3(tp.x, rng.range(0.9, 1.3), tp.y));
+    }
+    appendKit(kit, outParts, /*draped=*/true);
+    if (outParts) {
+        const std::size_t slot = drapedSlot(PartId::Trim);
+        if (slot < outParts->size()) MeshBuilder::append((*outParts)[slot], pool);
+    }
+    g.padMesh = std::move(m);
+    g.color = Vec3(1, 1, 1);
 }
 
 // THE CAMPUS SPORTS FIELD (Glenn: "sports fields"): a football pitch on the block's grass -- mown in stripes, its
@@ -2916,7 +3098,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 };
                 const Real uA = -L + m, uB = L - m;
                 if (add(uA, uB, W - m - d, W - m, 3, va) && add(uA, uB, -W + m, -W + m + d, 3, va * -1.0) &&
-                    add(uA, uB, -W + m + d + 2.0, W - m - d - 2.0, 4, va))
+                    add(uA, uB, -W + m + d + 2.0, W - m - d - 2.0, 6, va))
                     break;
             }
             if (ok && dorms.size() != 3) { ok = false; why = "a hall would leave the block"; }
@@ -3740,7 +3922,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.pad = pushPolyClearOfRoads(lot.footprint); b.pad = padClearOrEmpty(b.pad);
                 (void)padCoversRoad(b.pad); (void)padOnCarriageway(b.pad);
                 if (b.pad.empty()) continue;   // road-locked sliver: no park
-                if (rec.name != "sports_field" ||
+                if (rec.name == "campus_quad" || rec.name == "dorm_courtyard")
+                    sculptQuad(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts,
+                               p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0),
+                               [&](const Vec2& q) { return !clearOfRoads(q); }, rec.name == "campus_quad");
+                else if (rec.name != "sports_field" ||
                     !sculptSportsField(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts))
                     sculptPark(b, b.pad, b.height, meshGround,
                                mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u),

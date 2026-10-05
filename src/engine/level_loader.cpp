@@ -3927,6 +3927,8 @@ bool LevelLoader::load(const std::string& path,
     // THE CITY'S SEALED LOTS for the grass (#48): every building's footprint, its paved lot, and plazas --
     // captured here because preLots is MOVED into the city's entity pass before the scatter runs
     auto sealedLotPolys = std::make_shared<std::vector<engine::Poly2>>();
+    // the city's PARKS (lawns: a "lawn" grass layer mows them, and the meadow keeps off them)
+    auto lawnLotPolys = std::make_shared<std::vector<engine::Poly2>>();
     if (root.contains("terrain")) {
         TerrainParams terrainParams = readTerrainParams(root["terrain"]);
         terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
@@ -4022,6 +4024,10 @@ bool LevelLoader::load(const std::string& path,
                     if (lb.recipe == "plaza" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
                     // a mown pitch and its track: no wild grass or weeds on them (the island's meadow grew through)
                     if (lb.recipe == "sports_field" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
+                    // a park's walks and plazas, and its lawn
+                    for (const engine::Poly2& sp : lb.sealed) if (sp.size() >= 3) sealedLotPolys->push_back(sp);
+                    if (lb.type == "park" && lb.recipe != "sports_field" && lb.recipe != "plaza" && lb.pad.size() >= 3)
+                        lawnLotPolys->push_back(lb.pad);
                     continue;
                 }
                 if (lb.pavedLot.size() >= 3) sealedLotPolys->push_back(lb.pavedLot);
@@ -4723,6 +4729,25 @@ bool LevelLoader::load(const std::string& path,
                 }
             LOG_INFO << "[grass] sealed ground: " << sealedRoads->tris.size() << " road triangles, " << sealedPads->polys.size() << " lot polygons (buildings, paved lots, plazas)";
             const std::shared_ptr<const PadIndex> padsRO = sealedPads;
+            auto lawnPads = std::make_shared<PadIndex>();
+            for (const engine::Poly2& poly : *lawnLotPolys) {
+                const int k = static_cast<int>(lawnPads->polys.size());
+                lawnPads->polys.push_back(poly);
+                double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+                for (const engine::Vec2& v : poly) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+                const double kb = lawnPads->kBin;
+                for (int j = static_cast<int>(std::floor(z0 / kb)); j <= static_cast<int>(std::floor(z1 / kb)); ++j)
+                    for (int i = static_cast<int>(std::floor(x0 / kb)); i <= static_cast<int>(std::floor(x1 / kb)); ++i)
+                        lawnPads->bins[PadIndex::key(i, j)].push_back(k);
+            }
+            const std::shared_ptr<const PadIndex> lawnsRO = lawnPads;
+            // A LAWN layer (where: "lawn") mows the city's parks and the campus quad short; with one, the other
+            // layers keep off the parks (the meadow stood knee-deep on the quad)
+            bool haveLawn = false;
+            if (root.contains("grassLayers") && root["grassLayers"].is_array())
+                for (const json& gl : root["grassLayers"])
+                    haveLawn = haveLawn || (gl.is_object() && gl.value("where", std::string()) == "lawn");
+            if (!lawnLotPolys->empty()) LOG_INFO << "[grass] " << lawnLotPolys->size() << " park lawns" << (haveLawn ? ", mown" : "");
             auto plantGrass = [&](const json& gj, const std::string& tag) {
                 GrassField gf;
                 const double dilate = placeDilate;
@@ -4743,14 +4768,18 @@ bool LevelLoader::load(const std::string& path,
                 const std::string where = gj.value("where", std::string("meadow"));
                 // 0 meadow, 1 tall, 2 reeds, 3 flowers (open meadow patches), 4 clearing (a flower field
                 // in a forest clearing), 5 shore (flowers in clumps along the water)
-                const int kind = where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5 : 0;
+                const int kind = where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5
+                               : where == "lawn" ? 6 : 0;
                 const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
                 const double shore = gj.value("shoreBand", 6.0);
                 gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut,
-                              sealedRoads, padsRO](double x, double z, double y, double slopeCos) {
+                              sealedRoads, padsRO, lawnsRO, haveLawn](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
                     if (!sealedRoads->empty() && sealedRoads->near(x, z, 0.4)) return 0.0;   // the city's sealed ground
                     if (padsRO->covers(x, z)) return 0.0;
+                    // LAWNS: the lawn layer only on the parks, every other layer off them
+                    if (kind == 6) return lawnsRO->covers(x, z) && slopeCos > 0.8 ? 1.0 : 0.0;
+                    if (haveLawn && lawnsRO->covers(x, z)) return 0.0;
                     if (hydro && hydro->isWet(x, z, 0.3)) return 0.0;   // not in the rivers and lakes
                     const double slope = std::acos(std::clamp(slopeCos, -1.0, 1.0));
                     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
@@ -5920,7 +5949,7 @@ bool LevelLoader::load(const std::string& path,
                         p.campus = 3;
                         const double storeys = std::max(1.0, std::floor(static_cast<double>(lb.height) / 3.3));
                         p.capacity = static_cast<int>(engine::area(lb.plan) * storeys / 45.0);
-                    } else if (lb.recipe == "campus_quad") p.campus = 4;
+                    } else if (lb.recipe == "campus_quad" || lb.recipe == "dorm_courtyard") p.campus = 4;
                     else if (lb.recipe == "sports_field") p.campus = 5;
                     // The real door (ADR-0080): first unit that has one --
                     // the citysim snaps this place's entrance from a step

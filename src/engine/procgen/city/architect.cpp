@@ -1920,6 +1920,11 @@ BuildingRecipe architectCampus(int role, uint32_t seed) {
             out.placeType = "park";
             out.name = "sports_field";
             break;
+        case 6:   // the dorm block's courtyard: a quad without walks across (its halls run its whole length)
+            out.massing = BuildingRecipe::Massing::Park;
+            out.placeType = "park";
+            out.name = "dorm_courtyard";
+            break;
         default:
             out.massing = BuildingRecipe::Massing::Park;
             out.placeType = "park";
