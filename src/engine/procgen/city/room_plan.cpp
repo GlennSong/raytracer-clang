@@ -737,7 +737,7 @@ static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, co
 //   LIBRARY (2)                each run of the ground floor one READING room; the floors above, the STACKS.
 //   RESIDENCE HALL (3)         two-bed DORM rooms (3.6 m), a shared bath every eighth, a lounge by the stair.
 static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
-                           int storey, const Vec2& stairFoot) {
+                           int storey, const Vec2& stairFoot, std::size_t entranceEdge) {
     RoomPlan rp;
     rp.topology = PlateTopology::Apartments;
     rp.office = params.campus != 3;
@@ -852,6 +852,29 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                 std::fprintf(stderr, "\n");
             }
             runs = cut;
+        }
+        // THE QUAD DOOR (campus halls have a back door onto the quad; campusQuadDoor places it, for the facade too):
+        // a 4 m passage through this band from the corridor to it, cut like the stair's -- the door opens on the way
+        // through, not into a classroom (or a bookcase). Usually it already opens into the stair hall: the stair hugs
+        // the rear wall and the door stands just short of its foot.
+        Vec2 mid, outward;
+        if (storey == 0 && campusQuadDoor(planIn, params, entranceEdge, mid, outward)) {
+            {
+                const Real side = dot(mid - o, va);
+                if (std::getenv("RT_CAMPUS_DEBUG"))
+                    std::fprintf(stderr, "[quad door] campus %d band %zu alongPlus %d: rear side %+.1f -> %s\n", params.campus, bi,
+                                 b.alongPlus ? 1 : 0, side, (side > 0) == b.alongPlus ? "this band: cut" : "the corridor's side");
+                if ((side > 0) == b.alongPlus) {
+                    const Real x = b.alongPlus ? dot(mid - o, ua) + hl : hl - dot(mid - o, ua);
+                    std::vector<std::pair<Real, Real>> cut;
+                    for (const auto& r : runs) {
+                        if (x + 2.0 <= r.first || x - 2.0 >= r.second) { cut.push_back(r); continue; }
+                        if (x - 2.0 - r.first >= 3.4) cut.push_back({r.first, x - 2.0});
+                        if (r.second - (x + 2.0) >= 3.4) cut.push_back({x + 2.0, r.second});
+                    }
+                    runs = cut;
+                }
+            }
         }
         for (std::size_t ri = 0; ri < runs.size(); ++ri) {
             const Real r0 = runs[ri].first, r1 = runs[ri].second;
@@ -1232,7 +1255,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     if (params.campus && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
-        RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey, stairFoot);
+        RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey, stairFoot, entranceEdge);
         cp.finish = interiorFinishFor(params);
         if (!cp.rooms.empty() && floorIsWalkable(cp, planIn, centroid(stairWell), stairWell)) return cp;
         if (std::getenv("RT_CAMPUS_DEBUG"))

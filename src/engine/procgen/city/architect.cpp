@@ -1912,9 +1912,9 @@ BuildingRecipe architectCampus(int role, uint32_t seed) {
     out.params.seed = rng.next();
     RecipeCtx cx;
     switch (role) {
-        case 1: recipeTeachingHall(out, rng, cx); break;
-        case 2: recipeCampusLibrary(out, rng, cx); break;
-        case 3: recipeResidenceHall(out, rng, cx); break;
+        case 1: recipeTeachingHall(out, rng, cx); out.params.backDoor = true; break;   // a door onto the quad too
+        case 2: recipeCampusLibrary(out, rng, cx); out.params.backDoor = true; break;  // (the front stays on the street)
+        case 3: recipeResidenceHall(out, rng, cx); out.params.backDoor = true; break;
         case 5:
             out.massing = BuildingRecipe::Massing::Park;
             out.placeType = "park";

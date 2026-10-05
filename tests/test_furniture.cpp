@@ -660,3 +660,60 @@ TEST_CASE(a_campus_hall_with_a_notch_keeps_its_rooms_inside) {
     CHECK(piecesOut == 0);
     CHECK(lecture == 1);
 }
+
+// THE QUAD DOOR (Glenn: the campus doors): a campus hall's back door, in the middle of its rear wall, opens onto a
+// passage from the corridor -- never into a classroom, a dorm room or the stacks -- and from it the stair is walked to.
+TEST_CASE(a_campus_halls_quad_door_opens_onto_a_passage_to_the_corridor) {
+    UseShippedFurniture shipped;
+    // three plain halls (their stair hall often lands mid-floor, where the door is anyway) and two real ones off
+    // metro_v2_test: the teaching hall with a recess in one long side, and a hall trimmed at one end
+    Poly2 notched = {{-576.20, 403.99}, {-546.73, 425.65}, {-552.98, 434.16}, {-554.99, 432.68},
+                     {-552.81, 429.70}, {-562.66, 422.46}, {-564.85, 425.44}, {-582.46, 412.50}};
+    for (Vec2& q : notched) q = q - Vec2(-564.0, 419.0);
+    const Poly2 plans[5] = {{{0, 0}, {52, 0}, {52, 11}, {0, 11}}, {{0, 0}, {40, 0}, {40, 24}, {0, 24}},
+                            {{0, 0}, {54, 0}, {54, 15}, {0, 15}}, notched,
+                            {{0, 0}, {40, 0}, {44, 4}, {44, 11}, {0, 11}}};
+    const int kinds[5] = {1, 2, 3, 1, 1};
+    int checked = 0;
+    for (int pi = 0; pi < 5; ++pi)
+    for (int face : {-1, 1}) {   // the street on one side (the quad on the other), and the other way round
+        const int campus = kinds[pi];
+        BuildingParams p;
+        p.floors = 4; p.campus = static_cast<uint8_t>(campus); p.core = 1; p.walkableGround = true;
+        p.openDoorway = true; p.seed = 41; p.backDoor = true;
+        p.faceDir = Vec3(0, 0, static_cast<Real>(face));
+        const Poly2& plan = plans[pi];
+        const std::size_t entrance = entranceEdgeFor(plan, p);
+        const InteriorLayout il = interiorLayout(plan, p, entrance);
+        CHECK(il.hasStair);
+        if (!il.hasStair) continue;
+        const Real inset = std::max(p.wallThickness, Real(0.55));
+        const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, entrance), il.edge, inset, 0, il.well, entrance, il.stairFoot);
+        if (rp.rooms.empty()) continue;   // an open floor (no campus plan fits): nothing to open into
+        Vec2 mid, outward;
+        CHECK(campusQuadDoor(plan, p, entrance, mid, outward));
+        const Vec2 q = mid - outward * (inset + 0.6);   // a step inside the door
+        // and the building really has it: a "backdoor" attach on that wall, at that spot
+        const BuildingMesh bm = growPlanBuilding(plan, p, 0.0);
+        bool door = false;
+        for (const AttachPoint& ap : bm.attaches)
+            if (ap.tag == "backdoor" && (Vec2(ap.position.x, ap.position.z) - mid).length() < 0.6) door = true;
+        if (!door) {
+            std::printf("    plan %d face %d: no back door grown at (%.1f, %.1f); attaches:", pi, face, mid.x, mid.y);
+            for (const AttachPoint& ap : bm.attaches) std::printf(" %s(%.1f,%.1f)", ap.tag.c_str(), ap.position.x, ap.position.z);
+            std::printf("\n");
+        }
+        CHECK(door);
+        bool inRoom = false;
+        for (const Room& r : rp.rooms) {
+            Poly2 rr = r.rect;
+            ensureCCW(rr);
+            if (pointInPolygon(rr, q)) { inRoom = true; std::printf("    plan %d face %d: the quad door opens into a room (kind %d)\n", pi, face, static_cast<int>(r.kind)); }
+        }
+        CHECK(!inRoom);
+        CHECK(floorIsWalkable(rp, plan, q, il.well));
+        ++checked;
+    }
+    std::printf("    [quad door] %d halls checked\n", checked);
+    CHECK(checked >= 8);
+}

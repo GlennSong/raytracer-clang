@@ -442,7 +442,8 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
 // long walk, lamps between them, benches round the fountain and along the walk, flower beds in the round's corners.
 // No fence. Ground-relative like a park; the walks and the round are SEALED (no grass on them).
 static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::vector<RenderMesh>* outParts, Real meshCell,
-                       const std::function<bool(const Vec2&)>& street, bool crossWalks) {
+                       const std::function<bool(const Vec2&)>& street, bool crossWalks,
+                       const std::vector<std::pair<Vec2, Vec2>>& hallDoors) {
     const OBB2 ob = orientedBoundingBox(poly);
     const int la = ob.longAxis();
     const Vec2 ua = ob.axis[la], va(ua.y, -ua.x), c = ob.center;
@@ -546,6 +547,16 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
             walk(from, to, wDiag, stone * 0.97);
             diags.push_back({from, to});
         }
+    // TO EVERY HALL'S QUAD DOOR (its back door, in the middle of the wall facing the quad): a walk straight out from
+    // the door to the long walk
+    for (const auto& hd : hallDoors) {
+        const Vec2 foot = hd.first + hd.second * 0.4, axis = c + ua * dot(hd.first - c, ua);
+        const Vec2 d = axis - foot;
+        if (d.length() < 2.0 || d.length() > hw + 30.0) continue;
+        const Vec2 dir = normalize(d);
+        walk(foot, axis - dir * (wMain / 2 - 0.1), wDiag, stone * 0.97);
+        diags.push_back({foot, axis});
+    }
     auto offWalks = [&](const Vec2& q, Real clear) {
         if ((q - c).length() < R + clear) return false;
         if (std::fabs(dot(q - c, va)) < wMain / 2 + clear) return false;   // the long walk
@@ -3922,10 +3933,33 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.pad = pushPolyClearOfRoads(lot.footprint); b.pad = padClearOrEmpty(b.pad);
                 (void)padCoversRoad(b.pad); (void)padOnCarriageway(b.pad);
                 if (b.pad.empty()) continue;   // road-locked sliver: no park
-                if (rec.name == "campus_quad" || rec.name == "dorm_courtyard")
+                if (rec.name == "campus_quad" || rec.name == "dorm_courtyard") {
+                    // the halls round it are grown before it (the quad is the block's last lot): their quad doors
+                    std::vector<std::pair<Vec2, Vec2>> hallDoors;
+                    const Vec2 qc = centroid(b.pad);
+                    for (const LotBuilding& h : out) {
+                        if (h.recipe != "teaching_hall" && h.recipe != "campus_library" && h.recipe != "residence_hall") continue;
+                        for (const BuildingUnit& u : h.units)
+                            for (const DoorSpec& d : u.doors)
+                                if (d.back && (d.foot - qc).length() < 90.0 && dot(qc - d.foot, d.normal) > 0)
+                                    hallDoors.push_back({d.foot, d.normal});
+                    }
                     sculptQuad(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts,
                                p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0),
-                               [&](const Vec2& q) { return !clearOfRoads(q); }, rec.name == "campus_quad");
+                               [&](const Vec2& q) { return !clearOfRoads(q); }, rec.name == "campus_quad", hallDoors);
+                    if (std::getenv("RT_CAMPUS_DEBUG")) {
+                        std::printf("[quad] %s: %zu hall doors onto it\n", rec.name.c_str(), hallDoors.size());
+                        for (const LotBuilding& h : out) {
+                            if (h.recipe != "teaching_hall" && h.recipe != "campus_library" && h.recipe != "residence_hall") continue;
+                            for (const BuildingUnit& u : h.units) {
+                                std::printf("[quad]   %s at %.0f %.0f: backDoor %d walkable %d, %zu doors:", h.recipe.c_str(), h.site.x, h.site.y,
+                                            u.params.backDoor ? 1 : 0, u.params.walkableGround ? 1 : 0, u.doors.size());
+                                for (const DoorSpec& d : u.doors) std::printf(" (%s %.0f %.0f n %.2f %.2f, %.0f m)", d.back ? "back" : "front", d.foot.x, d.foot.y, d.normal.x, d.normal.y, (d.foot - qc).length());
+                                std::printf("\n");
+                            }
+                        }
+                    }
+                }
                 else if (rec.name != "sports_field" ||
                     !sculptSportsField(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts))
                     sculptPark(b, b.pad, b.height, meshGround,

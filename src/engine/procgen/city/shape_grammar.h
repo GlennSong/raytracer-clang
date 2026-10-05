@@ -553,6 +553,11 @@ bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
 // plan.size() when there is none.
 std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params);
+// A campus hall's door onto its quad (params.backDoor): the rear face's middle bay, or -- when the stair hugs that wall,
+// as it does in campus halls -- the bay a metre short of the flight's foot. Its centre on the wall and the wall's
+// outward normal; false when there is none. The facade and the floor plan both place it by this.
+bool campusQuadDoor(const Poly2& plan, const BuildingParams& params, std::size_t entranceEdge, Vec2& centre, Vec2& outward);
+Real stairWallDoorX(Real wallLen, const BuildingParams& params);
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.
 // Full is today's facades — reveals, frames, muntins, sills, cornices, trim.
