@@ -13,7 +13,10 @@
 --   nearest    = k             one of the k nearest candidates (default: any in the band)
 --   per_site   = true          its menu weight counts once per candidate site
 --   walkers_only, in_shift, bring_own_eighths = n
---   perform    = inside | outside | spot | wander
+--   perform    = inside | outside | spot | wander | roam
+--   a GROUP (perform = roam, sites = { "pitch" }): roles = { { name, n, speed = { lo, hi }, zone = -1 | 0 | 1 } },
+--     min_players (it starts with them), gather_minutes (given up after), swap_at (0..1: the zones swap)
+--   during     = "activity"   only offered while that activity is running within reach (watching it)
 -- }
 -- menus.<name> = { { hours = { lo, hi }, first = { { activity, chance }, ... }, pick = { { activity, weight }, ... } }, ... }
 --   the first band holding the hour is used; `first` entries are tried in order, each with its chance, then the
@@ -21,7 +24,7 @@
 
 activities = {
   order = { "bench", "across_town", "park_visit", "coffee", "browse", "groceries", "meal", "civic_visit",
-            "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time" },
+            "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game" },
 
   -- A DAY OFF'S STOPS
   bench            = { sites = { "seat" }, distance = { 30, 500 }, nearest = 4, perform = "spot" },
@@ -44,6 +47,16 @@ activities = {
   jog              = { sites = { "loop" }, tags = { "campus" }, distance = { 0, 900 }, nearest = 6, perform = "spot" },
   study            = { sites = { "library" }, distance = { 0, 1e9 }, nearest = 1 },
   quad_time        = { sites = { "quad" }, distance = { 0, 1e9 }, nearest = 1, perform = "outside" },
+
+  -- A KICKABOUT on the campus pitch: two sides of five, each in its half, swapping ends at half time; it starts with
+  -- six there, and is given up if it has not after twenty minutes
+  kickabout        = { sites = { "pitch" }, tags = { "campus" }, distance = { 0, 900 }, nearest = 3, perform = "roam",
+                       minutes = { 30, 45 }, min_players = 6, gather_minutes = 20, swap_at = 0.5,
+                       roles = { { name = "home", n = 5, speed = { 1.5, 4.0 }, zone = 0 },
+                                 { name = "away", n = 5, speed = { 1.5, 4.0 }, zone = 1 } } },
+  -- ...and watching it from the stand (only while one is on)
+  watch_game       = { sites = { "seat" }, tags = { "sports" }, distance = { 0, 900 }, nearest = 6, perform = "spot",
+                       minutes = { 15, 40 }, during = "kickabout" },
 }
 
 menus = {
@@ -65,7 +78,7 @@ menus = {
   student_break = {
     { hours = { 11.5, 13.5 }, first = { { "lunch", 0.45 }, { "campus_bench", 0.55 } },
       pick = { { "study", 2 }, { "quad_time", 1 } } },
-    { hours = { 15, 19.5 }, first = { { "jog", 0.25 }, { "campus_bench", 0.667 } },
+    { hours = { 15, 19.5 }, first = { { "kickabout", 0.2 }, { "watch_game", 0.15 }, { "jog", 0.25 }, { "campus_bench", 0.667 } },
       pick = { { "study", 2 }, { "quad_time", 1 } } },
     { hours = { 0, 24 }, first = { { "campus_bench", 0.75 } }, pick = { { "study", 2 }, { "quad_time", 1 } } },
   },

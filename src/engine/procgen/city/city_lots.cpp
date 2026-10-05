@@ -788,6 +788,16 @@ static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, 
         const Real a = std::acos(std::clamp((16.5 * s - 11.0 * s) / (9.15 * s), Real(-1), Real(1)));
         if (end < 0) ring(spot, 9.15 * s, -a, a); else ring(spot, 9.15 * s, 3.14159265 - a, 3.14159265 + a);
     }
+    // THE PITCH as an activity area (a kickabout's two halves): its centre, long axis and half sizes
+    {
+        LotBuilding::Area ar;
+        ar.kind = "pitch";
+        ar.center = pc;
+        ar.axis = ua;
+        ar.halfL = PL / 2;
+        ar.halfW = PW / 2;
+        g.areas.push_back(ar);
+    }
     // THE GOALS: white posts 7.32 m apart, a 2.44 m crossbar, a net frame sloping back
     BuildingMesh kit;
     const Vec3 post(0.95, 0.95, 0.93), net(0.82, 0.82, 0.80);

@@ -567,3 +567,225 @@ TEST_CASE(a_crowd_walks_a_footpath_to_work) {
     CHECK(onWalk > 100);
     CHECK(maxStuck < 100);   // nobody held on a walk for 10 s
 }
+
+// A KICKABOUT (activities framework, step B/C: the first GROUP activity, a session): players gather on the pitch, the
+// game starts once six are there, each side keeps to its half and they swap ends at half time, the game ends and
+// everyone walks off; with too few players it is given up after its gathering time, and nobody is left on the pitch.
+namespace {
+struct KickRun { int games = 0, started = 0, swapped = 0, givenUp = 0, outOfHalf = 0, offPitch = 0, maxOn = 0; };
+KickRun runKickabout(int walkers) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, walkers, 21);
+    ActivityCatalog cat = defaultActivityCatalog();
+    Menu kick;
+    kick.name = "kick";
+    { MenuBand b; b.first = {{"kickabout", 1.0, 0}}; kick.bands.push_back(b); }
+    cat.menus.push_back(kick);
+    sim.setActivityCatalog(cat);
+    GoalTable t;
+    t.addState("Play", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(t.setMenu("Play", "kick"));
+    t.addState("Rest", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.3);
+    CHECK(t.addTransition("Play", GoalEvent::Arrived, "Rest"));
+    CHECK(t.addTransition("Play", GoalEvent::NoRoute, "Rest"));
+    CHECK(t.addTransition("Rest", GoalEvent::DwellDone, "Play"));
+    CHECK(t.setEntry("Rest"));
+    sim.setGoalTables(t, t);
+    PlaceMap places;
+    const PlaceId field = places.add(PlaceType::Park, Vec2(50, 50), nav);
+    places.setCampus(field, 5);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 150.0, -250), nav);
+    CitySim::ActivityArea pitch;
+    pitch.kind = "pitch"; pitch.center = Vec2(50, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
+    sim.setAreas({pitch});
+    sim.assignPlaces(places, nav);
+    KickRun r;
+    std::vector<int> seenState(64, -1);
+    std::vector<uint8_t> sawSwap(64, 0);
+    for (int i = 0; i < 40000; ++i) {
+        sim.step(0.5, 0.0005);   // ~2.8 game hours
+        const auto& ses = sim.sessions();
+        for (std::size_t k = 0; k < ses.size() && k < seenState.size(); ++k) {
+            const auto& se = ses[k];
+            const int st = static_cast<int>(se.state);
+            if (st != seenState[k]) {
+                if (se.state == CitySim::Session::State::Running) ++r.started;
+                if (se.state == CitySim::Session::State::Ending && seenState[k] == 0) ++r.givenUp;
+                if (se.state == CitySim::Session::State::Dead && seenState[k] >= 0) ++r.games;
+                seenState[k] = st;
+            }
+            if (se.swapped && !sawSwap[k]) { sawSwap[k] = 1; ++r.swapped; }
+            if (se.state == CitySim::Session::State::Dead) { sawSwap[k] = 0; continue; }
+            int on = 0;
+            for (std::size_t m = 0; m < se.members.size(); ++m) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(se.members[m])];
+                if (a.seatPhase != 2) continue;
+                ++on;
+                const Vec2 d = a.pos - pitch.center;
+                const Real u = d.x, v = d.y;
+                if (std::fabs(u) > pitch.halfL + 0.01 || std::fabs(v) > pitch.halfW + 0.01) ++r.offPitch;
+                if (se.state == CitySim::Session::State::Running) {
+                    int zone = se.roles[m];   // home 0, away 1
+                    if (se.swapped) zone = 1 - zone;
+                    // in its half -- or, just after the swap, on its way across (a few seconds' grace)
+                    const bool inHalf = zone == 0 ? u <= 0.01 : u >= -0.01;
+                    if (!inHalf && !se.swapped) ++r.outOfHalf;
+                }
+            }
+            r.maxOn = std::max(r.maxOn, on);
+        }
+    }
+    return r;
+}
+}  // namespace
+
+TEST_CASE(a_kickabout_gathers_plays_swaps_ends_and_lets_everyone_go) {
+    const KickRun r = runKickabout(40);
+    std::printf("    [kickabout] %d started, %d swapped ends, %d games over, %d given up; most on the pitch %d; out of their half %d, "
+                "off the pitch %d\n", r.started, r.swapped, r.games, r.givenUp, r.maxOn, r.outOfHalf, r.offPitch);
+    CHECK(r.started >= 2);
+    CHECK(r.swapped >= 2);
+    CHECK(r.games >= 2);
+    CHECK(r.maxOn >= 6 && r.maxOn <= 10);
+    CHECK(r.outOfHalf == 0);
+    CHECK(r.offPitch == 0);
+}
+
+TEST_CASE(a_kickabout_that_never_fills_is_given_up) {
+    const KickRun r = runKickabout(3);   // three walkers: never six
+    std::printf("    [kickabout, 3 players] %d started, %d given up, %d sessions over\n", r.started, r.givenUp, r.games);
+    CHECK(r.started == 0);
+    CHECK(r.givenUp >= 1);
+    CHECK(r.games >= 1);   // and the session is over: nobody left standing on the pitch
+}
+
+// EVERY ACTIVITY KEEPS THE RULES (activities framework: the generic invariant test). A town with a site of every kind
+// runs a crowd on a menu offering EVERY activity in assets/scripts/activities.lua at once, all day. Whatever is added
+// to the catalog is held to the same rules without a test of its own:
+//   - a held spot is held by someone on their way to it or using it (no leaked reservation);
+//   - nobody uses a spot much past its activity's longest stay (nobody stuck);
+//   - a session's players are its members, and a dead session has none;
+//   - and every activity the town can offer is actually taken up.
+#include "../src/apps/citysim/scripting/activities_lua.h"
+#include "../src/engine/scripting/script_vm.h"
+#include <fstream>
+#include <sstream>
+TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
+    ActivityCatalog cat;
+    {
+        engine::ScriptVM vm;
+        std::string err;
+        std::ifstream f("assets/scripts/activities.lua");
+        std::stringstream ss;
+        ss << f.rdbuf();
+        CHECK(vm.doString(ss.str(), &err));
+        CHECK(engine::loadActivityCatalog(vm, cat, &err));
+    }
+    CHECK(cat.defs.size() >= 10);
+    Menu all;
+    all.name = "everything";
+    {
+        MenuBand b;
+        for (const ActivityDef& d : cat.defs) {
+            b.first.push_back({d.name, 0.12, 0});
+            b.pick.push_back({d.name, 0, 1.0});
+        }
+        all.bands.push_back(b);
+    }
+    cat.menus.push_back(all);
+    NavGraph nav = citytest::cityNav(1200.0, 100.0, 5);
+    CitySim sim;
+    sim.build(nav, 0, 300, 21);
+    sim.setActivityCatalog(cat);
+    GoalTable t;
+    t.addState("Go", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(t.setMenu("Go", "everything"));
+    t.addState("Be", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.2);
+    CHECK(t.addTransition("Go", GoalEvent::Arrived, "Be"));
+    CHECK(t.addTransition("Go", GoalEvent::NoRoute, "Be"));
+    CHECK(t.addTransition("Be", GoalEvent::DwellDone, "Go"));
+    CHECK(t.setEntry("Be"));
+    sim.setGoalTables(t, t);
+    // a site of every kind: places of each type (a campus among them), seats, a loop, a pitch with its stand
+    PlaceMap places;
+    const PlaceType types[] = {PlaceType::Home, PlaceType::Cafe, PlaceType::Restaurant, PlaceType::Shop, PlaceType::Supermarket,
+                               PlaceType::Civic, PlaceType::Park, PlaceType::Office};
+    int k = 0;
+    for (PlaceType ty : types)
+        for (int i = 0; i < 4; ++i, ++k) places.add(ty, Vec2(-450.0 + (k % 8) * 120.0, -450.0 + (k / 8) * 110.0), nav, 6, 23);
+    const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 0), nav);
+    const PlaceId lib = places.add(PlaceType::Civic, Vec2(60, 40), nav, 7, 23);
+    const PlaceId field = places.add(PlaceType::Park, Vec2(250, 50), nav);
+    places.setCampus(quad, 4); places.setCampus(lib, 2); places.setCampus(field, 5);
+    std::vector<CitySim::ActivitySpot> spots;
+    auto spot = [&](Vec2 p, SpotKind kd) { CitySim::ActivitySpot sp; sp.pos = p; sp.face = Vec2(0, 1); sp.kind = kd; spots.push_back(sp); };
+    for (int i = 0; i < 10; ++i) spot(Vec2(-20.0 + i * 4.0, 12.0), SpotKind::Sit);              // the quad's benches
+    for (int i = 0; i < 12; ++i) spot(Vec2(225.0 + i * 4.0, 72.0), SpotKind::Sit);             // the stand
+    for (int i = 0; i < 20; ++i) spot(Vec2(-400.0 + i * 40.0, 330.0), SpotKind::Sit);          // the town's benches
+    std::vector<Vec2> loop;
+    for (int i = 0; i < 40; ++i) { const Real a = 6.2831853 * i / 40; loop.push_back(Vec2(250.0 + 40.0 * std::cos(a), 50.0 + 25.0 * std::sin(a))); }
+    sim.setLoops({loop});
+    for (int i = 0; i < 8; ++i) {
+        CitySim::ActivitySpot sp; sp.kind = SpotKind::Jog; sp.loop = 0; sp.loopS = sim.loopLength(0) * i / 8.0; sp.hip = 0;
+        Vec2 tg; sp.pos = sim.loopPoint(0, sp.loopS, &tg); sp.face = tg; spots.push_back(sp);
+    }
+    sim.setSpots(spots);
+    CitySim::ActivityArea pitch;
+    pitch.kind = "pitch"; pitch.center = Vec2(250, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
+    sim.setAreas({pitch});
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(8.0);
+
+    // the longest any activity keeps someone at a spot or in a session, in hours, plus slack
+    double longest = 0;
+    for (const ActivityDef& d : cat.defs) {
+        double lo = d.minutesLo, hi = d.minutesHi;
+        for (const std::string& kd : d.sites) { double l2, h2; siteKindMinutes(kd, l2, h2); hi = std::max(hi, h2); }
+        longest = std::max(longest, hi / 60.0 + d.gatherMinutes / 60.0);
+    }
+    longest += 0.25;
+    int leaked = 0, stuck = 0, strayMember = 0, deadWithMembers = 0, runningSamples = 0;
+    std::vector<double> usingSince(sim.agents().size(), -1);
+    std::vector<int> used(cat.defs.size(), 0);
+    const double dtH = 0.5 * 0.0004;
+    double clock = 0;
+    for (int i = 0; i < 50000; ++i) {
+        sim.step(0.5, 0.0004);   // ~10 game hours, at about real time's walking pace
+        clock += dtH;
+        const auto& ag = sim.agents();
+        for (std::size_t a = 0; a < ag.size(); ++a) {
+            if (ag[a].tripActivity >= 0 && ag[a].tripActivity < static_cast<int>(used.size())) used[static_cast<std::size_t>(ag[a].tripActivity)] = 1;
+            if (ag[a].seatPhase == 2) {
+                if (usingSince[a] < 0) usingSince[a] = clock;
+                else if (clock - usingSince[a] > longest) { ++stuck; usingSince[a] = clock; }
+            } else usingSince[a] = -1;
+            if (ag[a].session >= 0) {
+                const auto& se = sim.sessions()[static_cast<std::size_t>(ag[a].session)];
+                bool member = false;
+                for (int m : se.members) member = member || m == static_cast<int>(a);
+                if (!member) ++strayMember;
+            }
+        }
+        for (std::size_t si = 0; si < sim.spots().size(); ++si) {
+            const auto& sp = sim.spots()[si];
+            if (sp.occupant < 0) continue;
+            if (ag[static_cast<std::size_t>(sp.occupant)].tripSeat != static_cast<int>(si)) ++leaked;
+        }
+        for (const auto& se : sim.sessions()) {
+            if (se.state == CitySim::Session::State::Dead && !se.members.empty()) ++deadWithMembers;
+            if (se.state == CitySim::Session::State::Running) ++runningSamples;
+        }
+    }
+    std::string unused;
+    for (std::size_t d = 0; d < cat.defs.size(); ++d)
+        if (!used[d]) unused += " " + cat.defs[d].name;
+    std::printf("    [every activity] %zu activities; leaked reservations %d, stuck %d, stray session members %d, dead sessions with "
+                "members %d; a game on in %d samples; never taken up:%s\n", cat.defs.size(), leaked, stuck, strayMember, deadWithMembers, runningSamples,
+                unused.empty() ? " none" : unused.c_str());
+    CHECK(leaked == 0);
+    CHECK(stuck == 0);
+    CHECK(strayMember == 0);
+    CHECK(deadWithMembers == 0);
+    CHECK(unused.empty());
+}

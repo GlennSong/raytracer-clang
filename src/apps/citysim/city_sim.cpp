@@ -2076,6 +2076,7 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     // ON A SEAT (M5): walking to or from it, nothing fires; sitting, the end of the dwell gets up and walks
     // back to the path first -- the next trip starts from there, not from the bench.
     if (a.seatPhase == 1 || a.seatPhase == 3) return;
+    if (a.seatPhase == 2 && a.session >= 0) return;   // a group's player: the session says when it ends
     if (a.seatPhase == 2) {
         const Real sitFor = a.restDwell > 0 ? a.restDwell : s.dwellHours;   // a sit is short: the day's windows wait for it
         if (a.goalHours >= sitFor) a.seatPhase = 3;
@@ -2320,6 +2321,30 @@ int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool count
     if (d.bringOwnEighths > 0 && static_cast<int>((a.brain >> 13) & 7u) < d.bringOwnEighths) return -1;
     if (d.inShift && !inWindow(clockHours_, departWorkHour(a), a.departHome)) return -1;
     const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
+    // WATCHING: only while that activity is running within reach
+    if (!d.during.empty()) {
+        const int dd = catalog_.find(d.during);
+        bool on = false;
+        for (const Session& se : sessions_)
+            if (se.def == dd && se.state == Session::State::Running &&
+                (areas_[static_cast<std::size_t>(se.area)].center - here).lengthSquared() <= d.distHi * d.distHi)
+                on = true;
+        if (!on) return -1;
+    }
+    // AREAS (a group activity: a session on a pitch)
+    for (const std::string& k : d.sites)
+        if (k == "pitch") {
+            if (countOnly) {
+                for (const ActivityArea& ar : areas_)
+                    if (ar.kind == k && (ar.tags & d.tags) == d.tags &&
+                        (ar.center - here).lengthSquared() <= d.distHi * d.distHi) { if (count) *count += 1; }
+                return -1;
+            }
+            const int ai = joinSession(a, di, here, d.distLo, d.distHi, d.nearest);
+            if (ai < 0) return -1;
+            a.tripActivity = di;
+            return areas_[static_cast<std::size_t>(ai)].node;
+        }
     // SPOTS
     uint32_t kinds = 0;
     bool venuesToo = false, street = false;
@@ -4529,7 +4554,16 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             if (hi <= 0) siteKindMinutes(siteKindOf(a), lo, hi);
             return jitter(lo / 60.0, hi / 60.0);
         };
-        if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
+        if (a.session >= 0 && a.session < static_cast<int>(sessions_.size()) && a.mode == Agent::Mode::Pedestrian &&
+            areas_[static_cast<std::size_t>(sessions_[static_cast<std::size_t>(a.session)].area)].node == node) {
+            // A GROUP'S PLAYER at its area's path: onto it, to its first point (the session runs it from here)
+            const Session& se = sessions_[static_cast<std::size_t>(a.session)];
+            a.restDwell = 1e9;
+            a.seatPhase = 1;
+            a.seatBack = a.pos;
+            a.roamTarget = zonePoint(se, a.sessionRole, tripRnd(a));
+            seated = true;
+        } else if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
             seats_[static_cast<std::size_t>(a.tripSeat)].node == node &&
             seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a) && a.mode == Agent::Mode::Pedestrian) {
             // AT THE SEAT'S PATH: off it to the seat, a sit of five to fifteen minutes, back (stepSeats) -- or onto the
@@ -4885,6 +4919,15 @@ void CitySim::setSpots(std::vector<ActivitySpot> seats) {
 }
 
 void CitySim::tagSpots() {
+    for (ActivityArea& ar : areas_) {
+        ar.tags &= ~(spot_tag::kCampus | spot_tag::kSports);
+        for (const Venue& v : venues_) {
+            if (v.campus != 4 && v.campus != 5) continue;
+            if ((v.door - ar.center).lengthSquared() >= 200.0 * 200.0) continue;
+            ar.tags |= spot_tag::kCampus;
+            if (v.campus == 5) ar.tags |= spot_tag::kSports;
+        }
+    }
     for (ActivitySpot& s : seats_) {
         s.tags &= ~(spot_tag::kCampus | spot_tag::kSports);
         for (const Venue& v : venues_) {
@@ -4955,6 +4998,170 @@ void CitySim::setLoops(std::vector<std::vector<Vec2>> loops) {
     }
 }
 
+void CitySim::setAreas(std::vector<ActivityArea> areas) {
+    areas_.clear();
+    sessions_.clear();
+    if (!nav_) return;
+    const int n = nav_->streetNodeCount();
+    for (ActivityArea& ar : areas) {
+        Real best = 150.0 * 150.0;   // a field is wide: its players cross the grass to it
+        ar.node = -1;
+        for (int i = 0; i < n; ++i) {
+            const Real d2 = (nav_->nodes[static_cast<std::size_t>(i)] - ar.center).lengthSquared();
+            if (d2 >= best) continue;
+            bool walk = false;
+            for (int ol : nav_->outLinks[static_cast<std::size_t>(i)]) walk = walk || nav_->links[static_cast<std::size_t>(ol)].walkable;
+            if (!walk) continue;
+            best = d2;
+            ar.node = i;
+        }
+        if (ar.node >= 0) areas_.push_back(ar);
+    }
+    tagSpots();
+}
+
+int CitySim::Session::roleCount(int role) const {
+    int n = 0;
+    for (int r : roles) n += r == role ? 1 : 0;
+    return n;
+}
+
+Vec2 CitySim::zonePoint(const Session& s, int role, uint32_t bits) const {
+    const ActivityArea& ar = areas_[static_cast<std::size_t>(s.area)];
+    const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(s.def)];
+    int zone = role >= 0 && role < static_cast<int>(d.roles.size()) ? d.roles[static_cast<std::size_t>(role)].zone : -1;
+    if (zone >= 0 && s.swapped) zone = 1 - zone;
+    const Real inL = std::max(Real(0.5), ar.halfL - 2.0), inW = std::max(Real(0.5), ar.halfW - 1.5);
+    const Real u0 = zone == 1 ? 1.0 : -inL, u1 = zone == 0 ? -1.0 : inL;
+    const Real fu = static_cast<Real>(bits & 0xFFFF) / 65535.0, fv = static_cast<Real>((bits >> 16) & 0xFFFF) / 65535.0;
+    const Vec2 side(ar.axis.y, -ar.axis.x);
+    return ar.center + ar.axis * (u0 + (u1 - u0) * fu) + side * (-inW + 2 * inW * fv);
+}
+
+// Join a session of activity `di` on the nearest suitable area: one gathering or running with a free role, else a
+// fresh one on an area with nothing on it. Returns the area, -1 for none.
+int CitySim::joinSession(Agent& a, int di, Vec2 here, Real distLo, Real distHi, int nearest) {
+    const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(di)];
+    std::vector<std::pair<Real, int>> cand;
+    for (int i = 0; i < static_cast<int>(areas_.size()); ++i) {
+        const ActivityArea& ar = areas_[static_cast<std::size_t>(i)];
+        bool kind = false;
+        for (const std::string& k : d.sites) kind = kind || k == ar.kind;
+        if (!kind || (ar.tags & d.tags) != d.tags) continue;
+        const Real d2 = (ar.center - here).lengthSquared();
+        if (d2 < distLo * distLo || d2 > distHi * distHi) continue;
+        cand.push_back({d2, i});
+    }
+    std::sort(cand.begin(), cand.end());
+    if (nearest > 0 && static_cast<int>(cand.size()) > nearest) cand.resize(static_cast<std::size_t>(nearest));
+    auto freeRole = [&](const Session& se) {
+        int best = -1;
+        Real bestFill = 1e9;
+        for (int r = 0; r < static_cast<int>(d.roles.size()); ++r) {
+            const int n = se.roleCount(r), cap = d.roles[static_cast<std::size_t>(r)].n;
+            if (n >= cap) continue;
+            const Real fill = static_cast<Real>(n) / std::max(1, cap);
+            if (fill < bestFill) { bestFill = fill; best = r; }
+        }
+        return best;
+    };
+    for (const auto& c : cand) {
+        // a session already here, of this activity, with room
+        int si = -1, role = -1;
+        bool busy = false;
+        for (int k = 0; k < static_cast<int>(sessions_.size()); ++k) {
+            Session& se = sessions_[static_cast<std::size_t>(k)];
+            if (se.area != c.second || se.state == Session::State::Dead) continue;
+            busy = true;
+            if (se.def != di || (se.state != Session::State::Gathering && se.state != Session::State::Running)) continue;
+            role = freeRole(se);
+            if (role >= 0) { si = k; break; }
+        }
+        if (si < 0 && !busy) {   // nothing on this area: start one
+            Session se;
+            se.def = di;
+            se.area = c.second;
+            se.gatherUntil = clockTotalHours_ + d.gatherMinutes / 60.0;
+            for (int k = 0; k <= static_cast<int>(sessions_.size()); ++k)
+                if (k == static_cast<int>(sessions_.size()) || sessions_[static_cast<std::size_t>(k)].state == Session::State::Dead) {
+                    if (k == static_cast<int>(sessions_.size())) sessions_.push_back(se); else sessions_[static_cast<std::size_t>(k)] = se;
+                    si = k;
+                    break;
+                }
+            role = freeRole(sessions_[static_cast<std::size_t>(si)]);
+        }
+        if (si < 0 || role < 0) continue;
+        Session& se = sessions_[static_cast<std::size_t>(si)];
+        se.members.push_back(indexOf(a));
+        se.roles.push_back(role);
+        // a group still forming waits a while longer for each new player (they are walking over)
+        if (se.state == Session::State::Gathering)
+            se.gatherUntil = std::max(se.gatherUntil, clockTotalHours_ + d.gatherMinutes / 60.0 * 0.5);
+        a.session = si;
+        a.sessionRole = role;
+        return c.second;
+    }
+    return -1;
+}
+
+void CitySim::leaveSession(Agent& a) {
+    if (a.session < 0 || a.session >= static_cast<int>(sessions_.size())) { a.session = -1; return; }
+    Session& se = sessions_[static_cast<std::size_t>(a.session)];
+    const int me = indexOf(a);
+    for (std::size_t k = 0; k < se.members.size(); ++k)
+        if (se.members[k] == me) {
+            se.members.erase(se.members.begin() + static_cast<std::ptrdiff_t>(k));
+            se.roles.erase(se.roles.begin() + static_cast<std::ptrdiff_t>(k));
+            break;
+        }
+    if (se.members.empty()) se.state = Session::State::Dead;
+    a.session = -1;
+    a.sessionRole = -1;
+}
+
+// THE SESSIONS' CLOCK: a gathering session starts once its players are on the area (or is given up when it has not
+// filled in time); a running one swaps ends at its half time and ends at its length; an ending one sends its players
+// off the area (stepSeats walks them back, and they leave it there).
+void CitySim::stepSessions() {
+    for (Session& se : sessions_) {
+        if (se.state == Session::State::Dead) continue;
+        const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(se.def)];
+        int present = 0;
+        for (int m : se.members) present += agents_[static_cast<std::size_t>(m)].seatPhase == 2 ? 1 : 0;
+        const int need = d.minPlayers > 0 ? d.minPlayers : 1;
+        if (se.state == Session::State::Gathering) {
+            if (present >= need) {
+                se.state = Session::State::Running;
+                se.startedAt = clockTotalHours_;
+                double lo = d.minutesLo, hi = d.minutesHi;
+                if (hi <= 0) siteKindMinutes("pitch", lo, hi);
+                const Real f = static_cast<Real>(rnd() % 1000u) / 999.0;
+                se.endAt = clockTotalHours_ + (lo + (hi - lo) * f) / 60.0;
+            } else if (clockTotalHours_ >= se.gatherUntil) {
+                se.state = Session::State::Ending;   // never filled: give it up
+            }
+        } else if (se.state == Session::State::Running) {
+            if (d.swapAt > 0 && !se.swapped && clockTotalHours_ >= se.startedAt + (se.endAt - se.startedAt) * d.swapAt) {
+                se.swapped = true;
+                for (int m : se.members) {   // to the other end
+                    Agent& p = agents_[static_cast<std::size_t>(m)];
+                    p.roamTarget = zonePoint(se, p.sessionRole, tripRnd(p));
+                }
+            }
+            if (clockTotalHours_ >= se.endAt) se.state = Session::State::Ending;
+        }
+        if (se.state == Session::State::Ending) {
+            std::vector<int> onTheWay;   // still walking to it: let go (they arrive to nothing, and stand about)
+            for (int m : se.members) {
+                Agent& p = agents_[static_cast<std::size_t>(m)];
+                if (p.seatPhase == 1 || p.seatPhase == 2) p.seatPhase = 3;
+                else if (p.seatPhase == 0) onTheWay.push_back(m);
+            }
+            for (int m : onTheWay) leaveSession(agents_[static_cast<std::size_t>(m)]);
+        }
+    }
+}
+
 Real CitySim::loopLength(int loop) const {
     return loop >= 0 && loop < static_cast<int>(loops_.size()) ? loops_[static_cast<std::size_t>(loop)].length : 0;
 }
@@ -4975,6 +5182,7 @@ Vec2 CitySim::loopPoint(int loop, Real s, Vec2* tangent) const {
 }
 
 void CitySim::releaseSeat(Agent& a) {
+    if (a.session >= 0) leaveSession(a);
     if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
         seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a))
         seats_[static_cast<std::size_t>(a.tripSeat)].occupant = -1;
@@ -4993,8 +5201,48 @@ int CitySim::pickSeat(Agent& a, Vec2 here) {
 void CitySim::stepSeats(Real dt) {
     constexpr Real kWalk = 1.2;   // an amble across the grass
     constexpr Real kJog = 2.8;    // a steady run
+    stepSessions();
     for (Agent& a : agents_) {
         if (a.seatPhase == 0) continue;
+        // A GROUP'S PLAYER (a session): onto the area to its first point; there, standing by while the group gathers,
+        // or running to point after point of its zone; and, the session over, back to where it left the path
+        if (a.session >= 0 && a.session < static_cast<int>(sessions_.size())) {
+            const Session& se = sessions_[static_cast<std::size_t>(a.session)];
+            const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(se.def)];
+            const RoleDef* role = a.sessionRole >= 0 && a.sessionRole < static_cast<int>(d.roles.size())
+                                      ? &d.roles[static_cast<std::size_t>(a.sessionRole)] : nullptr;
+            Vec2 target = a.seatPhase == 3 ? a.seatBack : a.roamTarget;
+            Real speed = kWalk;
+            if (a.seatPhase == 2) {
+                if (se.state != Session::State::Running) {   // gathering: stand by, facing the middle
+                    a.speed = 0;
+                    const Vec2 to = areas_[static_cast<std::size_t>(se.area)].center - a.pos;
+                    if (to.lengthSquared() > 1e-6) a.heading = normalize(to);
+                    continue;
+                }
+                const Real f = static_cast<Real>((a.brain >> 7) & 0xFF) / 255.0;
+                speed = role ? role->speedLo + (role->speedHi - role->speedLo) * f : 2.0;
+            }
+            const Vec2 dd = target - a.pos;
+            const Real L = dd.length(), step = speed * dt;
+            if (L <= step) {
+                a.pos = target;
+                if (a.seatPhase == 1) { a.seatPhase = 2; a.goalHours = 0; a.speed = 0; }
+                else if (a.seatPhase == 2) a.roamTarget = zonePoint(se, a.sessionRole, tripRnd(a));
+                else {   // off the area: out of the session, and the rest that held it ends now
+                    leaveSession(a);
+                    a.seatPhase = 0;
+                    a.restDwell = 1e-3;
+                    a.speed = 0;
+                }
+            } else {
+                a.pos = a.pos + dd * (step / L);
+                a.heading = dd * (1.0 / L);
+                a.speed = speed;
+            }
+            grid_.place(indexOf(a), a.pos);
+            continue;
+        }
         if (a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) { a.seatPhase = 0; continue; }
         const SeatSpot& s = seats_[static_cast<std::size_t>(a.tripSeat)];
         // RUNNING THE LOOP (a Jog spot): round it at a jogger's pace until the run's time is up (goalThink)

@@ -130,6 +130,10 @@ struct LotBuilding {
     // LOOPS to run (a sports field's track: the middle of its first lane), closed polylines, world XZ: the citysim's
     // jog spots (activities.h)
     std::vector<Poly2> loops;
+    // AREAS an activity happens on (a sports field's pitch): its kind, its centre, its long axis (unit), and its half
+    // length and width, world XZ -- the citysim's activity areas (a kickabout's two halves)
+    struct Area { std::string kind; Vec2 center, axis{1, 0}; Real halfL = 0, halfW = 0; };
+    std::vector<Area> areas;
     // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
     std::vector<BuildingUnit> units;
     // SITE PLAN (skyscrapers v2, ADR-0086): the lot's ground around the

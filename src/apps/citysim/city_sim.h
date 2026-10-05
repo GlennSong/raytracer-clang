@@ -222,6 +222,9 @@ struct Agent {
     engine::Vec2 seatBack{0, 0};
     Real loopS = 0;   // running a loop (a Jog spot): how far round it (m)
     int tripActivity = -1;   // the catalog activity this trip is for (CitySim::catalog_), -1 none
+    int session = -1;        // the group activity session it is in (CitySim::sessions_), -1 none
+    int sessionRole = -1;    // its role in it (the definition's roles)
+    engine::Vec2 roamTarget{0, 0};   // where it is running to on the area
     // Where the current outing/lunch trip is going, kept until arrival: a leg
     // by BUS sets the walker down at a stop and the trip resumes from there,
     // and it must resume to the same place, not re-pick one.
@@ -1151,6 +1154,29 @@ public:
     engine::Vec2 loopPoint(int loop, Real s, engine::Vec2* tangent = nullptr) const;
     // The spot agent i is USING right now (phase 2: sitting, standing, running its loop), else nullptr.
     const ActivitySpot* usingSpot(int agentIndex) const;
+    // AREAS a group activity happens on (a pitch): kind, tags, centre, long axis (unit), half length and width, and
+    // the node it is reached from (setAreas finds it, within 150 m).
+    struct ActivityArea {
+        std::string kind;
+        uint32_t tags = 0;
+        engine::Vec2 center, axis{1, 0};
+        Real halfL = 0, halfW = 0;
+        int node = -1;
+    };
+    void setAreas(std::vector<ActivityArea> areas);
+    const std::vector<ActivityArea>& areas() const { return areas_; }
+    // A SESSION: one group activity running on an area -- gathering its players, then running (zones swapped at
+    // half time), then ending (its players walk off). Dead once its last player has gone.
+    struct Session {
+        enum class State : uint8_t { Gathering, Running, Ending, Dead };
+        int def = -1, area = -1;
+        State state = State::Gathering;
+        double gatherUntil = 0, startedAt = 0, endAt = 0;   // clockTotalHours_
+        bool swapped = false;
+        std::vector<int> members, roles;   // agent index, its role
+        int roleCount(int role) const;
+    };
+    const std::vector<Session>& sessions() const { return sessions_; }
     using SeatSpot = ActivitySpot;   // the name the seats grew up with
     void setSpots(std::vector<ActivitySpot> spots);
     void setSeats(std::vector<SeatSpot> seats) { setSpots(std::move(seats)); }
@@ -1545,6 +1571,12 @@ private:
     std::vector<SeatSpot> seats_;
     struct Loop { std::vector<engine::Vec2> pts; std::vector<Real> cum; Real length = 0; };
     std::vector<Loop> loops_;
+    std::vector<ActivityArea> areas_;
+    std::vector<Session> sessions_;
+    int joinSession(Agent& a, int def, engine::Vec2 here, Real distLo, Real distHi, int nearest);
+    void leaveSession(Agent& a);
+    void stepSessions();
+    engine::Vec2 zonePoint(const Session& s, int role, uint32_t bits) const;   // a point in that role's zone
     void releaseSeat(Agent& a);
     int pickSeat(Agent& a, engine::Vec2 here);   // a free seat to walk to, reserved; -1 none
     void stepSeats(Real dt);                     // the walk off the path to a seat and back

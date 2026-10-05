@@ -115,8 +115,35 @@ bool loadActivityCatalog(ScriptVM& vm, citysim::ActivityCatalog& out, std::strin
         else if (pf == "outside") d.perform = citysim::Perform::Outside;
         else if (pf == "spot") d.perform = citysim::Perform::Spot;
         else if (pf == "wander") d.perform = citysim::Perform::Wander;
+        else if (pf == "roam") d.perform = citysim::Perform::Roam;
         else { lua_settop(L, base); return fail(err, "activities." + name + ": unknown perform `" + pf + "`"); }
         if (d.sites.empty()) { lua_settop(L, base); return fail(err, "activities." + name + ": no sites"); }
+        // A GROUP: roles = { { name, n, speed = { lo, hi }, zone }, ... }, min_players, gather_minutes, swap_at, during
+        lua_getfield(L, dt, "roles");
+        if (lua_istable(L, -1)) {
+            const int rt = lua_gettop(L);
+            const int nr = static_cast<int>(luaL_len(L, rt));
+            for (int i = 1; i <= nr; ++i) {
+                lua_rawgeti(L, rt, i);
+                const int ri = lua_gettop(L);
+                citysim::RoleDef r;
+                r.name = str(L, ri, "name");
+                r.n = static_cast<int>(num(L, ri, "n", 1));
+                pair(L, ri, "speed", r.speedLo, r.speedHi);
+                r.zone = static_cast<int>(num(L, ri, "zone", -1));
+                d.roles.push_back(r);
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        d.minPlayers = static_cast<int>(num(L, dt, "min_players", 0));
+        d.gatherMinutes = num(L, dt, "gather_minutes", 20);
+        d.swapAt = num(L, dt, "swap_at", 0);
+        d.during = str(L, dt, "during");
+        if (d.perform == citysim::Perform::Roam && d.roles.empty()) {
+            lua_settop(L, base);
+            return fail(err, "activities." + name + ": a roaming group needs its roles");
+        }
         c.defs.push_back(d);
         lua_pop(L, 1);
     }

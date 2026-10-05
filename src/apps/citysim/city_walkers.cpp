@@ -499,6 +499,13 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
         int onWalks = 0, studentsOnWalks = 0, joggers = 0;
         for (int i = 0; i < static_cast<int>(sm.agents().size()); ++i)
             if (const CitySim::ActivitySpot* sp = sm.usingSpot(i)) joggers += sp->kind == SpotKind::Jog ? 1 : 0;
+        int playing = 0, games = 0, gathering = 0, signedUp = 0;   // a group's players on its area, and the games on
+        for (const CitySim::Session& se : sm.sessions()) {
+            if (se.state == CitySim::Session::State::Gathering) { ++gathering; signedUp += static_cast<int>(se.members.size()); }
+            if (se.state != CitySim::Session::State::Running) continue;
+            ++games;
+            for (int m : se.members) playing += sm.agents()[static_cast<std::size_t>(m)].seatPhase == 2 ? 1 : 0;
+        }
         int jogBooked = 0;   // runners on their way: jog spots held
         for (const CitySim::ActivitySpot& sp : sm.spots()) jogBooked += sp.kind == SpotKind::Jog && sp.occupant >= 0 ? 1 : 0;
         const engine::NavGraph& ng = sm.nav();
@@ -528,10 +535,10 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
             }
         }
         char b[480];
-        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d) | jogging %d (booked %d)",
+        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d) | jogging %d (booked %d) | games %d (playing %d) gathering %d (%d coming)",
                       walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
                       tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
-                      onWalks, studentsOnWalks, joggers, jogBooked);
+                      onWalks, studentsOnWalks, joggers, jogBooked, games, playing, gathering, signedUp);
         ctx.settings.setString("walkers.telemetry", b);
         tel_ = Telemetry{};
     }

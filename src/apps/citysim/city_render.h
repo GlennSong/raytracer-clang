@@ -498,6 +498,7 @@ private:
     std::unordered_map<int, PlaceId> buildingPlace_;        // record index -> its place (kNoPlace: none)
     std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
+    std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
 public:

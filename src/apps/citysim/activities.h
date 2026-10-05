@@ -57,7 +57,7 @@ struct ActivityQuery {
 //
 // SITE KINDS (strings, so Lua names them): the city's places -- "cafe", "restaurant", "shop", "supermarket", "civic",
 // "park", "library", "teaching", "quad", "field" -- its activity spots -- "seat" (Sit), "bed" (Lie), "stand" (Stand),
-// "loop" (Jog), "pitch" (Play), "watch" (Watch) -- and "street" (a street corner to walk to and look about).
+// "loop" (Jog), "watch" (Watch) -- its activity AREAS -- "pitch" -- and "street" (a street corner to walk to).
 
 // What the body does once there.
 enum class Perform : uint8_t {
@@ -65,6 +65,16 @@ enum class Perform : uint8_t {
     Outside,   // stays out at the site (a park, the quad)
     Spot,      // the spot's own use: sit, lie, stand at it, run its loop (stepSeats)
     Wander,    // a walk to a street corner and a look about
+    Roam,      // a GROUP on an area (a pitch): each role runs to point after point in its zone (a session)
+};
+
+// A ROLE in a group activity: how many take it, how fast they move, and which part of the area is theirs (-1 the
+// whole of it, 0 / 1 its first / second half along its length -- swapped at the session's half time).
+struct RoleDef {
+    std::string name;
+    int n = 1;
+    double speedLo = 1.2, speedHi = 1.6;
+    int zone = -1;
 };
 
 struct ActivityDef {
@@ -80,6 +90,14 @@ struct ActivityDef {
     bool inShift = false;             // only inside the agent's working window (lunch)
     int bringOwnEighths = 0;          // this many eighths of agents (by their own bits) never go (brought lunch)
     Perform perform = Perform::Inside;
+    // A GROUP (perform Roam, an area site): its roles; it starts once `minPlayers` are there, and a session that has
+    // not filled within `gatherMinutes` is given up (its players go); `swapAt` (0..1 of the run) swaps the zones.
+    std::vector<RoleDef> roles;
+    int minPlayers = 0;
+    double gatherMinutes = 20;
+    double swapAt = 0;
+    // Offered only while a session of this activity is running within `distHi` (watching a game).
+    std::string during;
 };
 
 struct MenuEntry {

@@ -55,6 +55,14 @@ std::string ActivityCatalog::describe() const {
                       d.tags, d.hourLo, d.hourHi, d.minutesLo, d.minutesHi, d.distLo, d.distHi, d.nearest, d.perSite ? 1 : 0,
                       d.walkersOnly ? 1 : 0, d.inShift ? 1 : 0, d.bringOwnEighths, static_cast<int>(d.perform));
         out += b;
+        for (const RoleDef& r : d.roles) {
+            std::snprintf(b, sizeof b, "  role %s n=%d speed=%g-%g zone=%d\n", r.name.c_str(), r.n, r.speedLo, r.speedHi, r.zone);
+            out += b;
+        }
+        if (!d.roles.empty() || !d.during.empty()) {
+            std::snprintf(b, sizeof b, "  group min=%d gather=%g swap=%g during=%s\n", d.minPlayers, d.gatherMinutes, d.swapAt, d.during.c_str());
+            out += b;
+        }
     }
     for (const Menu& m : menus) {
         out += "menu " + m.name + "\n";
@@ -81,6 +89,7 @@ void siteKindMinutes(const std::string& k, double& lo, double& hi) {
     else if (k == "seat" || k == "bed" || k == "stand" || k == "watch") { lo = 4.8; hi = 15; }
     else if (k == "loop") { lo = 19.8; hi = 34.8; }
     else if (k == "street") { lo = 0.6; hi = 2.4; }
+    else if (k == "pitch") { lo = 30; hi = 45; }
     else { lo = 6; hi = 18; }   // a shop, anything else
 }
 
@@ -116,6 +125,16 @@ ActivityCatalog defaultActivityCatalog() {
     { ActivityDef& d = def("jog", {"loop"}); d.tags = spot_tag::kCampus; d.distHi = 900; d.nearest = 6; d.perform = Perform::Spot; }
     { ActivityDef& d = def("study", {"library"}); d.distHi = 1e9; d.nearest = 1; }
     { ActivityDef& d = def("quad_time", {"quad"}); d.distHi = 1e9; d.nearest = 1; d.perform = Perform::Outside; }
+    // A KICKABOUT on the campus pitch: two sides of five, each in its half, swapping ends at half time; it starts with
+    // six there, and is given up if it has not after twenty minutes
+    { ActivityDef& d = def("kickabout", {"pitch"}); d.tags = spot_tag::kCampus; d.distHi = 900; d.nearest = 3;
+      d.perform = Perform::Roam; d.minutesLo = 30; d.minutesHi = 45; d.minPlayers = 6; d.gatherMinutes = 20; d.swapAt = 0.5;
+      RoleDef home; home.name = "home"; home.n = 5; home.speedLo = 1.5; home.speedHi = 4.0; home.zone = 0;
+      RoleDef away = home; away.name = "away"; away.zone = 1;
+      d.roles = {home, away}; }
+    // ...and watching it from the stand
+    { ActivityDef& d = def("watch_game", {"seat"}); d.tags = spot_tag::kSports; d.distHi = 900; d.nearest = 6;
+      d.perform = Perform::Spot; d.minutesLo = 15; d.minutesHi = 40; d.during = "kickabout"; }
 
     Menu outing;
     outing.name = "outing";
@@ -137,7 +156,8 @@ ActivityCatalog defaultActivityCatalog() {
     brk.name = "student_break";
     { MenuBand b; b.hourLo = 11.5; b.hourHi = 13.5; b.first = {{"lunch", 0.45, 0}, {"campus_bench", 0.55, 0}};
       b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}}; brk.bands.push_back(b); }
-    { MenuBand b; b.hourLo = 15.0; b.hourHi = 19.5; b.first = {{"jog", 0.25, 0}, {"campus_bench", 0.667, 0}};
+    { MenuBand b; b.hourLo = 15.0; b.hourHi = 19.5;
+      b.first = {{"kickabout", 0.2, 0}, {"watch_game", 0.15, 0}, {"jog", 0.25, 0}, {"campus_bench", 0.667, 0}};
       b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}}; brk.bands.push_back(b); }
     { MenuBand b; b.first = {{"campus_bench", 0.75, 0}}; b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}}; brk.bands.push_back(b); }
     c.menus.push_back(brk);

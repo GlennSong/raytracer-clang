@@ -65,6 +65,7 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
     a.sealed = {{Vec2(0, 0), Vec2(2, 0), Vec2(2, 1)}};
     a.walks = {{Vec2(1, 2), Vec2(3, 4), 2.5}};
     a.loops = {{Vec2(0, 0), Vec2(5, 0), Vec2(5, 5), Vec2(0, 5)}};
+    a.areas = {{"pitch", Vec2(1, 2), Vec2(0, 1), 25.0, 17.0}};
     a.open = {{{Vec2(-1, -1), Vec2(13, -1), Vec2(13, 0), Vec2(-1, 0)}, OpenKind::Forecourt}, {{Vec2(12, 0), Vec2(13, 0), Vec2(13, 9)}, OpenKind::SideYard}};
     a.pavedLot = a.pad; a.paveY = 4.8; a.lot = {Vec2(-2, -2), Vec2(14, -2), Vec2(14, 10), Vec2(-2, 10)}; a.padBound = {Vec2(-1, -2), Vec2(13, -2), Vec2(13, 9)};
     BuildingUnit u; u.plan = {Vec2(1, 1), Vec2(11, 1), Vec2(11, 7), Vec2(1, 7)}; u.baseY = 4.6; u.params = everyFieldSet(); DoorSpec d; d.foot = Vec2(6, 1); d.normal = Vec2(0, -1); d.width = 1.2; d.height = 2.4; u.doors = {d}; u.enterable = true;
@@ -95,6 +96,7 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
         CHECK(x.sealed.size() == 1 && x.sealed[0].size() == 3 && x.sealed[0][2].y == 1);
         CHECK(x.walks.size() == 1 && x.walks[0].b.y == 4 && x.walks[0].width == 2.5);
         CHECK(x.loops.size() == 1 && x.loops[0].size() == 4 && x.loops[0][2].x == 5);
+        CHECK(x.areas.size() == 1 && x.areas[0].kind == "pitch" && x.areas[0].axis.y == 1 && x.areas[0].halfW == 17.0);
         CHECK(x.open.size() == 2 && x.open[0].kind == OpenKind::Forecourt && samePoly(x.open[0].poly, a.open[0].poly) && x.open[1].kind == OpenKind::SideYard && x.open[1].poly.size() == 3);
         CHECK(samePoly(x.pavedLot, a.pad) && x.paveY == 4.8 && samePoly(x.lot, a.lot) && samePoly(x.padBound, a.padBound));
         CHECK(x.units.size() == 2 && x.units[0].enterable && !x.units[1].enterable && x.units[0].baseY == 4.6 && samePoly(x.units[0].plan, u.plan) && samePoly(x.units[1].plan, u2.plan));

@@ -230,6 +230,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
         footpaths_ = c.footpaths;     // the parks' and the quad's walks
         jogLoops_ = c.jogLoops;       // the tracks to run
+        activityAreas_ = c.activityAreas;   // the pitches
     });
 
     // Merge every RoadEntity's constrained graph into one combined graph (a level
@@ -596,6 +597,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         const std::size_t offered = seats.size();
         sim_.setSeats(std::move(seats));
+        {   // THE AREAS a group plays on (a pitch)
+            std::vector<CitySim::ActivityArea> areas;
+            for (const auto& a : activityAreas_) {
+                CitySim::ActivityArea ar;
+                ar.kind = a.kind;
+                ar.center = Vec2(a.cx, a.cz);
+                ar.axis = Vec2(a.ax, a.az);
+                ar.halfL = a.halfL;
+                ar.halfW = a.halfW;
+                areas.push_back(ar);
+            }
+            sim_.setAreas(std::move(areas));
+            if (!sim_.areas().empty()) LOG_INFO << "[citysim] activity areas: " << sim_.areas().size() << " (pitches)";
+        }
         if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
     }
     sim_.setPerceptionReliability(params_.perceptionReliability);
