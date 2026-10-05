@@ -418,6 +418,7 @@ add_library(citysim STATIC
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
+    src/apps/citysim/activities.cpp
     src/apps/citysim/city_transit.cpp   # carrying people: the shared ride primitive
     src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
     src/apps/citysim/city_bus.cpp   # fixed-loop transit: derived routes and stops

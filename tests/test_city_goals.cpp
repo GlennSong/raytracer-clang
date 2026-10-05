@@ -402,3 +402,51 @@ TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
         }
     }
 }
+
+// AN ACTIVITY GOAL TAKES ONLY WHAT IT ASKS FOR (behaviour plan, step 2): a goal asking for a SIT on the CAMPUS uses the
+// campus's benches and never the town's, never a spot of another kind, and never one already held.
+TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
+    GoalTable out;
+    out.addState("Find", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(out.setActivity("Find", spotKindBit(SpotKind::Sit), spot_tag::kCampus));
+    out.addState("Pause", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.05);
+    CHECK(out.addTransition("Find", GoalEvent::Arrived, "Pause"));
+    CHECK(out.addTransition("Find", GoalEvent::NoRoute, "Pause"));
+    CHECK(out.addTransition("Pause", GoalEvent::DwellDone, "Find"));
+    CHECK(out.setEntry("Pause"));
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, 40, 21);
+    sim.setGoalTables(out, out);
+    PlaceMap places;
+    for (int i = 0; i < 6; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 100.0, -250), nav);
+    const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 0), nav);
+    places.setCampus(quad, 4);
+    std::vector<CitySim::ActivitySpot> spots;
+    auto spot = [&](Vec2 p, SpotKind k) { CitySim::ActivitySpot s; s.pos = p; s.face = Vec2(0, 1); s.kind = k; spots.push_back(s); };
+    for (int i = 0; i < 6; ++i) spot(Vec2(-15.0 + i * 6.0, 8.0), SpotKind::Sit);          // the quad's benches
+    for (int i = 0; i < 3; ++i) spot(Vec2(-12.0 + i * 8.0, -8.0), SpotKind::Watch);       // ...and somewhere to watch
+    for (int i = 0; i < 12; ++i) spot(Vec2(-250.0 + i * 40.0, 210.0), SpotKind::Sit);     // the town's benches, far off
+    sim.setSpots(spots);
+    sim.assignPlaces(places, nav);
+    int campusSits = 0, wrong = 0, shared = 0;
+    for (int i = 0; i < 40000; ++i) {
+        sim.step(0.1, 0.25);
+        std::vector<int> owner(sim.spots().size(), -1);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const CitySim::ActivitySpot* st = sim.seatedOn(static_cast<int>(k));
+            if (!st) continue;
+            const std::size_t si = static_cast<std::size_t>(st - sim.spots().data());
+            if (owner[si] >= 0) ++shared;
+            owner[si] = static_cast<int>(k);
+            // the city's day-off strollers run their own outing table (any bench); judge only this table's agents
+            if (sim.agents()[k].role == Agent::Role::Stroller) continue;
+            if (st->kind != SpotKind::Sit || !(st->tags & spot_tag::kCampus)) ++wrong;
+            else ++campusSits;
+        }
+    }
+    std::printf("    [activity] %d campus sit-samples, %d on the wrong spot, %d shared\n", campusSits, wrong, shared);
+    CHECK(campusSits > 100);
+    CHECK(wrong == 0);
+    CHECK(shared == 0);
+}

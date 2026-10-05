@@ -29,6 +29,7 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Lunch: return "lunch";
         case GoalTarget::Outing: return "outing";
         case GoalTarget::Campus: return "campus";
+        case GoalTarget::Activity: return "activity";
         default: return "none";
     }
 }
@@ -69,6 +70,14 @@ int GoalTable::addState(const std::string& name, GoalAction action,
     return id;
 }
 
+bool GoalTable::setActivity(const std::string& name, uint32_t spotKinds, uint32_t spotTags) {
+    const int id = machine_.findState(name);
+    if (id < 0 || id >= static_cast<int>(states_.size())) return false;
+    states_[static_cast<std::size_t>(id)].spotKinds = spotKinds;
+    states_[static_cast<std::size_t>(id)].spotTags = spotTags;
+    return true;
+}
+
 bool GoalTable::addTransition(const std::string& from, GoalEvent event,
                               const std::string& to) {
     int f = machine_.findState(from);
@@ -104,6 +113,11 @@ std::string GoalTable::describe() const {
         if (s.action == GoalAction::GoTo)
             out += std::string(" ") + targetName(s.target);
         out += std::string(" activity=") + activityName(s.activity);
+        if (s.target == GoalTarget::Activity) {
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), " spots=%x/%x", s.spotKinds, s.spotTags);
+            out += buf;
+        }
         if (s.dwellHours > 0) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), " dwell=%g", s.dwellHours);

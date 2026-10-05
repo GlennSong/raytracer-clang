@@ -746,6 +746,19 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
+    {   // THE ACTIVITY SPOTS, by kind and where (tagged once the places are known)
+        int byKind[static_cast<int>(SpotKind::Count)] = {0}, campus = 0, sports = 0;
+        for (const CitySim::ActivitySpot& sp : sim_.spots()) {
+            ++byKind[static_cast<int>(sp.kind)];
+            campus += (sp.tags & spot_tag::kCampus) ? 1 : 0;
+            sports += (sp.tags & spot_tag::kSports) ? 1 : 0;
+        }
+        std::string line;
+        for (int k = 0; k < static_cast<int>(SpotKind::Count); ++k)
+            if (byKind[k]) line += std::string(line.empty() ? "" : ", ") + std::to_string(byKind[k]) + " " + spotKindName(static_cast<SpotKind>(k));
+        LOG_INFO << "[citysim] activity spots: " << (line.empty() ? std::string("none") : line) << " | " << campus << " on a campus, "
+                 << sports << " by a sports field";
+    }
     LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     if (sim_.populationCache().used)
         LOG_INFO << "[citysim] population: " << (sim_.populationCache().hit ? "read from" : "decided, cached in")

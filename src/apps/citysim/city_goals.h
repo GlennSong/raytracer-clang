@@ -47,8 +47,10 @@ enum class GoalAction : uint8_t {
 // a civic building, or just a walk round the block (CitySim::pickOuting).
 // Campus: a student's break between classes -- the library, a bench on the quad
 // or a bleacher by the pitch, a walk across the quad, lunch (CitySim::pickCampusBreak).
+// Activity: a free ACTIVITY SPOT of the state's kinds and tags (activities.h) -- a bench, a stand, a track -- reserved
+// and walked to; what the body does there is the spot's kind.
 enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop, Stop, Depot,
-                                  Lunch, Outing, Campus };
+                                  Lunch, Outing, Campus, Activity };
 
 // The events CitySim EMITS at fixed points — the full trigger vocabulary a
 // table may transition on. Emission lives in C++ (clock windows, arrival,
@@ -80,6 +82,8 @@ struct GoalState {
     GoalTarget target = GoalTarget::None;
     Activity activity = Activity::AtHome;
     double dwellHours = 0;   // 0 = rest forever (only events can end it)
+    // GoalTarget::Activity: the spot kinds it takes (spotKindBit) and the tags the spot must carry (spot_tag)
+    uint32_t spotKinds = 0, spotTags = 0;
 };
 
 // The table itself: states + transitions over an engine::StateMachine, shared
@@ -97,6 +101,8 @@ public:
     bool addTransition(const std::string& from, GoalEvent event,
                        const std::string& to);
     bool setEntry(const std::string& name);   // false when unknown
+    // An Activity state's ask: which spot kinds, carrying which tags. False when the state is unknown.
+    bool setActivity(const std::string& name, uint32_t spotKinds, uint32_t spotTags);
 
     int entry() const { return entry_; }
     int stateCount() const { return static_cast<int>(states_.size()); }

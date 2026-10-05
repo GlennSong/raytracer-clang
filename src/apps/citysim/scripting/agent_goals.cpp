@@ -1,3 +1,4 @@
+#include "../activities.h"
 #include "agent_goals.h"
 
 #include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
@@ -53,6 +54,7 @@ bool parseTarget(const std::string& s, GoalTarget& out) {
     if (s == "lunch") { out = GoalTarget::Lunch; return true; }
     if (s == "outing") { out = GoalTarget::Outing; return true; }
     if (s == "campus") { out = GoalTarget::Campus; return true; }
+    if (s == "activity") { out = GoalTarget::Activity; return true; }
     return false;
 }
 
@@ -112,12 +114,42 @@ bool loadGoalTable(ScriptVM& vm, const std::string& archetype, GoalTable& out,
                   parseTarget(strField(L, si, "target"), target) &&
                   parseActivity(strField(L, si, "activity"), activity);
         double dwell = numField(L, si, "dwell", 0.0);
+        // an ACTIVITY state's ask: spot = { kinds = { "sit", ... }, tags = { "campus", ... } }
+        uint32_t spotKinds = 0, spotTags = 0;
+        lua_getfield(L, si, "spot");
+        if (lua_istable(L, -1)) {
+            const int sp = lua_gettop(L);
+            for (const char* field : {"kinds", "tags"}) {
+                lua_getfield(L, sp, field);
+                if (lua_istable(L, -1)) {
+                    const int arr = lua_gettop(L);
+                    const int n = static_cast<int>(luaL_len(L, arr));
+                    for (int k = 1; k <= n; ++k) {
+                        lua_rawgeti(L, arr, k);
+                        const std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+                        lua_pop(L, 1);
+                        if (field[0] == 'k') {
+                            citysim::SpotKind sk;
+                            if (citysim::spotKindFromName(v, sk)) spotKinds |= citysim::spotKindBit(sk);
+                            else ok = false;
+                        } else {
+                            const uint32_t tg = citysim::spotTagFromName(v);
+                            if (tg) spotTags |= tg; else ok = false;
+                        }
+                    }
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);   // spot
+        if (target == GoalTarget::Activity && spotKinds == 0) spotKinds = citysim::spotKindBit(citysim::SpotKind::Sit);
         lua_pop(L, 1);
         if (!ok || dwell < 0) {
             lua_settop(L, base);
             return fail(err, "agents." + archetype + ": bad state `" + name + "`");
         }
         table.addState(name, action, target, activity, dwell);
+        if (target == GoalTarget::Activity) table.setActivity(name, spotKinds, spotTags);
     }
     lua_pop(L, 1);   // states
 

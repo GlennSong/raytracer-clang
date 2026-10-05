@@ -7,6 +7,7 @@
 #include "../../engine/ai/pathfind.h"
 #include "agent_grid.h"
 #include "agent_id.h"
+#include "activities.h"
 #include "city_goals.h"
 #include "city_bus.h"
 #include "city_dispatch.h"
@@ -1122,17 +1123,25 @@ public:
     // How many agents assignPlaces made students (0 without a campus with a residence and a teaching hall).
     int studentCount() const { return students_; }
     const engine::NavGraph& nav() const { static const engine::NavGraph kEmpty; return nav_ ? *nav_ : kEmpty; }
-    // SEATS out in the city (the furniture library, M5; Glenn: benches you can sit on -- and so can everyone
-    // else): one per place a body sits, its floor point, the way it faces, its seat height, the path node it is
-    // reached from (setSeats finds it) and who has it. A stroller's outing may be a sit on one.
-    struct SeatSpot {
+    // ACTIVITY SPOTS (activities.h; the seats were the first kind -- the furniture library, M5; Glenn: benches you can
+    // sit on, and so can everyone else): one per place a body does something, its point, the way it faces, its
+    // height (a seat's hip), the path node it is reached from (setSpots finds it), what it is (kind), where it is
+    // (tags: campus, park, sports -- set once the places are known) and who holds it.
+    struct ActivitySpot {
         engine::Vec2 pos, face{0, 1};
         Real hip = 0.45;
         int node = -1;
         int occupant = -1;
+        SpotKind kind = SpotKind::Sit;
+        uint32_t tags = 0;
     };
-    void setSeats(std::vector<SeatSpot> seats);
+    using SeatSpot = ActivitySpot;   // the name the seats grew up with
+    void setSpots(std::vector<ActivitySpot> spots);
+    void setSeats(std::vector<SeatSpot> seats) { setSpots(std::move(seats)); }
+    const std::vector<ActivitySpot>& spots() const { return seats_; }
     const std::vector<SeatSpot>& seats() const { return seats_; }
+    // A free spot answering `q` from `here`, reserved for agent `a`; -1 none. The one picker every goal goes through.
+    int pickSpot(Agent& a, engine::Vec2 here, const ActivityQuery& q);
     // The agent's seat while it is SITTING on it (seatPhase 2), else nullptr: the renderer and the walker
     // system draw a seated body there.
     const SeatSpot* seatedOn(int agentIndex) const;
@@ -1300,6 +1309,10 @@ private:
     int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
     // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.
     int pickCampusSeat(Agent& a, engine::Vec2 here);
+    int pickActivity(Agent& a, int origin, const GoalState& s);   // GoalTarget::Activity -> the spot's node (tripSeat)
+    // Tags each spot by where it stands, once the places are known (assignPlaces): campus (near a quad or a
+    // field), sports (near a field).
+    void tagSpots();
     int pickLunch(Agent& a, int origin);    // GoalTarget::Lunch  -> a node, or -1
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
     void installGoalTables(GoalTable pedestrian, GoalTable driver);

@@ -1233,6 +1233,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     }   // decided (not read from the cache)
     students_ = 0;
     for (const Agent& a : agents_) students_ += a.role == Agent::Role::Student ? 1 : 0;
+    tagSpots();   // the venues are known now: which spots are on the campus
 
     // Seed the surface-level social graph: agents sharing a workplace are
     // coworkers; those sharing a home are neighbors (housemates).
@@ -1789,13 +1790,15 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     // trip across town can take the bus like any other. A trip resumed after a
     // bus leg keeps the destination it chose (outingTo).
     int chosen = -1;
-    if (s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch || s.target == GoalTarget::Campus) {
+    if (s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch || s.target == GoalTarget::Campus ||
+        s.target == GoalTarget::Activity) {
         if (a.outingTo >= 0) {
             chosen = a.outingTo;
         } else {
             chosen = s.target == GoalTarget::Outing ? pickOuting(a, origin)
                      : s.target == GoalTarget::Lunch ? pickLunch(a, origin)
-                                                     : pickCampusBreak(a, origin);
+                     : s.target == GoalTarget::Campus ? pickCampusBreak(a, origin)
+                                                       : pickActivity(a, origin, s);
             a.outingTo = chosen;
         }
     } else {
@@ -1851,11 +1854,12 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
         case GoalTarget::Outing:
         case GoalTarget::Lunch:
         case GoalTarget::Campus:
+        case GoalTarget::Activity:
             if (chosen >= 0 && chosen != origin) {
                 startTrip(a, origin, chosen, fromRest);
                 started = a.moving;
             }
-            if (!started) { a.outingTo = -1; a.tripVenue = -1; }
+            if (!started) { a.outingTo = -1; a.tripVenue = -1; releaseSeat(a); }   // no trip: no spot held
             break;
         case GoalTarget::Work:
         case GoalTarget::Home:
@@ -2379,27 +2383,12 @@ int CitySim::pickCampusBreak(Agent& a, int origin) {
 }
 
 int CitySim::pickCampusSeat(Agent& a, Vec2 here) {
-    // a free seat within 120 m of the quad or the field, one of the nearest six to here
-    std::vector<std::pair<Real, int>> c;
-    for (int i = 0; i < static_cast<int>(seats_.size()); ++i) {
-        const SeatSpot& s = seats_[static_cast<std::size_t>(i)];
-        if (s.occupant >= 0) continue;
-        bool onCampus = false;
-        for (const Venue& v : venues_) {
-            if (v.campus != 4 && v.campus != 5) continue;
-            if ((v.door - s.pos).lengthSquared() < 120.0 * 120.0) { onCampus = true; break; }
-        }
-        if (!onCampus) continue;
-        const Real d2 = (s.pos - here).lengthSquared();
-        if (d2 > 600.0 * 600.0) continue;
-        c.push_back({d2, i});
-    }
-    if (c.empty()) return -1;
-    const std::size_t k = std::min<std::size_t>(6, c.size());
-    std::partial_sort(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(k), c.end());
-    const int pick = c[rnd() % static_cast<uint32_t>(k)].second;
-    seats_[static_cast<std::size_t>(pick)].occupant = indexOf(a);
-    return pick;
+    // a free seat on the campus (within 120 m of the quad or the field: tagSpots), one of the nearest six to here
+    ActivityQuery q;
+    q.kinds = spotKindBit(SpotKind::Sit);
+    q.tags = spot_tag::kCampus;
+    q.maxDist = 600.0; q.nearest = 6;
+    return pickSpot(a, here, q);
 }
 
 void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
@@ -4811,7 +4800,7 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
 }
 
 // ---- SEATS (the furniture library, M5) ------------------------------------------------------------------------
-void CitySim::setSeats(std::vector<SeatSpot> seats) {
+void CitySim::setSpots(std::vector<ActivitySpot> seats) {
     seats_.clear();
     if (!nav_) return;
     // the nearest node a walker can leave by, within 60 m: where a sit starts and ends
@@ -4832,6 +4821,49 @@ void CitySim::setSeats(std::vector<SeatSpot> seats) {
         s.occupant = -1;
         if (s.node >= 0) seats_.push_back(s);
     }
+    tagSpots();
+}
+
+void CitySim::tagSpots() {
+    for (ActivitySpot& s : seats_) {
+        s.tags &= ~(spot_tag::kCampus | spot_tag::kSports);
+        for (const Venue& v : venues_) {
+            if (v.campus != 4 && v.campus != 5) continue;
+            if ((v.door - s.pos).lengthSquared() >= 120.0 * 120.0) continue;
+            s.tags |= spot_tag::kCampus;
+            if (v.campus == 5) s.tags |= spot_tag::kSports;
+        }
+    }
+}
+
+int CitySim::pickSpot(Agent& a, Vec2 here, const ActivityQuery& q) {
+    std::vector<std::pair<Real, int>> c;
+    for (int i = 0; i < static_cast<int>(seats_.size()); ++i) {
+        const ActivitySpot& s = seats_[static_cast<std::size_t>(i)];
+        if (s.occupant >= 0 || !(q.kinds & spotKindBit(s.kind)) || (s.tags & q.tags) != q.tags) continue;
+        const Real d2 = (s.pos - here).lengthSquared();
+        if (d2 < q.minDist * q.minDist || d2 > q.maxDist * q.maxDist) continue;
+        c.push_back({d2, i});
+    }
+    if (c.empty()) return -1;
+    const std::size_t k = std::min<std::size_t>(static_cast<std::size_t>(std::max(1, q.nearest)), c.size());
+    std::partial_sort(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(k), c.end());
+    const int pick = c[rnd() % static_cast<uint32_t>(k)].second;
+    seats_[static_cast<std::size_t>(pick)].occupant = indexOf(a);
+    return pick;
+}
+
+int CitySim::pickActivity(Agent& a, int origin, const GoalState& st) {
+    a.tripVenue = -1;
+    releaseSeat(a);
+    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
+    ActivityQuery q;
+    q.kinds = st.spotKinds ? st.spotKinds : spotKindBit(SpotKind::Sit);
+    q.tags = st.spotTags;
+    const int s = pickSpot(a, nav_->nodes[static_cast<std::size_t>(origin)], q);
+    if (s < 0) return -1;
+    a.tripSeat = s;
+    return seats_[static_cast<std::size_t>(s)].node;
 }
 
 const CitySim::SeatSpot* CitySim::seatedOn(int i) const {
@@ -4851,21 +4883,10 @@ void CitySim::releaseSeat(Agent& a) {
 
 int CitySim::pickSeat(Agent& a, Vec2 here) {
     // a free seat 30-500 m off, one of the nearest four (so neighbours do not all take the same bench)
-    std::vector<std::pair<Real, int>> c;
-    for (int i = 0; i < static_cast<int>(seats_.size()); ++i) {
-        const SeatSpot& s = seats_[static_cast<std::size_t>(i)];
-        if (s.occupant >= 0) continue;
-        const Vec2 d = s.pos - here;
-        const Real d2 = d.x * d.x + d.y * d.y;
-        if (d2 < 30.0 * 30.0 || d2 > 500.0 * 500.0) continue;
-        c.push_back({d2, i});
-    }
-    if (c.empty()) return -1;
-    const std::size_t k = std::min<std::size_t>(4, c.size());
-    std::partial_sort(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(k), c.end());
-    const int pick = c[rnd() % static_cast<uint32_t>(k)].second;
-    seats_[static_cast<std::size_t>(pick)].occupant = indexOf(a);
-    return pick;
+    ActivityQuery q;
+    q.kinds = spotKindBit(SpotKind::Sit);
+    q.minDist = 30.0; q.maxDist = 500.0; q.nearest = 4;
+    return pickSpot(a, here, q);
 }
 
 void CitySim::stepSeats(Real dt) {

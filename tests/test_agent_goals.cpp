@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/apps/citysim/city_goals.h"
+#include "../src/apps/citysim/activities.h"
 #include "../src/apps/citysim/scripting/agent_goals.h"
 #include "../src/engine/scripting/script_vm.h"
 
@@ -128,4 +129,42 @@ TEST_CASE(agents_lua_reader_rejects_malformed_tables) {
     CHECK(!loadGoalTable(vm, "noentry", t, &err));    // entry is mandatory
     CHECK(!loadGoalTable(vm, "badevent", t, &err));   // unknown event name
     CHECK(!loadGoalTable(vm, "badstate", t, &err));   // unknown action name
+}
+
+// ACTIVITY SPOTS (behaviour plan, step 2): a behaviour that asks for "an activity of these kinds, with these tags" is
+// pure Lua -- target "activity" with spot = { kinds, tags } -- and an unknown kind or tag is refused, not guessed.
+TEST_CASE(agents_lua_asks_for_an_activity_by_kind_and_tag) {
+    ScriptVM vm;
+    std::string err;
+    CHECK(vm.doString(R"lua(
+        agents = {
+            loafer = {
+                entry = "Find",
+                states = {
+                    { name = "Find", action = "goto", target = "activity", activity = "Outing",
+                      spot = { kinds = { "sit", "watch" }, tags = { "campus" } } },
+                    { name = "Sit", action = "rest", activity = "Outing", dwell = 0.2 },
+                },
+                transitions = {
+                    { from = "Find", event = "arrived", to = "Sit" },
+                    { from = "Find", event = "noRoute", to = "Sit" },
+                    { from = "Sit", event = "dwellDone", to = "Find" },
+                },
+            },
+            bad = {
+                entry = "Find",
+                states = { { name = "Find", action = "goto", target = "activity", spot = { kinds = { "juggle" } } } },
+            },
+        }
+    )lua", &err));
+    GoalTable t;
+    const bool ok = loadGoalTable(vm, "loafer", t, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    const GoalState& f = t.state(t.findState("Find"));
+    CHECK(f.target == GoalTarget::Activity);
+    CHECK(f.spotKinds == (citysim::spotKindBit(citysim::SpotKind::Sit) | citysim::spotKindBit(citysim::SpotKind::Watch)));
+    CHECK(f.spotTags == citysim::spot_tag::kCampus);
+    GoalTable b;
+    CHECK(!loadGoalTable(vm, "bad", b, &err));
 }
