@@ -496,7 +496,11 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 if (d < bestD) { bestD = d; seatAt = st->pos; }
             }
         // ...and how many are walking a park's or the quad's paths (footpaths), and students among them
-        int onWalks = 0, studentsOnWalks = 0;
+        int onWalks = 0, studentsOnWalks = 0, joggers = 0;
+        for (int i = 0; i < static_cast<int>(sm.agents().size()); ++i)
+            if (const CitySim::ActivitySpot* sp = sm.usingSpot(i)) joggers += sp->kind == SpotKind::Jog ? 1 : 0;
+        int jogBooked = 0;   // runners on their way: jog spots held
+        for (const CitySim::ActivitySpot& sp : sm.spots()) jogBooked += sp.kind == SpotKind::Jog && sp.occupant >= 0 ? 1 : 0;
         const engine::NavGraph& ng = sm.nav();
         for (const Agent& a : sm.agents()) {
             if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
@@ -504,12 +508,30 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
             if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
             ++onWalks;
             studentsOnWalks += a.role == Agent::Role::Student ? 1 : 0;
+            if (onWalks == 1 && std::getenv("RT_WALK_DEBUG"))
+                std::fprintf(stderr, "[walk debug] agent %d at %.1f %.1f link %d leg %d/%zu dist %.2f of %.2f speed %.2f far %d tier %d\n",
+                             static_cast<int>(&a - sm.agents().data()), a.pos.x, a.pos.y, li, a.leg, a.route.links.size(), a.distOnLeg,
+                             ng.links[static_cast<std::size_t>(li)].length, a.speed, a.far() ? 1 : 0, static_cast<int>(a.tier));
+            if (onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
+                const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
+                const int ai = static_cast<int>(&a - sm.agents().data());
+                std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f bodyLag %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.bodyLag, a.tethered ? 1 : 0);
+                std::fprintf(stderr, "[walk debug]   state %d hold %.1f riding %d awaiting %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
+                             static_cast<int>(a.state), a.holdTimer, sm.riding(static_cast<int>(&a - sm.agents().data())) ? 1 : 0,
+                             sm.awaitingRide(static_cast<int>(&a - sm.agents().data())) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
+                             li, L0.footA.x, L0.footA.y, L0.footB.x, L0.footB.y, L0.from, L0.to, ng.streetNodeCount());
+                for (std::size_t q = 1; q < std::min<std::size_t>(5, a.route.links.size()); ++q) {
+                    const engine::NavLink& Lq = ng.links[static_cast<std::size_t>(a.route.links[q])];
+                    std::fprintf(stderr, " [%s %.1f %.1f]", Lq.footpath ? "walk" : "street", Lq.footB.x, Lq.footB.y);
+                }
+                std::fprintf(stderr, "\n");
+            }
         }
         char b[480];
-        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d)",
+        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d) | jogging %d (booked %d)",
                       walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
                       tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
-                      onWalks, studentsOnWalks);
+                      onWalks, studentsOnWalks, joggers, jogBooked);
         ctx.settings.setString("walkers.telemetry", b);
         tel_ = Telemetry{};
     }

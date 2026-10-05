@@ -34,7 +34,8 @@ struct OccupantPlan {
 
 // `count` people on the free spots of `set` (spots already taken -- the player -- are left alone). Beds take the
 // sleepers at night; by day people sit, a piece at a time with a gap here and there, never on a fixture (a
-// toilet); a lectern takes its lecturer first, and while one is there the lecture hall's rows fill first. Fewer places than people: the rest are elsewhere in the building
+// toilet); a lectern takes its lecturer first, and while one is there the lecture hall's rows fill first. A place to
+// STAND that is not a lectern (a lab bench) takes a standing worker like a seat takes a sitter. Fewer places than people: the rest are elsewhere in the building
 // (a storey not streamed, the corridor).
 std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLibrary& lib, const OccupantPlan& plan);
 

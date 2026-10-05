@@ -99,6 +99,7 @@ constexpr Real kPoleClearance = 0.7;       // a walker keeps its centre this far
 constexpr Real kPlayerClearance = 1.1;     // ...and this far from the PLAYER (a wide berth,
                                            // so a near miss is a step-around, not a brush)
 constexpr Real kPedClearance = 4.0;     // a car aims to stop this far short of a ped/player
+constexpr Real kPedSideBySide = 0.4;   // walkers this close along the way walk abreast: neither leads
 constexpr Real kPedHardStop = 3.0;      // and will NOT roll closer than this (a real wall)
 constexpr Real kCarBuffer = 2.0;        // bumper to bumper behind a stopped (player's) car
 constexpr Real kLaneHalfCorridor = 2.0; // a car this far off our line is in another lane
@@ -2362,6 +2363,14 @@ int CitySim::pickCampusBreak(Agent& a, int origin) {
         const int lunch = pickLunch(a, origin);
         if (lunch >= 0) return lunch;
     }
+    if (h >= 15.0 && h < 19.5 && roll < 25u) {   // a run round the track (activities: a campus Jog spot)
+        ActivityQuery q;
+        q.kinds = spotKindBit(SpotKind::Jog);
+        q.tags = spot_tag::kCampus;
+        q.maxDist = 900.0;
+        const int st = pickSpot(a, here, q);
+        if (st >= 0) { a.tripSeat = st; return seats_[static_cast<std::size_t>(st)].node; }
+    }
     if (roll < 75u) {   // somewhere to sit outside (the bleachers too, a short walk off)
         const int st = pickCampusSeat(a, here);
         if (st >= 0) { a.tripSeat = st; return seats_[static_cast<std::size_t>(st)].node; }
@@ -4476,8 +4485,10 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
             seats_[static_cast<std::size_t>(a.tripSeat)].node == node &&
             seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a) && a.mode == Agent::Mode::Pedestrian) {
-            // AT THE SEAT'S PATH: off it to the seat, a sit of five to fifteen minutes, back (stepSeats).
-            a.restDwell = jitter(0.08, 0.25);
+            // AT THE SEAT'S PATH: off it to the seat, a sit of five to fifteen minutes, back (stepSeats) -- or onto the
+            // track for a run of twenty to thirty-five
+            a.restDwell = seats_[static_cast<std::size_t>(a.tripSeat)].kind == SpotKind::Jog ? jitter(0.33, 0.58)
+                                                                                           : jitter(0.08, 0.25);
             a.seatPhase = 1;
             a.seatBack = a.pos;
             seated = true;
@@ -4607,13 +4618,21 @@ void CitySim::computeGaps() {
             return a.first != b.first ? a.first < b.first : a.second < b.second;
         });
         minEntry[kv.first] = { v.front().first, v.front().second };
+        const bool walkers = (kv.first % 4096) == 1024;
         for (std::size_t k = 0; k + 1 < v.size(); ++k) {
+            // WALKERS go side by side, not in file: one LEVEL with me (within a body's depth along the way) is not in
+            // front of me -- the lean takes us past each other. Counted as a leader, a crowd that set off from one
+            // door together (a class change) stood at the same distance, each held behind the next, for ever.
+            std::size_t j = k + 1;
+            if (walkers)
+                while (j < v.size() && v[j].first - v[k].first < kPedSideBySide) ++j;
+            if (j >= v.size()) continue;
             // the nearer leader wins: a changing car sits in two lanes' chains
-            const Real g = std::max(Real(0), v[k + 1].first - agents_[v[k + 1].second].bodyLag - v[k].first);
+            const Real g = std::max(Real(0), v[j].first - agents_[v[j].second].bodyLag - v[k].first);
             if (g >= gaps_[v[k].second]) continue;
             gaps_[v[k].second] = g;
-            minGaps_[v[k].second] = pairMinGap(v[k].second, v[k + 1].second);
-            leaderSpeeds_[v[k].second] = agents_[v[k + 1].second].speed;
+            minGaps_[v[k].second] = pairMinGap(v[k].second, v[j].second);
+            leaderSpeeds_[v[k].second] = agents_[v[j].second].speed;
         }
     }
     // Car-following ACROSS a node: the front car on a link (no leader ahead on its
@@ -4806,7 +4825,10 @@ void CitySim::setSpots(std::vector<ActivitySpot> seats) {
     // the nearest node a walker can leave by, within 60 m: where a sit starts and ends
     const int n = nav_->nodeCount();
     for (SeatSpot& s : seats) {
-        Real best = 60.0 * 60.0;
+        // a seat is reached from the path within 60 m; a place on a track from as far as 150 (a field is wide, and a
+        // runner crosses the grass to it)
+        const Real reach = s.kind == SpotKind::Jog ? 150.0 : 60.0;
+        Real best = reach * reach;
         s.node = -1;
         for (int i = 0; i < n; ++i) {
             const Vec2 d = nav_->nodes[static_cast<std::size_t>(i)] - s.pos;
@@ -4829,7 +4851,9 @@ void CitySim::tagSpots() {
         s.tags &= ~(spot_tag::kCampus | spot_tag::kSports);
         for (const Venue& v : venues_) {
             if (v.campus != 4 && v.campus != 5) continue;
-            if ((v.door - s.pos).lengthSquared() >= 120.0 * 120.0) continue;
+            // (a track's far side is a field's width from its door)
+            const Real reach = s.kind == SpotKind::Jog ? 200.0 : 120.0;
+            if ((v.door - s.pos).lengthSquared() >= reach * reach) continue;
             s.tags |= spot_tag::kCampus;
             if (v.campus == 5) s.tags |= spot_tag::kSports;
         }
@@ -4866,11 +4890,50 @@ int CitySim::pickActivity(Agent& a, int origin, const GoalState& st) {
     return seats_[static_cast<std::size_t>(s)].node;
 }
 
-const CitySim::SeatSpot* CitySim::seatedOn(int i) const {
+const CitySim::ActivitySpot* CitySim::usingSpot(int i) const {
     if (i < 0 || i >= static_cast<int>(agents_.size())) return nullptr;
     const Agent& a = agents_[static_cast<std::size_t>(i)];
     if (a.seatPhase != 2 || a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) return nullptr;
     return &seats_[static_cast<std::size_t>(a.tripSeat)];
+}
+
+const CitySim::SeatSpot* CitySim::seatedOn(int i) const {
+    const ActivitySpot* s = usingSpot(i);
+    return s && (s->kind == SpotKind::Sit || s->kind == SpotKind::Lie) ? s : nullptr;
+}
+
+void CitySim::setLoops(std::vector<std::vector<Vec2>> loops) {
+    loops_.clear();
+    for (std::vector<Vec2>& pts : loops) {
+        if (pts.size() < 3) continue;
+        Loop L;
+        L.pts = std::move(pts);
+        L.cum.push_back(0);
+        for (std::size_t i = 0; i < L.pts.size(); ++i) {
+            L.length += (L.pts[(i + 1) % L.pts.size()] - L.pts[i]).length();
+            L.cum.push_back(L.length);
+        }
+        loops_.push_back(std::move(L));
+    }
+}
+
+Real CitySim::loopLength(int loop) const {
+    return loop >= 0 && loop < static_cast<int>(loops_.size()) ? loops_[static_cast<std::size_t>(loop)].length : 0;
+}
+
+Vec2 CitySim::loopPoint(int loop, Real s, Vec2* tangent) const {
+    if (loop < 0 || loop >= static_cast<int>(loops_.size())) return Vec2(0, 0);
+    const Loop& L = loops_[static_cast<std::size_t>(loop)];
+    if (L.length <= 0) return L.pts.front();
+    s = std::fmod(s, L.length);
+    if (s < 0) s += L.length;
+    const std::size_t i = static_cast<std::size_t>(std::upper_bound(L.cum.begin(), L.cum.end(), s) - L.cum.begin()) - 1;
+    const std::size_t k = std::min(i, L.pts.size() - 1);
+    const Vec2 a = L.pts[k], b = L.pts[(k + 1) % L.pts.size()];
+    const Real seg = L.cum[k + 1] - L.cum[k];
+    const Real t = seg > 1e-9 ? (s - L.cum[k]) / seg : 0;
+    if (tangent) *tangent = seg > 1e-9 ? (b - a) * (1.0 / seg) : Vec2(1, 0);
+    return a + (b - a) * t;
 }
 
 void CitySim::releaseSeat(Agent& a) {
@@ -4891,12 +4954,24 @@ int CitySim::pickSeat(Agent& a, Vec2 here) {
 
 void CitySim::stepSeats(Real dt) {
     constexpr Real kWalk = 1.2;   // an amble across the grass
+    constexpr Real kJog = 2.8;    // a steady run
     for (Agent& a : agents_) {
-        if (a.seatPhase != 1 && a.seatPhase != 3) continue;
+        if (a.seatPhase == 0) continue;
         if (a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) { a.seatPhase = 0; continue; }
         const SeatSpot& s = seats_[static_cast<std::size_t>(a.tripSeat)];
-        // to the seat, stopping in front of it; back to where it left the path
-        const Vec2 target = a.seatPhase == 1 ? s.pos + s.face * 0.35 : a.seatBack;
+        // RUNNING THE LOOP (a Jog spot): round it at a jogger's pace until the run's time is up (goalThink)
+        if (a.seatPhase == 2) {
+            if (s.kind != SpotKind::Jog || s.loop < 0) continue;
+            a.loopS += kJog * dt;
+            Vec2 tg(1, 0);
+            a.pos = loopPoint(s.loop, a.loopS, &tg);
+            a.heading = tg;
+            a.speed = kJog;
+            grid_.place(indexOf(a), a.pos);
+            continue;
+        }
+        // to the seat, stopping in front of it (a jogger: onto the track at its place); back to where it left the path
+        const Vec2 target = a.seatPhase == 1 ? (s.kind == SpotKind::Jog ? s.pos : s.pos + s.face * 0.35) : a.seatBack;
         const Vec2 d = target - a.pos;
         const Real L = d.length(), step = kWalk * dt;
         if (L <= step) {
@@ -4906,6 +4981,7 @@ void CitySim::stepSeats(Real dt) {
                 a.seatPhase = 2;
                 a.pos = s.pos;
                 a.heading = s.face;
+                a.loopS = s.loopS;
                 a.goalHours = 0;   // the sit's own clock starts now, not on the walk over
             } else {
                 releaseSeat(a);

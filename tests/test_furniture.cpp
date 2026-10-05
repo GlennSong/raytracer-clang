@@ -717,3 +717,48 @@ TEST_CASE(a_campus_halls_quad_door_opens_onto_a_passage_to_the_corridor) {
     std::printf("    [quad door] %d halls checked\n", checked);
     CHECK(checked >= 8);
 }
+
+// THE LABS (behaviour plan, step 3): a teaching hall's labs are worked standing -- students at the benches' fronts,
+// facing them, on their own spots -- like the lecture rows are sat in.
+TEST_CASE(students_stand_at_the_lab_benches) {
+    UseShippedFurniture shipped;
+    const FurnitureLibrary& lib = FurnitureLibrary::global();
+    // the teaching hall's upper storey has labs (campus_buildings_have_their_rooms_and_furniture)
+    const Poly2 plan = {{0, 0}, {52, 0}, {52, 22}, {0, 22}};
+    int standing = 0, atBench = 0, facing = 0, benches = 0;
+    for (int storey : {1, 2}) {
+        BuildingParams p;
+        p.floors = 4; p.campus = 1; p.core = 1; p.walkableGround = true; p.openDoorway = true; p.seed = 41;
+        const std::size_t entrance = entranceEdgeFor(plan, p);
+        const InteriorLayout il = interiorLayout(plan, p, entrance);
+        const Real inset = std::max(p.wallThickness, Real(0.55));
+        const RoomPlan rp = roomPlan(plan, p, coreFor(plan, p, entrance), il.edge, inset, storey, il.well, entrance, il.stairFoot);
+        std::vector<PlacedPiece> out;
+        RenderMesh col;
+        emitFurniture(out, &col, rp, 0.0, p.seed + storey, 3.2);
+        Interactables set;
+        for (const PlacedPiece& pp : out)
+            if (lib.interactive(static_cast<Piece>(pp.piece)))
+                set.pieces.push_back({pp.piece, interactXform(lib.find(static_cast<Piece>(pp.piece)), pp.xform, pp.variant), 0});
+        for (const InteractPiece& ip : set.pieces) benches += static_cast<Piece>(ip.piece) == Piece::LabBench;
+        OccupantPlan cls;
+        cls.people = 400; cls.seed = 5;   // more than the storey's places: every one is taken
+        for (const Occupant& o : planOccupants(set, lib, cls)) {
+            if (o.pose != Occupant::Pose::Stand) continue;
+            ++standing;
+            const InteractPiece& ip = set.pieces[o.piece];
+            if (static_cast<Piece>(ip.piece) != Piece::LabBench) continue;
+            ++atBench;
+            // in front of the bench (its +z), facing it (-z)
+            const Vec3 at(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
+            const Mat4 inv = ip.xform.inverse();
+            const Vec3 local = piecePoint(inv, at);
+            const Vec3 f = pieceDir(inv, pieceDir(o.at, Vec3(0, 0, 1)));
+            if (local.z > 0.75 && f.z < -0.9) ++facing;
+        }
+    }
+    std::printf("    [labs] %d benches, %d standing, %d at a bench, %d in front facing it\n", benches, standing, atBench, facing);
+    CHECK(benches > 0);
+    CHECK(atBench == benches * 3);
+    CHECK(facing == atBench);
+}

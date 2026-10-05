@@ -450,3 +450,120 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
     CHECK(wrong == 0);
     CHECK(shared == 0);
 }
+
+// JOGGERS (behaviour plan, step 3): an activity goal for a JOG spot walks onto the track, runs its loop at a jogger's
+// pace -- on the loop's line, laps and all -- and walks off when the run is done; a runner is never drawn seated, and
+// no start spot is ever two runners'.
+TEST_CASE(joggers_run_laps_of_the_track_and_come_off_it) {
+    GoalTable out;
+    out.addState("Run", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(out.setActivity("Run", spotKindBit(SpotKind::Jog), 0));
+    out.addState("Rest", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.2);
+    CHECK(out.addTransition("Run", GoalEvent::Arrived, "Rest"));
+    CHECK(out.addTransition("Run", GoalEvent::NoRoute, "Rest"));
+    CHECK(out.addTransition("Rest", GoalEvent::DwellDone, "Run"));
+    CHECK(out.setEntry("Rest"));
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, 30, 21);
+    sim.setGoalTables(out, out);
+    // a track: a 40 x 30 m oval between the streets
+    std::vector<Vec2> loop;
+    for (int i = 0; i < 48; ++i) {
+        const Real a = 6.2831853 * i / 48;
+        loop.push_back(Vec2(50.0 + 20.0 * std::cos(a), 50.0 + 15.0 * std::sin(a)));
+    }
+    sim.setLoops({loop});
+    std::vector<CitySim::ActivitySpot> spots;
+    for (int k = 0; k < 8; ++k) {
+        CitySim::ActivitySpot s;
+        s.kind = SpotKind::Jog; s.loop = 0; s.loopS = sim.loopLength(0) * k / 8.0; s.hip = 0;
+        Vec2 tg;
+        s.pos = sim.loopPoint(0, s.loopS, &tg);
+        s.face = tg;
+        spots.push_back(s);
+    }
+    sim.setSpots(spots);
+    std::printf("    [jog] %zu of 8 spots reachable\n", sim.spots().size());
+    CHECK(sim.spots().size() == 8);
+    int runSamples = 0, offLoop = 0, seatedRunners = 0, shared = 0, finished = 0;
+    Real ran = 0, ranTime = 0;
+    std::vector<Vec2> last(sim.agents().size());
+    std::vector<uint8_t> was(sim.agents().size(), 0);
+    const Real dt = 0.1;
+    for (int i = 0; i < 30000; ++i) {
+        sim.step(dt, 0.002);   // a run is ~0.45 h: ~13 min of this clock, laps and laps
+        std::vector<int> owner(8, -1);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            const CitySim::ActivitySpot* sp = sim.usingSpot(static_cast<int>(k));
+            if (a.seatPhase == 0 && was[k] == 3) ++finished;
+            if (sp && sp->kind == SpotKind::Jog) {
+                ++runSamples;
+                const std::size_t si = static_cast<std::size_t>(sp - sim.spots().data());
+                if (owner[si] >= 0) ++shared;
+                owner[si] = static_cast<int>(k);
+                if (sim.seatedOn(static_cast<int>(k))) ++seatedRunners;
+                // on the loop's line
+                Real best = 1e9;
+                for (std::size_t j = 0; j < loop.size(); ++j) {
+                    const Vec2 p = loop[j], q = loop[(j + 1) % loop.size()], d = q - p;
+                    const Real t = std::max(Real(0), std::min(Real(1), dot(a.pos - p, d) / d.lengthSquared()));
+                    best = std::min(best, (p + d * t - a.pos).length());
+                }
+                if (best > 0.05) ++offLoop;
+                if (was[k] == 2) { ran += (a.pos - last[k]).length(); ranTime += dt; }
+            }
+            last[k] = a.pos;
+            was[k] = a.seatPhase;
+        }
+    }
+    const Real pace = ranTime > 0 ? ran / ranTime : 0;
+    std::printf("    [jog] %d run-samples, %.0f m run (%.2f m/s), %d runs finished; off the loop %d, seated %d, shared %d\n",
+                runSamples, ran, pace, finished, offLoop, seatedRunners, shared);
+    CHECK(runSamples > 1000);
+    CHECK(ran > sim.loopLength(0) * 3);        // laps, not a lap
+    CHECK(pace > 2.4 && pace < 3.0);          // a jog (chords of the loop read a touch short of 2.8 m/s)
+    CHECK(finished >= 3);
+    CHECK(offLoop == 0);
+    CHECK(seatedRunners == 0);
+    CHECK(shared == 0);
+}
+
+// A CROWD ON A WALK (the island's stuck students: 32 of them held at the foot of a walk, speed 0): walkers whose
+// commute runs over a footpath -- many leaving the same door at once -- get to work.
+TEST_CASE(a_crowd_walks_a_footpath_to_work) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
+    const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
+    const Vec2 d = normalize(p11 - p00);
+    nav.appendFootpaths({{p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0}});
+    CitySim sim;
+    sim.build(nav, 0, 60, 21);
+    PlaceMap places;
+    const PlaceId home = places.add(PlaceType::Home, p00 + Vec2(-6, -6), nav);
+    const PlaceId job = places.add(PlaceType::Office, p11 + Vec2(6, 6), nav, 8, 17);
+    (void)home; (void)job;
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(7.9);
+    int onWalk = 0, arrived = 0, maxStuck = 0;
+    std::vector<int> stuck(sim.agents().size(), 0);
+    std::vector<Real> lastD(sim.agents().size(), -1);
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.0005);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+            if (!nav.links[static_cast<std::size_t>(li)].footpath) { stuck[k] = 0; continue; }
+            ++onWalk;
+            if (std::fabs(a.distOnLeg - lastD[k]) < 1e-6) ++stuck[k]; else stuck[k] = 0;
+            lastD[k] = a.distOnLeg;
+            maxStuck = std::max(maxStuck, stuck[k]);
+        }
+    }
+    for (const Agent& a : sim.agents()) arrived += !a.moving && a.restNode == nav.nearestNode(places[job].entrance);
+    std::printf("    [crowd] %d walker-steps on the walk, %d at work, longest stall %.1f s\n", onWalk, arrived, maxStuck * 0.1);
+    CHECK(onWalk > 100);
+    CHECK(maxStuck < 100);   // nobody held on a walk for 10 s
+}

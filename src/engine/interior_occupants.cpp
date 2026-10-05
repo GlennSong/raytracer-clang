@@ -105,6 +105,7 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
             const Use u{pi, vi, (pieceDraw & 0xFFFFFF00u) | static_cast<uint32_t>(vi & 0xFF)};
             if (v.verb == Verb::Lie && a->family == "sleeping") beds.push_back(u);
             else if (v.verb == Verb::Sit) seats.push_back(u);
+            else if (v.verb == Verb::Stand && !hasTag(*a, "lecture")) seats.push_back(u);   // at a lab bench: a place to work
         }
     }
     auto byOrder = [](const Use& x, const Use& y) { return x.order != y.order ? x.order < y.order : x.piece < y.piece; };
@@ -124,7 +125,8 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
             if (static_cast<int>(out.size()) >= plan.people) break;
             if (pass == 0 && mix(u.order ^ (plan.seed + 0x51u)) % 5u == 0u) continue;
             const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[u.piece].piece));
-            if (freeNow(u.piece, a->verbs[static_cast<std::size_t>(u.verb)])) take(u.piece, u.verb, Occupant::Pose::Sit);
+            const FurnVerb& v = a->verbs[static_cast<std::size_t>(u.verb)];
+            if (freeNow(u.piece, v)) take(u.piece, u.verb, v.verb == Verb::Stand ? Occupant::Pose::Stand : Occupant::Pose::Sit);
         }
     return out;
 }

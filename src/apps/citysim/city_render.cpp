@@ -228,6 +228,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         showPlan_ = showPlan_ || c.showPlan;
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
         footpaths_ = c.footpaths;     // the parks' and the quad's walks
+        jogLoops_ = c.jogLoops;       // the tracks to run
     });
 
     // Merge every RoadEntity's constrained graph into one combined graph (a level
@@ -569,6 +570,29 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 }
             }
         });
+        // THE TRACKS (activity spots, behaviour plan step 3): each loop the sim's, with eight places round it to start a
+        // run from -- a jogger walks onto the track there, runs laps, and walks off
+        {
+            std::vector<std::vector<Vec2>> loops;
+            for (const auto& lp : jogLoops_) {
+                std::vector<Vec2> pts;
+                for (const auto& q : lp) pts.push_back(Vec2(q[0], q[1]));
+                loops.push_back(std::move(pts));
+            }
+            sim_.setLoops(std::move(loops));
+            for (int li = 0; li < sim_.loopCount(); ++li)
+                for (int k = 0; k < 8; ++k) {
+                    CitySim::ActivitySpot s;
+                    s.kind = SpotKind::Jog;
+                    s.loop = li;
+                    s.loopS = sim_.loopLength(li) * k / 8.0;
+                    Vec2 tg(1, 0);
+                    s.pos = sim_.loopPoint(li, s.loopS, &tg);
+                    s.face = tg;
+                    s.hip = 0;
+                    seats.push_back(s);
+                }
+        }
         const std::size_t offered = seats.size();
         sim_.setSeats(std::move(seats));
         if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
@@ -747,9 +771,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
     {   // THE ACTIVITY SPOTS, by kind and where (tagged once the places are known)
-        int byKind[static_cast<int>(SpotKind::Count)] = {0}, campus = 0, sports = 0;
+        int byKind[static_cast<int>(SpotKind::Count)] = {0}, campus = 0, sports = 0, campusJog = 0;
         for (const CitySim::ActivitySpot& sp : sim_.spots()) {
             ++byKind[static_cast<int>(sp.kind)];
+            campusJog += sp.kind == SpotKind::Jog && (sp.tags & spot_tag::kCampus) ? 1 : 0;
             campus += (sp.tags & spot_tag::kCampus) ? 1 : 0;
             sports += (sp.tags & spot_tag::kSports) ? 1 : 0;
         }
@@ -757,7 +782,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         for (int k = 0; k < static_cast<int>(SpotKind::Count); ++k)
             if (byKind[k]) line += std::string(line.empty() ? "" : ", ") + std::to_string(byKind[k]) + " " + spotKindName(static_cast<SpotKind>(k));
         LOG_INFO << "[citysim] activity spots: " << (line.empty() ? std::string("none") : line) << " | " << campus << " on a campus, "
-                 << sports << " by a sports field";
+                 << sports << " by a sports field (" << campusJog << " campus jog)";
     }
     LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     if (sim_.populationCache().used)

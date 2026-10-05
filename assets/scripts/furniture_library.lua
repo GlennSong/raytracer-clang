@@ -189,7 +189,16 @@ furniture_library = {
     verbs = { { verb = "stand", label = "stand at the lectern", spots = { "stand" }, eye = { 0, 1.62, -0.30 },
                 look = { 0, -0.15, 1 }, exit = { 0, 0, -0.75 } } },
   },
-  lab_bench = { family = "surface", tags = { "lab" } },
+  -- three places to stand and work at its front (its drawers' side, +z), facing it
+  lab_bench = {
+    family = "surface", tags = { "lab" },
+    spots = { { id = "l", at = { -0.8, 0, 1.05 } }, { id = "m", at = { 0, 0, 1.05 } }, { id = "r", at = { 0.8, 0, 1.05 } } },
+    verbs = {
+      { verb = "stand", label = "stand at the bench", spots = { "l" }, eye = { -0.8, 1.62, 1.0 }, look = { 0, -0.45, -1 }, exit = { -0.8, 0, 1.45 } },
+      { verb = "stand", label = "stand at the bench", spots = { "m" }, eye = { 0, 1.62, 1.0 }, look = { 0, -0.45, -1 }, exit = { 0, 0, 1.45 } },
+      { verb = "stand", label = "stand at the bench", spots = { "r" }, eye = { 0.8, 1.62, 1.0 }, look = { 0, -0.45, -1 }, exit = { 0.8, 0, 1.45 } },
+    },
+  },
   -- eight chairs, four a side, part of the piece; built below
   reading_table = { family = "surface", tags = { "library" }, spots = {}, verbs = {} },
   bookcase = { family = "storage", tags = { "books", "library" }, variety = 8 },

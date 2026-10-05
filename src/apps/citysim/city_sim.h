@@ -220,6 +220,7 @@ struct Agent {
     int tripSeat = -1;
     uint8_t seatPhase = 0;
     engine::Vec2 seatBack{0, 0};
+    Real loopS = 0;   // running a loop (a Jog spot): how far round it (m)
     // Where the current outing/lunch trip is going, kept until arrival: a leg
     // by BUS sets the walker down at a stop and the trip resumes from there,
     // and it must resume to the same place, not re-pick one.
@@ -1122,6 +1123,9 @@ public:
     const std::vector<Venue>& venues() const { return venues_; }
     // How many agents assignPlaces made students (0 without a campus with a residence and a teaching hall).
     int studentCount() const { return students_; }
+    // Debug: agent i's follow gap and its minimum (computeGaps), +inf with no leader.
+    Real debugGap(int i) const { return i >= 0 && i < static_cast<int>(gaps_.size()) ? gaps_[static_cast<std::size_t>(i)] : -1; }
+    Real debugMinGap(int i) const { return i >= 0 && i < static_cast<int>(minGaps_.size()) ? minGaps_[static_cast<std::size_t>(i)] : -1; }
     const engine::NavGraph& nav() const { static const engine::NavGraph kEmpty; return nav_ ? *nav_ : kEmpty; }
     // ACTIVITY SPOTS (activities.h; the seats were the first kind -- the furniture library, M5; Glenn: benches you can
     // sit on, and so can everyone else): one per place a body does something, its point, the way it faces, its
@@ -1134,7 +1138,16 @@ public:
         int occupant = -1;
         SpotKind kind = SpotKind::Sit;
         uint32_t tags = 0;
+        int loop = -1;     // a Jog spot: the loop it runs (setLoops) and where on it the run starts (m)
+        Real loopS = 0;
     };
+    // LOOPS to run (a track): closed polylines. A Jog spot names one; a jogger runs it from the spot's place.
+    void setLoops(std::vector<std::vector<engine::Vec2>> loops);
+    int loopCount() const { return static_cast<int>(loops_.size()); }
+    Real loopLength(int loop) const;
+    engine::Vec2 loopPoint(int loop, Real s, engine::Vec2* tangent = nullptr) const;
+    // The spot agent i is USING right now (phase 2: sitting, standing, running its loop), else nullptr.
+    const ActivitySpot* usingSpot(int agentIndex) const;
     using SeatSpot = ActivitySpot;   // the name the seats grew up with
     void setSpots(std::vector<ActivitySpot> spots);
     void setSeats(std::vector<SeatSpot> seats) { setSpots(std::move(seats)); }
@@ -1142,8 +1155,8 @@ public:
     const std::vector<SeatSpot>& seats() const { return seats_; }
     // A free spot answering `q` from `here`, reserved for agent `a`; -1 none. The one picker every goal goes through.
     int pickSpot(Agent& a, engine::Vec2 here, const ActivityQuery& q);
-    // The agent's seat while it is SITTING on it (seatPhase 2), else nullptr: the renderer and the walker
-    // system draw a seated body there.
+    // The agent's seat while it is SITTING on it (seatPhase 2 on a Sit or Lie spot), else nullptr: the renderer and
+    // the walker system draw a seated body there. A jogger is not seated: it is drawn on the move where it runs.
     const SeatSpot* seatedOn(int agentIndex) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0
     // once it has merged into its lane (see Agent::pullOffset).
@@ -1519,6 +1532,8 @@ private:
     int students_ = 0;
     std::vector<Venue> venues_;
     std::vector<SeatSpot> seats_;
+    struct Loop { std::vector<engine::Vec2> pts; std::vector<Real> cum; Real length = 0; };
+    std::vector<Loop> loops_;
     void releaseSeat(Agent& a);
     int pickSeat(Agent& a, engine::Vec2 here);   // a free seat to walk to, reserved; -1 none
     void stepSeats(Real dt);                     // the walk off the path to a seat and back

@@ -5964,6 +5964,11 @@ bool LevelLoader::load(const std::string& path,
                     }
                     for (const engine::LotBuilding::Walk& k : lb.walks)
                         cfg.footpaths.push_back({k.a.x, k.a.y, k.b.x, k.b.y, k.streetEnds ? k.width : -k.width});
+                    for (const engine::Poly2& lp : lb.loops) {
+                        std::vector<std::array<double, 2>> pts;
+                        for (const engine::Vec2& v : lp) pts.push_back({v.x, v.y});
+                        if (pts.size() >= 3) cfg.jogLoops.push_back(std::move(pts));
+                    }
                     if (p.campus && std::getenv("RT_CAMPUS_DEBUG"))
                         std::fprintf(stderr, "[campus place] %s role %d door (%.1f, %.1f) site (%.1f, %.1f) floor y %.2f beds %d\n",
                                      lb.recipe.c_str(), p.campus, p.ex, p.ez, p.x, p.z, static_cast<double>(lb.baseY), p.capacity);

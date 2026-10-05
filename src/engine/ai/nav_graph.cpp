@@ -408,8 +408,8 @@ NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<
         for (int n : {S.from, S.to}) {
             const Vec2 pave = nodes[static_cast<std::size_t>(n)] + side * off;
             if ((pave - pts[p]).length() > 80.0) continue;
-            addWalk(n, fp, pave, pts[p], false);
-            addWalk(fp, n, pts[p], pave, false);
+            addWalk(n, fp, pave, pts[p], true);   // each way keeps to its own side: a class coming out of the
+            addWalk(fp, n, pts[p], pave, true);   // quad meets one going in side by side, not head on
         }
         ++rep.streetJoins;
     }

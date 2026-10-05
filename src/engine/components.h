@@ -827,6 +827,8 @@ struct CitySimConfig {
     // THE WALKS (parks' paths, the campus quad's): ax, az, bx, bz, width -- a negative width keeps the walk's loose
     // ends off the streets (NavGraph::appendFootpaths). The citysim joins them into its walking network.
     std::vector<std::array<double, 5>> footpaths;
+    // LOOPS to run (a sports field's track), closed polylines world XZ: the citysim's jog spots.
+    std::vector<std::vector<std::array<double, 2>>> jogLoops;
 };
 
 // Build-time street furniture (device: "place the stop lights when we build

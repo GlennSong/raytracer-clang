@@ -127,6 +127,9 @@ struct LotBuilding {
     // through the hall)
     struct Walk { Vec2 a, b; Real width = 2.0; bool streetEnds = true; };
     std::vector<Walk> walks;
+    // LOOPS to run (a sports field's track: the middle of its first lane), closed polylines, world XZ: the citysim's
+    // jog spots (activities.h)
+    std::vector<Poly2> loops;
     // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
     std::vector<BuildingUnit> units;
     // SITE PLAN (skyscrapers v2, ADR-0086): the lot's ground around the

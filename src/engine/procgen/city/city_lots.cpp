@@ -745,6 +745,15 @@ static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, 
         for (int k = 0; k <= static_cast<int>(kLanes); ++k)
             stadium(tR + k * kLane - 0.025, tR + k * kLane + 0.025, 0.075, lane);
         quad(tS / 2 - 0.05, -(tR + trackW), tS / 2 + 0.05, -tR, 0.075, lane);   // the finish line
+        // THE LOOP a jogger runs: the middle of lane 1, anticlockwise from the finish line
+        Poly2 loop;
+        const Real r = tR + kLane * 0.5, hs = tS / 2;
+        auto at = [&](Real x, Real z) { const Vec3 q = P(x, z, 0); loop.push_back(Vec2(q.x, q.z)); };
+        for (int i = 0; i < 6; ++i) at(hs - tS * i / 6.0, -r);                 // the home straight
+        for (int i = 0; i <= 12; ++i) { const Real a = -1.5707963 - 3.14159265 * i / 12; at(-hs + std::cos(a) * r, std::sin(a) * r); }
+        for (int i = 1; i < 6; ++i) at(-hs + tS * i / 6.0, r);                 // the back straight
+        for (int i = 0; i < 12; ++i) { const Real a = 1.5707963 - 3.14159265 * i / 12; at(hs + std::cos(a) * r, std::sin(a) * r); }
+        g.loops.push_back(std::move(loop));
     }
     // the lines: 12 cm white
     const Real lw = 0.12, ly = 0.08;
