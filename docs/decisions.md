@@ -6424,6 +6424,21 @@ Open: piedmont's bundle is 5.2 GB, almost all of it grammar part meshes stored a
 soup — welding the parts is the size lever. `rt_bake --prune` keeps the newest bundle per level *path*
 without checking the key is still current, so a stale-tag bundle survives when it is the only one for its
 spelling of the path (`rt_bake` writes relative paths, `level_tests` absolute ones).
+
+**Addendum, 2026-10-05: shared blocks.** A day of lots-tag bumps wrote ~270 GB of near-identical bundles
+(each rebake a whole new file; the island's is 8 GB). Measured: bakes are deterministic (a from-scratch
+metro_v2_test rebake matched the cached bundle in 1643 of 1643 sections) and a campus change alters a few
+cells. So file bundles now align sections to 4 KB (`kFileSectionAlign`; memory bundles keep 64 B and old
+bundles still read), and `BundleWriter::addCloneSource` lets a new bundle clone a section from an earlier
+one with `FICLONERANGE` when its size, FNV **and bytes** match — the files share blocks on btrfs/XFS;
+elsewhere the bytes are written. `bakeLevel` clones from the level's newest previous bundle (relative and
+absolute paths alike, the one being replaced included) and from any copied-forward donor. A one-line
+campus change's rebake of metro_v2_test wrote 3.4 MB of 1.07 GB. Correctness does not rest on the hash:
+every section is still computed fresh, and a clone is confirmed byte for byte (a rotted or colliding
+source is refused and written instead). Rejected: a content-addressed section store (portable, and GC by
+refcount, but a new format and reader — kept for the housekeeping work) and incremental lots computation
+(the lots pass is global: one campus per city, distance rules, grading — weeks, and time is not the
+bottleneck). Operating guide: [docs/bakes.md](bakes.md).
 ## ADR-0085 — Two road generators, selected per entity: `shape:"lanelab"` beside `shape:"road"`
 
 **Status:** Accepted · **Date:** 2026-09-09
