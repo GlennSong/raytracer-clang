@@ -3032,7 +3032,9 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
                 while (!work.empty()) {
                     auto& [v, ei] = work.back();
                     if (ei < nav.outLinks[v].size()) {
-                        const int w = nav.links[static_cast<std::size_t>(nav.outLinks[v][ei++])].to;
+                        const engine::NavLink& ol = nav.links[static_cast<std::size_t>(nav.outLinks[v][ei++])];
+                        if (ol.footpath) continue;   // a walk joins nothing for a car
+                        const int w = ol.to;
                         if (idx[w] < 0) {
                             idx[w] = low[w] = counter++;
                             stack.push_back(w);
@@ -3100,9 +3102,15 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
             CHECK(fwOff == fwLinks);
             CHECK(rampOn == ramps);
             CHECK(rampOff == ramps);
-            int linksInBig = 0;
-            for (const engine::NavLink& l : nav.links) linksInBig += comp[l.from] == big && comp[l.to] == big;
-            CHECK(linksInBig == static_cast<int>(nav.links.size()));   // one drivable network
+            // one drivable network -- of the DRIVABLE links: a park's or the quad's walk (a footpath, walkers only)
+            // is not a road and no car reaches it
+            int linksInBig = 0, drivable = 0;
+            for (const engine::NavLink& l : nav.links) {
+                if (l.footpath) continue;
+                ++drivable;
+                linksInBig += comp[l.from] == big && comp[l.to] == big;
+            }
+            CHECK(linksInBig == drivable);
             std::printf("    [freeway] %-18s connectivity: %d nodes, %d strongly connected components, the biggest "
                         "holds %d nodes; %d nodes are islands of one | links inside it:%s\n",
                         name, nn, comps, size[big], singles, cls.c_str());

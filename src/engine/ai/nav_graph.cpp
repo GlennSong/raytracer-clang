@@ -52,6 +52,8 @@ Vec2 NavGraph::laneCenter(int link, int lane, Real t, Real laneWidth) const {
 }
 
 Vec2 NavGraph::sidewalkPoint(int link, Real t, Real verge) const {
+    const NavLink& L = links[link];
+    if (L.footpath) return L.footA + (L.footB - L.footA) * t;   // a walk: its own line
     Vec2 c = pointOnLink(link, t);
     Vec2 r = rightOf(direction(link));
     return c + r * (links[link].width * 0.5 + verge);
@@ -61,6 +63,7 @@ int NavGraph::nearestNode(const Vec2& p) const {
     int best = -1;
     Real bestD2 = 0;
     for (int i = 0; i < nodeCount(); ++i) {
+        if (static_cast<std::size_t>(i) < footNode.size() && footNode[static_cast<std::size_t>(i)]) continue;
         Real d2 = (nodes[i] - p).lengthSquared();
         if (best < 0 || d2 < bestD2) { best = i; bestD2 = d2; }
     }
@@ -294,6 +297,123 @@ NavGraph buildNavGraph(const RoadGraph& roadsIn, const NavBuildParams& params) {
         if (v.size() >= 3) g.junction[i] = 1;
     }
     return g;
+}
+
+NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<Real, 5>>& segs, Real connect) {
+    FootpathReport rep;
+    if (segs.empty() || nodes.empty()) return rep;
+    const int firstNew = nodeCount(), firstLink = linkCount();
+    if (streetNodes < 0) streetNodes = firstNew;
+    footNode.resize(nodes.size(), 0);
+    // the walk nodes: every end, merged within 0.8 m
+    std::vector<Vec2> pts;
+    auto nodeAt = [&](const Vec2& q) {
+        for (std::size_t i = 0; i < pts.size(); ++i)
+            if ((pts[i] - q).lengthSquared() < 0.8 * 0.8) return static_cast<int>(i);
+        pts.push_back(q);
+        return static_cast<int>(pts.size()) - 1;
+    };
+    struct Seg { int a, b; Real w; std::vector<std::pair<Real, int>> cuts; };
+    std::vector<uint8_t> noStreet;   // per walk node: an end of a walk that must not be joined to a street
+    std::vector<Seg> ss;
+    for (const auto& s : segs) {
+        const Vec2 a(s[0], s[1]), b(s[2], s[3]);
+        if ((b - a).length() < 0.5) continue;
+        Seg g; g.a = nodeAt(a); g.b = nodeAt(b); g.w = std::fabs(s[4]);
+        noStreet.resize(pts.size(), 0);
+        if (s[4] < 0) noStreet[static_cast<std::size_t>(g.a)] = noStreet[static_cast<std::size_t>(g.b)] = 1;
+        if (g.a != g.b) ss.push_back(g);
+    }
+    // TEES: an end that met no other end but lies on another walk's middle joins it there
+    std::vector<int> degree(pts.size(), 0);
+    for (const Seg& g : ss) { ++degree[static_cast<std::size_t>(g.a)]; ++degree[static_cast<std::size_t>(g.b)]; }
+    for (std::size_t p = 0; p < pts.size(); ++p) {
+        if (degree[p] != 1) continue;
+        for (Seg& g : ss) {
+            if (g.a == static_cast<int>(p) || g.b == static_cast<int>(p)) continue;
+            const Vec2 A = pts[static_cast<std::size_t>(g.a)], B = pts[static_cast<std::size_t>(g.b)], ab = B - A;
+            const Real L2 = ab.lengthSquared();
+            const Real t = L2 > 1e-9 ? dot(pts[p] - A, ab) / L2 : 0;
+            if (t <= 0.02 || t >= 0.98) continue;
+            if ((A + ab * t - pts[p]).length() > std::max(Real(1.6), g.w * 0.5 + 0.2)) continue;
+            g.cuts.push_back({t, static_cast<int>(p)});
+            ++degree[p];
+            ++rep.tees;
+            break;
+        }
+    }
+    // the nodes go in, flagged as walk nodes
+    for (const Vec2& q : pts) {
+        nodes.push_back(q);
+        outLinks.emplace_back();
+        junction.push_back(0);
+        nodeSpread.push_back(0);
+        nodeKind.push_back(0);
+        footNode.push_back(1);
+    }
+    rep.nodes = static_cast<int>(pts.size());
+    // a walk link each way; the walker keeps 0.45 m right of the walk's line, so two ways pass
+    auto addWalk = [&](int from, int to, const Vec2& fa, const Vec2& fb, bool offset) {
+        NavLink L;
+        L.from = from; L.to = to;
+        L.length = (fb - fa).length();
+        L.width = 0;
+        L.klass = RoadClass::Local;
+        L.lanes = 1;
+        L.walkable = true;
+        L.access = road_access::kWalkable | road_access::kFootpath;
+        L.parkWidth = 0;
+        L.footpath = true;
+        Vec2 r(0, 0);
+        if (offset && L.length > 1e-6) { const Vec2 d = (fb - fa) * (1.0 / L.length); r = Vec2(d.y, -d.x) * 0.45; }
+        L.footA = fa + r; L.footB = fb + r;
+        outLinks[static_cast<std::size_t>(from)].push_back(linkCount());
+        links.push_back(L);
+        ++rep.links;
+    };
+    for (Seg& g : ss) {
+        std::sort(g.cuts.begin(), g.cuts.end());
+        std::vector<int> chain{g.a};
+        for (const auto& c : g.cuts) chain.push_back(c.second);
+        chain.push_back(g.b);
+        for (std::size_t k = 0; k + 1 < chain.size(); ++k) {
+            const int u = firstNew + chain[k], v = firstNew + chain[k + 1];
+            addWalk(u, v, nodes[static_cast<std::size_t>(u)], nodes[static_cast<std::size_t>(v)], true);
+            addWalk(v, u, nodes[static_cast<std::size_t>(v)], nodes[static_cast<std::size_t>(u)], true);
+        }
+    }
+    // LOOSE ENDS to the street: the nearest street SEGMENT (one a walker uses) within `connect` -- its nodes can be
+    // far apart, so the end joins BOTH of its nodes, each connector running from that node's pavement on the walk's
+    // side of the street, not from the middle of the road
+    noStreet.resize(pts.size(), 0);
+    auto streetLink = [&](int li) { const NavLink& L = links[static_cast<std::size_t>(li)]; return L.walkable && !L.footpath; };
+    for (std::size_t p = 0; p < pts.size(); ++p) {
+        if (degree[p] != 1 || noStreet[p]) continue;
+        const int fp = firstNew + static_cast<int>(p);
+        int bestLink = -1;
+        Real bestD = connect;
+        for (int li = 0; li < firstLink; ++li) {
+            if (!streetLink(li)) continue;
+            const NavLink& L = links[static_cast<std::size_t>(li)];
+            const Real dd = pointSegDist(pts[p], nodes[static_cast<std::size_t>(L.from)], nodes[static_cast<std::size_t>(L.to)]);
+            if (dd < bestD) { bestD = dd; bestLink = li; }
+        }
+        if (bestLink < 0) { ++rep.unjoined; continue; }
+        const NavLink& S = links[static_cast<std::size_t>(bestLink)];
+        const Vec2 a = nodes[static_cast<std::size_t>(S.from)], b = nodes[static_cast<std::size_t>(S.to)];
+        const Vec2 d = normalize(b - a);
+        Vec2 side(-d.y, d.x);
+        if (dot(pts[p] - a, side) < 0) side = side * -1.0;
+        const Real off = S.width * 0.5 + 1.0;
+        for (int n : {S.from, S.to}) {
+            const Vec2 pave = nodes[static_cast<std::size_t>(n)] + side * off;
+            if ((pave - pts[p]).length() > 80.0) continue;
+            addWalk(n, fp, pave, pts[p], false);
+            addWalk(fp, n, pts[p], pave, false);
+        }
+        ++rep.streetJoins;
+    }
+    return rep;
 }
 
 }  // namespace engine

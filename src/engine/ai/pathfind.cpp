@@ -140,6 +140,7 @@ Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onF
             if (onFoot && (link.klass == RoadClass::Freeway ||
                        link.klass == RoadClass::Ramp || !link.walkable))
                 continue;
+            if (!onFoot && link.footpath) continue;   // a walk: never a vehicle's
             Real step = link.length / classSpeed(link.klass);
             if (!onFoot && link.to != goalNode && link.klass != RoadClass::Freeway &&
                 link.klass != RoadClass::Ramp && graph.isJunction(link.to))
@@ -180,6 +181,7 @@ std::vector<char> reachableFrom(const NavGraph& graph, int startNode, bool onFoo
         stack.pop_back();
         for (int li : graph.outLinks[static_cast<std::size_t>(u)]) {
             const NavLink& link = graph.links[static_cast<std::size_t>(li)];
+            if (!onFoot && link.footpath) continue;
             if (onFoot && (link.klass == RoadClass::Freeway || link.klass == RoadClass::Ramp || !link.walkable))
                 continue;
             if (!seen[static_cast<std::size_t>(link.to)]) {
@@ -202,6 +204,7 @@ std::vector<int> stronglyConnected(const NavGraph& graph, bool onFoot) {
     std::vector<Frame> call;
     int counter = 0, comps = 0;
     auto usable = [&](const NavLink& link) {
+        if (!onFoot && link.footpath) return false;
         return !(onFoot && (link.klass == RoadClass::Freeway || link.klass == RoadClass::Ramp || !link.walkable));
     };
     for (int root = 0; root < n; ++root) {

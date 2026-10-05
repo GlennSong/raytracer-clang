@@ -496,6 +496,7 @@ private:
     void stepIndoors(engine::World& world, Real dt);
     Real indoorAcc_ = 1.0;
     std::unordered_map<int, PlaceId> buildingPlace_;        // record index -> its place (kNoPlace: none)
+    std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
 public:

@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_AI_NAV_GRAPH_H
 
 #include "../procgen/city/road_network.h"   // RoadGraph, RoadEdge, RoadClass, Vec2
+#include <array>
 #include <vector>
 
 namespace engine {
@@ -67,6 +68,11 @@ struct NavLink {
     // to know how the cross-section is laid out.
     Real parkOffset = 0;
     Real parkWidth = 0;
+    // A FOOTPATH (access kFootpath; the quad's and the parks' walks, joined to the streets at load): walkers only --
+    // vehicle routing never takes it. A walker on it is on the line footA -> footB (world XZ), not offset beside a
+    // carriageway: a connector from a street node starts on that street's pavement, not in its middle.
+    bool footpath = false;
+    Vec2 footA, footB;
 };
 
 // Semantic signal predicate (roads-v2.2 #17/S5): a node is signal-CONTROLLED
@@ -89,6 +95,9 @@ struct NavGraph {
     // this round — every box/gridlock ratchet reads it unchanged; nodeKind
     // carries the NEW distinctions (Intersection vs gore vs landing).
     std::vector<uint8_t> nodeKind;
+    // 1 on a node only footpaths meet (a park's or the quad's walks, appendFootpaths): nearestNode() never answers
+    // with one, so a home, a job or a car's goal stays on the streets; walks are found by ROUTING through them.
+    std::vector<uint8_t> footNode;
 
     JunctionKind kindOf(int node) const {
         return node >= 0 && node < static_cast<int>(nodeKind.size())
@@ -97,6 +106,11 @@ struct NavGraph {
     }
 
     int nodeCount() const { return static_cast<int>(nodes.size()); }
+    // The STREET nodes: [0, streetNodeCount()). Footpath nodes are appended after them (appendFootpaths), and every
+    // random draw of "a node somewhere in the city" -- a spawn, a wander goal -- draws from the streets only: a draw
+    // over all nodes put agents on the walks and, by moving the dice, changed the whole population.
+    int streetNodes = -1;
+    int streetNodeCount() const { return streetNodes >= 0 ? streetNodes : nodeCount(); }
     int linkCount() const { return static_cast<int>(links.size()); }
 
     // True if `node` is an intersection (three or more distinct neighbours) — a
@@ -133,6 +147,14 @@ struct NavGraph {
     // A pedestrian point at param t: on the verge just outside the kerb, on the
     // right of travel. `verge` is the extra offset beyond the carriageway edge.
     Vec2 sidewalkPoint(int link, Real t, Real verge = 1.0) const;
+
+    // THE WALKS (campus gap pass; Glenn: students should cross the quad): footpath segments (world XZ, a -> b, their
+    // width) joined into this graph as walker-only links (kFootpath; vehicle routing skips them). Ends that meet
+    // (within 0.8 m) share a node; an end on another walk's middle (within 1.6 m) tees into it; a loose end within
+    // `connect` m of a street segment is joined to both its nodes, from that street's pavement -- unless its width is NEGATIVE (|width|; the
+    // walk to a hall's quad door, whose nearest street is through the hall). Returns what was added.
+    struct FootpathReport { int nodes = 0, links = 0, streetJoins = 0, tees = 0, unjoined = 0; };
+    FootpathReport appendFootpaths(const std::vector<std::array<Real, 5>>& segs, Real connect = 14.0);
 
     // Nearest node / nearest link to a world point — for snapping trip ends.
     // Return -1 if the graph is empty.

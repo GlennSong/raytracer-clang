@@ -5962,6 +5962,8 @@ bool LevelLoader::load(const std::string& path,
                         p.ez = static_cast<float>(d0.foot.y + d0.normal.y * 1.5);
                         break;
                     }
+                    for (const engine::LotBuilding::Walk& k : lb.walks)
+                        cfg.footpaths.push_back({k.a.x, k.a.y, k.b.x, k.b.y, k.streetEnds ? k.width : -k.width});
                     if (p.campus && std::getenv("RT_CAMPUS_DEBUG"))
                         std::fprintf(stderr, "[campus place] %s role %d door (%.1f, %.1f) site (%.1f, %.1f) floor y %.2f beds %d\n",
                                      lb.recipe.c_str(), p.campus, p.ex, p.ez, p.x, p.z, static_cast<double>(lb.baseY), p.capacity);

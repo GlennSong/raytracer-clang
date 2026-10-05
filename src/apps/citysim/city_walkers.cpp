@@ -495,10 +495,21 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 const Real d = (st->pos - sm.tierCenter()).length();
                 if (d < bestD) { bestD = d; seatAt = st->pos; }
             }
-        char b[400];
-        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d",
+        // ...and how many are walking a park's or the quad's paths (footpaths), and students among them
+        int onWalks = 0, studentsOnWalks = 0;
+        const engine::NavGraph& ng = sm.nav();
+        for (const Agent& a : sm.agents()) {
+            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+            if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
+            ++onWalks;
+            studentsOnWalks += a.role == Agent::Role::Student ? 1 : 0;
+        }
+        char b[480];
+        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d)",
                       walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
-                      tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount());
+                      tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
+                      onWalks, studentsOnWalks);
         ctx.settings.setString("walkers.telemetry", b);
         tel_ = Telemetry{};
     }

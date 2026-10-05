@@ -17,7 +17,7 @@ constexpr std::size_t kBuildingParamsSize = 496;   // 432 before the party walls
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 10, kLotsVersion = 9, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 10, kLotsVersion = 10, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -103,6 +103,8 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         putPoly(w, lb.lot);
         putPoly(w, lb.padBound);
         putPolys(w, lb.sealed);   // lots v9: a park's paths and plazas (no grass on them)
+        w.put<uint32_t>(static_cast<uint32_t>(lb.walks.size()));   // lots v10: its walks as lines (the citysim's footpaths)
+        for (const LotBuilding::Walk& k : lb.walks) { putVec2(w, k.a); putVec2(w, k.b); w.put<double>(k.width); putBool(w, k.streetEnds); }
     }
 }
 
@@ -132,6 +134,8 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         if (!getPoly(r, lb.lot)) return false;
         if (!getPoly(r, lb.padBound)) return false;
         if (!getPolys(r, lb.sealed)) return false;
+        uint32_t nw = 0; if (!r.get(nw)) return false; lb.walks.resize(nw);
+        for (LotBuilding::Walk& k : lb.walks) if (!getVec2(r, k.a) || !getVec2(r, k.b) || !r.get(k.width) || !getBool(r, k.streetEnds)) return false;
     }
     return r.ok();
 }

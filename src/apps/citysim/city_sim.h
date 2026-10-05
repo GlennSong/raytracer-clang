@@ -1121,6 +1121,7 @@ public:
     const std::vector<Venue>& venues() const { return venues_; }
     // How many agents assignPlaces made students (0 without a campus with a residence and a teaching hall).
     int studentCount() const { return students_; }
+    const engine::NavGraph& nav() const { static const engine::NavGraph kEmpty; return nav_ ? *nav_ : kEmpty; }
     // SEATS out in the city (the furniture library, M5; Glenn: benches you can sit on -- and so can everyone
     // else): one per place a body sits, its floor point, the way it faces, its seat height, the path node it is
     // reached from (setSeats finds it) and who has it. A stroller's outing may be a sit on one.

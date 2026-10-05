@@ -483,16 +483,17 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     goalPed_ = wander_ ? wanderGoals(false) : defaultScheduleGoals();
     goalDriver_ = wander_ ? wanderGoals(true) : defaultScheduleGoals();
 
-    const int n = graph.nodeCount();
-    if (n == 0) return;
+    const int nAll = graph.nodeCount();
+    if (nAll == 0) return;
+    const int n = graph.streetNodeCount();   // spawns and random homes/works: the streets, never the walks
 
     // Per-node box radius (widest incident half-width) — every junction rule and
     // the launch clearance read this via junctionRadius(). Junction boxes (centre
     // + radius) additionally feed the bridge's don't-block-the-box and
     // spawn-placement checks (nearJunction).
     junctions_.clear();
-    nodeBoxRadius_.assign(n, 0.0);
-    for (int v = 0; v < n; ++v) {
+    nodeBoxRadius_.assign(nAll, 0.0);
+    for (int v = 0; v < nAll; ++v) {
         Real r = 0;
         // The box must FIT its local geometry: a curvy crossing gets sampled into
         // a KNOT of nodes a few metres apart, and a half-width-sized box there
@@ -1690,7 +1691,7 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
         ~RestoreScale() { if (li >= 0) s[static_cast<std::size_t>(li)] = 1.0; priced = false; }
     } restore{departScale_, uturn, wanderPriced_};
     wanderPriced_ = uturn >= 0;
-    int start = static_cast<int>(tripRnd(a) % static_cast<uint32_t>(n));
+    int start = static_cast<int>(tripRnd(a) % static_cast<uint32_t>(std::max(1, nav_->streetNodeCount())));   // a street node
     int fallback = -1;
     // After the first unreachable goal, flood what IS reachable once and skip the rest without
     // searching: a failed A* explores everything reachable before it gives up, the costliest
@@ -1727,8 +1728,9 @@ bool CitySim::startWanderTrip(Agent& a, int from, bool fromRest) {
         seen[static_cast<std::size_t>(from)] = 0;
         return seen;
     };
-    for (int k = 0; k < n; ++k) {
-        int goal = (start + k) % n;
+    const int nGoal = std::max(1, nav_->streetNodeCount());   // wander to street nodes, never onto a walk
+    for (int k = 0; k < nGoal; ++k) {
+        int goal = (start + k) % nGoal;
         if (goal == from) continue;
         if (!reach.empty() && !reach[static_cast<std::size_t>(goal)]) continue;
         if (!ahead.empty() && !ahead[static_cast<std::size_t>(goal)]) continue;
@@ -2325,7 +2327,7 @@ int CitySim::pickOuting(Agent& a, int origin) {
             }
     }
     // A walk round the block.
-    const int n = nav_->nodeCount();
+    const int n = nav_->streetNodeCount();   // a street corner, not a node on a park's walk
     for (int tries = 0; tries < 48; ++tries) {
         const int cand = static_cast<int>(rnd() % static_cast<uint32_t>(n));
         const Vec2 d = nav_->nodes[static_cast<std::size_t>(cand)] - here;

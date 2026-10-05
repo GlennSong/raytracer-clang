@@ -348,3 +348,57 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     CHECK(std::abs(in1 - 30) <= 1 && std::abs(in2 - 20) <= 1);
     CHECK(at1 >= 15 && at2 >= 15);
 }
+
+// THE WALKS IN THE WALKING NETWORK (Glenn: students should cross the quad; and every park's paths): footpaths join the
+// nav graph as walker-only links. A walker's route takes the diagonal across a block when it is shorter; a car's never
+// does; nearestNode never answers with a walk node; a walk's end joins the street at its pavement, not its middle; a
+// tee joins a walk to another's middle; a walk marked off-street (a quad door's) stays off the streets.
+#include "../src/engine/ai/pathfind.h"
+TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
+    CHECK(c00 >= 0 && c11 >= 0 && c00 != c11);
+    const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
+    const Route before = findRoute(nav, c00, c11, true);
+    Real walkBefore = 0;
+    for (int li : before.links) walkBefore += nav.links[static_cast<std::size_t>(li)].length;
+    const int streetLinks = nav.linkCount(), streetNodes = nav.nodeCount();
+    const Vec2 d = normalize(p11 - p00);
+    std::vector<std::array<Real, 5>> segs = {
+        {p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0},   // the diagonal, its ends short of the corners
+        // a spur off its middle, toward a door (its far end must not be joined to a street)
+        {(p00.x + p11.x) * 0.5 + 0.6, (p00.y + p11.y) * 0.5 - 0.6, (p00.x + p11.x) * 0.5 + 20.0, (p00.y + p11.y) * 0.5 - 20.0, -2.0}};
+    const NavGraph::FootpathReport rep = nav.appendFootpaths(segs);
+    std::printf("    [footpaths] %d nodes, %d links, %d tees, %d street joins; street walk %.0f m\n", rep.nodes, rep.links, rep.tees,
+                rep.streetJoins, walkBefore);
+    CHECK(rep.tees == 1);
+    CHECK(rep.streetJoins == 2);   // the diagonal's two ends; not the spur's
+    // a walker cuts across; the walk is shorter than the streets round the block
+    const Route after = findRoute(nav, c00, c11, true);
+    Real walkAfter = 0;
+    bool usedPath = false;
+    for (int li : after.links) {
+        walkAfter += nav.links[static_cast<std::size_t>(li)].length;
+        usedPath = usedPath || nav.links[static_cast<std::size_t>(li)].footpath;
+    }
+    CHECK(usedPath);
+    CHECK(walkAfter < walkBefore * 0.85);
+    // a car never takes a walk
+    const Route car = findRoute(nav, c00, c11, false);
+    CHECK(car.valid());
+    for (int li : car.links) CHECK(!nav.links[static_cast<std::size_t>(li)].footpath);
+    // and cannot get to a walk node at all
+    CHECK(!findRoute(nav, c00, streetNodes, false).valid());
+    // nearestNode keeps to the streets, even standing on the walk
+    CHECK(nav.nearestNode((p00 + p11) * 0.5) < streetNodes);
+    // the connector from the street starts on its pavement (a carriageway's half width + 1 m out), never in its middle
+    for (int li = streetLinks; li < nav.linkCount(); ++li) {
+        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
+        CHECK(L.footpath && L.walkable && (L.access & road_access::kFootpath));
+        if (L.from < streetNodes) {
+            const Real off = (L.footA - nav.nodes[static_cast<std::size_t>(L.from)]).length();
+            CHECK(off > 1.0);
+            CHECK((nav.sidewalkPoint(li, 0.0) - L.footA).length() < 1e-9);
+        }
+    }
+}

@@ -159,6 +159,8 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
     }
 
     g.sealed.push_back(Poly2(rim, rim + PN));   // the plaza: no grass on it
+    for (int k = 0; k < PN; ++k)                // ...and a ring across it for the walkers' network
+        g.walks.push_back({c + (rim[k] - c) * 0.6, c + (rim[(k + 1) % PN] - c) * 0.6, 1.2});
     // Walking-path SPOKES: from the plaza out to the midpoints of the longest
     // lot edges — the desire lines to the surrounding sidewalks.
     struct Spoke { Vec2 a, b; };
@@ -184,9 +186,10 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
             std::min(Real(3.0), std::max(Real(1.2), meshCell * Real(0.75)));
         const int segs =
             std::max(1, static_cast<int>((len - r0 * 0.85) / segLen));
-        {   // sealed: no grass on the walk
+        {   // sealed: no grass on the walk; and a line for the walkers' network, from the plaza's ring to the street
             const Vec2 pe = p0 + dir * (len - r0 * 0.85);
             g.sealed.push_back({p0 - perp * hw, p0 + perp * hw, pe + perp * hw, pe - perp * hw});
+            g.walks.push_back({c + dir * (r0 * 0.6), pe, hw * 2});
         }
         for (int s = 0; s < segs; ++s) {
             Vec2 q0 = p0 + dir * ((len - r0 * 0.85) * s / segs);
@@ -471,6 +474,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
                                   Vec3(q1.x + perp.x * w / 2, py, q1.y + perp.y * w / 2), Vec3(q1.x - perp.x * w / 2, py, q1.y - perp.y * w / 2), up, col);
         }
         g.sealed.push_back({a - perp * (w / 2), a + perp * (w / 2), b + perp * (w / 2), b - perp * (w / 2)});
+        g.walks.push_back({a, b, w});
     };
     // a paved disc, sealed -- in RINGS a terrain cell apart: it is draped, and a fan from its centre to a 7 m rim
     // hung its middle 0.4 m over a sloping courtyard
@@ -517,6 +521,14 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
     box(c, py + 2.06, ua, Vec3(1.6, 0.03, 1.6), PartId::Trim, water * 1.3);   // ... its water
     box(c, py + 2.06, ua, Vec3(0.22, 0.55, 0.22), PartId::Trim, stone);      // the finial
 
+    // the ROUND as a walk too (for the walkers' network): a ring of chords where the walks meet it
+    {
+        const int n = 12;
+        for (int k = 0; k < n; ++k) {
+            const Real a0 = 6.2831853 * k / n, a1 = 6.2831853 * (k + 1) / n;
+            g.walks.push_back({c + Vec2(std::cos(a0), std::sin(a0)) * (R - 0.6), c + Vec2(std::cos(a1), std::sin(a1)) * (R - 0.6), 1.2});
+        }
+    }
     // THE WALKS run on past the quad until they meet the SIDEWALK (Glenn: "those ribbons should go to the edges where
     // it meets the sidewalk"): from `from` along `dir`, at least to `minLen`, then on in half-metre steps until the
     // next would be street, 30 m at most
@@ -555,6 +567,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
         if (d.length() < 2.0 || d.length() > hw + 30.0) continue;
         const Vec2 dir = normalize(d);
         walk(foot, axis - dir * (wMain / 2 - 0.1), wDiag, stone * 0.97);
+        g.walks.back().streetEnds = false;
         diags.push_back({foot, axis});
     }
     auto offWalks = [&](const Vec2& q, Real clear) {

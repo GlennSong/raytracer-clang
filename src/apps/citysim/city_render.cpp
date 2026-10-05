@@ -227,6 +227,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         debugWidgets_ = c.debugWidgets;
         showPlan_ = showPlan_ || c.showPlan;
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
+        footpaths_ = c.footpaths;     // the parks' and the quad's walks
     });
 
     // Merge every RoadEntity's constrained graph into one combined graph (a level
@@ -521,6 +522,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     }
 #endif
 
+    // THE WALKS (campus gap pass): the parks' paths and the quad's walks join the walking network, after the
+    // streets' own analyses and the places (link and node indices so far are unchanged) and before the sim reads it.
+    // Footpaths are walker-only (vehicle routing skips them; nearestNode never answers with one), so a route on foot
+    // simply finds the quad when it is the shorter way.
+    if (!footpaths_.empty() && !std::getenv("RT_NO_FOOTPATHS")) {
+        std::vector<std::array<Real, 5>> segs;
+        segs.reserve(footpaths_.size());
+        for (const auto& f : footpaths_) segs.push_back({f[0], f[1], f[2], f[3], f[4]});
+        const auto tf0 = std::chrono::steady_clock::now();
+        const engine::NavGraph::FootpathReport fr = nav_.appendFootpaths(segs);
+        LOG_INFO << "[citysim] footpaths joined in " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tf0).count() << " s";
+        LOG_INFO << "[citysim] footpaths: " << fr.links << " walk links over " << fr.nodes << " nodes, " << fr.tees
+                 << " tees, " << fr.streetJoins << " ends joined to the streets, " << fr.unjoined << " ends with no street in reach";
+    }
     sim_.setJunctionPad(sidewalk_);
     sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body
     { const auto tT0 = std::chrono::steady_clock::now();

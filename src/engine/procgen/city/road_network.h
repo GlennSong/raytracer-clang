@@ -53,6 +53,7 @@ constexpr uint8_t kWalkable   = 1;   // pedestrians travel along it
 constexpr uint8_t kFrontage   = 2;   // lots/parking/sidewalk band may front it
 constexpr uint8_t kCrossable  = 4;   // may host a zebra crossing
 constexpr uint8_t kSignalable = 8;   // counts as a signal approach
+constexpr uint8_t kFootpath   = 16;  // a FOOTPATH (a park's or the quad's walk): pedestrians only, never a vehicle
 constexpr uint8_t kAllStreet =
     kWalkable | kFrontage | kCrossable | kSignalable;
 }  // namespace road_access

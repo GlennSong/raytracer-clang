@@ -121,6 +121,12 @@ struct LotBuilding {
     // SEALED GROUND on a park (the quad, a park's walks): its paths and plazas, world XZ -- the host keeps grass off
     // them (a meadow grew over every path once the grass came to the city).
     std::vector<Poly2> sealed;
+    // ITS WALKS as lines (a park's paths, the quad's walks): centre a -> b and width, world XZ. The citysim joins
+    // them into its walking network (NavGraph::appendFootpaths), so people cross the parks and the quad.
+    // streetEnds false: its loose ends are not joined to a street (a walk to a hall's quad door: the nearest street is
+    // through the hall)
+    struct Walk { Vec2 a, b; Real width = 2.0; bool streetEnds = true; };
+    std::vector<Walk> walks;
     // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
     std::vector<BuildingUnit> units;
     // SITE PLAN (skyscrapers v2, ADR-0086): the lot's ground around the
