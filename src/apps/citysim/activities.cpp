@@ -51,9 +51,9 @@ std::string ActivityCatalog::describe() const {
     for (const ActivityDef& d : defs) {
         out += "activity " + d.name + " sites";
         for (const std::string& s : d.sites) out += " " + s;
-        std::snprintf(b, sizeof b, " tags=%u hours=%g-%g minutes=%g-%g dist=%g-%g nearest=%d perSite=%d walkers=%d shift=%d own=%d perform=%d\n",
+        std::snprintf(b, sizeof b, " tags=%u hours=%g-%g minutes=%g-%g dist=%g-%g nearest=%d perSite=%d walkers=%d shift=%d own=%d home=%d perform=%d\n",
                       d.tags, d.hourLo, d.hourHi, d.minutesLo, d.minutesHi, d.distLo, d.distHi, d.nearest, d.perSite ? 1 : 0,
-                      d.walkersOnly ? 1 : 0, d.inShift ? 1 : 0, d.bringOwnEighths, static_cast<int>(d.perform));
+                      d.walkersOnly ? 1 : 0, d.inShift ? 1 : 0, d.bringOwnEighths, d.fromHome ? 1 : 0, static_cast<int>(d.perform));
         out += b;
         for (const RoleDef& r : d.roles) {
             std::snprintf(b, sizeof b, "  role %s n=%d speed=%g-%g zone=%d\n", r.name.c_str(), r.n, r.speedLo, r.speedHi, r.zone);
@@ -136,16 +136,35 @@ ActivityCatalog defaultActivityCatalog() {
     { ActivityDef& d = def("watch_game", {"seat"}); d.tags = spot_tag::kSports; d.distHi = 900; d.nearest = 6;
       d.perform = Perform::Spot; d.minutesLo = 15; d.minutesHi = 40; d.during = "kickabout"; }
 
+    // THE ERRAND on the way home (the old fixed "shop near home"): a supermarket or a store near HOME, one of the three
+    // nearest open
+    { ActivityDef& d = def("errand", {"supermarket", "shop"}); d.fromHome = true; d.distHi = 700; d.nearest = 3; }
+
+    // A DAY OFF, by the hour: coffee and the park in the morning; the shops and lunch at midday; errands and the park
+    // in the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
     Menu outing;
     outing.name = "outing";
-    {
+    auto band = [&](double lo, double hi, double bench, double across, std::vector<MenuEntry> pick) {
         MenuBand b;
-        b.first = {{"bench", 0.30, 0}, {"across_town", 0.14, 0}};
-        b.pick = {{"park_visit", 0, 3.0}, {"coffee", 0, 2.5}, {"browse", 0, 2.0}, {"groceries", 0, 1.0},
-                  {"meal", 0, 1.5}, {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 3.0}};
+        b.hourLo = lo; b.hourHi = hi;
+        b.first = {{"bench", bench, 0}, {"across_town", across, 0}};
+        b.pick = std::move(pick);
         outing.bands.push_back(b);
-    }
+    };
+    band(5.0, 10.5, 0.20, 0.10, {{"coffee", 0, 4.0}, {"park_visit", 0, 3.0}, {"groceries", 0, 0.5}, {"civic_visit", 0, 0.3},
+                                {"walk_round_block", 0, 3.0}});
+    band(10.5, 14.0, 0.25, 0.14, {{"browse", 0, 2.5}, {"meal", 0, 2.0}, {"coffee", 0, 2.0}, {"park_visit", 0, 3.0},
+                                 {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 2.0}});
+    band(14.0, 17.5, 0.30, 0.14, {{"browse", 0, 2.5}, {"groceries", 0, 1.5}, {"park_visit", 0, 3.0}, {"coffee", 0, 1.5},
+                                 {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 3.0}});
+    band(17.5, 23.0, 0.15, 0.10, {{"meal", 0, 3.0}, {"coffee", 0, 1.0}, {"park_visit", 0, 1.5}, {"groceries", 0, 1.0},
+                                 {"walk_round_block", 0, 2.0}});
+    band(23.0, 5.0, 0.0, 0.0, {{"walk_round_block", 0, 1.0}, {"park_visit", 0, 0.5}});
     c.menus.push_back(outing);
+    Menu errand;
+    errand.name = "errand";
+    { MenuBand b; b.first = {{"errand", 1.0, 0}}; errand.bands.push_back(b); }
+    c.menus.push_back(errand);
     Menu lunch;
     lunch.name = "lunch";
     { MenuBand b; b.first = {{"lunch", 1.0, 0}}; lunch.bands.push_back(b); }

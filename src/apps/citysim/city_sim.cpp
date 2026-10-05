@@ -1791,12 +1791,14 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     // trip across town can take the bus like any other. A trip resumed after a
     // bus leg keeps the destination it chose (outingTo).
     int chosen = -1;
+    const bool errandMenu = s.target == GoalTarget::Shop && catalog_.menu("errand");
     if (s.target == GoalTarget::Outing || s.target == GoalTarget::Lunch || s.target == GoalTarget::Campus ||
-        s.target == GoalTarget::Activity) {
+        s.target == GoalTarget::Activity || errandMenu) {
         if (a.outingTo >= 0) {
             chosen = a.outingTo;
         } else {
             chosen = s.target == GoalTarget::Outing ? pickOuting(a, origin)
+                     : errandMenu ? pickFromMenu(a, origin, *catalog_.menu("errand"))
                      : s.target == GoalTarget::Lunch ? pickLunch(a, origin)
                      : s.target == GoalTarget::Campus ? pickCampusBreak(a, origin)
                      : !s.menu.empty() && catalog_.menu(s.menu) ? pickFromMenu(a, origin, *catalog_.menu(s.menu))
@@ -1870,7 +1872,14 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
             started = a.moving;
             break;
         case GoalTarget::Shop:
-            if (a.shop >= 0) {
+            // the errand (the catalog's "errand" menu: a shop near home); the old fixed shop without one
+            if (errandMenu) {
+                if (chosen >= 0 && chosen != origin) {
+                    startTrip(a, origin, chosen, fromRest);
+                    started = a.moving;
+                }
+                if (!started) { a.outingTo = -1; a.tripVenue = -1; releaseSeat(a); }
+            } else if (a.shop >= 0) {
                 startTrip(a, origin, a.shop, fromRest);
                 started = a.moving;
             }
@@ -2320,7 +2329,8 @@ int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool count
     if (d.walkersOnly && (a.archetype != Agent::Mode::Pedestrian || a.mode != Agent::Mode::Pedestrian)) return -1;
     if (d.bringOwnEighths > 0 && static_cast<int>((a.brain >> 13) & 7u) < d.bringOwnEighths) return -1;
     if (d.inShift && !inWindow(clockHours_, departWorkHour(a), a.departHome)) return -1;
-    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
+    const int fromNode = d.fromHome && a.home >= 0 && a.home < nav_->nodeCount() ? a.home : origin;
+    const Vec2 here = nav_->nodes[static_cast<std::size_t>(fromNode)];
     // WATCHING: only while that activity is running within reach
     if (!d.during.empty()) {
         const int dd = catalog_.find(d.during);

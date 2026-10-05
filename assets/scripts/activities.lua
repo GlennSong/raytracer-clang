@@ -13,6 +13,7 @@
 --   nearest    = k             one of the k nearest candidates (default: any in the band)
 --   per_site   = true          its menu weight counts once per candidate site
 --   walkers_only, in_shift, bring_own_eighths = n
+--   from       = "home"      the distance band is measured from home (an errand near home), not from here
 --   perform    = inside | outside | spot | wander | roam
 --   a GROUP (perform = roam, sites = { "pitch" }): roles = { { name, n, speed = { lo, hi }, zone = -1 | 0 | 1 } },
 --     min_players (it starts with them), gather_minutes (given up after), swap_at (0..1: the zones swap)
@@ -24,7 +25,7 @@
 
 activities = {
   order = { "bench", "across_town", "park_visit", "coffee", "browse", "groceries", "meal", "civic_visit",
-            "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game" },
+            "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game", "errand" },
 
   -- A DAY OFF'S STOPS
   bench            = { sites = { "seat" }, distance = { 30, 500 }, nearest = 4, perform = "spot" },
@@ -41,6 +42,9 @@ activities = {
   -- LUNCH OUT: walkers in their shift; three in eight brought theirs
   lunch            = { sites = { "cafe", "restaurant" }, distance = { 0, 600 }, nearest = 4, walkers_only = true,
                        in_shift = true, bring_own_eighths = 3 },
+
+  -- THE ERRAND on the way home: a supermarket or a store near HOME, one of the three nearest open
+  errand           = { sites = { "supermarket", "shop" }, from = "home", distance = { 0, 700 }, nearest = 3 },
 
   -- A STUDENT'S BREAK
   campus_bench     = { sites = { "seat" }, tags = { "campus" }, distance = { 0, 600 }, nearest = 6, perform = "spot" },
@@ -60,16 +64,24 @@ activities = {
 }
 
 menus = {
-  order = { "outing", "lunch", "student_break" },
+  order = { "outing", "errand", "lunch", "student_break" },
 
-  -- a day off's next stop: now and then a bench or a trip across town, else the places about (each one counts) or
-  -- a walk round the block
+  -- A DAY OFF, by the hour: coffee and the park in the morning; the shops and lunch at midday; errands and the park in
+  -- the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
   outing = {
-    { hours = { 0, 24 },
-      first = { { "bench", 0.30 }, { "across_town", 0.14 } },
-      pick  = { { "park_visit", 3 }, { "coffee", 2.5 }, { "browse", 2 }, { "groceries", 1 }, { "meal", 1.5 },
-                { "civic_visit", 0.7 }, { "walk_round_block", 3 } } },
+    { hours = { 5, 10.5 }, first = { { "bench", 0.20 }, { "across_town", 0.10 } },
+      pick = { { "coffee", 4 }, { "park_visit", 3 }, { "groceries", 0.5 }, { "civic_visit", 0.3 }, { "walk_round_block", 3 } } },
+    { hours = { 10.5, 14 }, first = { { "bench", 0.25 }, { "across_town", 0.14 } },
+      pick = { { "browse", 2.5 }, { "meal", 2 }, { "coffee", 2 }, { "park_visit", 3 }, { "civic_visit", 0.7 }, { "walk_round_block", 2 } } },
+    { hours = { 14, 17.5 }, first = { { "bench", 0.30 }, { "across_town", 0.14 } },
+      pick = { { "browse", 2.5 }, { "groceries", 1.5 }, { "park_visit", 3 }, { "coffee", 1.5 }, { "civic_visit", 0.7 }, { "walk_round_block", 3 } } },
+    { hours = { 17.5, 23 }, first = { { "bench", 0.15 }, { "across_town", 0.10 } },
+      pick = { { "meal", 3 }, { "coffee", 1 }, { "park_visit", 1.5 }, { "groceries", 1 }, { "walk_round_block", 2 } } },
+    { hours = { 23, 5 }, first = { { "bench", 0 }, { "across_town", 0 } },
+      pick = { { "walk_round_block", 1 }, { "park_visit", 0.5 } } },
   },
+
+  errand = { { hours = { 0, 24 }, first = { { "errand", 1.0 } } } },
 
   lunch = { { hours = { 0, 24 }, first = { { "lunch", 1.0 } } } },
 

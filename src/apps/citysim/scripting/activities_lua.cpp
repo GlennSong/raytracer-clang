@@ -110,6 +110,9 @@ bool loadActivityCatalog(ScriptVM& vm, citysim::ActivityCatalog& out, std::strin
         d.walkersOnly = flag(L, dt, "walkers_only");
         d.inShift = flag(L, dt, "in_shift");
         d.bringOwnEighths = static_cast<int>(num(L, dt, "bring_own_eighths", 0));
+        { const std::string from = str(L, dt, "from");
+          if (!from.empty() && from != "home" && from != "here") { lua_settop(L, base); return fail(err, "activities." + name + ": from is home or here"); }
+          d.fromHome = from == "home"; }
         const std::string pf = str(L, dt, "perform");
         if (pf.empty() || pf == "inside") d.perform = citysim::Perform::Inside;
         else if (pf == "outside") d.perform = citysim::Perform::Outside;

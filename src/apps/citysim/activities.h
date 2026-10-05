@@ -89,6 +89,8 @@ struct ActivityDef {
     bool walkersOnly = false;         // not for someone in their car
     bool inShift = false;             // only inside the agent's working window (lunch)
     int bringOwnEighths = 0;          // this many eighths of agents (by their own bits) never go (brought lunch)
+    bool fromHome = false;            // the distance band is measured from HOME, not from here (the errand on the
+                                      // way home: a shop near home)
     Perform perform = Perform::Inside;
     // A GROUP (perform Roam, an area site): its roles; it starts once `minPlayers` are there, and a session that has
     // not filled within `gatherMinutes` is given up (its players go); `swapAt` (0..1 of the run) swaps the zones.
