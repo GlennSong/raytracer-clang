@@ -1799,6 +1799,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
             chosen = s.target == GoalTarget::Outing ? pickOuting(a, origin)
                      : s.target == GoalTarget::Lunch ? pickLunch(a, origin)
                      : s.target == GoalTarget::Campus ? pickCampusBreak(a, origin)
+                     : !s.menu.empty() && catalog_.menu(s.menu) ? pickFromMenu(a, origin, *catalog_.menu(s.menu))
                                                        : pickActivity(a, origin, s);
             a.outingTo = chosen;
         }
@@ -2265,85 +2266,175 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
 // park or a coffee is likelier than the town hall; never straight back to
 // the stop just left. Sets a.tripVenue (-1 for the plain walk).
 int CitySim::pickOuting(Agent& a, int origin) {
-    const int prev = a.tripVenue;
-    a.tripVenue = -1;
-    releaseSeat(a);
-    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
-    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
-    const Real h = clockHours_;
-    // A SIT on a bench (M5): now and then the outing is a seat out in the open -- a park bench, a café's
-    // terrace chair -- and the walk to it.
-    if (!seats_.empty() && rnd() % 100u < 30u) {
-        const int s = pickSeat(a, here);
-        if (s >= 0) { a.tripSeat = s; return seats_[static_cast<std::size_t>(s)].node; }
+    const Menu* m = catalog_.menu("outing");
+    return m ? pickFromMenu(a, origin, *m) : -1;
+}
+
+// ---- THE CATALOG'S CHOOSER (activities framework, step A) --------------------------------------------------------
+
+std::string CitySim::venueKind(const Venue& v) const {
+    switch (v.type) {
+        case PlaceType::Cafe: return "cafe";
+        case PlaceType::Restaurant: return "restaurant";
+        case PlaceType::Shop: return "shop";
+        case PlaceType::Supermarket: return "supermarket";
+        case PlaceType::Office: return "office";
+        case PlaceType::Home: return "home";
+        case PlaceType::Park: return v.campus == 4 ? "quad" : v.campus == 5 ? "field" : "park";
+        case PlaceType::Civic: return v.campus == 2 ? "library" : v.campus == 1 ? "teaching" : "civic";
+        default: return "?";
     }
-    // Now and then, somewhere ACROSS TOWN: a park, a civic building, a
-    // restaurant 1.2-3 km off -- the trip a bus is for (the rider plans it in
-    // startGoalTrip like any other). Local stops are walks.
-    if (rnd() % 100u < 14u) {
-        std::vector<int> far;
+}
+
+static const char* spotSiteKind(SpotKind k) {
+    switch (k) {
+        case SpotKind::Sit: return "seat";
+        case SpotKind::Lie: return "bed";
+        case SpotKind::Stand: return "stand";
+        case SpotKind::Jog: return "loop";
+        case SpotKind::Play: return "pitch";
+        case SpotKind::Watch: return "watch";
+        default: return "?";
+    }
+}
+
+std::string CitySim::siteKindOf(const Agent& a) const {
+    if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size())) return spotSiteKind(seats_[static_cast<std::size_t>(a.tripSeat)].kind);
+    if (a.tripVenue >= 0 && a.tripVenue < static_cast<int>(venues_.size())) return venueKind(venues_[static_cast<std::size_t>(a.tripVenue)]);
+    if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(catalog_.defs.size())) {
+        const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(a.tripActivity)];
+        if (!d.sites.empty()) return d.sites.front();
+    }
+    return "";
+}
+
+// One activity's site for this agent from `origin`: a spot (reserved), a place, or a street corner. countOnly: how
+// many candidate sites there are (a per-site menu weight), nothing chosen.
+int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool countOnly, int* count) {
+    if (count) *count = 0;
+    if (di < 0 || di >= static_cast<int>(catalog_.defs.size()) || !nav_) return -1;
+    const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(di)];
+    const Real h = clockHours_;
+    if (!hourIn(h, d.hourLo, d.hourHi)) return -1;
+    if (d.walkersOnly && (a.archetype != Agent::Mode::Pedestrian || a.mode != Agent::Mode::Pedestrian)) return -1;
+    if (d.bringOwnEighths > 0 && static_cast<int>((a.brain >> 13) & 7u) < d.bringOwnEighths) return -1;
+    if (d.inShift && !inWindow(clockHours_, departWorkHour(a), a.departHome)) return -1;
+    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
+    // SPOTS
+    uint32_t kinds = 0;
+    bool venuesToo = false, street = false;
+    for (const std::string& k : d.sites) {
+        bool found = false;
+        for (int sk = 0; sk < static_cast<int>(SpotKind::Count); ++sk)
+            if (k == spotSiteKind(static_cast<SpotKind>(sk))) { kinds |= spotKindBit(static_cast<SpotKind>(sk)); found = true; }
+        if (k == "street") { street = true; found = true; }
+        if (!found) venuesToo = true;
+    }
+    if (kinds) {
+        ActivityQuery q;
+        q.kinds = kinds; q.tags = d.tags; q.minDist = d.distLo; q.maxDist = d.distHi;
+        q.nearest = d.nearest > 0 ? d.nearest : 1 << 30;
+        if (countOnly) {
+            int n = 0;
+            for (const ActivitySpot& sp : seats_)
+                if (sp.occupant < 0 && (q.kinds & spotKindBit(sp.kind)) && (sp.tags & q.tags) == q.tags) {
+                    const Real d2 = (sp.pos - here).lengthSquared();
+                    if (d2 >= q.minDist * q.minDist && d2 <= q.maxDist * q.maxDist) ++n;
+                }
+            if (count) *count += n;
+        } else {
+            const int sp = pickSpot(a, here, q);
+            if (sp >= 0) {
+                a.tripSeat = sp;
+                a.tripActivity = di;
+                return seats_[static_cast<std::size_t>(sp)].node;
+            }
+        }
+    }
+    // PLACES
+    if (venuesToo) {
+        std::vector<std::pair<Real, int>> cand;
         for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
             const Venue& v = venues_[static_cast<std::size_t>(i)];
-            if (i == prev || !v.openAt(h)) continue;
-            if (v.type != PlaceType::Park && v.type != PlaceType::Civic &&
-                v.type != PlaceType::Restaurant && v.type != PlaceType::Cafe)
-                continue;
-            const Vec2 d = nav_->nodes[static_cast<std::size_t>(v.node)] - here;
-            const Real d2 = d.x * d.x + d.y * d.y;
-            if (d2 < 1200.0 * 1200.0 || d2 > 3000.0 * 3000.0) continue;
-            far.push_back(i);
+            if (i == prevVenue || v.node == origin || !v.openAt(h)) continue;
+            const std::string vk = venueKind(v);
+            bool want = false;
+            for (const std::string& k : d.sites) want = want || k == vk;
+            if (!want) continue;
+            const Real d2 = (nav_->nodes[static_cast<std::size_t>(v.node)] - here).lengthSquared();
+            if (d2 < d.distLo * d.distLo || d2 > d.distHi * d.distHi) continue;
+            cand.push_back({d2, i});
         }
-        if (!far.empty()) {
-            a.tripVenue = far[rnd() % static_cast<uint32_t>(far.size())];
-            return venues_[static_cast<std::size_t>(a.tripVenue)].node;
+        if (countOnly) { if (count) *count += static_cast<int>(cand.size()); }
+        else if (!cand.empty()) {
+            int pick;
+            if (d.nearest > 0) {
+                const std::size_t k = std::min<std::size_t>(cand.size(), static_cast<std::size_t>(d.nearest));
+                std::partial_sort(cand.begin(), cand.begin() + static_cast<std::ptrdiff_t>(k), cand.end());
+                pick = cand[tripRnd(a) % k].second;
+            } else {
+                pick = cand[rnd() % static_cast<uint32_t>(cand.size())].second;
+            }
+            a.tripVenue = pick;
+            a.tripActivity = di;
+            return venues_[static_cast<std::size_t>(pick)].node;
         }
     }
-    constexpr Real kReach = 650.0;
-    std::vector<std::pair<Real, int>> cum;   // cumulative weight -> venue index
-    Real total = 0;
-    for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
-        const Venue& v = venues_[static_cast<std::size_t>(i)];
-        if (i == prev || v.node == origin) continue;
-        const Vec2 d = nav_->nodes[static_cast<std::size_t>(v.node)] - here;
-        const Real d2 = d.x * d.x + d.y * d.y;
-        if (d2 > kReach * kReach || d2 < 60.0 * 60.0) continue;
-        if (!v.openAt(h)) continue;
-        Real w = 0;
-        switch (v.type) {
-            case PlaceType::Park:        w = 3.0; break;
-            case PlaceType::Cafe:        w = 2.5; break;
-            case PlaceType::Shop:        w = 2.0; break;
-            case PlaceType::Supermarket: w = 1.0; break;
-            case PlaceType::Restaurant:  w = (h >= 11.5 && h < 21.5) ? 1.5 : 0.0; break;
-            case PlaceType::Civic:       w = 0.7; break;
-            default:                     w = 0.0; break;
+    // A STREET CORNER: somewhere in the distance band a walker leaves by (a walk round the block)
+    if (street) {
+        if (countOnly) { if (count) *count += 1; return -1; }
+        const int n = nav_->streetNodeCount();
+        for (int tries = 0; tries < 48; ++tries) {
+            const int cand = static_cast<int>(rnd() % static_cast<uint32_t>(n));
+            const Real d2 = (nav_->nodes[static_cast<std::size_t>(cand)] - here).lengthSquared();
+            if (d2 < d.distLo * d.distLo || d2 > d.distHi * d.distHi) continue;
+            for (int ol : nav_->outLinks[static_cast<std::size_t>(cand)])
+                if (nav_->links[static_cast<std::size_t>(ol)].walkable) { a.tripActivity = di; return cand; }
         }
+    }
+    return -1;
+}
+
+int CitySim::pickFromMenu(Agent& a, int origin, const Menu& m) {
+    const int prev = a.tripVenue;
+    a.tripVenue = -1;
+    a.tripActivity = -1;
+    releaseSeat(a);
+    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
+    const MenuBand* band = nullptr;
+    for (const MenuBand& b : m.bands)
+        if (hourIn(clockHours_, b.hourLo, b.hourHi)) { band = &b; break; }
+    if (!band) return -1;
+    // FIRST: tried in order, each with its chance
+    for (const MenuEntry& e : band->first) {
+        if (static_cast<Real>(rnd() % 1000u) >= e.chance * 1000.0) continue;
+        const int node = tryActivity(a, origin, catalog_.find(e.activity), prev, false, nullptr);
+        if (node >= 0) return node;
+    }
+    // THEN a weighted pick: a per-site activity weighs as much again for every site it could go to
+    std::vector<std::pair<Real, int>> cum;   // cumulative weight -> entry
+    Real total = 0;
+    for (std::size_t k = 0; k < band->pick.size(); ++k) {
+        const MenuEntry& e = band->pick[k];
+        const int di = catalog_.find(e.activity);
+        if (di < 0) continue;
+        int n = 0;
+        tryActivity(a, origin, di, prev, true, &n);
+        if (n <= 0) continue;
+        const Real w = e.weight * (catalog_.defs[static_cast<std::size_t>(di)].perSite ? n : 1);
         if (w <= 0) continue;
         total += w;
-        cum.push_back({total, i});
+        cum.push_back({total, static_cast<int>(k)});
     }
-    constexpr Real kWalkWeight = 3.0;
-    const Real roll = static_cast<Real>(rnd() % 100000u) / 100000.0 * (total + kWalkWeight);
-    if (roll < total) {
-        for (const auto& c : cum)
-            if (roll <= c.first) {
-                a.tripVenue = c.second;
-                return venues_[static_cast<std::size_t>(c.second)].node;
-            }
-    }
-    // A walk round the block.
-    const int n = nav_->streetNodeCount();   // a street corner, not a node on a park's walk
-    for (int tries = 0; tries < 48; ++tries) {
-        const int cand = static_cast<int>(rnd() % static_cast<uint32_t>(n));
-        const Vec2 d = nav_->nodes[static_cast<std::size_t>(cand)] - here;
-        const Real d2 = d.x * d.x + d.y * d.y;
-        if (d2 < 150.0 * 150.0 || d2 > 450.0 * 450.0) continue;
-        for (int ol : nav_->outLinks[static_cast<std::size_t>(cand)])
-            if (nav_->links[static_cast<std::size_t>(ol)].walkable) return cand;
-    }
-    if (!cum.empty()) {
-        a.tripVenue = cum.back().second;
-        return venues_[static_cast<std::size_t>(a.tripVenue)].node;
+    if (cum.empty()) return -1;
+    const Real roll = static_cast<Real>(rnd() % 100000u) / 100000.0 * total;
+    std::size_t at = 0;
+    while (at + 1 < cum.size() && roll > cum[at].first) ++at;
+    // the chosen one, then (if its site has gone) the others in order
+    for (std::size_t t = 0; t < cum.size(); ++t) {
+        const MenuEntry& e = band->pick[static_cast<std::size_t>(cum[(at + t) % cum.size()].second)];
+        const int node = tryActivity(a, origin, catalog_.find(e.activity), prev, false, nullptr);
+        if (node >= 0) return node;
     }
     return -1;
 }
@@ -2353,42 +2444,8 @@ int CitySim::pickOuting(Agent& a, int origin) {
 // across the quad -- and at midday, lunch out like anyone. Sets tripVenue or
 // tripSeat; -1 = no stop (the table's NoRoute row: straight back to class).
 int CitySim::pickCampusBreak(Agent& a, int origin) {
-    a.tripVenue = -1;
-    releaseSeat(a);
-    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
-    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
-    const Real h = clockHours_;
-    const uint32_t roll = rnd() % 100u;
-    if (h >= 11.5 && h < 13.5 && roll < 45u) {
-        const int lunch = pickLunch(a, origin);
-        if (lunch >= 0) return lunch;
-    }
-    if (h >= 15.0 && h < 19.5 && roll < 25u) {   // a run round the track (activities: a campus Jog spot)
-        ActivityQuery q;
-        q.kinds = spotKindBit(SpotKind::Jog);
-        q.tags = spot_tag::kCampus;
-        q.maxDist = 900.0;
-        const int st = pickSpot(a, here, q);
-        if (st >= 0) { a.tripSeat = st; return seats_[static_cast<std::size_t>(st)].node; }
-    }
-    if (roll < 75u) {   // somewhere to sit outside (the bleachers too, a short walk off)
-        const int st = pickCampusSeat(a, here);
-        if (st >= 0) { a.tripSeat = st; return seats_[static_cast<std::size_t>(st)].node; }
-    }
-    // The library, or the quad itself.
-    int lib = -1, quad = -1;
-    Real libD = 1e30, quadD = 1e30;
-    for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
-        const Venue& v = venues_[static_cast<std::size_t>(i)];
-        if ((v.campus != 2 && v.campus != 4) || v.node == origin) continue;
-        const Real d2 = (nav_->nodes[static_cast<std::size_t>(v.node)] - here).lengthSquared();
-        if (v.campus == 2 && d2 < libD) { libD = d2; lib = i; }
-        if (v.campus == 4 && d2 < quadD) { quadD = d2; quad = i; }
-    }
-    const int pick = (lib >= 0 && (roll % 3u != 0u || quad < 0)) ? lib : quad;
-    if (pick < 0) return -1;
-    a.tripVenue = pick;
-    return venues_[static_cast<std::size_t>(pick)].node;
+    const Menu* m = catalog_.menu("student_break");
+    return m ? pickFromMenu(a, origin, *m) : -1;
 }
 
 int CitySim::pickCampusSeat(Agent& a, Vec2 here) {
@@ -2480,28 +2537,8 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
 // a car commuter stays in too (its car is parked at work -- a lunch trip
 // would drive it round the block). -1 = no trip (the table's NoRoute row).
 int CitySim::pickLunch(Agent& a, int origin) {
-    a.tripVenue = -1;
-    if (!nav_ || origin < 0 || origin >= nav_->nodeCount()) return -1;
-    if (a.archetype != Agent::Mode::Pedestrian || a.mode != Agent::Mode::Pedestrian) return -1;
-    if (((a.brain >> 13) & 7u) < 3u) return -1;
-    if (!inWindow(clockHours_, departWorkHour(a), a.departHome)) return -1;
-    const Vec2 here = nav_->nodes[static_cast<std::size_t>(origin)];
-    std::vector<std::pair<Real, int>> near;
-    for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
-        const Venue& v = venues_[static_cast<std::size_t>(i)];
-        if (v.type != PlaceType::Cafe && v.type != PlaceType::Restaurant) continue;
-        if (v.node == origin || !v.openAt(clockHours_)) continue;
-        const Vec2 d = nav_->nodes[static_cast<std::size_t>(v.node)] - here;
-        const Real d2 = d.x * d.x + d.y * d.y;
-        if (d2 > 600.0 * 600.0) continue;
-        near.push_back({d2, i});
-    }
-    if (near.empty()) return -1;
-    std::sort(near.begin(), near.end());
-    const std::size_t k = std::min<std::size_t>(near.size(), 4);
-    const int pick = near[static_cast<std::size_t>(tripRnd(a) % k)].second;
-    a.tripVenue = pick;
-    return venues_[static_cast<std::size_t>(pick)].node;
+    const Menu* m = catalog_.menu("lunch");
+    return m ? pickFromMenu(a, origin, *m) : -1;
 }
 
 int CitySim::goalNodeFor(const Agent& a, GoalTarget target) const {
@@ -4482,13 +4519,22 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             return lo + (hi - lo) * static_cast<Real>(tripRnd(a) % 1000u) / 999.0;
         };
         bool seated = false;
+        // HOW LONG (the activity catalog): the activity's own minutes, else what its kind of site keeps a visitor
+        auto stay = [&]() {
+            double lo = 0, hi = 0;
+            if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(catalog_.defs.size())) {
+                const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(a.tripActivity)];
+                lo = d.minutesLo; hi = d.minutesHi;
+            }
+            if (hi <= 0) siteKindMinutes(siteKindOf(a), lo, hi);
+            return jitter(lo / 60.0, hi / 60.0);
+        };
         if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
             seats_[static_cast<std::size_t>(a.tripSeat)].node == node &&
             seats_[static_cast<std::size_t>(a.tripSeat)].occupant == indexOf(a) && a.mode == Agent::Mode::Pedestrian) {
             // AT THE SEAT'S PATH: off it to the seat, a sit of five to fifteen minutes, back (stepSeats) -- or onto the
             // track for a run of twenty to thirty-five
-            a.restDwell = seats_[static_cast<std::size_t>(a.tripSeat)].kind == SpotKind::Jog ? jitter(0.33, 0.58)
-                                                                                           : jitter(0.08, 0.25);
+            a.restDwell = stay();
             a.seatPhase = 1;
             a.seatBack = a.pos;
             seated = true;
@@ -4501,16 +4547,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             // An OUTING or LUNCH stop: in through the door, for as long as
             // that kind of place keeps people -- or, at a park, outside.
             const Venue& v = venues_[static_cast<std::size_t>(a.tripVenue)];
-            if (v.campus == 2) a.restDwell = jitter(0.5, 1.2);         // a session in the library
-            else if (v.campus == 4) a.restDwell = jitter(0.1, 0.3);    // a while on the quad
-            else switch (v.type) {
-                case PlaceType::Cafe:        a.restDwell = jitter(0.25, 0.5); break;
-                case PlaceType::Restaurant:  a.restDwell = jitter(0.5, 1.0); break;
-                case PlaceType::Supermarket: a.restDwell = jitter(0.2, 0.4); break;
-                case PlaceType::Civic:       a.restDwell = jitter(0.3, 0.6); break;
-                case PlaceType::Park:        a.restDwell = jitter(0.1, 0.25); break;
-                default:                     a.restDwell = jitter(0.1, 0.3); break;
-            }
+            a.restDwell = stay();   // a coffee, a meal, a session in the library, a while on the quad
             if (placeIsIndoors(v.type)) {
                 a.pos = v.door;
                 inside = true;
@@ -4518,7 +4555,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         } else if (a.mode == Agent::Mode::Pedestrian && outingStroller(a) &&
                    node != a.home) {
             // A walk round the block: a pause to look about, outside.
-            a.restDwell = jitter(0.01, 0.04);
+            a.restDwell = a.tripActivity >= 0 ? stay() : jitter(0.01, 0.04);
         } else if (atHome) {
             a.pos = a.homeDoor;
             inside = true;
@@ -4531,6 +4568,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         }
         a.indoors = inside && a.mode == Agent::Mode::Pedestrian;
         a.outingTo = -1;   // arrived: the next outing chooses afresh
+        a.tripActivity = -1;
         // Outside: a spot of its own, not the sidewalk point everyone arriving
         // along this street ends on.
         if (!a.indoors && a.mode == Agent::Mode::Pedestrian && a.seatPhase == 0)

@@ -70,6 +70,13 @@ int GoalTable::addState(const std::string& name, GoalAction action,
     return id;
 }
 
+bool GoalTable::setMenu(const std::string& name, const std::string& menu) {
+    const int id = machine_.findState(name);
+    if (id < 0 || id >= static_cast<int>(states_.size())) return false;
+    states_[static_cast<std::size_t>(id)].menu = menu;
+    return true;
+}
+
 bool GoalTable::setActivity(const std::string& name, uint32_t spotKinds, uint32_t spotTags) {
     const int id = machine_.findState(name);
     if (id < 0 || id >= static_cast<int>(states_.size())) return false;
@@ -117,6 +124,7 @@ std::string GoalTable::describe() const {
             char buf[48];
             std::snprintf(buf, sizeof(buf), " spots=%x/%x", s.spotKinds, s.spotTags);
             out += buf;
+            if (!s.menu.empty()) out += " menu=" + s.menu;
         }
         if (s.dwellHours > 0) {
             char buf[32];

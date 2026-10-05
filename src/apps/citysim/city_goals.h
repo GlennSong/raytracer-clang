@@ -82,8 +82,10 @@ struct GoalState {
     GoalTarget target = GoalTarget::None;
     Activity activity = Activity::AtHome;
     double dwellHours = 0;   // 0 = rest forever (only events can end it)
-    // GoalTarget::Activity: the spot kinds it takes (spotKindBit) and the tags the spot must carry (spot_tag)
+    // GoalTarget::Activity: the spot kinds it takes (spotKindBit) and the tags the spot must carry (spot_tag) -- or,
+    // when `menu` names one, a pick from that menu of the activity catalog (activities.h)
     uint32_t spotKinds = 0, spotTags = 0;
+    std::string menu;
 };
 
 // The table itself: states + transitions over an engine::StateMachine, shared
@@ -103,6 +105,8 @@ public:
     bool setEntry(const std::string& name);   // false when unknown
     // An Activity state's ask: which spot kinds, carrying which tags. False when the state is unknown.
     bool setActivity(const std::string& name, uint32_t spotKinds, uint32_t spotTags);
+    // An Activity state that picks from a MENU of the activity catalog. False when the state is unknown.
+    bool setMenu(const std::string& name, const std::string& menu);
 
     int entry() const { return entry_; }
     int stateCount() const { return static_cast<int>(states_.size()); }

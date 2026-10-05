@@ -114,6 +114,7 @@ bool loadGoalTable(ScriptVM& vm, const std::string& archetype, GoalTable& out,
                   parseTarget(strField(L, si, "target"), target) &&
                   parseActivity(strField(L, si, "activity"), activity);
         double dwell = numField(L, si, "dwell", 0.0);
+        const std::string menuName = strField(L, si, "menu");   // an Activity state may pick from a catalog menu
         // an ACTIVITY state's ask: spot = { kinds = { "sit", ... }, tags = { "campus", ... } }
         uint32_t spotKinds = 0, spotTags = 0;
         lua_getfield(L, si, "spot");
@@ -150,6 +151,7 @@ bool loadGoalTable(ScriptVM& vm, const std::string& archetype, GoalTable& out,
         }
         table.addState(name, action, target, activity, dwell);
         if (target == GoalTarget::Activity) table.setActivity(name, spotKinds, spotTags);
+        if (target == GoalTarget::Activity && !menuName.empty()) table.setMenu(name, menuName);
     }
     lua_pop(L, 1);   // states
 

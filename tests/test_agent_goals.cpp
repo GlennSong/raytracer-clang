@@ -168,3 +168,31 @@ TEST_CASE(agents_lua_asks_for_an_activity_by_kind_and_tag) {
     GoalTable b;
     CHECK(!loadGoalTable(vm, "bad", b, &err));
 }
+
+// THE ACTIVITY CATALOG IN LUA (activities framework, step A): assets/scripts/activities.lua describes exactly the
+// catalog built into C++ -- the outings, lunch and students' breaks the town ran on before -- so the script can take
+// over without a change in behaviour; a menu naming an unknown activity, or an unknown site kind, is refused.
+#include "../src/apps/citysim/scripting/activities_lua.h"
+TEST_CASE(activities_lua_is_the_built_in_catalog) {
+    ScriptVM vm;
+    std::string err;
+    std::ifstream f("assets/scripts/activities.lua");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    CHECK(!ss.str().empty());
+    CHECK(vm.doString(ss.str(), &err));
+    citysim::ActivityCatalog lua;
+    const bool ok = loadActivityCatalog(vm, lua, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    const std::string a = lua.describe(), b = citysim::defaultActivityCatalog().describe();
+    if (a != b) std::printf("    LUA:\n%s\n    C++:\n%s\n", a.c_str(), b.c_str());
+    CHECK(a == b);
+    ScriptVM bad;
+    CHECK(bad.doString("activities = { x = { sites = { \"moon\" } } }", &err));
+    citysim::ActivityCatalog c;
+    CHECK(!loadActivityCatalog(bad, c, &err));
+    ScriptVM bad2;
+    CHECK(bad2.doString("activities = { x = { sites = { \"cafe\" } } } menus = { m = { { first = { { \"y\", 1 } } } } }", &err));
+    CHECK(!loadActivityCatalog(bad2, c, &err));
+}

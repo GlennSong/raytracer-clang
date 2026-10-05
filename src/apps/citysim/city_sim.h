@@ -221,6 +221,7 @@ struct Agent {
     uint8_t seatPhase = 0;
     engine::Vec2 seatBack{0, 0};
     Real loopS = 0;   // running a loop (a Jog spot): how far round it (m)
+    int tripActivity = -1;   // the catalog activity this trip is for (CitySim::catalog_), -1 none
     // Where the current outing/lunch trip is going, kept until arrival: a leg
     // by BUS sets the walker down at a stop and the trip resumes from there,
     // and it must resume to the same place, not re-pick one.
@@ -1123,6 +1124,8 @@ public:
     const std::vector<Venue>& venues() const { return venues_; }
     // How many agents assignPlaces made students (0 without a campus with a residence and a teaching hall).
     int studentCount() const { return students_; }
+    void setActivityCatalog(ActivityCatalog c) { catalog_ = std::move(c); }
+    const ActivityCatalog& activityCatalog() const { return catalog_; }
     // Debug: agent i's follow gap and its minimum (computeGaps), +inf with no leader.
     Real debugGap(int i) const { return i >= 0 && i < static_cast<int>(gaps_.size()) ? gaps_[static_cast<std::size_t>(i)] : -1; }
     Real debugMinGap(int i) const { return i >= 0 && i < static_cast<int>(minGaps_.size()) ? minGaps_[static_cast<std::size_t>(i)] : -1; }
@@ -1326,6 +1329,13 @@ private:
     // Tags each spot by where it stands, once the places are known (assignPlaces): campus (near a quad or a
     // field), sports (near a field).
     void tagSpots();
+    // THE CATALOG (activities.h): what there is to go and do, and the menus that choose. pickFromMenu chooses an
+    // activity and its site -- a place, a spot or a street corner -- and returns the node to walk to (tripVenue /
+    // tripSeat / tripActivity set), -1 for nothing.
+    int pickFromMenu(Agent& a, int origin, const Menu& m);
+    int tryActivity(Agent& a, int origin, int def, int prevVenue, bool countOnly, int* count);
+    std::string venueKind(const Venue& v) const;
+    std::string siteKindOf(const Agent& a) const;   // the kind of site the agent's trip is for (arrival's dwell)
     int pickLunch(Agent& a, int origin);    // GoalTarget::Lunch  -> a node, or -1
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
@@ -1529,6 +1539,7 @@ private:
     GoalTable goalPed_ = defaultScheduleGoals();
     GoalTable strollerTable_ = strollerGoals();
     GoalTable studentTable_ = studentGoals();
+    ActivityCatalog catalog_ = defaultActivityCatalog();
     int students_ = 0;
     std::vector<Venue> venues_;
     std::vector<SeatSpot> seats_;

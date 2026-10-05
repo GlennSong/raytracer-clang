@@ -440,6 +440,7 @@ if(RT_ENABLE_SCRIPTING)
     # goal/fleet tables into citysim types, so they belong to the app, not the core.
     target_sources(citysim PRIVATE
         src/apps/citysim/scripting/agent_goals.cpp
+        src/apps/citysim/scripting/activities_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )
 endif()

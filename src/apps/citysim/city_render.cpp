@@ -25,6 +25,7 @@
 #include "../../engine/procgen/city/building_records.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
+#include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../engine/scripting/procgen_bindings.h"
@@ -739,6 +740,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // its archetype tables replace the built-ins BEFORE the warm-up below, so
     // the whole visible day runs on the scripted goals. Lua runs only here, at
     // load — every per-tick transition executes in C++ from the tables.
+    // THE ACTIVITY CATALOG (activities framework): what there is to go and do, and the menus that choose -- from
+    // assets/scripts/activities.lua when it is there (the built-in catalog otherwise: the same, by test)
+    {
+        const std::string code = engine::loadScriptCode("activities.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            citysim::ActivityCatalog cat;
+            if (vm.doString(code, &err) && engine::loadActivityCatalog(vm, cat, &err)) {
+                LOG_INFO << "[citysim] activities: " << cat.defs.size() << " activities, " << cat.menus.size() << " menus (activities.lua)";
+                sim_.setActivityCatalog(std::move(cat));
+            } else {
+                LOG_WARN << "[citysim] activities.lua: " << err << " (using the built-in catalog)";
+            }
+        }
+    }
     if (!params_.agentScript.empty()) {
         engine::ScriptVM vm;
         std::string err;
