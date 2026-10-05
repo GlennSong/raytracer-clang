@@ -34,6 +34,10 @@ constexpr const char* kBundleFile = "level.bundle";
 constexpr const char* kManifestFile = "manifest.json";
 constexpr size_t kHeaderBytes = 64;
 constexpr size_t kSectionAlign = 64;
+// A FILE bundle aligns its sections to the filesystem's block, so a section identical to one in an earlier bundle can
+// be CLONED from it (BundleWriter::addCloneSource): the two files share the blocks on a copy-on-write filesystem
+// (btrfs, XFS) instead of the bytes being written again. Memory bundles keep kSectionAlign.
+constexpr size_t kFileSectionAlign = 4096;
 
 // FNV-1a, the repo's content hash (terrain_field.cpp's erosion cache uses the same constants).
 constexpr uint64_t kFnvOffset = 1469598103934665603ULL;
@@ -70,6 +74,14 @@ public:
     const std::vector<SectionInfo>& sections() const { return sections_; }
     std::shared_ptr<std::vector<uint8_t>> memory() const { return mem_; }   // memory mode, after finish()
     uint64_t bytesWritten() const { return pos_; }
+    // SHARED BLOCKS (Glenn: "can we do partial bakes on top of other bakes because we know that that data hasn't
+    // changed?"): an earlier bundle file whose sections a later add() may clone instead of writing -- a section of
+    // the same size and content hash, block-aligned in that file. Cloning is the kernel's FICLONERANGE: the new
+    // file's blocks ARE the old file's until either is rewritten, so a rebake that changed 3% of a level costs 3%
+    // of its size on disk. Where the filesystem cannot (tmpfs, ext4, another device, not Linux) the bytes are written
+    // as before. Any number of sources; the first match wins. False when the file cannot be read as a bundle.
+    bool addCloneSource(const std::string& bundlePath);
+    uint64_t bytesCloned() const { return cloned_; }   // of bytesWritten(), how many were shared with a source
     // The bytes of a section written earlier in THIS bundle (the last of that name): how one producer reads
     // another's products — built a moment ago or copied forward — before the bundle is finished.
     bool readBack(const std::string& name, std::vector<uint8_t>& out) const;
@@ -83,6 +95,12 @@ private:
     uint64_t pos_ = 0;
     std::vector<SectionInfo> sections_;
     bool finished_ = false;
+    struct CloneSrc { int fd = -1; std::vector<SectionInfo> sections; };
+    std::vector<CloneSrc> sources_;
+    uint64_t cloned_ = 0;
+    bool cloneFailed_ = false;   // the filesystem said no once: stop asking
+    bool tryClone(uint64_t size, uint64_t fnv);
+    size_t align() const { return f_ ? kFileSectionAlign : kSectionAlign; }
 };
 
 class Bundle {

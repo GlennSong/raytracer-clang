@@ -114,6 +114,27 @@ nlohmann::json manifestProducer(const nlohmann::json& manifest, const std::strin
     return nlohmann::json();
 }
 
+// The newest finished bundle under `root` for the same level (by its manifest's level path, made absolute: rt_bake
+// says it relatively, a test absolutely), other than `exclude`: what a rebake clones its unchanged sections from.
+static std::string previousBundleFor(const std::string& root, const std::string& levelPath, const std::string& exclude) {
+    std::error_code ec;
+    auto norm = [](const std::string& p) { std::error_code e; return fs::absolute(p, e).lexically_normal().string(); };
+    const std::string want = norm(levelPath), ex = norm(exclude);
+    std::string best, bestCreated;
+    for (const fs::directory_entry& e : fs::directory_iterator(root, ec)) {
+        if (!e.is_directory(ec)) continue;
+        const std::string dir = e.path().string();
+        if (dir.find(".tmp-") != std::string::npos || (!exclude.empty() && norm(dir) == ex)) continue;
+        const nlohmann::json m = readManifest(dir);
+        if (m.is_null() || !fs::exists(dir + "/" + kBundleFile)) continue;
+        const nlohmann::json lv = m.value("level", nlohmann::json::object());
+        if (norm(lv.value("path", std::string())) != want) continue;
+        const std::string created = m.value("created", std::string());
+        if (created > bestCreated) { bestCreated = created; best = dir; }
+    }
+    return best;
+}
+
 BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress) {
     BakeReport rep; const auto t0 = std::chrono::steady_clock::now();
     LevelInputs in; if (!loadLevelInputs(req.levelPath, in, &rep.error)) return rep;
@@ -138,6 +159,14 @@ BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress) {
         std::error_code ec; fs::create_directories(root, ec);
         tmpDir = rep.dir + ".tmp-" + std::to_string(pid()); fs::remove_all(tmpDir, ec); fs::create_directories(tmpDir, ec);
         if (!w.openFile(tmpDir + "/" + kBundleFile, &rep.error)) return rep;
+        // SHARED BLOCKS: the level's last bundle lends every section that comes out the same (a lots rebake after a
+        // campus change rewrites only the campus's cells)
+        {   // (a forced rebuild too: whether a section is the same is its hash's call, not the cache's)
+            // (the bundle this one replaces counts: a forced rebuild under the same key clones from it, and its blocks
+            // outlive its deletion at the rename)
+            const std::string prev = previousBundleFor(root, req.levelPath, std::string());
+            if (!prev.empty() && w.addCloneSource(prev + "/" + kBundleFile)) rep.cloneFrom.push_back(prev);
+        }
     }
     double totalWeight = 0; for (const Applicable& a : aps) totalWeight += std::max(1e-6, a.p->weight());
     double doneWeight = 0; nlohmann::json producersJson = nlohmann::json::array();
@@ -148,6 +177,9 @@ BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress) {
         if (!donor.empty()) {
             std::string err; std::unique_ptr<Bundle> from = Bundle::open(donor + "/" + kBundleFile, &err);
             if (from) {
+                if (std::find(rep.cloneFrom.begin(), rep.cloneFrom.end(), donor) == rep.cloneFrom.end() &&
+                    w.addCloneSource(donor + "/" + kBundleFile))
+                    rep.cloneFrom.push_back(donor);   // a section copied forward is cloned, not rewritten
                 for (const std::string& s : from->sections(name + "/")) { const Bundle::View v = from->section(s); w.add(s, v.data, v.size); }
                 const nlohmann::json old = manifestProducer(from->manifest(), name);
                 for (const char* k : {"seconds", "timings", "report", "built"}) if (old.contains(k)) entry[k] = old[k];
@@ -175,6 +207,8 @@ BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress) {
     nlohmann::json manifest = {{"kind", "rt-level-bundle"}, {"created", isoNowUtc()}, {"engine", engineIdentityJson()}, {"key", rep.keyHex},
                                {"level", {{"path", req.levelPath}, {"bytes", levelBytes}, {"mtime", levelMtime}, {"fnv", hex16(levelFnv)}}},
                                {"producers", producersJson}, {"threads", req.threads}};
+    rep.bytes = w.bytesWritten();
+    rep.bytesCloned = w.bytesCloned();
     if (!w.finish(manifest, &rep.error)) { if (!tmpDir.empty()) { std::error_code ec; fs::remove_all(tmpDir, ec); } return rep; }
     if (req.toMemory) { rep.memory = w.memory(); rep.ok = true; rep.seconds = secondsSince(t0); return rep; }
     {   // manifest.json last (the commit marker), then rename into place

@@ -166,6 +166,10 @@ int main(int argc, char** argv) {
         uint64_t bytes = 0; std::error_code ec; bytes = std::filesystem::file_size(rep.dir + "/" + kBundleFile, ec);
         std::string built; for (const std::string& n : rep.built) built += (built.empty() ? "" : ", ") + n; std::string reused; for (const std::string& n : rep.reused) reused += (reused.empty() ? "" : ", ") + n;
         std::printf("wrote %s (%s, %.1f s; built %s%s%s)\n", rep.dir.c_str(), humanBytes(bytes).c_str(), rep.seconds, built.empty() ? "nothing" : built.c_str(), reused.empty() ? "" : "; reused ", reused.c_str());
+        if (!rep.cloneFrom.empty())
+            std::printf("  shared %s of it with %s (%.0f%%; new on disk %s)\n", humanBytes(rep.bytesCloned).c_str(),
+                        rep.cloneFrom.front().c_str(), rep.bytes ? 100.0 * rep.bytesCloned / rep.bytes : 0.0,
+                        humanBytes(rep.bytes > rep.bytesCloned ? rep.bytes - rep.bytesCloned : 0).c_str());
     }
     if (glb || split) {
         std::string err; std::unique_ptr<Bundle> b = Bundle::open(rep.dir + "/" + kBundleFile, &err);
