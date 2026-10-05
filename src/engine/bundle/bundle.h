@@ -80,8 +80,13 @@ public:
     // file's blocks ARE the old file's until either is rewritten, so a rebake that changed 3% of a level costs 3%
     // of its size on disk. Where the filesystem cannot (tmpfs, ext4, another device, not Linux) the bytes are written
     // as before. Any number of sources; the first match wins. False when the file cannot be read as a bundle.
+    // A match is confirmed BYTE FOR BYTE against the source before it is cloned (a 64-bit hash can collide, and a
+    // source can have rotted on disk since it was hashed).
     bool addCloneSource(const std::string& bundlePath);
     uint64_t bytesCloned() const { return cloned_; }   // of bytesWritten(), how many were shared with a source
+    // Sections whose size and hash matched a source's but whose BYTES did not: written, never cloned. Every clone is
+    // compared byte for byte first, so a clone is exactly what would have been written.
+    uint64_t clonesRefused() const { return cloneRefused_; }
     // The bytes of a section written earlier in THIS bundle (the last of that name): how one producer reads
     // another's products — built a moment ago or copied forward — before the bundle is finished.
     bool readBack(const std::string& name, std::vector<uint8_t>& out) const;
@@ -99,7 +104,8 @@ private:
     std::vector<CloneSrc> sources_;
     uint64_t cloned_ = 0;
     bool cloneFailed_ = false;   // the filesystem said no once: stop asking
-    bool tryClone(uint64_t size, uint64_t fnv);
+    bool tryClone(const void* data, uint64_t size, uint64_t fnv);
+    uint64_t cloneRefused_ = 0;   // hash matched, bytes did not (a collision, or the source rotted on disk)
     size_t align() const { return f_ ? kFileSectionAlign : kSectionAlign; }
 };
 

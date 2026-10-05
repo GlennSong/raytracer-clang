@@ -410,5 +410,31 @@ TEST_CASE(a_rebake_shares_its_unchanged_sections_with_the_last_one) {
     std::printf("    [clone] %s: %llu of %llu section bytes shared (%s)\n", dir.c_str(), static_cast<unsigned long long>(cloned),
                 static_cast<unsigned long long>((cellA.size() + cellB.size() + cellC.size()) * 4), cow ? "btrfs" : "no block sharing here");
     if (cow) CHECK(cloned == (cellA.size() + cellC.size()) * 4 + std::string(nlohmann::json{{"n", 3}}.dump()).size());
+    CHECK(w.clonesRefused() == 0);
+
+    // A SOURCE THAT ROTTED ON DISK: its bytes changed after it was written, its table still names the old hash. A
+    // rebake with the true bytes matches that hash -- and must write them, not clone the rot.
+    if (cow) {
+        std::unique_ptr<Bundle> src = Bundle::open(dir + "/a.bundle", &err);
+        uint64_t off = 0;
+        for (const SectionInfo& s : src->sectionTable()) if (s.name == "lots/cell/2_0/parts/2") off = s.offset;
+        src.reset();
+        {
+            std::fstream f(dir + "/a.bundle", std::ios::in | std::ios::out | std::ios::binary);
+            f.seekp(static_cast<std::streamoff>(off + 40)); const char x = 0x55; f.write(&x, 1);
+        }
+        BundleWriter w2; CHECK(w2.openFile(dir + "/c.bundle", &err));
+        CHECK(w2.addCloneSource(dir + "/a.bundle"));
+        CHECK(w2.add("lots/cell/2_0/parts/2", cellC.data(), cellC.size() * 4));
+        CHECK(w2.clonesRefused() == 1);
+        CHECK(w2.bytesCloned() == 0);
+        nlohmann::json m2{{"kind", "test"}}; CHECK(w2.finish(m2, &err));
+        std::unique_ptr<Bundle> c2 = Bundle::open(dir + "/c.bundle", &err);
+        CHECK(c2 && c2->checkSection("lots/cell/2_0/parts/2"));
+        const Bundle::View v = c2 ? c2->section("lots/cell/2_0/parts/2") : Bundle::View{};
+        CHECK(v.size == cellC.size() * 4 && std::memcmp(v.data, cellC.data(), v.size) == 0);
+        std::printf("    [clone] a rotted source: %llu refused, %llu cloned\n", static_cast<unsigned long long>(w2.clonesRefused()),
+                    static_cast<unsigned long long>(w2.bytesCloned()));
+    }
     fs::remove_all(dir, ec);
 }

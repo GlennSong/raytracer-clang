@@ -112,12 +112,22 @@ bool BundleWriter::addCloneSource(const std::string& bundlePath) {
 // Clone a section of `size` bytes hashing to `fnv` from a source, at pos_ (block-aligned). The source's section is
 // followed by zeros up to its next block (its own padding), so the whole last block is cloned and the writer moves
 // on past it: no write touches a shared block.
-bool BundleWriter::tryClone(uint64_t size, uint64_t fnv) {
+bool BundleWriter::tryClone(const void* data, uint64_t size, uint64_t fnv) {
 #ifdef __linux__
     if (!f_ || cloneFailed_ || sources_.empty() || pos_ % kFileSectionAlign != 0) return false;
     for (const CloneSrc& s : sources_)
         for (const SectionInfo& si : s.sections) {
             if (si.size != size || si.fnv != fnv) continue;
+            {   // THE BYTES, not just the hash: read the source's section and compare
+                std::vector<uint8_t> have(static_cast<size_t>(size));
+                uint64_t got = 0;
+                while (got < size) {
+                    const ssize_t n = ::pread(s.fd, have.data() + got, static_cast<size_t>(size - got), static_cast<off_t>(si.offset + got));
+                    if (n <= 0) break;
+                    got += static_cast<uint64_t>(n);
+                }
+                if (got != size || std::memcmp(have.data(), data, static_cast<size_t>(size)) != 0) { ++cloneRefused_; continue; }
+            }
             const uint64_t len = (size + kFileSectionAlign - 1) / kFileSectionAlign * kFileSectionAlign;
             if (std::fflush(f_) != 0) return false;
             struct file_clone_range r{};
@@ -144,7 +154,7 @@ bool BundleWriter::tryClone(uint64_t size, uint64_t fnv) {
             return true;
         }
 #else
-    (void)size; (void)fnv;
+    (void)data; (void)size; (void)fnv;
 #endif
     return false;
 }
@@ -174,7 +184,7 @@ bool BundleWriter::add(const std::string& name, const void* data, size_t size) {
     if (finished_ || !isOpen() || name.empty()) return false;
     if (!pad()) return false;
     SectionInfo s; s.name = name; s.offset = pos_; s.size = size; s.fnv = fnv1a(data, size);
-    if (!(size > 0 && tryClone(size, s.fnv)) && !write(data, size)) return false;
+    if (!(size > 0 && tryClone(data, size, s.fnv)) && !write(data, size)) return false;
     sections_.push_back(std::move(s)); return true;
 }
 bool BundleWriter::addJson(const std::string& name, const nlohmann::json& j) { const std::string s = j.dump(); return add(name, s.data(), s.size()); }
