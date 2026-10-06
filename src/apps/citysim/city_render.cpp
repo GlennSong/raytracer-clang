@@ -1237,6 +1237,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // static, so its transforms are baked once here; only the lit lens (above)
     // changes each step.
     signalLinks_.clear();
+    signalLensCache_.clear();
     SignalController& sc = sim_.signals();
     for (int li = 0; li < nav_.linkCount(); ++li)
         if (sc.hasSignal(li)) signalLinks_.push_back(li);
@@ -2172,6 +2173,17 @@ void CityRenderSystem::syncGroups(World& world) {
 
     carAgentIds_.assign(cars.size(), {});
     pedAgentIds_.assign(1, {});
+    // RT_DUMP_STATS: where the sync goes, section by section (the island profile: 13 ms a bake)
+    static const bool syncStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    static double secMs[7] = {0, 0, 0, 0, 0, 0, 0};
+    static int secCalls = 0;
+    auto secT = std::chrono::steady_clock::now();
+    auto sec = [&](int k) {
+        if (!syncStats) return;
+        const auto n = std::chrono::steady_clock::now();
+        secMs[k] += std::chrono::duration<double, std::milli>(n - secT).count();
+        secT = n;
+    };
     const auto& agents = sim_.agents();
     for (std::size_t ai = 0; ai < agents.size(); ++ai) {
         const Agent& a = agents[ai];
@@ -2225,6 +2237,7 @@ void CityRenderSystem::syncGroups(World& world) {
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
     }
+    sec(0);
     // Scenery parked cars (R6b): bays seeded full at build render a real car
     // (variant by bay index) — and, riding the car groups, they get the same
     // kinematic collision boxes as ambient traffic for free.
@@ -2313,11 +2326,18 @@ void CityRenderSystem::syncGroups(World& world) {
     // CURRENT state — so a phase change moves the lit lens between the red/amber/
     // green emissive batches. The pole assembly (signalPostGroup_) is static and
     // left untouched. (The lit lens overlays the head's matching housing lamp.)
+    sec(1);
     SignalController& sc = sim_.signals();
-    for (int li : signalLinks_) {
+    if (signalLensCache_.size() != signalLinks_.size()) {   // first bake (after build adopted the placed poles)
+        signalLensCache_.resize(signalLinks_.size());
+        for (std::size_t k = 0; k < signalLinks_.size(); ++k)
+            for (int s = 0; s < 3; ++s) signalLensCache_[k][static_cast<std::size_t>(s)] = signalLensPose(signalLinks_[k], static_cast<SignalState>(s));
+    }
+    for (std::size_t sk = 0; sk < signalLinks_.size(); ++sk) {
+        const int li = signalLinks_[sk];
         SignalState st = sc.stateForLink(li);
         int s = static_cast<int>(st);
-        if (sig[s]) sig[s]->transforms.push_back(signalLensPose(li, st));
+        if (sig[s]) sig[s]->transforms.push_back(signalLensCache_[sk][static_cast<std::size_t>(s)]);
         // THE LEFT ARROW (ADR-0109): a fourth lamp beside the head, on the side the left turn goes,
         // lit green (or amber) through the lead arrow while the straight-on lamps show red
         if (sc.hasLeftArrow(li)) {
@@ -2325,7 +2345,7 @@ void CityRenderSystem::syncGroups(World& world) {
             if (la != SignalState::Red && st == SignalState::Red) {
                 const Vec2 u = nav_.direction(li);
                 const Vec3 turnSide(-u.y, 0, u.x);   // the nav frame's left of travel, in the world
-                Mat4 pose = signalLensPose(li, SignalState::Green);
+                Mat4 pose = signalLensCache_[sk][static_cast<std::size_t>(SignalState::Green)];
                 pose = Mat4::trs(Vec3(0, 0, 0) + turnSide * 0.34, Quat(), Vec3(1, 1, 1)) * pose;
                 const int k = static_cast<int>(la);
                 if (sig[k]) sig[k]->transforms.push_back(pose);
@@ -2340,6 +2360,7 @@ void CityRenderSystem::syncGroups(World& world) {
     refreshBounds(pedLie);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
 
+    sec(2);
     // SEE-INTO VEHICLES. The clear glass rides exactly its bodies' transforms
     // (bodies and agent ids were pushed in lockstep above), and the people are
     // posed on the same pose: the driver on the driver's seat, and one rider per
@@ -2435,6 +2456,7 @@ void CityRenderSystem::syncGroups(World& world) {
         for (InstanceGroup* r : rid) refreshBounds(r);
     }
 
+    sec(3);
     // Debug widgets: a ground footprint (coloured by state) + a forward arrow per
     // agent, scaled to the agent's speed so it reads as the present trajectory.
     {
@@ -2569,9 +2591,18 @@ void CityRenderSystem::syncGroups(World& world) {
         if (lot) { lot->boundsCenter = Vec3(0, 0, 0); lot->boundsRadius = 6000.0; }
     }
 
+    sec(4);
     // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
     // driven by each drawn car's carLampState. Always baked (not a debug widget).
     syncCarLamps(world);
+    sec(5);
+    if (syncStats && ++secCalls % 300 == 0) {
+        LOG_INFO << "[stats] group sync ms per bake: agents " << secMs[0] / secCalls << ", parked cars " << secMs[1] / secCalls
+                 << ", signals + bounds " << secMs[2] / secCalls << ", see-into vehicles " << secMs[3] / secCalls
+                 << ", debug widgets " << secMs[4] / secCalls << ", car lamps " << secMs[5] / secCalls;
+        for (double& m : secMs) m = 0;
+        secCalls = 0;
+    }
 }
 
 // PEOPLE INSIDE (campus M4). The sim rests an indoor agent at its place's door, undrawn; a streamed interior's

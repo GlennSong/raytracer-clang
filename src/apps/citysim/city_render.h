@@ -592,6 +592,9 @@ private:
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
+    // Each signal's three lens poses (red, amber, green), parallel to signalLinks_: the poles never move, and
+    // working them out every bake (a ground sample apiece) was 10.6 ms of the island's 13 ms sync for 4,727 signals
+    std::vector<std::array<engine::Mat4, 3>> signalLensCache_;
     // BUILD-TIME furniture adoption (device: the city places poles, the sim
     // reacts): per-link SignalSite overrides published by the level loader's
     // StreetFurniture component. Empty when the level placed none — then this
