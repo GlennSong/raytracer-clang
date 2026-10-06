@@ -862,6 +862,34 @@ public:
     }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
 
+    // THE GPU CROWD (the 100k plan's mid-range band on compute): far travellers placed by a compute shader from their
+    // route and clock -- see shaders/vulkan/crowd.comp. The caller keeps the data; a backend copies what changed.
+    //   kinds:  what each traveller is drawn as (mesh, material, height above the road, how far it is drawn)
+    //   links:  6 floats per road link (its from and to ends, heights included), the routes' geometry
+    //   routes: 2 uints per entry (link, the route's running distance at that link's start, as float bits)
+    //   agents: one CrowdAgent per traveller slot; `dirty` the slots changed since the last call (all: everything)
+    // A backend without it returns false from supportsGpuCrowd and the caller draws its own (the CPU band).
+    struct CrowdKind {
+        MeshHandle mesh;
+        RenderMaterial material;
+        float yOffset = 0.0f;
+        float maxDistance = 2000.0f;
+    };
+    struct CrowdAgent {   // 32 bytes, as crowd.comp reads it
+        uint32_t routeOff = 0, routeLen = 0;
+        float dist0 = 0, t0 = 0, speed = 0, side = 0;
+        uint32_t kind = 0, live = 0;
+    };
+    virtual bool supportsGpuCrowd() const { return false; }
+    virtual void setCrowdKinds(const std::vector<CrowdKind>& /*kinds*/) {}
+    virtual void setCrowdLinks(const std::vector<float>& /*sixPerLink*/) {}
+    virtual void setCrowdRoutes(const std::vector<uint32_t>& /*pairs*/, std::size_t /*firstChanged*/) {}
+    virtual void setCrowdAgents(const std::vector<CrowdAgent>& /*agents*/, const std::vector<uint32_t>& /*dirty*/,
+                                bool /*all*/) {}
+    virtual void setCrowdClock(float /*simSeconds*/) {}
+    virtual uint32_t crowdTravellers() const { return 0; }   // live records last uploaded (telemetry)
+    virtual uint32_t crowdDrawn() const { return 0; }        // instances the GPU emitted, a frame or two ago
+
     // Set (or clear, via `enabled = false`) the planetary atmosphere glow pass
     // (procedural-planet-plan P3). Backends without the pass ignore it. No-op default.
     virtual void setAtmosphere(const AtmosphereRenderParams& /*atmosphere*/) {}

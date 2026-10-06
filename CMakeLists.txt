@@ -1096,7 +1096,7 @@ function(rt_build_vulkan_shaders)
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
-                   ui.vert ui.frag occlusion_reduce.comp)
+                   ui.vert ui.frag occlusion_reduce.comp crowd.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(

@@ -1,0 +1,89 @@
+#version 450
+// THE GPU CROWD (the 100k plan's mid-range band on compute; Glenn: "Let's do the work for compute and push it higher
+// than we can go"). One invocation per far traveller: where it is NOW is a function of the clock -- the distance it
+// had at t0 plus its speed times the time since -- found on its route by a binary search of the route's running
+// distances, placed on that link (heights interpolated between the link's ends, set off sideways to its lane or
+// pavement), culled by distance and the view, and appended to its kind's instance run (an indirect draw's count).
+// The CPU never touches a far person per frame: it writes a record when a far trip changes (CityRenderSystem).
+layout(local_size_x = 64) in;
+
+struct Agent {
+    uint routeOff;   // first entry in Routes
+    uint routeLen;   // entries
+    float dist0;     // metres along the route (from its first entry's link start) at t0
+    float t0;        // sim seconds
+    float speed;     // m/s
+    float side;      // metres off the link's centreline, to its right (x = dir.y, z = -dir.x)
+    uint kind;       // which mesh / material (Kinds, Cmds)
+    uint live;
+};
+struct Kind {
+    uint base;       // this kind's first instance row
+    float yOffset;   // above the link's height (half a car's height; a person's middle)
+    float maxDist;
+    float pad;
+};
+struct Cmd {         // VkDrawIndexedIndirectCommand
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+
+layout(std430, binding = 0) readonly buffer Links { float L[]; };    // 6 per link: from xyz, to xyz
+layout(std430, binding = 1) readonly buffer Routes { uvec2 R[]; };   // (link, running distance at its start: float bits)
+layout(std430, binding = 2) readonly buffer Agents { Agent A[]; };
+layout(std430, binding = 3) readonly buffer Kinds { Kind K[]; };
+layout(std430, binding = 4) buffer Cmds { Cmd C[]; };
+layout(std430, binding = 5) writeonly buffer Instances { vec4 I[]; };   // 4 columns per instance
+
+layout(push_constant) uniform Push {
+    vec4 planes[6];   // the view's planes, normalised (inside: dot(n, p) + d >= 0)
+    vec4 camNow;      // xyz the eye, w the sim clock (seconds)
+    uvec4 counts;     // x agents, y 1 = debug (every instance 8x: to be seen from anywhere)
+} pc;
+
+vec3 linkFrom(uint l) { return vec3(L[l * 6u], L[l * 6u + 1u], L[l * 6u + 2u]); }
+vec3 linkTo(uint l) { return vec3(L[l * 6u + 3u], L[l * 6u + 4u], L[l * 6u + 5u]); }
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.counts.x) return;
+    const Agent a = A[i];
+    if (a.live == 0u || a.routeLen == 0u) return;
+    const float d = a.dist0 + a.speed * max(pc.camNow.w - a.t0, 0.0);
+    const uint last = a.routeOff + a.routeLen - 1u;
+    const uint lastLink = R[last].x;
+    const float total = uintBitsToFloat(R[last].y) + distance(linkFrom(lastLink).xz, linkTo(lastLink).xz);
+    if (d >= total) return;   // arrived: indoors, or parked
+    // the last entry whose running distance is <= d
+    uint lo = a.routeOff, hi = last;
+    while (lo < hi) {
+        const uint mid = (lo + hi + 1u) / 2u;
+        if (uintBitsToFloat(R[mid].y) <= d) lo = mid; else hi = mid - 1u;
+    }
+    const uint l = R[lo].x;
+    const vec3 p0 = linkFrom(l), p1 = linkTo(l);
+    const vec2 dxz = p1.xz - p0.xz;
+    const float len = max(length(dxz), 1e-4);
+    const vec2 dir = dxz / len;
+    const float t = clamp((d - uintBitsToFloat(R[lo].y)) / len, 0.0, 1.0);
+    vec3 p = mix(p0, p1, t);
+    p.xz += vec2(dir.y, -dir.x) * a.side;
+    const Kind k = K[a.kind];
+    p.y += k.yOffset;
+    if (distance(p, pc.camNow.xyz) > k.maxDist) return;
+    for (int f = 0; f < 6; ++f)
+        if (dot(pc.planes[f].xyz, p) + pc.planes[f].w < -4.0) return;   // (a body's slack)
+    const uint idx = atomicAdd(C[a.kind].instanceCount, 1u);
+    const uint o = (k.base + idx) * 4u;
+    // the model's columns: +Z along the way (yaw = atan2(dir.x, dir.y), as the CPU poses), +X to its right, +Y up
+    const float sc = pc.counts.y == 1u ? 8.0 : 1.0;
+    const vec3 fw = vec3(dir.x, 0.0, dir.y);
+    const vec3 rt = vec3(fw.z, 0.0, -fw.x);
+    I[o] = vec4(rt * sc, 0.0);
+    I[o + 1u] = vec4(0.0, sc, 0.0, 0.0);
+    I[o + 2u] = vec4(fw * sc, 0.0);
+    I[o + 3u] = vec4(p, 1.0);
+}

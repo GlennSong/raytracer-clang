@@ -562,6 +562,14 @@ public:
     const std::vector<Agent>& agents() const { return agents_; }
     // Every K agent (the simulated-in-full, drawn tier), ascending: what a drawer walks instead of agents()
     const std::vector<int>& nearAgents() const { return kIdx_; }
+    // THE GPU CROWD'S FEED: the agents whose far trip may have changed since the last take (a tier change, a far
+    // tick, a wake) -- a drawer re-reads just those. `all` set: re-read everyone (the list overflowed, untaken).
+    void takeCrowdChanges(std::vector<int>& out, bool& all) {
+        out.swap(crowdDirty_);
+        crowdDirty_.clear();
+        all = crowdDirtyAll_;
+        crowdDirtyAll_ = false;
+    }
     // Every V agent (simulated coarsely, not drawn in full), ascending: the drawers' mid-range band
     const std::vector<int>& farAgents() const { return vIdx_; }
     // A far agent's drawn pose: its last coarse pose run on along its heading at its speed for the time since that
@@ -1680,6 +1688,13 @@ private:
     std::vector<int> kIdx_, vIdx_, tierScan_;
     std::vector<int> pinned_;   // the followed agents (pinAgent)
     std::vector<int> seatScan_;   // stepSeats' K + V, ascending
+    std::vector<int> crowdDirty_;  // takeCrowdChanges
+    bool crowdDirtyAll_ = true;
+    void crowdChanged(int i) {
+        if (crowdDirtyAll_) return;
+        if (crowdDirty_.size() > agents_.size()) { crowdDirtyAll_ = true; crowdDirty_.clear(); return; }
+        crowdDirty_.push_back(i);
+    }
     bool rehashAll_ = true;   // a bulk move (build, seedFromSchedule): re-place EVERYONE in the grid next tick
     void setTier(int agentIndex, Agent::Tier t);
     void rebuildTierLists();

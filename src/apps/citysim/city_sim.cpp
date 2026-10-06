@@ -1596,6 +1596,7 @@ void CitySim::setTier(int i, Agent::Tier t) {
         if (it != v.end() && *it == i) v.erase(it);
     };
     auto add = [&](std::vector<int>& v) { v.insert(std::lower_bound(v.begin(), v.end(), i), i); };
+    crowdChanged(i);
     if (a.tier == Agent::Tier::K) drop(kIdx_);
     else if (a.tier == Agent::Tier::V) { drop(vIdx_); vGrid_.remove(i); }
     else dGrid_.remove(i);
@@ -6621,6 +6622,7 @@ void CitySim::tickV(int i, Real hoursPerSecond) {
         goalThink(a, dts * hoursPerSecond);
     if (a.moving) vAdvance(a, dts);
     grid_.place(i, a.pos);   // the far tier re-hashes on its tick, not per step
+    crowdChanged(i);         // its pose and clock moved on: the crowd's record for it too
 }
 
 // Advance a V agent along its REAL A* route at the modelled pace: link class

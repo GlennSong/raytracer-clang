@@ -506,6 +506,22 @@ private:
     engine::Entity farPedGroup_;
     // (far band ground heights: in the agent's draw cache below)
     int farDrawn_ = 0;
+    // THE GPU CROWD'S FEED (crowd.comp; when the renderer has it, it replaces the CPU band above): one record per far
+    // traveller (V or D, on a trip), its remaining route in an append-only arena compacted when the garbage
+    // outweighs the live. Each frame re-reads only the agents the sim says changed (CitySim::takeCrowdChanges).
+    void feedGpuCrowd(engine::FrameContext& ctx);
+    bool crowdInit_ = false, gpuCrowd_ = false;
+    std::vector<engine::Renderer::CrowdAgent> crowdRec_;
+    std::vector<int> crowdSlot_, crowdOwner_, crowdFree_, crowdChanges_;
+    // per slot: the route its arena span was laid for (size, first and last link) and the leg the span starts at --
+    // the same route next tick reuses the span (only its distance and clock change)
+    struct CrowdSpan { uint32_t size = 0; int first = -1, last = -1, baseLeg = 0; };
+    std::vector<CrowdSpan> crowdSpan_;
+    std::vector<uint32_t> crowdArena_, crowdDirtySlots_;
+    std::size_t crowdGarbage_ = 0;
+    std::vector<float> crowdLinkLen_;   // per link: its length as the shader measures it (xz, end to end)
+    Real farCarDistance = 4000.0, farPedDistance = 1500.0;
+    int crowdLive_ = 0, crowdDrawnSeen_ = 0;
     Real farCarRadius = 900.0, farPedRadius = 700.0;
     // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
     // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.

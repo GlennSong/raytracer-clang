@@ -2451,7 +2451,7 @@ void CityRenderSystem::syncGroups(World& world) {
 
     // THE MID-RANGE BAND: far agents in reach, as stand-ins, run on from their last coarse tick
     farDrawn_ = 0;
-    if (!farCarGroups_.empty() && sim_.hasTierCenter()) {
+    if (!farCarGroups_.empty() && sim_.hasTierCenter() && !gpuCrowd_) {   // (the GPU crowd draws them when it can)
         std::vector<InstanceGroup*> fc;
         for (Entity e : farCarGroups_) {
             InstanceGroup* g = world.get<InstanceGroup>(e);
@@ -3039,7 +3039,8 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << ", far(V) " << vTier << ", dormant(D) " << dormant
                  << ", moving " << moving << ", rolling " << rolling
                  << ", asleep " << sim_.sleepingAgents()
-                 << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_;
+                 << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_
+                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_;
         simMs = syncMs = 0.0;
         calls = 0;
     }
@@ -3052,7 +3053,135 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("plan_widgets", engine::KeyCode::Semicolon);
 }
 
+void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
+    if (!built_ || farCarGroups_.empty() || !farPedGroup_.valid()) return;
+    World& world = ctx.world;
+    if (!crowdInit_) {
+        crowdInit_ = true;
+        if (!ctx.renderer.supportsGpuCrowd() || std::getenv("RT_NO_FAR_BAND")) return;
+        // what a traveller is drawn as: the band's stand-ins (a body per car slot, the box person last)
+        std::vector<engine::Renderer::CrowdKind> kinds;
+        const std::vector<Vec3> he = carGroupHalfExtents();
+        for (std::size_t v = 0; v < farCarGroups_.size(); ++v) {
+            const InstanceGroup* g = world.get<InstanceGroup>(farCarGroups_[v]);
+            if (!g) return;
+            kinds.push_back({g->mesh, g->material, static_cast<float>(v < he.size() ? he[v].y : 0.7), static_cast<float>(farCarDistance)});
+        }
+        const InstanceGroup* pg = world.get<InstanceGroup>(farPedGroup_);
+        if (!pg) return;
+        kinds.push_back({pg->mesh, pg->material, 0.9f, static_cast<float>(farPedDistance)});
+        ctx.renderer.setCrowdKinds(kinds);
+        // every link's ends with their heights (the ground, plus a deck's layer)
+        std::vector<float> L(static_cast<std::size_t>(nav_.linkCount()) * 6);
+        crowdLinkLen_.assign(static_cast<std::size_t>(nav_.linkCount()), 0.0f);
+        for (int li = 0; li < nav_.linkCount(); ++li) {
+            const engine::NavLink& k = nav_.links[static_cast<std::size_t>(li)];
+            const Vec2 a = nav_.nodes[static_cast<std::size_t>(k.from)], b = nav_.nodes[static_cast<std::size_t>(k.to)];
+            const Real lift = k.layer * kLayerClearance;
+            float* o = &L[static_cast<std::size_t>(li) * 6];
+            o[0] = static_cast<float>(a.x); o[1] = static_cast<float>(groundAt(a.x, a.y) + lift); o[2] = static_cast<float>(a.y);
+            o[3] = static_cast<float>(b.x); o[4] = static_cast<float>(groundAt(b.x, b.y) + lift); o[5] = static_cast<float>(b.y);
+            crowdLinkLen_[static_cast<std::size_t>(li)] = static_cast<float>((b - a).length());
+        }
+        ctx.renderer.setCrowdLinks(L);
+        gpuCrowd_ = true;
+        LOG_INFO << "[citysim] GPU crowd on: " << kinds.size() << " kinds, " << nav_.linkCount() << " links";
+    }
+    if (!gpuCrowd_) return;
+    const std::vector<Agent>& agents = sim_.agents();
+    bool all = false;
+    sim_.takeCrowdChanges(crowdChanges_, all);
+    if (crowdSlot_.size() != agents.size()) { crowdSlot_.assign(agents.size(), -1); all = true; }
+    const std::size_t arenaBefore = crowdArena_.size() / 2;
+    crowdDirtySlots_.clear();
+    const int pedKind = static_cast<int>(farCarGroups_.size());
+    auto refresh = [&](int i) {
+        const Agent& a = agents[static_cast<std::size_t>(i)];
+        const bool car = a.mode == Agent::Mode::Driver;
+        const bool live = a.tier != Agent::Tier::K && a.moving && !a.released && !a.playerControlled && a.leg >= 0 &&
+                          a.leg < static_cast<int>(a.route.links.size()) && !(!car && sim_.riding(i));
+        int& slot = crowdSlot_[static_cast<std::size_t>(i)];
+        if (!live) {
+            if (slot >= 0) {
+                crowdGarbage_ += crowdRec_[static_cast<std::size_t>(slot)].routeLen;
+                crowdRec_[static_cast<std::size_t>(slot)] = engine::Renderer::CrowdAgent{};
+                crowdSpan_[static_cast<std::size_t>(slot)] = CrowdSpan{};
+                crowdOwner_[static_cast<std::size_t>(slot)] = -1;
+                crowdFree_.push_back(slot);
+                crowdDirtySlots_.push_back(static_cast<uint32_t>(slot));
+                --crowdLive_;
+                slot = -1;
+            }
+            return;
+        }
+        if (slot < 0) {
+            if (!crowdFree_.empty()) { slot = crowdFree_.back(); crowdFree_.pop_back(); }
+            else { slot = static_cast<int>(crowdRec_.size()); crowdRec_.emplace_back(); crowdOwner_.push_back(-1); crowdSpan_.emplace_back(); }
+            crowdOwner_[static_cast<std::size_t>(slot)] = i;
+            ++crowdLive_;
+        }
+        engine::Renderer::CrowdAgent r = crowdRec_[static_cast<std::size_t>(slot)];
+        CrowdSpan& sp = crowdSpan_[static_cast<std::size_t>(slot)];
+        const bool same = r.live && sp.size == a.route.links.size() && sp.first == a.route.links.front() &&
+                          sp.last == a.route.links.back() && a.leg >= sp.baseLeg;
+        if (!same) {   // a new route (or a new traveller): lay its span from the leg it is on
+            if (r.live) crowdGarbage_ += r.routeLen;
+            r.routeOff = static_cast<uint32_t>(crowdArena_.size() / 2);
+            float cum = 0;
+            for (std::size_t j = static_cast<std::size_t>(a.leg); j < a.route.links.size(); ++j) {
+                const int li = a.route.links[j];
+                uint32_t bits;
+                std::memcpy(&bits, &cum, sizeof bits);
+                crowdArena_.push_back(static_cast<uint32_t>(li));
+                crowdArena_.push_back(bits);
+                cum += crowdLinkLen_[static_cast<std::size_t>(li)];
+            }
+            r.routeLen = static_cast<uint32_t>(a.route.links.size() - static_cast<std::size_t>(a.leg));
+            sp = CrowdSpan{static_cast<uint32_t>(a.route.links.size()), a.route.links.front(), a.route.links.back(), a.leg};
+        }
+        // where the current leg starts within the span (its running distance)
+        float legStart = 0;
+        std::memcpy(&legStart, &crowdArena_[(r.routeOff + static_cast<uint32_t>(a.leg - sp.baseLeg)) * 2 + 1], sizeof legStart);
+        const engine::NavLink& L0 = nav_.links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+        const float xzLen = crowdLinkLen_[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+        const Real along = L0.length > 1e-6 ? a.distOnLeg * xzLen / L0.length : 0;
+        r.dist0 = legStart + static_cast<float>(along);
+        r.t0 = static_cast<float>(a.vLastTick);
+        r.speed = car ? static_cast<float>(engine::classSpeed(L0.klass) * a.speedFactor)
+                      : static_cast<float>(a.speed > 0.3 ? a.speed : 1.3 * a.speedFactor);
+        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L0.from)], B = nav_.nodes[static_cast<std::size_t>(L0.to)];
+        const Vec2 dir = xzLen > 1e-6 ? (B - A) * (1.0 / xzLen) : Vec2(1, 0);
+        r.side = static_cast<float>(dot(a.pos - (A + dir * along), Vec2(dir.y, -dir.x)));
+        r.kind = static_cast<uint32_t>(car ? std::clamp(drawSlotFor(i), 0, pedKind - 1) : pedKind);
+        r.live = 1;
+        crowdRec_[static_cast<std::size_t>(slot)] = r;
+        crowdDirtySlots_.push_back(static_cast<uint32_t>(slot));
+    };
+    if (all) for (int i = 0; i < static_cast<int>(agents.size()); ++i) refresh(i);
+    else for (int i : crowdChanges_) if (i >= 0 && i < static_cast<int>(agents.size())) refresh(i);
+    // the arena: compacted when its garbage outweighs what is live (every record's route re-laid, every record sent)
+    bool relaid = false;
+    if (crowdGarbage_ > 1000000 && crowdGarbage_ * 2 > crowdArena_.size() / 2) {
+        std::vector<uint32_t> fresh;
+        fresh.reserve(crowdArena_.size() / 2);
+        for (engine::Renderer::CrowdAgent& r : crowdRec_) {
+            if (!r.live) continue;   // (its span keeps its base leg: the entries move together)
+            const uint32_t off = static_cast<uint32_t>(fresh.size() / 2);
+            fresh.insert(fresh.end(), crowdArena_.begin() + r.routeOff * 2, crowdArena_.begin() + (r.routeOff + r.routeLen) * 2);
+            r.routeOff = off;
+        }
+        crowdArena_.swap(fresh);
+        crowdGarbage_ = 0;
+        relaid = true;
+    }
+    if (relaid || crowdArena_.size() / 2 > arenaBefore) ctx.renderer.setCrowdRoutes(crowdArena_, relaid ? 0 : arenaBefore);
+    if (relaid || all || !crowdDirtySlots_.empty()) ctx.renderer.setCrowdAgents(crowdRec_, crowdDirtySlots_, relaid || all);
+    ctx.renderer.setCrowdClock(static_cast<float>(sim_.seconds()));
+    crowdDrawnSeen_ = static_cast<int>(ctx.renderer.crowdDrawn());
+}
+
 void CityRenderSystem::update(engine::FrameContext& ctx) {
+    feedGpuCrowd(ctx);
     // Stage the sun for the bake's car lamps (see solarElevation_).
     solarElevation_ = ctx.view.lighting.solarElevation;
     solarStaged_ = true;
