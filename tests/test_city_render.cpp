@@ -358,33 +358,29 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
     CityRenderSystem city(p);
     CHECK(city.build(world, nullptr));
 
-    auto sigCount = [&](SignalState s) {
-        return groupCount(world, city.signalGroup(s));
-    };
-
-    // The signalled junction puts at least one lens in some state group, and the
-    // total number of lenses is conserved across phases (each approach is in
-    // exactly one state group at a time).
-    std::size_t total0 = sigCount(SignalState::Green) + sigCount(SignalState::Yellow) +
-                         sigCount(SignalState::Red);
+    // ONE MODEL PER SIGNAL, ITS STATE A NUMBER (FLAG_SIGNAL_STATE): each post instance carries its approach's
+    // state in its bottom row (1 green, 2 amber, 3 red) and mesh.vert lights that lamp. Every post shows exactly
+    // one valid state at every step, and the junction cycles through green and red.
+    const InstanceGroup* posts = world.get<InstanceGroup>(city.signalPostGroup());
+    CHECK(posts != nullptr);
+    CHECK(posts && (posts->material.flags & RenderMaterial::FLAG_SIGNAL_STATE) != 0);
+    const std::size_t total0 = posts ? posts->transforms.size() : 0;
     CHECK(total0 > 0);
-    // One static signal-head assembly per signalled approach; the lit lenses
-    // (across the three state groups) always sum to that same count.
-    CHECK(groupCount(world, city.signalPostGroup()) == total0);
-
-    bool sawGreen = false, sawRed = false;
-    bool totalStable = true;
+    bool sawGreen = false, sawRed = false, allValid = true;
     for (int i = 0; i < 2000; ++i) {
         city.step(world, 0.1);
-        if (sigCount(SignalState::Green) > 0) sawGreen = true;
-        if (sigCount(SignalState::Red) > 0) sawRed = true;
-        std::size_t total = sigCount(SignalState::Green) + sigCount(SignalState::Yellow) +
-                            sigCount(SignalState::Red);
-        if (total != total0) totalStable = false;
+        posts = world.get<InstanceGroup>(city.signalPostGroup());
+        if (!posts || posts->transforms.size() != total0) { allValid = false; break; }
+        for (const Mat4& m : posts->transforms) {
+            const int st = static_cast<int>(m.m[3][0] + 0.5);
+            if (st < 1 || st > 3) allValid = false;
+            sawGreen = sawGreen || st == 1;
+            sawRed = sawRed || st == 3;
+        }
     }
-    CHECK(sawGreen);        // the lens glows green on a green phase...
-    CHECK(sawRed);          // ...and red on a red phase (it changes state)
-    CHECK(totalStable);     // and every approach is always represented exactly once
+    CHECK(sawGreen);   // a lamp glows green on a green phase...
+    CHECK(sawRed);     // ...and red on a red phase (it changes state)
+    CHECK(allValid);   // and every post always shows one state
 }
 
 // --- car lamps (ADR-0065 follow-up) ------------------------------------------

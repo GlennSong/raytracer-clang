@@ -132,6 +132,9 @@ struct RenderMaterial {
     // equal is open) -- so a near model and its far impostor CROSSFADE per pixel instead of popping.
     // Not with FLAG_GRASS (which owns the same push slot). Vulkan.
     static constexpr uint32_t FLAG_LOD_BAND = 1u << 19;
+    // A traffic signal's state rides each instance's bottom row (Mat4::m[3][0]: 0 none, 1 green, 2 amber, 3 red);
+    // mesh.vert lights the lamp of that colour. One static model per signal; only the number changes.
+    static constexpr uint32_t FLAG_SIGNAL_STATE = 1u << 20;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the

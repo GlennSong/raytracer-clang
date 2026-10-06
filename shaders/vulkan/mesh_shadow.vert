@@ -14,7 +14,10 @@ layout(push_constant) uniform Push {
 } pc;
 
 void main() {
-    gl_Position = pc.lightViewProj * inModel * vec4(inPosition, 1.0);
+    // (the bottom row can carry per-instance DATA -- a grass rank, a signal's state -- never w)
+    mat4 M = inModel;
+    M[0][3] = 0.0;
+    gl_Position = pc.lightViewProj * M * vec4(inPosition, 1.0);
     // FLAG_LOD_BAND (pc.model[2].x = 1): a hard cut at the middle of each band edge, by the INSTANCE's
     // origin (a near tree casts its shadow while it is drawn, its impostor beyond) -- pc.model[0].xyz the
     // camera, pc.model[1] the band (in0, in1, out0, out1). A collapsed instance draws nothing.

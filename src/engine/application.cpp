@@ -917,6 +917,13 @@ std::string Application::handleControlCommand(const std::string& line) {
     if (cmd.name == "activities?") return "ok " + settingsStore.getString("activities.telemetry", "none");
     // people drawn moving faster than a sprint (citysim walkers): how many, and the latest with their state
     if (cmd.name == "speeders?") return "ok " + settingsStore.getString("speeders.telemetry", "none");
+    // `pin <agent>` / `unpin <agent>`: FOLLOW an agent -- it stays in the full sim however far it goes
+    if (cmd.name == "pin" || cmd.name == "unpin") {
+        if (cmd.args.empty()) return "err usage: pin|unpin <agent id>";
+        settingsStore.setString("pin.request", cmd.args[0] + (cmd.name == "pin" ? " 1" : " 0"));
+        return "ok staged (`pin?` for the count)";
+    }
+    if (cmd.name == "pin?") return "ok " + settingsStore.getString("pin.status", "none followed");
     // `who? <agent>`: stage a question about any agent; `who?` alone: the answer (refreshed every step)
     if (cmd.name == "who?") {
         if (!cmd.args.empty()) {

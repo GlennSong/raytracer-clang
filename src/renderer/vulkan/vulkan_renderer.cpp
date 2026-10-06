@@ -343,7 +343,11 @@ struct DrawItem {
 
 // The sphere round a mesh's bounds under a transform (its largest axis scale), into an item's world bounds.
 static void sphereOf(const BoundingSphere& b, const Mat4& t, Vec3& c, Real& r) {
-    c = t.transformPoint(b.center);
+    // AFFINE (no divide): the bottom row can carry per-instance data -- a grass rank, a signal's state
+    const Vec3& p = b.center;
+    c = Vec3(t.m[0][0] * p.x + t.m[0][1] * p.y + t.m[0][2] * p.z + t.m[0][3],
+             t.m[1][0] * p.x + t.m[1][1] * p.y + t.m[1][2] * p.z + t.m[1][3],
+             t.m[2][0] * p.x + t.m[2][1] * p.y + t.m[2][2] * p.z + t.m[2][3]);
     Real sc = 0;
     for (int col = 0; col < 3; ++col)
         sc = std::max(sc, std::sqrt(t.m[0][col] * t.m[0][col] + t.m[1][col] * t.m[1][col] + t.m[2][col] * t.m[2][col]));

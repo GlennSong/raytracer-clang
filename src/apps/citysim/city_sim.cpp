@@ -1568,6 +1568,15 @@ void CitySim::placeFromSchedule(int idx) {
 // precisely the tier whose job is to be approximate; by the time the player is
 // close enough for the difference to matter, the promote pass has already run
 // its catch-up and handed over an exact lane pose.
+void CitySim::pinAgent(int i, bool on) {
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return;
+    agents_[static_cast<std::size_t>(i)].pinned = on;
+    const auto it = std::lower_bound(pinned_.begin(), pinned_.end(), i);
+    const bool has = it != pinned_.end() && *it == i;
+    if (on && !has) pinned_.insert(it, i);
+    if (!on && has) pinned_.erase(it);
+}
+
 void CitySim::rebuildTierLists() {
     kIdx_.clear();
     vIdx_.clear();
@@ -1590,6 +1599,15 @@ void CitySim::setTier(int i, Agent::Tier t) {
     else if (a.tier == Agent::Tier::V) { drop(vIdx_); vGrid_.remove(i); }
     else dGrid_.remove(i);
     a.tier = t;
+    if (t == Agent::Tier::D) {
+        // DORMANT: rebuilt from its schedule on waking (placeFromSchedule plans afresh), so it keeps no trip -- its
+        // route and its sensing memory go back to the heap (at 100k, most of the agents' heap)
+        std::vector<int>().swap(a.route.links);
+        a.leg = 0;
+        a.distOnLeg = 0;
+        a.moving = false;
+        a.memory.release();
+    }
     if (t == Agent::Tier::K) add(kIdx_);
     else if (t == Agent::Tier::V) { add(vIdx_); vGrid_.place(i, a.pos); }
     else dGrid_.place(i, a.pos);
@@ -6363,12 +6381,17 @@ void CitySim::tierPass(Real hoursPerSecond) {
         Agent& a = agents_[i];
         if (a.tier != Agent::Tier::K) continue;
         // Player-adjacent agents never demote: host-driven, released to the
-        // player, or tethered to a physical body another bridge owns.
-        if (a.playerControlled || a.released || a.tethered) continue;
+        // player, or tethered to a physical body another bridge owns -- nor one being followed.
+        if (a.playerControlled || a.released || a.tethered || a.pinned) continue;
         const Real dr = a.mode == Agent::Mode::Driver ? carDemoteRadius
                                                       : pedDemoteRadius;
         const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
-        if (dx * dx + dy * dy <= dr * dr) continue;
+        if (dx * dx + dy * dy <= dr * dr) {
+            // near you now: remembered for a while after you go (only those really in range -- a fresh city starts
+            // everyone K, and stamping the ones demoted this tick kept the whole population awake)
+            a.rememberUntil = simSeconds_ + rememberSeconds;
+            continue;
+        }
         setTier(static_cast<int>(i), Agent::Tier::V);
         a.vLastTick = simSeconds_;   // its first coarse tick advances from here
         a.vHold = 0;
@@ -6391,6 +6414,8 @@ void CitySim::tierPass(Real hoursPerSecond) {
             Agent& a = agents_[i];
             if (a.tier != Agent::Tier::V) continue;
             if (a.playerControlled || a.released || a.tethered) continue;
+            // REMEMBERED (near you lately) or followed: stays far, on its exact trip, rather than rebuilt later
+            if (a.pinned || a.rememberUntil > simSeconds_) continue;
             // NEVER A BUS, NOR ANYONE MID-JOURNEY ON ONE. A bus is the city's shared
             // state: frozen out past the bubble it stranded every rider waiting along
             // its loop, and the riders aboard with it -- measured on metro_planned, 38 of
@@ -6435,6 +6460,16 @@ void CitySim::tierPass(Real hoursPerSecond) {
         // no snap. Render + kinematic proxy pick it up on this step's bake.
         tickV(idx, hoursPerSecond);
         if (!clearPromotion(idx)) continue;   // no room behind: stays far, retries
+        setTier(idx, Agent::Tier::K);
+        grid_.place(idx, a.pos);
+        ++promotions_;
+    }
+    // FOLLOWED agents are in the full sim wherever they are: woken, caught up, promoted
+    for (int idx : pinned_) {
+        Agent& a = agents_[static_cast<std::size_t>(idx)];
+        if (a.tier == Agent::Tier::K) continue;
+        if (a.tier == Agent::Tier::D) wakeDormant(idx);
+        tickV(idx, hoursPerSecond);
         setTier(idx, Agent::Tier::K);
         grid_.place(idx, a.pos);
         ++promotions_;

@@ -215,12 +215,35 @@ TEST_CASE(sim_scale_100k_island_prints) {
             sim.resetPhaseTimes();
             std::vector<double> ms;
             const int ticks = 300;
+            CitySim::PhaseTimes worstPh{};
+            double worstMs = 0;
+            int worstWakes = 0, worstPromos = 0;
             for (int i = 0; i < ticks; ++i) {
                 if (moving) { player = player + Vec2(15.0 / 30.0, 0); sim.setTierCenter(player); }
+                const CitySim::PhaseTimes before = sim.phaseTimes();
+                const int w0 = sim.wakes();
+                const long p0 = sim.tierPromotions();
                 const auto t0 = std::chrono::steady_clock::now();
                 sim.step(1.0 / 30.0, 0.05);   // the island's localHz: a tick every 30th of a second
                 ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                if (ms.back() > worstMs) {   // the slowest tick: what spiked
+                    worstMs = ms.back();
+                    const CitySim::PhaseTimes& a = sim.phaseTimes();
+                    worstPh.rehash = a.rehash - before.rehash; worstPh.tierPass = a.tierPass - before.tierPass;
+                    worstPh.activeList = a.activeList - before.activeList; worstPh.goals = a.goals - before.goals;
+                    worstPh.gaps = a.gaps - before.gaps; worstPh.advance = a.advance - before.advance;
+                    worstPh.advMove = a.advMove - before.advMove; worstPh.advPairs = a.advPairs - before.advPairs;
+                    worstPh.advPop = a.advPop - before.advPop; worstPh.advSolver = a.advSolver - before.advSolver;
+                    worstPh.total = a.total - before.total;
+                    worstWakes = sim.wakes() - w0;
+                    worstPromos = static_cast<int>(sim.tierPromotions() - p0);
+                }
             }
+            std::printf("    [100k]   slowest tick %.2f ms (tick %d of %d): rehash %.0f tier %.0f goals %.0f gaps %.0f advance %.0f "
+                        "(move %.0f solver %.0f) us | wakes %d promotions %d\n", worstMs,
+                        static_cast<int>(std::max_element(ms.begin(), ms.end()) - ms.begin()), ticks, worstPh.rehash,
+                        worstPh.tierPass, worstPh.goals, worstPh.gaps, worstPh.advance, worstPh.advMove, worstPh.advSolver,
+                        worstWakes, worstPromos);
             std::vector<double> s = ms;
             std::sort(s.begin(), s.end());
             int k = 0, v = 0, d = 0, mov = 0;

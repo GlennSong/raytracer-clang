@@ -4,6 +4,7 @@
 #include "../../profile.h"
 #include "../occlusion.h"
 
+#include <chrono>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -260,9 +261,16 @@ void RenderSystem::render(FrameContext& ctx) {
                      cam.fovDegrees, cam.farPlane);
 
     Real alpha = ctx.interpolation;
+    // RT_DUMP_STATS: the encode walk's two halves timed and counted (entities visited / drawn, groups and instances
+    // visited / drawn), every 120 frames
+    static const bool encStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    static double encEntMs = 0, encGrpMs = 0;
+    static long encEnt = 0, encEntDrawn = 0, encGrp = 0, encGrpIn = 0, encInst = 0, encInstDrawn = 0, encFrames = 0;
+    const auto encT0 = std::chrono::steady_clock::now();
     ctx.world.each<Transform, PrevTransform, Renderable>(
         [&](Entity entity, Transform& t, PrevTransform& prev, Renderable& r) {
             if (entity == ctx.view.activeCameraEntity) return;
+            ++encEnt;
             if (audit) {
                 BoundingSphere ab = ctx.renderer.getMeshBounds(r.mesh);
                 std::fprintf(stderr,
@@ -333,7 +341,9 @@ void RenderSystem::render(FrameContext& ctx) {
                 if (r.minDistance > 0 && dist <= r.minDistance) return;
             }
             ctx.renderer.drawMesh(r.mesh, model, r.material);
+            ++encEntDrawn;
         });
+    const auto encT1 = std::chrono::steady_clock::now();
 
     // Instanced groups (static scatter — the forest). Cheap coarse reject on the
     // group's bounds, then PER-INSTANCE frustum cull so only the on-screen plants
@@ -341,6 +351,7 @@ void RenderSystem::render(FrameContext& ctx) {
     ctx.world.each<InstanceGroup>(
         [&](Entity, InstanceGroup& g) {
             if (g.transforms.empty()) return;
+            ++encGrp;
             if (g.renderLayer & ctx.renderer.hiddenLayers) return;   // debug layer hidden
             if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
             // Live override (slider) wins over the level's per-group value, which
@@ -365,8 +376,11 @@ void RenderSystem::render(FrameContext& ctx) {
                 }
             }
             BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
+            ++encGrpIn;
+            encInst += static_cast<long>(g.transforms.size());
             frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
                                  cam.position, drawDist, instanceScratch_);
+            encInstDrawn += static_cast<long>(instanceScratch_.size());
             if (instanceScratch_.empty()) return;
             if (hidden) {   // hidden from the camera, but its shadow may fall where the camera sees
                 RenderMaterial shadowOnly = g.material;
@@ -376,6 +390,18 @@ void RenderSystem::render(FrameContext& ctx) {
                 ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
             }
         });
+    if (encStats) {
+        const auto encT2 = std::chrono::steady_clock::now();
+        encEntMs += std::chrono::duration<double, std::milli>(encT1 - encT0).count();
+        encGrpMs += std::chrono::duration<double, std::milli>(encT2 - encT1).count();
+        if (++encFrames == 120) {
+            std::fprintf(stderr, "[encode] per frame: entities %.2f ms (%ld visited, %ld drawn) | instance groups %.2f ms (%ld groups, "
+                         "%ld in view; %ld instances tested, %ld drawn)\n", encEntMs / 120, encEnt / 120, encEntDrawn / 120,
+                         encGrpMs / 120, encGrp / 120, encGrpIn / 120, encInst / 120, encInstDrawn / 120);
+            encEntMs = encGrpMs = 0;
+            encEnt = encEntDrawn = encGrp = encGrpIn = encInst = encInstDrawn = encFrames = 0;
+        }
+    }
     // RT_OCC_STATS=1: what the occlusion test saved, every 120 frames
     if (occStats) {
         static long frames = 0, t = 0, c = 0, gt = 0, gc = 0, used = 0;

@@ -428,3 +428,49 @@ TEST_CASE(dormant_agents_do_not_move_their_parked_cars) {
                 held);
     CHECK(held > 0);   // the invariant must actually have been exercised
 }
+
+// CONTINUITY (the 100k plan; Glenn: "I'd definitely want it so I could follow someone around the city ... I don't want
+// it so that if you turn around and turn back that person disappears"). Someone near you stays FAR on their exact
+// trip for rememberSeconds after you go -- not dormant, not rebuilt from a schedule -- and then may sleep; someone
+// you follow (pinAgent) stays in the full sim however far you go.
+TEST_CASE(near_agents_are_remembered_and_a_pinned_one_is_followed) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 200, 100, 11);
+    sim.tieringEnabled = true;
+    sim.dormancyEnabled = true;
+    sim.dormantRadius = 600.0;
+    sim.dormantResumeRadius = 500.0;
+    sim.rememberSeconds = 30.0;
+    const Real dt = 1.0 / 60.0;
+    auto run = [&](Vec2 c, Real seconds) {
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i) { sim.setTierCenter(c); sim.step(dt, 0.05); }
+    };
+    run(Vec2(-700, -700), 10.0);
+    std::vector<int> near;
+    for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i)
+        if (sim.agents()[static_cast<std::size_t>(i)].tier == Agent::Tier::K) near.push_back(i);
+    CHECK(near.size() >= 2);
+    const int followed = near.empty() ? -1 : near.front();
+    sim.pinAgent(followed, true);
+    auto dormantOf = [&](const std::vector<int>& ids) {
+        int n = 0;
+        for (int i : ids) n += sim.agents()[static_cast<std::size_t>(i)].tier == Agent::Tier::D ? 1 : 0;
+        return n;
+    };
+    // over to the far corner for 20 s: inside the 30 s memory, none of them sleeps, and the followed one stays in full
+    run(Vec2(700, 700), 20.0);
+    const int dormantInside = dormantOf(near);
+    const bool followedFull1 = sim.agents()[static_cast<std::size_t>(followed)].tier == Agent::Tier::K;
+    // 40 s more: the memory has run out -- the far ones may sleep now; the followed one is still in full
+    run(Vec2(700, 700), 40.0);
+    const int dormantAfter = dormantOf(near);
+    const bool followedFull2 = sim.agents()[static_cast<std::size_t>(followed)].tier == Agent::Tier::K;
+    std::printf("    [continuity] %zu near; dormant 20 s after leaving %d, 60 s after %d; followed agent in full %d/%d; %d dormant city-wide\n",
+                near.size(), dormantInside, dormantAfter, followedFull1 ? 1 : 0, followedFull2 ? 1 : 0, sim.dormantAgents());
+    CHECK(dormantInside == 0);
+    CHECK(dormantAfter > 0);
+    CHECK(followedFull1 && followedFull2);
+    sim.pinAgent(followed, false);
+    CHECK(sim.pinnedCount() == 0);
+}

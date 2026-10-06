@@ -105,6 +105,13 @@ struct Agent {
     // Sim-seconds at which a DORMANT agent stopped being simulated. Its state is
     // reconstructed from its schedule on waking, so this is only telemetry.
     Real dormantSince = 0;
+    // CONTINUITY (the 100k plan; Glenn: "I'd definitely want it so I could follow someone around the city ... I
+    // don't want it so that if you turn around and turn back that person disappears"):
+    //   rememberUntil -- sim seconds: someone near you lately stays FAR (its exact trip) instead of going dormant
+    //                    (rebuilt from its schedule), so it is where it should be when you come back;
+    //   pinned        -- followed: simulated in full however far it goes.
+    Real rememberUntil = 0;
+    bool pinned = false;
     // "Is this agent too far away to have a body?" — no drawn instance, no
     // physics proxy, nothing for anyone to sense or brake for.
     //
@@ -848,6 +855,10 @@ public:
     // whenever it is more than `maxLead` metres from `anchor` (the car's real
     // position, re-fed each step). Determinism holds for an identical call
     // sequence — the host owns whatever nondeterminism it feeds in.
+    // Follow an agent: keep it in the full sim wherever it goes (and back off when unpinned).
+    void pinAgent(int agentIndex, bool on);
+    int pinnedCount() const { return static_cast<int>(pinned_.size()); }
+    Real rememberSeconds = 600.0;   // how long someone near you stays exact once you have gone (0: off)
     void setAgentTether(int agentIndex, engine::Vec2 anchor, Real maxLead) {
         if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return;
         Agent& a = agents_[agentIndex];
@@ -1658,6 +1669,7 @@ private:
     // per-tick passes walk these, never the whole population -- a dormant agent (93% of 100k) is touched only when
     // the bubble calls it back. Ascending order keeps every pass's order, and so its result, as it was.
     std::vector<int> kIdx_, vIdx_, tierScan_;
+    std::vector<int> pinned_;   // the followed agents (pinAgent)
     bool rehashAll_ = true;   // a bulk move (build, seedFromSchedule): re-place EVERYONE in the grid next tick
     void setTier(int agentIndex, Agent::Tier t);
     void rebuildTierLists();

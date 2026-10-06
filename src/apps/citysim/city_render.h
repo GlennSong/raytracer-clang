@@ -593,6 +593,7 @@ private:
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<uint8_t> siteShared_;  // by link: its signal shares an earlier one's pole and head (draws no lens)
+    std::vector<int> postLinkOf_;      // per signal-post instance: the link whose state its head shows
     // Each signal's three lens poses (red, amber, green), parallel to signalLinks_: the poles never move, and
     // working them out every bake (a ground sample apiece) was 10.6 ms of the island's 13 ms sync for 4,727 signals
     std::vector<std::array<engine::Mat4, 3>> signalLensCache_;

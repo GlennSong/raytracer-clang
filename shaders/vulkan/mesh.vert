@@ -79,6 +79,23 @@ void main() {
     mat4 M = inModel;
     float rank = 0.0;
     if (grass) { rank = M[0][3]; M[0][3] = 0.0; }
+    // FLAG_SIGNAL_STATE (bit 20): a traffic signal whose STATE rides the bottom row (0 none, 1 green, 2 amber,
+    // 3 red): the lamp of that colour glows (outColor pushed past 1: mesh.frag reads it as emission). One static
+    // model per signal -- nothing about it is rebuilt but that number.
+    const bool signalState = (pc.surfaceFlags.y & (1u << 20)) != 0u;
+    float signalLit = 0.0;
+    if (signalState) {
+        const int st = int(M[0][3] + 0.5);
+        M[0][3] = 0.0;
+        // the lamp colours street_kit::emitTrafficSignal paints (8-bit in the packed layout: a tolerance)
+        const vec3 lamp = st == 1 ? vec3(0.12, 0.72, 0.28) : st == 2 ? vec3(0.85, 0.62, 0.10) : vec3(0.85, 0.12, 0.10);
+        if (st > 0 && all(lessThan(abs(inColor.rgb - lamp), vec3(0.03)))) signalLit = 1.0;
+        // the other two lamps are dark lenses, not painted ones (in daylight they read as lit too)
+        else if (all(lessThan(abs(inColor.rgb - vec3(0.12, 0.72, 0.28)), vec3(0.03))) ||
+                 all(lessThan(abs(inColor.rgb - vec3(0.85, 0.62, 0.10)), vec3(0.03))) ||
+                 all(lessThan(abs(inColor.rgb - vec3(0.85, 0.12, 0.10)), vec3(0.03))))
+            signalLit = -1.0;
+    }
     vec4 world = M * vec4(inPosition, 1.0);
     vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
     vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
@@ -123,6 +140,6 @@ void main() {
     // Tangent in world space for normal mapping (matches Metal's model*tangent).
     outWorldTangent = normalize((M * vec4(tangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
-    outColor = inColor.rgb;
+    outColor = signalLit > 0.5 ? inColor.rgb * 8.0 : signalLit < -0.5 ? inColor.rgb * 0.06 : inColor.rgb;   // (a lit signal lamp: see mesh.frag)
     gl_Position = g.viewProjection * world;
 }

@@ -16,7 +16,9 @@ layout(location = 1) out vec3 outWorldPos;
 
 void main() {
     outTexcoord = inTexcoord;
-    const vec4 world = inModel * vec4(inPosition, 1.0);
+    mat4 M = inModel;
+    M[0][3] = 0.0;   // (per-instance data rides the bottom row, never w)
+    const vec4 world = M * vec4(inPosition, 1.0);
     outWorldPos = world.xyz;
     gl_Position = pc.lightViewProj * world;
 }

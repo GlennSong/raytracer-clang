@@ -1281,6 +1281,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             siteHasLink_[s.link] = 1;
             if (s.shared) siteShared_[s.link] = 1;
         }
+        // the loader's post instances, in its order (a shared pole has none)
+        postLinkOf_.clear();
+        for (const auto& s : f.signalPoles)
+            if (!s.shared) postLinkOf_.push_back(s.link);
         adoptedPosts = f.postGroup;
     });
 
@@ -1296,8 +1300,19 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         g.renderLayer = engine::LayerSim;   // debug layer toggle
         g.drawClass = engine::DrawClass::Furniture;
         for (int li : signalLinks_) g.transforms.push_back(signalPostPose(li));
+        postLinkOf_ = signalLinks_;
         refreshBounds(&g);
         world.add<InstanceGroup>(signalPostGroup_, g);
+    }
+    // ONE MODEL, ITS STATE A NUMBER: the head's own lamps light by the state each instance carries (mesh.vert,
+    // FLAG_SIGNAL_STATE) -- no lens geometry rebuilt or pushed per signal per bake
+    if (InstanceGroup* pg = world.get<InstanceGroup>(signalPostGroup_)) {
+        pg->material.flags |= engine::RenderMaterial::FLAG_SIGNAL_STATE;
+        if (pg->transforms.size() != postLinkOf_.size()) {
+            LOG_WARN << "[citysim] signal posts " << pg->transforms.size() << " vs " << postLinkOf_.size()
+                     << " links: lamps unlit";
+            postLinkOf_.clear();
+        }
     }
 
     // Curbside bay markings (R6b): one white outline instanced per bay —
@@ -2356,14 +2371,17 @@ void CityRenderSystem::syncGroups(World& world) {
         for (std::size_t k = 0; k < signalLinks_.size(); ++k)
             for (int s = 0; s < 3; ++s) signalLensCache_[k][static_cast<std::size_t>(s)] = signalLensPose(signalLinks_[k], static_cast<SignalState>(s));
     }
+    // each post's lit lamp: its link's state in the instance's bottom row (1 green, 2 amber, 3 red)
+    if (InstanceGroup* pg = signalPostGroup_.valid() ? world.get<InstanceGroup>(signalPostGroup_) : nullptr)
+        for (std::size_t k = 0; k < postLinkOf_.size() && k < pg->transforms.size(); ++k)
+            pg->transforms[k].m[3][0] = static_cast<Real>(static_cast<int>(sc.stateForLink(postLinkOf_[k])) + 1);
     for (std::size_t sk = 0; sk < signalLinks_.size(); ++sk) {
         const int li = signalLinks_[sk];
         // a link sharing an earlier signal's pole lights nothing of its own: the head shows its approach's main
         // link (two lit lamps on one head read as a broken light)
         if (li < static_cast<int>(siteShared_.size()) && siteShared_[static_cast<std::size_t>(li)]) continue;
         SignalState st = sc.stateForLink(li);
-        int s = static_cast<int>(st);
-        if (sig[s]) sig[s]->transforms.push_back(signalLensCache_[sk][static_cast<std::size_t>(s)]);
+        // (the head's own lamp is lit by its state now; only the left arrow below is a separate lens)
         // THE LEFT ARROW (ADR-0109): a fourth lamp beside the head, on the side the left turn goes,
         // lit green (or amber) through the lead arrow while the straight-on lamps show red
         if (sc.hasLeftArrow(li)) {
@@ -2971,6 +2989,19 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // deck height at the projected point — the numbers that separate "the
     // terrain is wrong" from "the road is wrong" from "the pad is wrong".
     {
+        // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
+        {
+            const std::string pr = ctx.settings.getString("pin.request", "");
+            if (!pr.empty()) {
+                ctx.settings.setString("pin.request", "");
+                int id = -1, on = 1;
+                if (std::sscanf(pr.c_str(), "%d %d", &id, &on) >= 1 && id >= 0 && id < static_cast<int>(sim_.agents().size())) {
+                    sim_.pinAgent(id, on != 0);
+                    ctx.settings.setString("pin.status", std::to_string(sim_.pinnedCount()) + " followed; last " + std::to_string(id) +
+                                                             (on ? " pinned" : " unpinned"));
+                }
+            }
+        }
         const std::string q = ctx.settings.getString("ground.query", "");
         if (!q.empty()) {
             ctx.settings.setString("ground.query", "");
