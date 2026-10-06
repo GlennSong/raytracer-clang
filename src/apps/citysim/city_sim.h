@@ -17,6 +17,7 @@
 #include "traffic_signal.h"
 #include <cstdint>
 #include <utility>
+#include <queue>
 #include <vector>
 
 namespace citysim {
@@ -622,6 +623,7 @@ public:
     int farTarget = 0;
     Real farScale() const { return farScale_; }
     long resumedTrips() const { return resumedTrips_; }
+    long dormantEvents() const { return dormantEventsRun_; }   // schedule events run for sleeping agents
     Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
     Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
     Real pedPromoteRadius = 280.0;
@@ -1250,6 +1252,15 @@ public:
     // EVERYTHING ABOUT ONE AGENT, on one line (the `who?` and `speeders?` debug commands): tier, where, how fast,
     // what it is doing (trip, seat, activity, session), its route leg and link, its rest, its leash.
     std::string describeAgent(int agentIndex) const;
+    // THE CENSUS (Glenn: "Ridership feels sparse ... more people outside"): who is out right now, whatever their tier
+    // -- walkers outside (moving, or standing out of doors) and moving, drivers moving, riders aboard, people waiting
+    // at stops -- in all and by role. O(agents): ask it now and then, not every frame.
+    struct Census {
+        int agents = 0, walkers = 0, drivers = 0;
+        int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, riding = 0, waiting = 0;
+        int byRole[4] = {0, 0, 0, 0}, outsideByRole[4] = {0, 0, 0, 0};   // Agent::Role: commuter, shopkeeper, stroller, student
+    };
+    Census census() const;
     // A group member's place in its session (formations other than Roam) and the way it faces there.
     engine::Vec2 memberPlace(const Session& s, int agentIndex, engine::Vec2* face) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0
@@ -1317,8 +1328,17 @@ public:
     // take the nearest of their sampled jobs. Set before assignPlaces.
     void setLongCommuteShare(Real share) { longCommuteShare_ = share; }
     void setBusCommuteShare(Real share) { busCommuteShare_ = share; }
+    // HOW FAR A DAY REACHES (Glenn: "a small percent wants a long distance trip between cities across the island.
+    // Maybe some people go to nearby cities and most within their city"). Of the agents whose job is SAMPLED
+    // (drivers, bus commuters), these shares look in the nearest towns / any town farther; the rest stay in their
+    // own. A town is a street network (BusNetwork::networkOf) with jobs; a level of one town is unaffected.
+    void setTripReach(Real nearbyShare, Real farShare) { nearbyTripShare_ = nearbyShare; farTripShare_ = farShare; }
     // What the last assignPlaces did with the drivers' jobs (for the load log).
-    struct CommuteStats { int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0; int busCommuters = 0, busCommuteTried = 0; };
+    struct CommuteStats {
+        int crossTownDrivers = 0, driversWithJobs = 0; Real meanDriverCommute = 0; int busCommuters = 0, busCommuteTried = 0;
+        int towns = 0, ownTown = 0, nearbyTown = 0, farTown = 0;   // where everyone's work is, from their home's town
+        int driverOwn = 0, driverNearby = 0, driverFar = 0;          // ...the drivers' alone
+    };
     const CommuteStats& commuteStats() const { return commuteStats_; }
     const RelationshipTable& relationships() const { return relationships_; }
 
@@ -1543,6 +1563,7 @@ private:
     const engine::NavGraph* nav_ = nullptr;
     Real longCommuteShare_ = 0;   // setLongCommuteShare
     Real busCommuteShare_ = 0;    // setBusCommuteShare
+    Real nearbyTripShare_ = 0.15, farTripShare_ = 0.05;   // setTripReach
     CommuteStats commuteStats_;
     std::vector<Agent> agents_;
     std::vector<SimVehicle> vehicles_;
@@ -1701,6 +1722,17 @@ private:
     std::vector<int> seatScan_;   // stepSeats' K + V, ascending
     Real nearScale_ = 1.0, farScale_ = 1.0;
     long resumedTrips_ = 0;   // wakes that resumed a trip (wakeDormant) rather than rebuilt from the schedule
+    // THE SLEEPERS' DAY (Glenn: the island "feels like a graveyard"; the census: a dormant agent ran no schedule, so
+    // no new trip ever started across 90% of the island). A dormant agent's next schedule event -- its next departure,
+    // or its arrival when mid-trip -- sits in a min-heap on the game clock; when it comes due the agent is placed by
+    // its schedule (placeFromSchedule: a trip begun, or indoors at the far end) without waking, the GPU crowd draws the
+    // trip, and its next event goes in. Stale entries (it woke since) are skipped when popped.
+    struct DormantEvent { double at; int agent; bool operator>(const DormantEvent& o) const { return at > o.at || (at == o.at && agent > o.agent); } };
+    std::priority_queue<DormantEvent, std::vector<DormantEvent>, std::greater<DormantEvent>> dormantHeap_;
+    std::vector<double> dormantEventAt_;   // per agent: its live event's time (-1 none)
+    long dormantEventsRun_ = 0;
+    void scheduleDormantEvent(int i);
+    void runDormantEvents();
     std::vector<int> crowdDirty_;  // takeCrowdChanges
     bool crowdDirtyAll_ = true;
     void crowdChanged(int i) {

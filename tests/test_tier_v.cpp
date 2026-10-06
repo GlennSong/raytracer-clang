@@ -417,15 +417,22 @@ TEST_CASE(dormant_agents_do_not_move_their_parked_cars) {
         sim.step(0.1, 0.05);
     }
 
-    int held = 0;
+    // A dormant owner still keeps its day (the dormant schedule events): one
+    // that left for work took its car. So a car either held its pose, or went
+    // WITH its owner -- driven (owner under way) or parked where the owner now
+    // rests. Never moved without them: that is the parked-heap bug.
+    int held = 0, went = 0;
     for (std::size_t k = 0; k < watch.size(); ++k) {
         const int v = watch[k];
-        if (sim.agents()[ownerOf[v]].tier != Agent::Tier::D) continue;  // woke: fair game
-        ++held;
-        CHECK((sim.vehicles()[v].pos - before[k]).length() < 1e-9);
+        const Agent& o = sim.agents()[ownerOf[v]];
+        if (o.tier != Agent::Tier::D) continue;  // woke: fair game
+        if ((sim.vehicles()[v].pos - before[k]).length() < 1e-9) { ++held; continue; }
+        ++went;
+        CHECK(o.moving || (sim.vehicles()[v].pos - o.pos).length() < 1e-6);
     }
-    std::printf("    [dormancy] %d cars of still-dormant owners held their pose\n",
-                held);
+    std::printf("    [dormancy] %d cars of still-dormant owners held their pose, "
+                "%d went with their owner (%ld schedule events)\n",
+                held, went, sim.dormantEvents());
     CHECK(held > 0);   // the invariant must actually have been exercised
 }
 

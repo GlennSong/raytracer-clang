@@ -35,7 +35,7 @@ TEST_CASE(bus_network_lays_out_the_routes_it_was_asked_for) {
     BusNetwork net;
     CHECK(net.empty());
     net.build(gridCity(), 3, 6, 11);
-    CHECK(net.routeCount() == 3);
+    CHECK(net.routeCount() == 6);   // three loops, each driven both ways round
     for (int r = 0; r < net.routeCount(); ++r) {
         const BusRoute& route = net.route(r);
         CHECK(route.valid());
@@ -175,11 +175,11 @@ TEST_CASE(buses_drive_their_loop_and_carry_riders) {
     sim.setBuses(2, 12, 8, 260.0);
 
     CHECK(!sim.buses().empty());
-    CHECK(sim.buses().routeCount() == 2);
+    CHECK(sim.buses().routeCount() == 4);   // two loops, both ways
     int busCount = 0;
     for (std::size_t i = 0; i < sim.agents().size(); ++i)
         if (sim.isBus(static_cast<int>(i))) ++busCount;
-    CHECK(busCount == 8);
+    CHECK(busCount == 16);   // doubled with the twins: each direction keeps the headway
 
     // Where every bus starts, so we can prove they went somewhere.
     std::vector<Vec2> busStart(sim.agents().size(), Vec2(0, 0));
@@ -269,7 +269,7 @@ TEST_CASE(bus_routes_spread_across_streets_instead_of_sharing_them) {
     const NavGraph nav = gridCity(600.0, 100.0, 6);
     BusNetwork net;
     net.build(nav, 3, 10, 21);
-    CHECK(net.routeCount() == 3);
+    CHECK(net.routeCount() == 6);
     auto key = [&](int a, int b) {
         const long long n = nav.nodeCount();
         return a < b ? a * n + b : b * n + a;
@@ -287,7 +287,7 @@ TEST_CASE(bus_routes_spread_across_streets_instead_of_sharing_them) {
         for (long long st : streets[static_cast<std::size_t>(r)]) {
             bool other = false;
             for (int q = 0; q < net.routeCount() && !other; ++q) {
-                if (q == r) continue;
+                if (q == r || q == net.route(r).twin) continue;   // a twin drives its own loop's streets, by design
                 for (long long s2 : streets[static_cast<std::size_t>(q)])
                     if (s2 == st) { other = true; break; }
             }
@@ -312,7 +312,7 @@ TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
     sim.build(nav, 24, 60, 17);
     sim.setBuses(2, 12, 8, 260.0);
     const BusNetwork& net = sim.buses();
-    CHECK(net.routeCount() == 2);
+    CHECK(net.routeCount() == 4);
     int dealt = 0;
     for (int r = 0; r < net.routeCount(); ++r) {
         const BusRoute& route = net.route(r);
@@ -337,7 +337,30 @@ TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
         for (std::size_t k = 1; k < starts.size(); ++k)
             CHECK(starts[k] - starts[k - 1] >= n / m - 1);
     }
-    CHECK(dealt == 8);
+    CHECK(dealt == 16);
+}
+
+// BOTH WAYS ROUND (Glenn: "Buses should probably go in both directions"). Every loop has a twin over the same
+// stops in reverse, so the stop just behind you is one stop away on the twin, not a whole lap on the loop.
+TEST_CASE(every_bus_loop_has_a_twin_the_other_way_round) {
+    const NavGraph nav = gridCity(600.0, 100.0, 6);
+    BusNetwork net;
+    net.build(nav, 3, 10, 21);
+    CHECK(net.twoWay());
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const BusRoute& f = net.route(r);
+        CHECK(f.twin >= 0);
+        if (f.twin < r) continue;   // check each pair once, from its forward loop
+        const BusRoute& b = net.route(f.twin);
+        CHECK(b.twin == r);
+        const std::size_t n = f.stops.size();
+        CHECK(b.stops.size() == n);
+        for (std::size_t k = 0; k < n && b.stops.size() == n; ++k)
+            CHECK(b.stops[k].node == f.stops[(n - k) % n].node);
+        // stop 1 -> stop 0 is nearly a lap one way round and one leg the other
+        CHECK(net.rideMetres(r, 1, 0) > 0.5 * f.loopLength);
+        CHECK(net.rideMetres(f.twin, static_cast<int>(n - 1), 0) < 0.5 * b.loopLength);
+    }
 }
 
 

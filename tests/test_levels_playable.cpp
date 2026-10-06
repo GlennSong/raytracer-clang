@@ -3762,3 +3762,48 @@ TEST_CASE(level_print_skyline_by_recipe) {
                         k.c_str(), t.n, t.enterable, t.tallest, t.metres, t.plate / std::max(1, t.n), t.at.x, t.at.y);
     }
 }
+
+// THE DAY'S CENSUS (Glenn: "Ridership feels sparse even when it was 28000 people"; "don't people do things through
+// the day? Shop? Jog?"). Print-only under RT_CENSUS=1: metro seeded at seven hours of the day, each run five minutes
+// to settle and five measured at REAL pace (trips are real seconds, stays are game hours: a fast clock would distort
+// the very thing measured) -- who is out, who is moving, who rides, who waits, what the bus planner said.
+TEST_CASE(metro_day_census_prints) {
+    if (!std::getenv("RT_CENSUS")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : simLevelPath(), world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, riding, waiting) | by role out%% "
+                "commuter/shopkeeper/stroller/student | boardings in 5 min | bus plans asked / taken / not worth it\n");
+    for (Real hour : {8.0, 10.0, 12.5, 15.0, 17.5, 20.0, 23.0}) {
+        city.setWorldClock(hour, 1.0 / 3600.0);
+        for (int i = 0; i < 3000; ++i) city.step(world, 0.1);   // settle 5 min
+        const long b0 = city.sim().busBoardAttempts();
+        const auto ps0 = city.sim().buses().planStats();
+        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[4] = {0, 0, 0, 0}, rAll[4] = {0, 0, 0, 0};
+        int samples = 0;
+        for (int i = 0; i < 3000; ++i) {
+            city.step(world, 0.1);
+            if (i % 100 != 0) continue;   // every 10 s
+            const citysim::CitySim::Census c = city.sim().census();
+            wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; rd += c.riding; wt += c.waiting; ag += c.agents;
+            for (int r = 0; r < 4; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; }
+            ++samples;
+        }
+        const double n = samples;
+        const double out = (wo + dm + rd + wt) / n, all = ag / n;
+        const auto& ps = city.sim().buses().planStats();
+        auto pct = [](double a, double b) { return b > 0 ? 100.0 * a / b : 0.0; };
+        std::printf("    [census] %5.1f | %5.1f%% (%.0f / %.0f, %.0f, %.0f, %.0f) | %.1f / %.1f / %.1f / %.1f | %ld | %ld / %ld / %ld\n",
+                    hour, pct(out, all), wo / n, wm / n, dm / n, rd / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
+                    pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]), city.sim().busBoardAttempts() - b0, ps.asked - ps0.asked,
+                    ps.ok - ps0.ok, ps.noSaving - ps0.noSaving);
+    }
+}

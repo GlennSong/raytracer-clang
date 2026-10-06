@@ -3,8 +3,10 @@
 #include "traffic_rules.h"   // approachStop
 #include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
 #include "../../profile.h"
+#include "../../job_system.h"   // assignPlaces decides the population in parallel
 
 #include <algorithm>
+#include <atomic>
 #include <iterator>
 #include <cstring>
 #include <fstream>
@@ -703,7 +705,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 2;   // bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 4;   // bump when assignPlaces' rules or this record change
 struct Fnv {
     uint64_t h = 1469598103934665603ull;
     void bytes(const void* p, std::size_t n) {
@@ -786,9 +788,50 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         if (v.node >= 0) venues_.push_back(v);
     }
 
-    // Scratch for the on-foot job search, hoisted: one allocation, not one
-    // per walker.
-    std::vector<std::pair<Real, PlaceId>> jobDist;
+    // THE VENUES BY CELL (a day-off walker's anchor was the nearest venue by a scan of every venue: 80k walkers x
+    // ~15k venues on a 309k island). Rings outward from the home's cell until no nearer ring can hold a closer one;
+    // ties go to the lower venue index, exactly as the scan's strict < did.
+    constexpr Real kVenueCell = 250.0;
+    std::unordered_map<int64_t, std::vector<int>> venueCells;
+    int64_t vx0 = INT64_MAX, vx1 = INT64_MIN, vz0 = INT64_MAX, vz1 = INT64_MIN;
+    for (int vi = 0; vi < static_cast<int>(venues_.size()); ++vi) {
+        const Vec2 q = graph.nodes[static_cast<std::size_t>(venues_[static_cast<std::size_t>(vi)].node)];
+        const int64_t cx = static_cast<int64_t>(std::floor(q.x / kVenueCell)), cz = static_cast<int64_t>(std::floor(q.y / kVenueCell));
+        vx0 = std::min(vx0, cx); vx1 = std::max(vx1, cx); vz0 = std::min(vz0, cz); vz1 = std::max(vz1, cz);
+        venueCells[(cx << 32) ^ (cz & 0xffffffff)].push_back(vi);
+    }
+    auto nearestVenueNode = [&](int hn) {
+        const Vec2 p = graph.nodes[static_cast<std::size_t>(hn)];
+        const int64_t cx = static_cast<int64_t>(std::floor(p.x / kVenueCell)), cz = static_cast<int64_t>(std::floor(p.y / kVenueCell));
+        const int64_t maxRing = std::max({cx - vx0, vx1 - cx, cz - vz0, vz1 - cz, int64_t(0)});
+        Real best = 1e30;
+        int bestIdx = -1;
+        auto visit = [&](int64_t x, int64_t z) {
+            auto it = venueCells.find((x << 32) ^ (z & 0xffffffff));
+            if (it == venueCells.end()) return;
+            for (int vi : it->second) {
+                const Venue& v = venues_[static_cast<std::size_t>(vi)];
+                if (v.node == hn) continue;
+                const Vec2 d = graph.nodes[static_cast<std::size_t>(v.node)] - p;
+                const Real d2 = d.x * d.x + d.y * d.y;
+                if (d2 < best || (d2 == best && vi < bestIdx)) { best = d2; bestIdx = vi; }
+            }
+        };
+        for (int64_t r = 0; r <= maxRing; ++r) {
+            for (int64_t x = cx - r; x <= cx + r; ++x) {
+                visit(x, cz - r);
+                if (r > 0) visit(x, cz + r);
+            }
+            for (int64_t z = cz - r + 1; z <= cz + r - 1; ++z) {
+                visit(cx - r, z);
+                visit(cx + r, z);
+            }
+            // every cell of ring r+1 is at least r cells' width from p
+            if (bestIdx >= 0 && best <= (r * kVenueCell) * (r * kVenueCell)) break;
+        }
+        return bestIdx >= 0 ? venues_[static_cast<std::size_t>(bestIdx)].node : -1;
+    };
+
     // THE JOBS BY CELL (pushing past 100k: a walker's job search measured every job on the island against every
     // walker -- 250,000 x ~15,000 -- 165 s of a 309k load). Square cells; a search reads only the cells it needs.
     constexpr Real kJobCell = 250.0;
@@ -812,6 +855,82 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     };
     int crossTownDrivers = 0, driversWithJobs = 0, busCommuters = 0, busCommuteTried = 0;
     Real driverCommute = 0;
+
+    // THE TOWNS (setTripReach). Every street network belongs to a town: itself when it holds kTownJobs jobs or more,
+    // else the nearest such network by centre (a cul-de-sac's few shops do not make it a town). Each town's NEARBY
+    // towns are the kNearbyTowns nearest by centre; FAR is every other. Job pools keep the order of `jobs`, so a
+    // level of one town samples exactly as it always did.
+    constexpr int kTownJobs = 20, kNearbyTowns = 2;
+    int netCount = 0;
+    for (int n = 0; n < graph.nodeCount(); ++n) netCount = std::max(netCount, buses_.networkOf(n) + 1);
+    std::vector<int> townOfNet(static_cast<std::size_t>(netCount), -1);
+    std::vector<int> townNets;   // town index -> its network
+    std::vector<std::vector<PlaceId>> townJobs, nearbyJobs, farJobs;
+    std::vector<std::vector<int>> nearbyTowns;
+    {
+        std::vector<Vec2> centre(static_cast<std::size_t>(netCount), Vec2(0, 0));
+        std::vector<int> nodesIn(static_cast<std::size_t>(netCount), 0), jobsIn(static_cast<std::size_t>(netCount), 0);
+        for (int n = 0; n < graph.nodeCount(); ++n) {
+            const int net = buses_.networkOf(n);
+            if (net < 0) continue;
+            centre[static_cast<std::size_t>(net)] += graph.nodes[static_cast<std::size_t>(n)];
+            ++nodesIn[static_cast<std::size_t>(net)];
+        }
+        for (int net = 0; net < netCount; ++net)
+            if (nodesIn[static_cast<std::size_t>(net)]) centre[static_cast<std::size_t>(net)] = centre[static_cast<std::size_t>(net)] * (Real(1) / nodesIn[static_cast<std::size_t>(net)]);
+        for (PlaceId id : jobs) {
+            const int net = buses_.networkOf(nodeOf(id));
+            if (net >= 0) ++jobsIn[static_cast<std::size_t>(net)];
+        }
+        for (int net = 0; net < netCount; ++net)
+            if (jobsIn[static_cast<std::size_t>(net)] >= kTownJobs) {
+                townOfNet[static_cast<std::size_t>(net)] = static_cast<int>(townNets.size());
+                townNets.push_back(net);
+            }
+        for (int net = 0; net < netCount; ++net) {
+            if (townOfNet[static_cast<std::size_t>(net)] >= 0 || !nodesIn[static_cast<std::size_t>(net)]) continue;
+            Real best = 1e30;
+            for (int t = 0; t < static_cast<int>(townNets.size()); ++t) {
+                const Real d2 = (centre[static_cast<std::size_t>(townNets[static_cast<std::size_t>(t)])] - centre[static_cast<std::size_t>(net)]).lengthSquared();
+                if (d2 < best) { best = d2; townOfNet[static_cast<std::size_t>(net)] = t; }
+            }
+        }
+        const std::size_t towns = townNets.size();
+        townJobs.resize(towns); nearbyJobs.resize(towns); farJobs.resize(towns); nearbyTowns.resize(towns);
+        for (PlaceId id : jobs) {
+            const int net = buses_.networkOf(nodeOf(id));
+            const int t = net >= 0 ? townOfNet[static_cast<std::size_t>(net)] : -1;
+            if (t >= 0) townJobs[static_cast<std::size_t>(t)].push_back(id);
+        }
+        for (std::size_t t = 0; t < towns; ++t) {
+            std::vector<std::pair<Real, int>> others;
+            for (std::size_t u = 0; u < towns; ++u)
+                if (u != t) others.push_back({(centre[static_cast<std::size_t>(townNets[u])] - centre[static_cast<std::size_t>(townNets[t])]).lengthSquared(), static_cast<int>(u)});
+            std::sort(others.begin(), others.end());
+            std::vector<char> near(towns, 0);
+            for (std::size_t k = 0; k < others.size() && k < static_cast<std::size_t>(kNearbyTowns); ++k) {
+                near[static_cast<std::size_t>(others[k].second)] = 1;
+                nearbyTowns[t].push_back(others[k].second);
+            }
+            for (PlaceId id : jobs) {   // in the order of `jobs`
+                const int net = buses_.networkOf(nodeOf(id));
+                const int u = net >= 0 ? townOfNet[static_cast<std::size_t>(net)] : -1;
+                if (u < 0 || static_cast<std::size_t>(u) == t) continue;
+                (near[static_cast<std::size_t>(u)] ? nearbyJobs[t] : farJobs[t]).push_back(id);
+            }
+        }
+    }
+    auto townOf = [&](int node) {
+        const int net = buses_.networkOf(node);
+        return net >= 0 && net < netCount ? townOfNet[static_cast<std::size_t>(net)] : -1;
+    };
+    enum class Reach { Own, Nearby, Far };
+    auto reachOf = [&](const Agent& a) {
+        uint32_t rr = a.brain * 0xA24BAED5u;   // own bits, decorrelated from the other rolls
+        rr ^= rr >> 15; rr *= 0x9FB21C65u; rr ^= rr >> 13;
+        const Real u = static_cast<Real>(rr & 0x3FF) / 1024.0;
+        return u < farTripShare_ ? Reach::Far : u < farTripShare_ + nearbyTripShare_ ? Reach::Nearby : Reach::Own;
+    };
 
     // THE POPULATION CACHE: the key is everything the decisions below read.
     popCache_ = PopulationCacheReport{};
@@ -837,7 +956,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             k.real(a.departHome); k.real(a.departWork);
             k.pod(isBus(static_cast<int>(i))); k.pod(isTaxi(static_cast<int>(i)));
         }
-        k.real(busCommuteShare_); k.real(busMaxWalk_); k.real(longCommuteShare_);
+        k.real(busCommuteShare_); k.real(busMaxWalk_); k.real(longCommuteShare_); k.real(nearbyTripShare_); k.real(farTripShare_);
         for (int r = 0; r < buses_.routeCount(); ++r) {
             const BusRoute& br = buses_.route(r);
             k.pod(br.regional); k.pod(br.network); k.real(br.pace);
@@ -894,7 +1013,24 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         commuteSecondsMedian_ = cachedTail.medianAll; commuteSecondsDrive_ = cachedTail.medianDrive;
         commuteSecondsWalk_ = cachedTail.medianWalk;
     } else {
-    for (Agent& a : agents_) {
+    // THREADED (Glenn: "We should have them do that logic on another thread maybe?"). Each agent's decisions read
+    // only shared, settled data -- places, the graph, the job and venue indexes, the bus network -- and write only
+    // that agent, so they run across the cores and come out identical (RT_POPULATION_VERIFY checks it). What was
+    // lazy and shared is settled first: every place's node, the job cells.
+    engine::JobSystem decide;
+    decide.parallelFor(0, places.places().size(), [&](std::size_t pi) { nodeOf(static_cast<PlaceId>(pi)); }, 64);
+    for (PlaceId cand : jobs) {
+        const Vec2 q = places[cand].site;
+        jobCells[jobCellKey(static_cast<int64_t>(std::floor(q.x / kJobCell)), static_cast<int64_t>(std::floor(q.y / kJobCell)))].push_back(cand);
+        jobLo = Vec2(std::min(jobLo.x, q.x), std::min(jobLo.y, q.y));
+        jobHi = Vec2(std::max(jobHi.x, q.x), std::max(jobHi.y, q.y));
+    }
+    constexpr uint8_t kTallyCross = 1, kTallyBusTried = 2, kTallyBus = 4, kTallyDriverJob = 8;
+    std::vector<uint8_t> tally(agents_.size(), 0);
+    std::vector<Real> driverDist(agents_.size(), 0);
+    decide.parallelFor(0, agents_.size(), [&](std::size_t ai) {
+        Agent& a = agents_[ai];
+        thread_local std::vector<std::pair<Real, PlaceId>> jobDist;   // the on-foot job search's scratch
         // Home: deterministic pick from the agent's own brain bits (no rng
         // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
         // modulo could only ever reach odd home indices when homes.size()
@@ -946,13 +1082,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         if (dayOff) {
             // The window mechanics need somewhere that is not home: the
             // nearest routable venue. Outings themselves choose afresh.
-            Real best = 1e30;
-            for (const Venue& v : venues_) {
-                const Vec2 d = graph.nodes[static_cast<std::size_t>(v.node)] -
-                               graph.nodes[static_cast<std::size_t>(hn)];
-                const Real d2 = d.x * d.x + d.y * d.y;
-                if (d2 < best && v.node != hn) { best = d2; anchor = v.node; }
-            }
+            anchor = nearestVenueNode(hn);
             if (anchor >= 0 && !commutable(hn, anchor)) anchor = -1;
         }
         if (anchor >= 0) {
@@ -1019,25 +1149,37 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 uint32_t bc = a.brain * 0x85EBCA6Bu;
                 bc ^= bc >> 13; bc *= 0xC2B2AE35u; bc ^= bc >> 16;
                 if (static_cast<Real>(bc & 0x3FF) < busCommuteShare_ * 1024.0) {
-                    ++busCommuteTried;
+                    tally[ai] |= kTallyBusTried;
                     const int homeNet = buses_.networkOf(hn);
                     const Vec2 homeAt = graph.nodes[static_cast<std::size_t>(hn)];
+                    // a town nearby, or (the far share) one across the island
+                    const int ht = townOf(hn);
+                    const std::vector<PlaceId>* pool = &jobs;
+                    if (ht >= 0) {
+                        const std::vector<PlaceId>& nb = nearbyJobs[static_cast<std::size_t>(ht)];
+                        const std::vector<PlaceId>& fa = farJobs[static_cast<std::size_t>(ht)];
+                        if (reachOf(a) == Reach::Far && !fa.empty()) pool = &fa;
+                        else if (!nb.empty()) pool = &nb;
+                    }
                     std::vector<std::pair<Real, PlaceId>> far;
                     for (int c = 0; c < 24; ++c) {
                         uint32_t hh = bc + static_cast<uint32_t>(c) * 0x9E3779B9u;
                         hh ^= hh >> 16; hh *= 0x7feb352dU; hh ^= hh >> 15;
-                        const PlaceId cand = jobs[hh % jobs.size()];
+                        const PlaceId cand = (*pool)[hh % pool->size()];
                         const int net = buses_.networkOf(nodeOf(cand));
                         if (net < 0 || net == homeNet) continue;
                         far.push_back({(places[cand].site - homePos).lengthSquared(), cand});
                     }
                     std::sort(far.begin(), far.end());
+                    // no stop within a walk of home: no candidate can plan (the planner would say so 48 times)
+                    if (!buses_.servesNear(homeAt, busMaxWalk_)) far.clear();
                     for (const auto& fc : far) {
                         const Vec2 jobAt = graph.nodes[static_cast<std::size_t>(nodeOf(fc.second))];
-                        if (buses_.planTrip(homeAt, jobAt, busMaxWalk_).valid() &&
-                            buses_.planTrip(jobAt, homeAt, busMaxWalk_).valid()) {
+                        if (!buses_.servesNear(jobAt, busMaxWalk_)) continue;
+                        if (buses_.planTrip(homeAt, jobAt, busMaxWalk_, false, /*walkable=*/false).valid() &&
+                            buses_.planTrip(jobAt, homeAt, busMaxWalk_, false, /*walkable=*/false).valid()) {
                             pick = fc.second;
-                            ++busCommuters;
+                            tally[ai] |= kTallyBus;
                             break;
                         }
                     }
@@ -1060,13 +1202,6 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 constexpr Real kWalkJobCeil  = 900.0;   // "a local place to work"
                 // (from the job cells: every job within the band's reach -- the same candidates the old scan of all
                 // jobs ranked, in the same (distance, id) order; widened below only if the fallback needs farther)
-                if (jobCells.empty())
-                    for (PlaceId cand : jobs) {
-                        const Vec2 q = places[cand].site;
-                        jobCells[jobCellKey(static_cast<int64_t>(std::floor(q.x / kJobCell)), static_cast<int64_t>(std::floor(q.y / kJobCell)))].push_back(cand);
-                        jobLo = Vec2(std::min(jobLo.x, q.x), std::min(jobLo.y, q.y));
-                        jobHi = Vec2(std::max(jobHi.x, q.x), std::max(jobHi.y, q.y));
-                    }
                 jobsNear(homePos, kWalkJobCeil, jobDist);
                 const auto byDist = [](const std::pair<Real, PlaceId>& x,
                                        const std::pair<Real, PlaceId>& y) {
@@ -1115,13 +1250,26 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                             pick = outside[c].second;
                 }
             } else {
+                // WHICH TOWN (setTripReach): most drive within their own, some to a town nearby, a few across the
+                // island. One town (or none known): every job, as before.
+                const int ht = townNets.size() > 1 ? townOf(hn) : -1;
+                const std::vector<PlaceId>* pool = &jobs;
+                const Reach reach = ht >= 0 ? reachOf(a) : Reach::Own;
+                if (ht >= 0) {
+                    const std::vector<PlaceId>& own = townJobs[static_cast<std::size_t>(ht)];
+                    const std::vector<PlaceId>& nb = nearbyJobs[static_cast<std::size_t>(ht)];
+                    const std::vector<PlaceId>& fa = farJobs[static_cast<std::size_t>(ht)];
+                    if (reach == Reach::Far && !fa.empty()) pool = &fa;
+                    else if (reach != Reach::Own && !nb.empty()) pool = &nb;
+                    else if (!own.empty()) pool = &own;
+                }
                 const int kCandidates = 24;
                 std::pair<Real, PlaceId> cands[kCandidates];
                 int nc = 0;
                 for (int c = 0; c < kCandidates; ++c) {
                     uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
                     h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
-                    PlaceId cand = jobs[h % jobs.size()];
+                    PlaceId cand = (*pool)[h % pool->size()];
                     const Vec2 d = places[cand].site - homePos;
                     cands[nc++] = {d.x * d.x + d.y * d.y, cand};
                 }
@@ -1142,10 +1290,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 uint32_t ct = a.brain * 0x9E3779B9u;   // own bits, decorrelated from the role roll
                 ct ^= ct >> 15; ct *= 0x2c1b3c6dU; ct ^= ct >> 12;
                 const bool crossTown =
-                    longCommuteShare_ > 0 &&
+                    longCommuteShare_ > 0 && pool == (ht >= 0 ? &townJobs[static_cast<std::size_t>(ht)] : &jobs) &&
                     static_cast<Real>(ct & 0x3FF) < longCommuteShare_ * 1024.0;
                 if (crossTown) {
-                    ++crossTownDrivers;
+                    tally[ai] |= kTallyCross;
                     for (int c = 0; c < nc && pick == kNoPlace; ++c)
                         if (cands[c].first >= kLongCommute * kLongCommute &&
                             commutable(hn, nodeOf(cands[c].second)))
@@ -1158,6 +1306,20 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                         pick = cands[c].second;
                         break;
                     }
+                // another town that no sampled job of routes to by car: the nearest routable of the same
+                // samples drawn from home's own town instead
+                if (pick == kNoPlace && ht >= 0 && pool != &townJobs[static_cast<std::size_t>(ht)] &&
+                    !townJobs[static_cast<std::size_t>(ht)].empty()) {
+                    const std::vector<PlaceId>& own = townJobs[static_cast<std::size_t>(ht)];
+                    Real best = 1e30;
+                    for (int c = 0; c < kCandidates; ++c) {
+                        uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
+                        h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
+                        const PlaceId cand = own[h % own.size()];
+                        const Real d2 = (places[cand].site - homePos).lengthSquared();
+                        if ((d2 < best || (d2 == best && cand < pick)) && commutable(hn, nodeOf(cand))) { best = d2; pick = cand; }
+                    }
+                }
             }
             if (pick == kNoPlace) {   // none of the samples routed: widen out
                 const std::size_t start =
@@ -1172,8 +1334,8 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.work = nodeOf(pick);
                 a.workDoor = doorOf(pick);
                 if (a.archetype == Agent::Mode::Driver) {
-                    ++driversWithJobs;
-                    driverCommute += (places[pick].site - homePos).length();
+                    tally[ai] |= kTallyDriverJob;
+                    driverDist[ai] = (places[pick].site - homePos).length();
                 }
                 {   // An errand stop: the nearest shop to HOME that is routable
                     // from work, so the last leg home is short. Deterministic:
@@ -1240,6 +1402,12 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 // else Commuter — keep the jittered office hours from build().
             }
         }
+    });
+    for (std::size_t ai = 0; ai < agents_.size(); ++ai) {   // the tallies, in agent order (the sum is the serial sum)
+        crossTownDrivers += (tally[ai] & kTallyCross) ? 1 : 0;
+        busCommuteTried += (tally[ai] & kTallyBusTried) ? 1 : 0;
+        busCommuters += (tally[ai] & kTallyBus) ? 1 : 0;
+        if (tally[ai] & kTallyDriverJob) { ++driversWithJobs; driverCommute += driverDist[ai]; }
     }
 
     // STUDENTS are decided with everyone else, so a cache hit restores them too.
@@ -1328,6 +1496,19 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     relationships_.set(A.uid, B.uid, Relationship::Neighbor);
             }
         }
+    }
+    commuteStats_ = CommuteStats{};
+    commuteStats_.towns = static_cast<int>(townNets.size());
+    for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {   // where the work went, cached or decided
+        const Agent& A = agents_[static_cast<std::size_t>(i)];
+        if (isBus(i) || isTaxi(i) || A.workPlace == kNoPlace) continue;
+        const int ht = townOf(A.home), wt = townOf(A.work);
+        if (ht < 0 || wt < 0) continue;
+        const bool drives = A.archetype == Agent::Mode::Driver;
+        if (ht == wt) { ++commuteStats_.ownTown; commuteStats_.driverOwn += drives; }
+        else if (std::find(nearbyTowns[static_cast<std::size_t>(ht)].begin(), nearbyTowns[static_cast<std::size_t>(ht)].end(), wt) !=
+                 nearbyTowns[static_cast<std::size_t>(ht)].end()) { ++commuteStats_.nearbyTown; commuteStats_.driverNearby += drives; }
+        else { ++commuteStats_.farTown; commuteStats_.driverFar += drives; }
     }
     commuteStats_.crossTownDrivers = crossTownDrivers;
     commuteStats_.busCommuters = busCommuters;
@@ -1609,6 +1790,56 @@ void CitySim::placeFromSchedule(int idx) {
 // precisely the tier whose job is to be approximate; by the time the player is
 // close enough for the difference to matter, the promote pass has already run
 // its catch-up and handed over an exact lane pose.
+void CitySim::scheduleDormantEvent(int i) {
+    if (dormantEventAt_.size() != agents_.size()) dormantEventAt_.assign(agents_.size(), -1.0);
+    Agent& a = agents_[static_cast<std::size_t>(i)];
+    dormantEventAt_[static_cast<std::size_t>(i)] = -1.0;
+    if (a.tier != Agent::Tier::D || hoursPerSecond_ <= 0 || !nav_) return;
+    double at = -1;
+    if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
+        // mid-trip: when it gets there, at its modelled pace
+        Real left = -a.distOnLeg;
+        for (std::size_t j = static_cast<std::size_t>(a.leg); j < a.route.links.size(); ++j)
+            left += nav_->links[static_cast<std::size_t>(a.route.links[j])].length;
+        const engine::NavLink& L0 = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+        const Real pace = a.mode == Agent::Mode::Driver ? engine::classSpeed(L0.klass) * a.speedFactor : kWalkSpeed * a.speedFactor;
+        at = clockTotalHours_ + std::max(Real(0), left) / std::max(pace, Real(0.3)) * hoursPerSecond_;
+    } else if (a.home != a.work) {
+        // at rest: its next departure (to work, or home)
+        const Real now = clockHours_;
+        double best = 25.0;
+        for (Real h : {departWorkHour(a), Real(a.departHome)}) {
+            double d = std::fmod(h - now + 48.0, 24.0);
+            if (d < 1e-4) d += 24.0;
+            best = std::min(best, d);
+        }
+        at = clockTotalHours_ + best + 1e-4;   // (just past it: the snapshot then reads "travelling")
+    }
+    if (at < 0) return;
+    dormantEventAt_[static_cast<std::size_t>(i)] = at;
+    dormantHeap_.push({at, i});
+}
+
+void CitySim::runDormantEvents() {
+    int budget = 400;   // a backlog (a long pause, a clock jump) spreads over ticks instead of a hitch
+    while (!dormantHeap_.empty() && budget > 0 && dormantHeap_.top().at <= clockTotalHours_) {
+        const DormantEvent ev = dormantHeap_.top();
+        dormantHeap_.pop();
+        const std::size_t i = static_cast<std::size_t>(ev.agent);
+        if (i >= agents_.size() || i >= dormantEventAt_.size() || dormantEventAt_[i] != ev.at) continue;   // stale
+        Agent& a = agents_[i];
+        if (a.tier != Agent::Tier::D) { dormantEventAt_[i] = -1.0; continue; }
+        --budget;
+        placeFromSchedule(ev.agent);
+        a.vLastTick = simSeconds_;   // its pose is of now (the crowd's t0, a wake's resume)
+        grid_.place(ev.agent, a.pos);
+        dGrid_.place(ev.agent, a.pos);
+        crowdChanged(ev.agent);
+        ++dormantEventsRun_;
+        scheduleDormantEvent(ev.agent);
+    }
+}
+
 void CitySim::pinAgent(int i, bool on) {
     if (i < 0 || i >= static_cast<int>(agents_.size())) return;
     agents_[static_cast<std::size_t>(i)].pinned = on;
@@ -1643,6 +1874,8 @@ void CitySim::setTier(int i, Agent::Tier t) {
     a.tier = t;
     if (t == Agent::Tier::D) {
         releaseSeat(a);   // a bench, a place in a group: let go (it was holding them for ever)
+        // its day goes on asleep: the next departure or arrival on the clock (runDormantEvents)
+        scheduleDormantEvent(i);
         // DORMANT: its sensing memory goes back to the heap. Its TRIP stays as it was (frozen until it is rebuilt
         // from its schedule on waking): clearing it set a mid-trip driver "not moving" with its car left in the
         // road, which everything that counts parked cars then saw as parked in a heap
@@ -1944,7 +2177,8 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
             to < nav_->nodeCount() && to != origin) {
             const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(origin)];
             const Vec2 p1 = nav_->nodes[static_cast<std::size_t>(to)];
-            BusTrip bt = buses_.planTrip(p0, p1, busMaxWalk_);
+            BusTrip bt = buses_.planTrip(p0, p1, busMaxWalk_, true,
+                                         /*walkable=*/buses_.networkOf(origin) == buses_.networkOf(to));
             if (bt.valid() && buses_.waitFor(busSelf, bt)) {
                 const int stopNode =
                     buses_.route(bt.route)
@@ -2715,6 +2949,8 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     if (!nav_ || routes <= 0 || busCount <= 0) return;
     buses_.build(*nav_, routes, stopsPerRoute, rng_ ? rng_ : 1u);
     if (buses_.empty()) return;
+    // Each loop driven both ways round: as many buses again, so each direction keeps the headway one direction had.
+    if (buses_.twoWay()) busCount *= 2;
     if (busTable_.stateCount() == 0) busTable_ = busGoals();
     // Buses come off the DRIVER pool, spread by index like the cabs, and are
     // dealt across the routes BY LAP TIME -- one each first, then to whichever
@@ -2792,8 +3028,11 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         const BusRoute& route = buses_.route(r);
         const int n = static_cast<int>(route.stops.size());
         const int m = static_cast<int>(fleet.size());
+        // a loop's twin (its stops in reverse from the same first stop) starts half a spacing on, so the two
+        // directions' buses do not queue at one stop
+        const int shift = route.twin >= 0 && route.twin < r && m > 0 ? n / (2 * m) : 0;
         for (int k = 0; k < m && n > 0; ++k) {
-            const int at = static_cast<int>((static_cast<long long>(k) * n) / m);
+            const int at = static_cast<int>(((static_cast<long long>(k) * n) / m + shift) % n);
             const int stopNode = route.stops[static_cast<std::size_t>(at)].node;
             seatBusAt(fleet[static_cast<std::size_t>(k)], stopNode, seatedAt[stopNode]++);
             busStop_[static_cast<std::size_t>(fleet[static_cast<std::size_t>(k)])] =
@@ -5140,6 +5379,30 @@ const CitySim::ActivitySpot* CitySim::usingSpot(int i) const {
     return &seats_[static_cast<std::size_t>(a.tripSeat)];
 }
 
+CitySim::Census CitySim::census() const {
+    Census c;
+    for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
+        const Agent& a = agents_[static_cast<std::size_t>(i)];
+        if (isBus(i)) continue;
+        ++c.agents;
+        const int r = std::min(3, static_cast<int>(a.role));
+        ++c.byRole[r];
+        const bool rides = riding(i);
+        if (rides) { ++c.riding; ++c.outsideByRole[r]; continue; }
+        if (awaitingRide(i)) { ++c.waiting; ++c.outsideByRole[r]; continue; }
+        if (a.mode == Agent::Mode::Pedestrian) {
+            ++c.walkers;
+            const bool out = a.moving || !a.indoors;
+            if (out) { ++c.walkersOutside; ++c.outsideByRole[r]; }
+            if (a.moving) ++c.walkersMoving;
+        } else {
+            ++c.drivers;
+            if (a.moving) { ++c.driversMoving; ++c.outsideByRole[r]; }
+        }
+    }
+    return c;
+}
+
 std::string CitySim::describeAgent(int i) const {
     if (i < 0 || i >= static_cast<int>(agents_.size())) return "no such agent";
     const Agent& a = agents_[static_cast<std::size_t>(i)];
@@ -5734,6 +5997,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // pose is the exact lane pose). BEFORE the clock advances: a promoted
     // agent joins this step's K passes with no double-advanced time.
     tierPass(hoursPerSecond);
+    runDormantEvents();   // the sleepers' departures and arrivals that came due
     phaseMark(phase_.tierPass);
     // ACTIVE LIST (perf). Every pass below used to walk the WHOLE population
     // just to `continue` on the far tier: ~12 sweeps over thousands of

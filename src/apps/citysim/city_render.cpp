@@ -872,6 +872,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
              << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m; "
              << sim_.commuteStats().busCommuters << " walkers ride to work in another town (share "
              << params_.busCommuteShare << ", " << sim_.commuteStats().busCommuteTried << " tried)";
+    {
+        const CitySim::CommuteStats& cs = sim_.commuteStats();
+        const int all = cs.ownTown + cs.nearbyTown + cs.farTown;
+        if (cs.towns > 1 && all > 0)
+            LOG_INFO << "[citysim] trip reach: " << cs.towns << " towns; work in own town " << (100.0 * cs.ownTown / all)
+                     << "%, a nearby town " << (100.0 * cs.nearbyTown / all) << "%, across the island " << (100.0 * cs.farTown / all) << "% | drivers " << cs.driverOwn << " / "
+                     << cs.driverNearby << " / " << cs.driverFar;
+    }
 
     // ONE CLOCK. A staged day/night cycle owns the world's hour and rate:
     // the sim opens at the sky's hour and its schedules run at the sky's
