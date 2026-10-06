@@ -261,22 +261,24 @@ void RenderSystem::render(FrameContext& ctx) {
                      cam.fovDegrees, cam.farPlane);
 
     Real alpha = ctx.interpolation;
+    SparseSet<SourceSpec>* sourceSpecs = ctx.world.componentPool<SourceSpec>();   // (once, not per entity)
     // RT_DUMP_STATS: the encode walk's two halves timed and counted (entities visited / drawn, groups and instances
     // visited / drawn), every 120 frames
     static const bool encStats = std::getenv("RT_DUMP_STATS") != nullptr;
     static double encEntMs = 0, encGrpMs = 0;
     static long encEnt = 0, encEntDrawn = 0, encGrp = 0, encGrpIn = 0, encInst = 0, encInstDrawn = 0, encFrames = 0;
     const auto encT0 = std::chrono::steady_clock::now();
-    ctx.world.each<Transform, PrevTransform, Renderable>(
-        [&](Entity entity, Transform& t, PrevTransform& prev, Renderable& r) {
-            if (entity == ctx.view.activeCameraEntity) return;
+    // One drawable's cull + draw (reached through the draw index's visible cells, or the ECS walk with
+    // RT_NO_DRAW_INDEX=1): the same tests whichever way it is found.
+    auto drawEntity = [&](uint32_t entityIndex, Transform& t, PrevTransform& prev, Renderable& r) {
+            if (entityIndex == ctx.view.activeCameraEntity.index) return;
             ++encEnt;
             if (audit) {
                 BoundingSphere ab = ctx.renderer.getMeshBounds(r.mesh);
                 std::fprintf(stderr,
                              "[draw-audit] e%u mesh %u layer %u hidden %d aabb "
                              "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
-                             entity.index, r.mesh.index, r.renderLayer,
+                             entityIndex, r.mesh.index, r.renderLayer,
                              (r.renderLayer & ctx.renderer.hiddenLayers) ? 1 : 0,
                              ab.boxMin.x, ab.boxMin.y, ab.boxMin.z, ab.boxMax.x,
                              ab.boxMax.y, ab.boxMax.z);
@@ -286,7 +288,7 @@ void RenderSystem::render(FrameContext& ctx) {
             // chain (editor only — PLAY flattens parenting at load, so there
             // parentId is 0 and this is just the interpolated local).
             Mat4 model = lerp(prev.value, t, alpha).matrix();
-            SourceSpec* s = ctx.world.get<SourceSpec>(entity);
+            SourceSpec* s = sourceSpecs ? sourceSpecs->get(entityIndex) : nullptr;
             if (s && s->parentId != 0) {
                 Entity parent = findByDocumentId(ctx.world, s->parentId);
                 if (parent.valid())
@@ -302,14 +304,14 @@ void RenderSystem::render(FrameContext& ctx) {
                 if (audit)
                     std::fprintf(stderr, "[draw-audit] e%u FRUSTUM-CULLED world "
                                  "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
-                                 entity.index, worldMin.x, worldMin.y, worldMin.z,
+                                 entityIndex, worldMin.x, worldMin.y, worldMin.z,
                                  worldMax.x, worldMax.y, worldMax.z);
                 return;
             }
             if (audit)
                 std::fprintf(stderr, "[draw-audit] e%u DRAWN world "
                              "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
-                             entity.index, worldMin.x, worldMin.y, worldMin.z,
+                             entityIndex, worldMin.x, worldMin.y, worldMin.z,
                              worldMax.x, worldMax.y, worldMax.z);
             if (occ && !(r.material.flags & RenderMaterial::FLAG_OVERLAY)) {
                 ++occTested;
@@ -342,16 +344,14 @@ void RenderSystem::render(FrameContext& ctx) {
             }
             ctx.renderer.drawMesh(r.mesh, model, r.material);
             ++encEntDrawn;
-        });
-    const auto encT1 = std::chrono::steady_clock::now();
+        };
 
     // Instanced groups (static scatter — the forest). Cheap coarse reject on the
     // group's bounds, then PER-INSTANCE frustum cull so only the on-screen plants
     // draw (not the whole region) — then one instanced draw of the visible subset.
-    ctx.world.each<InstanceGroup>(
-        [&](Entity, InstanceGroup& g) {
+    auto drawGroup = [&](InstanceGroup& g) {
+
             if (g.transforms.empty()) return;
-            ++encGrp;
             if (g.renderLayer & ctx.renderer.hiddenLayers) return;   // debug layer hidden
             if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
             // Live override (slider) wins over the level's per-group value, which
@@ -389,7 +389,49 @@ void RenderSystem::render(FrameContext& ctx) {
             } else {
                 ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
             }
-        });
+        };
+    // THE DRAW INDEX (Glenn: "see what kind of performance you can eke out"): the island visited ~27,000 entities
+    // and ~50,000 instance groups a frame to draw ~340 and ~410 -- 6 ms of encode. Static drawables (terrain,
+    // structure, scenery, furniture, ground paint) live in 200 m cells; a frame tests the cells and visits only
+    // the members of the visible ones, plus a short list of the rest (bodies, effects, the unclassed). It keeps
+    // itself right without help: each frame re-classifies a slice of the pools (new, moved, gone, reclassed), so
+    // anything changes cell within a few frames; a member whose index no longer holds a drawable is dropped.
+    static const bool noIndex = std::getenv("RT_NO_DRAW_INDEX") != nullptr;
+    SparseSet<Transform>* tPool = ctx.world.componentPool<Transform>();
+    SparseSet<PrevTransform>* pPool = ctx.world.componentPool<PrevTransform>();
+    SparseSet<Renderable>* rPool = ctx.world.componentPool<Renderable>();
+    SparseSet<InstanceGroup>* gPool = ctx.world.componentPool<InstanceGroup>();
+    std::chrono::steady_clock::time_point encT1;
+    if (noIndex || !tPool || !pPool || !rPool) {
+        ctx.world.each<Transform, PrevTransform, Renderable>(
+            [&](Entity e, Transform& t, PrevTransform& prev, Renderable& r) { drawEntity(e.index, t, prev, r); });
+        encT1 = std::chrono::steady_clock::now();
+        ctx.world.each<InstanceGroup>([&](Entity, InstanceGroup& g) { ++encGrp; drawGroup(g); });
+    } else {
+        drawIndex_.refresh(*tPool, *rPool, gPool, ctx.renderer, policy);
+        auto entityAt = [&](uint32_t i) {
+            Transform* t = tPool->get(i);
+            PrevTransform* pv = t ? pPool->get(i) : nullptr;
+            Renderable* r = pv ? rPool->get(i) : nullptr;
+            if (r) drawEntity(i, *t, *pv, *r);
+            return r != nullptr;
+        };
+        auto groupAt = [&](uint32_t i) {
+            InstanceGroup* g = gPool ? gPool->get(i) : nullptr;
+            if (g) { ++encGrp; drawGroup(*g); }
+            return g != nullptr;
+        };
+        // a cell hidden whole behind nearer geometry (the occlusion depth), and too far for its members' shadows to
+        // reach the cascades (150 m of view depth; 400 m leaves room for a tall building's evening shadow), is
+        // skipped whole -- its members would only have drawn shadow-only
+        auto cellOk = [&](const Vec3& lo, const Vec3& hi, Real dist) {
+            if (!occ || dist < 400.0) return true;
+            return !occludedBox(*occ, lo, hi, occSlack);
+        };
+        drawIndex_.visit(frustum, cam.position, static_cast<Real>(ctx.renderer.vegetationDrawDistance), entityAt, groupAt,
+                         cellOk, encT1);
+    }
+
     if (encStats) {
         const auto encT2 = std::chrono::steady_clock::now();
         encEntMs += std::chrono::duration<double, std::milli>(encT1 - encT0).count();

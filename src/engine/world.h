@@ -53,6 +53,11 @@ public:
         return p && p->containsIndex(entity.index);
     }
 
+    // A component's pool (nullptr if none was ever added): for a hot loop that asks one entity after another,
+    // so it pays the type lookup once. pool->get(entity.index) answers for a LIVE entity's index.
+    template <typename T>
+    SparseSet<T>* componentPool() { return poolIfExists<T>(); }
+
     // Invoke fn(Entity, Ts&...) for each live entity having all of Ts.
     // Contract: do NOT create/destroy entities or add/remove any of the
     // iterated component types inside the callback — collect and apply after.
@@ -74,20 +79,24 @@ public:
         };
         (consider(poolIfExists<Ts>()), ...);
         if (missing) return;
+        // The pools ONCE, not per entity: poolHas / poolIfExists are hash-map lookups, and the render walk paid
+        // three of them (and three more to fetch) for each of ~27,000 entities a frame. A pool object outlives any
+        // add or remove inside `fn` (only its storage moves; it is asked afresh per index).
+        const std::tuple<SparseSet<Ts>*...> ps(poolIfExists<Ts>()...);
         if (drive == &firstPool->entityIndices()) {
             const std::vector<uint32_t>& indices = *drive;
             for (std::size_t i = 0; i < indices.size(); i++) {
                 uint32_t index = indices[i];
-                if (!(poolHas<Ts>(index) && ...)) continue;
-                fn(entities.handleAt(index), *poolIfExists<Ts>()->get(index)...);
+                if (!(std::get<SparseSet<Ts>*>(ps)->containsIndex(index) && ...)) continue;
+                fn(entities.handleAt(index), *std::get<SparseSet<Ts>*>(ps)->get(index)...);
             }
             return;
         }
         // Another type's pool: walk a copy, so `fn` may add or remove that component safely.
         const std::vector<uint32_t> indices = *drive;
         for (uint32_t index : indices) {
-            if (!(poolHas<Ts>(index) && ...)) continue;
-            fn(entities.handleAt(index), *poolIfExists<Ts>()->get(index)...);
+            if (!(std::get<SparseSet<Ts>*>(ps)->containsIndex(index) && ...)) continue;
+            fn(entities.handleAt(index), *std::get<SparseSet<Ts>*>(ps)->get(index)...);
         }
     }
 

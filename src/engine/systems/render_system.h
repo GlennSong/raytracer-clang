@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_RENDER_SYSTEM_H
 
 #include "../system.h"
+#include "draw_index.h"
 
 namespace engine {
 
@@ -38,6 +39,7 @@ private:
     // Reused across groups and frames so per-instance culling stops heap-
     // allocating the full instance count every group every frame.
     std::vector<Mat4> instanceScratch_;
+    DrawIndex drawIndex_;   // static drawables by world cell (draw_index.h)
 };
 
 
