@@ -670,6 +670,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         const Vec2 pad(kGridPad, kGridPad);
         grid_.configure(lo - pad, hi + pad, kAgentGridCell,
                         static_cast<int>(agents_.size()));
+        vGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(agents_.size()));
+        dGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(agents_.size()));
         rebuildTierLists();
         rehashAll_ = true;
         for (std::size_t i = 0; i < agents_.size(); ++i)
@@ -1585,10 +1587,12 @@ void CitySim::setTier(int i, Agent::Tier t) {
     };
     auto add = [&](std::vector<int>& v) { v.insert(std::lower_bound(v.begin(), v.end(), i), i); };
     if (a.tier == Agent::Tier::K) drop(kIdx_);
-    else if (a.tier == Agent::Tier::V) drop(vIdx_);
+    else if (a.tier == Agent::Tier::V) { drop(vIdx_); vGrid_.remove(i); }
+    else dGrid_.remove(i);
     a.tier = t;
     if (t == Agent::Tier::K) add(kIdx_);
-    else if (t == Agent::Tier::V) add(vIdx_);
+    else if (t == Agent::Tier::V) { add(vIdx_); vGrid_.place(i, a.pos); }
+    else dGrid_.place(i, a.pos);
     // entering the drawn and stepped tiers: interpolate from here, not from where it was last listed
     if (t != Agent::Tier::D) {
         a.tickFromPos = a.pos;
@@ -4695,9 +4699,18 @@ void CitySim::labelDriverState(Agent& a, Real seenAhead, Real gap,
 
 void CitySim::computeGaps() {
     const Real INF = std::numeric_limits<Real>::infinity();
-    gaps_.assign(agents_.size(), INF);
-    minGaps_.assign(agents_.size(), kCarMinGap);   // overwritten where a leader exists
-    leaderSpeeds_.assign(agents_.size(), 0.0);     // valid only where gaps_ < INF
+    // (read only for K agents: sized once, reset where they are -- not 2.4 MB of writes a tick at 100k)
+    if (gaps_.size() != agents_.size()) {
+        gaps_.assign(agents_.size(), INF);
+        minGaps_.assign(agents_.size(), kCarMinGap);
+        leaderSpeeds_.assign(agents_.size(), 0.0);
+    } else {
+        for (int k : kIdx_) {
+            gaps_[static_cast<std::size_t>(k)] = INF;
+            minGaps_[static_cast<std::size_t>(k)] = kCarMinGap;   // overwritten where a leader exists
+            leaderSpeeds_[static_cast<std::size_t>(k)] = 0.0;     // valid only where gaps_ < INF
+        }
+    }
     auto laneKeyOf = [this](const Agent& a, int li) {
         // Clamp per link so a car keyed onto a narrower continuation matches the
         // followers/leaders actually driving that link's lanes.
@@ -4800,8 +4813,15 @@ void CitySim::computeGaps() {
 //     queue â the signal owns that conflict, not mutual corridor braking.
 void CitySim::computeCarWedge() {
     const Real INF = std::numeric_limits<Real>::infinity();
-    carAheadGap_.assign(agents_.size(), INF);
-    carAheadSpeed_.assign(agents_.size(), 0.0);
+    if (carAheadGap_.size() != agents_.size()) {
+        carAheadGap_.assign(agents_.size(), INF);
+        carAheadSpeed_.assign(agents_.size(), 0.0);
+    } else {
+        for (int k : kIdx_) {
+            carAheadGap_[static_cast<std::size_t>(k)] = INF;
+            carAheadSpeed_[static_cast<std::size_t>(k)] = 0.0;
+        }
+    }
     constexpr Real kRange = 38.0;   // sense horizon (m)
     constexpr Real kLat = 2.15;     // corridor half-width: two bodies abreast
     for (int ai : active_) {
@@ -5588,12 +5608,19 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // Only what can have moved: the K and V tiers (a dormant agent stands where it went under) -- unless a bulk
     // move put everyone somewhere new
     if (rehashAll_) {
-        for (std::size_t i = 0; i < agents_.size(); ++i)
-            grid_.place(static_cast<int>(i), agents_[i].pos);
+        for (std::size_t i = 0; i < agents_.size(); ++i) {
+            const Agent& a = agents_[i];
+            grid_.place(static_cast<int>(i), a.pos);
+            if (a.tier == Agent::Tier::V) vGrid_.place(static_cast<int>(i), a.pos);
+            else if (a.tier == Agent::Tier::D) dGrid_.place(static_cast<int>(i), a.pos);
+        }
         rehashAll_ = false;
     } else {
         for (int i : kIdx_) grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
-        for (int i : vIdx_) grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
+        for (int i : vIdx_) {
+            grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
+            vGrid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
+        }
     }
     phaseMark(phase_.rehash);
     // Record the rate BEFORE tierPass: waking a dormant agent reconstructs it
@@ -5680,7 +5707,11 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     busServiceWas_ = busesInService();
 
     sensed_.clear();
-    sensedIndex_.assign(agents_.size(), -1);   // agent -> its ghost (grid lookups)
+    // agent -> its ghost (grid lookups, which find any tier: every entry not set this tick must read -1, so the
+    // ones set LAST tick are cleared rather than the whole array)
+    if (sensedIndex_.size() != agents_.size()) sensedIndex_.assign(agents_.size(), -1);
+    else for (int k : sensedSet_) sensedIndex_[static_cast<std::size_t>(k)] = -1;
+    sensedSet_.clear();
     for (int ai : active_) {
         const Agent& a = agents_[ai];
         const std::size_t i = static_cast<std::size_t>(ai);
@@ -5697,6 +5728,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             Vec2 sp = (a.mode == Agent::Mode::Pedestrian && a.tethered)
                           ? a.tetherAnchor : a.pos;
             sensedIndex_[i] = static_cast<int>(sensed_.size());
+            sensedSet_.push_back(static_cast<int>(i));
             sensed_.push_back({sp, a.elevation, static_cast<int>(i)});
         }
     }
@@ -5707,7 +5739,11 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // Pass 2: leading gaps. Pass 3: advance. `advanced` records who really ran
     // advance() (and so had refreshPose re-anchor its base position) this tick —
     // the reactive lean below is only valid on a re-anchored pose.
-    std::vector<uint8_t> advanced(agents_.size(), 0);
+    // (kept between ticks; the agents set last tick cleared -- read for any agent the grid finds)
+    if (advancedFlags_.size() != agents_.size()) advancedFlags_.assign(agents_.size(), 0);
+    else for (int k : advancedSet_) advancedFlags_[static_cast<std::size_t>(k)] = 0;
+    advancedSet_.clear();
+    std::vector<uint8_t>& advanced = advancedFlags_;
     phaseMark(phase_.goals);   // clock + signals + goal pass + sensed build
     computeGaps();
     computeCarWedge();   // S7 senses: bodies in the forward corridor
@@ -5741,7 +5777,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 continue;
             }
         }
-        if (a.moving) { advance(a, dt, gaps_[i], minGaps_[i]); advanced[i] = 1; }
+        if (a.moving) { advance(a, dt, gaps_[i], minGaps_[i]); advanced[i] = 1; advancedSet_.push_back(static_cast<int>(i)); }
     }
     // Keep the flags: "did this agent get stepped" is the question a director
     // asks when its agent stands still (ADR-0091).
@@ -5941,7 +5977,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // step, so the sidestep is a transient lean while someone is in view.
     phaseMark(phase_.advPairs);
     crowdBase_.resize(agents_.size());
-    crowdHas_.assign(agents_.size(), 0);
+    if (crowdHas_.size() != agents_.size()) crowdHas_.assign(agents_.size(), 0);
+    else for (int k : kIdx_) crowdHas_[static_cast<std::size_t>(k)] = 0;   // (set only for K walkers)
     for (int ki : kIdx_) {
         Agent& a = agents_[static_cast<std::size_t>(ki)];
         if (!a.moving) { a.state = Agent::State::Resting; a.lateralOffset = 0; a.crowdOffset = Vec2(0, 0); }
@@ -6371,7 +6408,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
         // straight to K: waking is an approximation, and V is the tier whose
         // whole job is being approximate until the player is close enough for
         // it to matter.
-        grid_.query(c, dormantResumeRadius + 4.0, dormantScratch_);
+        dGrid_.query(c, dormantResumeRadius + 4.0, dormantScratch_);
         for (int idx : dormantScratch_) {
             Agent& a = agents_[static_cast<std::size_t>(idx)];
             if (a.tier != Agent::Tier::D) continue;
@@ -6384,7 +6421,8 @@ void CitySim::tierPass(Real hoursPerSecond) {
     }
 
     const Real reach = std::max(carPromoteRadius, pedPromoteRadius);
-    grid_.query(c, reach + 4.0, tierScratch_);
+    // (V agents only, at their positions as of this tick's re-hash -- grid_'s too; a woken one was placed on waking)
+    vGrid_.query(c, reach + 4.0, tierScratch_);
     for (int idx : tierScratch_) {
         Agent& a = agents_[static_cast<std::size_t>(idx)];
         if (a.tier != Agent::Tier::V) continue;

@@ -1534,6 +1534,9 @@ private:
     std::vector<SensedGhost> sensed_;   // per-step snapshot of bodies cars/peds may SEE
                                         // (peds + players + external obstacles)
     std::vector<int> sensedIndex_;      // per agent: its slot in sensed_, -1 = absent
+    std::vector<int> sensedSet_;        // ...the agents given a slot this tick (cleared next tick)
+    std::vector<uint8_t> advancedFlags_;   // per agent: advance() stepped it this tick
+    std::vector<int> advancedSet_;         // ...which ones (cleared next tick)
                                         // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<Real> externalHalf_;                // parallel: a vehicle's half length, 0 = a person
@@ -1546,6 +1549,10 @@ private:
     // coarse tick, when its position actually moves). junctionGrid_ is a static
     // bake of junctions_ so nearJunction() stops scanning the whole list.
     AgentGrid grid_;
+    // ...and the same cells holding ONE tier each (setTier keeps them): the wake check asks for dormant agents in a
+    // kilometre and the promote check for far ones in 500 m -- from grid_ that was everyone there (~5,000 at 100k),
+    // each loaded and sorted to read its tier
+    AgentGrid vGrid_, dGrid_;
     // Spatial index of PARKED cars, keyed by vehicle index. A driven car is
     // found through its driver in `grid_`; a parked one has no driver and sits
     // far from its owner, so it needs its own. Entries for driven cars go stale
