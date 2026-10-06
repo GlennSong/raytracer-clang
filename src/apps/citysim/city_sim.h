@@ -611,6 +611,12 @@ public:
     // pipeline; the sim only exposes the fields.) Without BOTH the switch and
     // a centre, every agent stays K and behaviour is bit-identical to before.
     bool tieringEnabled = false;
+    // THE NEAR TARGET (the 100k plan, pushing past it): with nearTarget > 0 the K ring's radii are scaled (35%..100%)
+    // to hold about that many agents simulated in full round the player -- denser cities, a smaller ring; the GPU
+    // crowd shows everyone past it. 0: the radii as set.
+    int nearTarget = 0;
+    Real nearScale() const { return nearScale_; }
+    long resumedTrips() const { return resumedTrips_; }
     Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
     Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
     Real pedPromoteRadius = 280.0;
@@ -1688,6 +1694,8 @@ private:
     std::vector<int> kIdx_, vIdx_, tierScan_;
     std::vector<int> pinned_;   // the followed agents (pinAgent)
     std::vector<int> seatScan_;   // stepSeats' K + V, ascending
+    Real nearScale_ = 1.0;
+    long resumedTrips_ = 0;   // wakes that resumed a trip (wakeDormant) rather than rebuilt from the schedule
     std::vector<int> crowdDirty_;  // takeCrowdChanges
     bool crowdDirtyAll_ = true;
     void crowdChanged(int i) {

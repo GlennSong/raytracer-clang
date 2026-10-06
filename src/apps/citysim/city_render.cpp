@@ -228,6 +228,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // RT_MAX_AMBIENT=<n>: the population cap per class for this run (scale tests on a real level without
         // editing it -- the bake never sees it)
         if (const char* m = std::getenv("RT_MAX_AMBIENT")) params_.maxAmbient = std::max(6, std::atoi(m));
+        // RT_DENSITY_SCALE=<k>: the level's cars per lane-km and walkers per km times k (with RT_MAX_AMBIENT: the
+        // scale runs past what the streets were sized for)
+        if (const char* k = std::getenv("RT_DENSITY_SCALE")) {
+            const double f = std::max(0.01, std::atof(k));
+            params_.carsPerLaneKm *= f;
+            params_.pedsPerKm *= f;
+        }
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.startHour = c.startHour;
@@ -655,6 +662,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // once a player position is fed each fixed step (see step() below) — the
     // build warm-up therefore runs everything K, exactly as before.
     sim_.tieringEnabled = params_.tieredAgents;
+    // RT_NEAR_TARGET=<n>: hold about n agents in the full sim round the player (the ring adapts; the GPU crowd shows
+    // the rest) -- for populations past what a full ring can carry
+    if (const char* nt = std::getenv("RT_NEAR_TARGET")) sim_.nearTarget = std::max(0, std::atoi(nt));
     sim_.dormancyEnabled = params_.dormantAgents;
     sim_.pedPromoteRadius = params_.pedPromoteRadius;
     sim_.pedDemoteRadius = params_.pedDemoteRadius;
@@ -3040,7 +3050,7 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << ", moving " << moving << ", rolling " << rolling
                  << ", asleep " << sim_.sleepingAgents()
                  << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_
-                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_;
+                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale();
         simMs = syncMs = 0.0;
         calls = 0;
     }

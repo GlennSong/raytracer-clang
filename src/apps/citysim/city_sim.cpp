@@ -1622,6 +1622,27 @@ void CitySim::setTier(int i, Agent::Tier t) {
 void CitySim::wakeDormant(int idx) {
     if (idx < 0 || idx >= static_cast<int>(agents_.size())) return;
     Agent& a = agents_[static_cast<std::size_t>(idx)];
+    // A TRAVELLER resumes its trip where the clock says it is -- where the GPU crowd has been drawing it all along --
+    // rather than being rebuilt from its schedule, when it can still be on that trip (the time since it went under is
+    // less than what was left of it, at its modelled pace). Otherwise, as before: rebuilt.
+    if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) && nav_) {
+        Real left = 0;
+        for (std::size_t j = static_cast<std::size_t>(a.leg); j < a.route.links.size(); ++j)
+            left += nav_->links[static_cast<std::size_t>(a.route.links[j])].length;
+        left -= a.distOnLeg;
+        const engine::NavLink& L0 = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+        const Real pace = a.mode == Agent::Mode::Driver ? engine::classSpeed(L0.klass) * a.speedFactor : kWalkSpeed * a.speedFactor;
+        const Real since = simSeconds_ - a.vLastTick;
+        if (pace > 0.1 && since >= 0 && since * pace < left) {
+            setTier(idx, Agent::Tier::V);
+            a.vHold = 0;
+            vAdvance(a, since);
+            a.vLastTick = simSeconds_;
+            a.wakeAt = -1;
+            ++resumedTrips_;
+            return;
+        }
+    }
     placeFromSchedule(idx);
     setTier(idx, Agent::Tier::V);
     a.vLastTick = simSeconds_;   // its next coarse tick advances from now
@@ -6396,6 +6417,15 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
 void CitySim::tierPass(Real hoursPerSecond) {
     if (!tieringEnabled || !haveTierCenter_) return;   // no player: all K
     const Vec2 c = tierCenter_;
+    // the near target: ease the ring in when it holds too many, back out when too few (slowly: no pumping)
+    if (nearTarget > 0) {
+        const Real k = static_cast<Real>(kIdx_.size());
+        if (k > nearTarget * 1.15) nearScale_ = std::max(Real(0.35), nearScale_ * 0.985);
+        else if (k < nearTarget * 0.85) nearScale_ = std::min(Real(1.0), nearScale_ * 1.01);
+    } else {
+        nearScale_ = 1.0;
+    }
+    const Real ns = nearScale_;
     tierScan_ = kIdx_;   // (a copy: demotions edit the list)
     for (int ki : tierScan_) {
         const std::size_t i = static_cast<std::size_t>(ki);
@@ -6404,8 +6434,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
         // Player-adjacent agents never demote: host-driven, released to the
         // player, or tethered to a physical body another bridge owns -- nor one being followed.
         if (a.playerControlled || a.released || a.tethered || a.pinned) continue;
-        const Real dr = a.mode == Agent::Mode::Driver ? carDemoteRadius
-                                                      : pedDemoteRadius;
+        const Real dr = (a.mode == Agent::Mode::Driver ? carDemoteRadius : pedDemoteRadius) * ns;
         const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
         if (dx * dx + dy * dy <= dr * dr) {
             // near you now: remembered for a while after you go (only those really in range -- a fresh city starts
@@ -6466,14 +6495,13 @@ void CitySim::tierPass(Real hoursPerSecond) {
         }
     }
 
-    const Real reach = std::max(carPromoteRadius, pedPromoteRadius);
+    const Real reach = std::max(carPromoteRadius, pedPromoteRadius) * ns;
     // (V agents only, at their positions as of this tick's re-hash -- grid_'s too; a woken one was placed on waking)
     vGrid_.query(c, reach + 4.0, tierScratch_);
     for (int idx : tierScratch_) {
         Agent& a = agents_[static_cast<std::size_t>(idx)];
         if (a.tier != Agent::Tier::V) continue;
-        const Real pr = a.mode == Agent::Mode::Driver ? carPromoteRadius
-                                                      : pedPromoteRadius;
+        const Real pr = (a.mode == Agent::Mode::Driver ? carPromoteRadius : pedPromoteRadius) * ns;
         const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
         if (dx * dx + dy * dy >= pr * pr) continue;
         // Catch the V state up to NOW, then hand it to K exactly where the

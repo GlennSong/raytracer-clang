@@ -474,3 +474,27 @@ TEST_CASE(near_agents_are_remembered_and_a_pinned_one_is_followed) {
     sim.pinAgent(followed, false);
     CHECK(sim.pinnedCount() == 0);
 }
+
+// A TRAVELLER WAKES WHERE THE CLOCK SAYS IT IS (the GPU crowd draws dormant travellers moving along their routes):
+// someone who went dormant mid-trip and is woken before that trip could be over resumes it, advanced by the time it
+// slept, instead of being rebuilt from its schedule.
+TEST_CASE(a_dormant_traveller_wakes_further_along_its_trip) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 200, 100, 11);
+    sim.tieringEnabled = true;
+    sim.dormancyEnabled = true;
+    sim.dormantRadius = 600.0;
+    sim.dormantResumeRadius = 500.0;
+    sim.rememberSeconds = 0;   // (no memory: let them sleep at once)
+    sim.seedFromSchedule(8.5);   // the morning commute: plenty mid-trip
+    const Real dt = 1.0 / 60.0;
+    auto run = [&](Vec2 c, Real seconds) {
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i) { sim.setTierCenter(c); sim.step(dt, 0.05); }
+    };
+    run(Vec2(-700, -700), 5.0);    // the far corner goes dormant, some of it mid-trip
+    run(Vec2(700, 700), 3.0);      // back: they wake a few seconds later
+    std::printf("    [resume] %d wakes, %ld resumed their trip\n", sim.wakes(), sim.resumedTrips());
+    CHECK(sim.wakes() > 0);
+    CHECK(sim.resumedTrips() > 0);
+}
