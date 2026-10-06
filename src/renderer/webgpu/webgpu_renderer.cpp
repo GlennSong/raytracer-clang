@@ -762,7 +762,9 @@ public:
         g.mat = matKeyOf(material);
         instanceStaging_.resize(instanceStaging_.size() + transforms.size() * 16);
         float* dst = instanceStaging_.data() + g.instanceOffset * 16;
-        for (const Mat4& t : transforms) { packMat4(t, dst); dst += 16; }
+        // (the bottom row's per-instance data -- a grass rank, a signal's state -- is read by the Vulkan shaders
+        // only: here it would be a w)
+        for (const Mat4& t : transforms) { packMat4(t, dst); dst[3] = 0.0f; dst += 16; }
         instancedGroups_.push_back(g);
     }
 

@@ -856,7 +856,9 @@ public:
     virtual void drawMeshInstanced(MeshHandle handle,
                                    const std::vector<Mat4>& transforms,
                                    const RenderMaterial& material) {
-        for (const Mat4& m : transforms) drawMesh(handle, m, material);
+        // (a backend without instancing: the bottom row's per-instance DATA -- a grass rank, a signal's state,
+        // read only by the Vulkan shaders -- must not reach its model matrix as a w)
+        for (Mat4 m : transforms) { m.m[3][0] = 0; drawMesh(handle, m, material); }
     }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
 
