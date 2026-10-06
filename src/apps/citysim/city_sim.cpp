@@ -1602,12 +1602,10 @@ void CitySim::setTier(int i, Agent::Tier t) {
     a.tier = t;
     if (t == Agent::Tier::D) {
         releaseSeat(a);   // a bench, a place in a group: let go (it was holding them for ever)
-        // DORMANT: rebuilt from its schedule on waking (placeFromSchedule plans afresh), so it keeps no trip -- its
-        // route and its sensing memory go back to the heap (at 100k, most of the agents' heap)
-        std::vector<int>().swap(a.route.links);
-        a.leg = 0;
-        a.distOnLeg = 0;
-        a.moving = false;
+        // DORMANT: its sensing memory goes back to the heap. Its TRIP stays as it was (frozen until it is rebuilt
+        // from its schedule on waking): clearing it set a mid-trip driver "not moving" with its car left in the
+        // road, which everything that counts parked cars then saw as parked in a heap
+        // (metro_cars_park_in_spaces_not_heaps: 27 on the verge, 24 stacked).
         a.memory.release();
     }
     if (t == Agent::Tier::K) add(kIdx_);
