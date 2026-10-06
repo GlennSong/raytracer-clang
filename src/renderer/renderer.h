@@ -874,6 +874,7 @@ public:
         RenderMaterial material;
         float yOffset = 0.0f;
         float maxDistance = 2000.0f;
+        float minDistance = 0.0f;   // stand-ins are for distance: none nearer than this
     };
     struct CrowdAgent {   // 32 bytes, as crowd.comp reads it
         uint32_t routeOff = 0, routeLen = 0;

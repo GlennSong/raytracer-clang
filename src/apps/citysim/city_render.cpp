@@ -665,6 +665,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // RT_NEAR_TARGET=<n>: hold about n agents in the full sim round the player (the ring adapts; the GPU crowd shows
     // the rest) -- for populations past what a full ring can carry
     if (const char* nt = std::getenv("RT_NEAR_TARGET")) sim_.nearTarget = std::max(0, std::atoi(nt));
+    if (const char* ft = std::getenv("RT_FAR_TARGET")) sim_.farTarget = std::max(0, std::atoi(ft));
     sim_.dormancyEnabled = params_.dormantAgents;
     sim_.pedPromoteRadius = params_.pedPromoteRadius;
     sim_.pedDemoteRadius = params_.pedDemoteRadius;
@@ -3050,7 +3051,7 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << ", moving " << moving << ", rolling " << rolling
                  << ", asleep " << sim_.sleepingAgents()
                  << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_
-                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale();
+                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale() << " far ring x" << sim_.farScale();
         simMs = syncMs = 0.0;
         calls = 0;
     }
@@ -3075,11 +3076,11 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
         for (std::size_t v = 0; v < farCarGroups_.size(); ++v) {
             const InstanceGroup* g = world.get<InstanceGroup>(farCarGroups_[v]);
             if (!g) return;
-            kinds.push_back({g->mesh, g->material, static_cast<float>(v < he.size() ? he[v].y : 0.7), static_cast<float>(farCarDistance)});
+            kinds.push_back({g->mesh, g->material, static_cast<float>(v < he.size() ? he[v].y : 0.7), static_cast<float>(farCarDistance), 120.0f});
         }
         const InstanceGroup* pg = world.get<InstanceGroup>(farPedGroup_);
         if (!pg) return;
-        kinds.push_back({pg->mesh, pg->material, 0.9f, static_cast<float>(farPedDistance)});
+        kinds.push_back({pg->mesh, pg->material, 0.9f, static_cast<float>(farPedDistance), 60.0f});
         ctx.renderer.setCrowdKinds(kinds);
         // every link's ends with their heights (the ground, plus a deck's layer)
         std::vector<float> L(static_cast<std::size_t>(nav_.linkCount()) * 6);

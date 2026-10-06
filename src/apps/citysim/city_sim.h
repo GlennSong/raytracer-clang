@@ -616,6 +616,11 @@ public:
     // crowd shows everyone past it. 0: the radii as set.
     int nearTarget = 0;
     Real nearScale() const { return nearScale_; }
+    // ...and the FAR ring (V): with farTarget > 0 the dormant / resume radii scale (20%..100%) to hold about that many
+    // agents in the coarse tier -- at 5x density a 1.2 km circle held 105,000 of them, ticked once a second. The GPU
+    // crowd draws dormant travellers moving, so a smaller far ring is not an emptier view.
+    int farTarget = 0;
+    Real farScale() const { return farScale_; }
     long resumedTrips() const { return resumedTrips_; }
     Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
     Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
@@ -1694,7 +1699,7 @@ private:
     std::vector<int> kIdx_, vIdx_, tierScan_;
     std::vector<int> pinned_;   // the followed agents (pinAgent)
     std::vector<int> seatScan_;   // stepSeats' K + V, ascending
-    Real nearScale_ = 1.0;
+    Real nearScale_ = 1.0, farScale_ = 1.0;
     long resumedTrips_ = 0;   // wakes that resumed a trip (wakeDormant) rather than rebuilt from the schedule
     std::vector<int> crowdDirty_;  // takeCrowdChanges
     bool crowdDirtyAll_ = true;

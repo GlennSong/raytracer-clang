@@ -789,6 +789,27 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // Scratch for the on-foot job search, hoisted: one allocation, not one
     // per walker.
     std::vector<std::pair<Real, PlaceId>> jobDist;
+    // THE JOBS BY CELL (pushing past 100k: a walker's job search measured every job on the island against every
+    // walker -- 250,000 x ~15,000 -- 165 s of a 309k load). Square cells; a search reads only the cells it needs.
+    constexpr Real kJobCell = 250.0;
+    std::unordered_map<int64_t, std::vector<PlaceId>> jobCells;
+    auto jobCellKey = [](int64_t cx, int64_t cz) { return (cx << 32) ^ (cz & 0xffffffff); };
+    Vec2 jobLo(1e30, 1e30), jobHi(-1e30, -1e30);
+    // every job within the square of half-side r round p (a superset of the circle)
+    auto jobsNear = [&](Vec2 p, Real r, std::vector<std::pair<Real, PlaceId>>& out) {
+        out.clear();
+        const int64_t x0 = static_cast<int64_t>(std::floor((p.x - r) / kJobCell)), x1 = static_cast<int64_t>(std::floor((p.x + r) / kJobCell));
+        const int64_t z0 = static_cast<int64_t>(std::floor((p.y - r) / kJobCell)), z1 = static_cast<int64_t>(std::floor((p.y + r) / kJobCell));
+        for (int64_t cx = x0; cx <= x1; ++cx)
+            for (int64_t cz = z0; cz <= z1; ++cz) {
+                auto it = jobCells.find(jobCellKey(cx, cz));
+                if (it == jobCells.end()) continue;
+                for (PlaceId cand : it->second) {
+                    const Vec2 d = places[cand].site - p;
+                    out.push_back({d.x * d.x + d.y * d.y, cand});
+                }
+            }
+    };
     int crossTownDrivers = 0, driversWithJobs = 0, busCommuters = 0, busCommuteTried = 0;
     Real driverCommute = 0;
 
@@ -1037,12 +1058,16 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 // nearest of all win.
                 constexpr Real kWalkJobFloor = 300.0;   // metres, straight line
                 constexpr Real kWalkJobCeil  = 900.0;   // "a local place to work"
-                jobDist.clear();
-                jobDist.reserve(jobs.size());
-                for (PlaceId cand : jobs) {
-                    const Vec2 d = places[cand].site - homePos;
-                    jobDist.push_back({d.x * d.x + d.y * d.y, cand});
-                }
+                // (from the job cells: every job within the band's reach -- the same candidates the old scan of all
+                // jobs ranked, in the same (distance, id) order; widened below only if the fallback needs farther)
+                if (jobCells.empty())
+                    for (PlaceId cand : jobs) {
+                        const Vec2 q = places[cand].site;
+                        jobCells[jobCellKey(static_cast<int64_t>(std::floor(q.x / kJobCell)), static_cast<int64_t>(std::floor(q.y / kJobCell)))].push_back(cand);
+                        jobLo = Vec2(std::min(jobLo.x, q.x), std::min(jobLo.y, q.y));
+                        jobHi = Vec2(std::max(jobHi.x, q.x), std::max(jobHi.y, q.y));
+                    }
+                jobsNear(homePos, kWalkJobCeil, jobDist);
                 const auto byDist = [](const std::pair<Real, PlaceId>& x,
                                        const std::pair<Real, PlaceId>& y) {
                     if (x.first != y.first) return x.first < y.first;
@@ -1066,13 +1091,28 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 for (std::size_t c = 0; c < takeFar && pick == kNoPlace; ++c)
                     if (commutable(hn, nodeOf(jobDist[c].second))) pick = jobDist[c].second;
                 if (pick == kNoPlace) {   // nothing beyond the floor routes
-                    const std::size_t near =
-                        static_cast<std::size_t>(jobDist.end() - split);
-                    const std::size_t takeNear = std::min<std::size_t>(8, near);
-                    std::partial_sort(split, split + takeNear, jobDist.end(), byDist);
+                    // the nearest 8 OUTSIDE the band, from every job: widen the reach until 8 of them lie inside it
+                    // (or it covers every job), so the ranking matches a scan of all of them
+                    std::vector<std::pair<Real, PlaceId>> outside;
+                    for (Real reach = kWalkJobCeil * 2;; reach *= 2) {
+                        jobsNear(homePos, reach, outside);
+                        outside.erase(std::remove_if(outside.begin(), outside.end(),
+                                                     [&](const std::pair<Real, PlaceId>& e) {
+                                                         return e.first >= kWalkJobFloor * kWalkJobFloor &&
+                                                                e.first <= kWalkJobCeil * kWalkJobCeil;
+                                                     }),
+                                      outside.end());
+                        std::size_t within = 0;
+                        for (const auto& e : outside) within += e.first <= reach * reach ? 1 : 0;
+                        const bool coversAll = homePos.x - reach <= jobLo.x && homePos.x + reach >= jobHi.x &&
+                                               homePos.y - reach <= jobLo.y && homePos.y + reach >= jobHi.y;
+                        if (within >= 8 || coversAll) break;
+                    }
+                    const std::size_t takeNear = std::min<std::size_t>(8, outside.size());
+                    std::partial_sort(outside.begin(), outside.begin() + takeNear, outside.end(), byDist);
                     for (std::size_t c = 0; c < takeNear && pick == kNoPlace; ++c)
-                        if (commutable(hn, nodeOf((split + c)->second)))
-                            pick = (split + c)->second;
+                        if (commutable(hn, nodeOf(outside[c].second)))
+                            pick = outside[c].second;
                 }
             } else {
                 const int kCandidates = 24;
@@ -6426,6 +6466,16 @@ void CitySim::tierPass(Real hoursPerSecond) {
         nearScale_ = 1.0;
     }
     const Real ns = nearScale_;
+    if (farTarget > 0) {
+        const Real v = static_cast<Real>(vIdx_.size());
+        if (v > farTarget * 1.15) farScale_ = std::max(Real(0.2), farScale_ * 0.985);
+        else if (v < farTarget * 0.85) farScale_ = std::min(Real(1.0), farScale_ * 1.01);
+    } else {
+        farScale_ = 1.0;
+    }
+    // (never inside the K ring)
+    const Real dormR = std::max(dormantRadius * farScale_, std::max(carDemoteRadius, pedDemoteRadius) * ns + 50.0);
+    const Real resumeR = std::max(dormantResumeRadius * farScale_, std::max(carPromoteRadius, pedPromoteRadius) * ns + 30.0);
     tierScan_ = kIdx_;   // (a copy: demotions edit the list)
     for (int ki : tierScan_) {
         const std::size_t i = static_cast<std::size_t>(ki);
@@ -6474,7 +6524,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
             // would also lose the ride. Forty buses ticking at 1 Hz cost nothing.
             if (isBus(static_cast<int>(i)) || buses_.tripOf(static_cast<int>(i))) continue;
             const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
-            if (dx * dx + dy * dy <= dormantRadius * dormantRadius) continue;
+            if (dx * dx + dy * dy <= dormR * dormR) continue;
             setTier(static_cast<int>(i), Agent::Tier::D);
             a.dormantSince = simSeconds_;
             ++dormancies_;
@@ -6483,12 +6533,12 @@ void CitySim::tierPass(Real hoursPerSecond) {
         // straight to K: waking is an approximation, and V is the tier whose
         // whole job is being approximate until the player is close enough for
         // it to matter.
-        dGrid_.query(c, dormantResumeRadius + 4.0, dormantScratch_);
+        dGrid_.query(c, resumeR + 4.0, dormantScratch_);
         for (int idx : dormantScratch_) {
             Agent& a = agents_[static_cast<std::size_t>(idx)];
             if (a.tier != Agent::Tier::D) continue;
             const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
-            if (dx * dx + dy * dy >= dormantResumeRadius * dormantResumeRadius)
+            if (dx * dx + dy * dy >= resumeR * resumeR)
                 continue;
             wakeDormant(idx);
             ++wakes_;

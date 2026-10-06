@@ -7180,6 +7180,7 @@ void VulkanRenderer::setCrowdAgents(const std::vector<CrowdAgent>& agents, const
         std::memcpy(&kinds[k * 4], &impl->crowdKindBase[k], sizeof(uint32_t));
         kinds[k * 4 + 1] = impl->crowdKinds[k].yOffset;
         kinds[k * 4 + 2] = impl->crowdKinds[k].maxDistance;
+        kinds[k * 4 + 3] = impl->crowdKinds[k].minDistance;
     }
     impl->crowdWrite(impl->crowdKindBuf, 0, kinds.data(), kinds.size() * sizeof(float));
     impl->crowdGrow(impl->crowdInst, VkDeviceSize(std::max<uint32_t>(run, 1)) * 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, false);

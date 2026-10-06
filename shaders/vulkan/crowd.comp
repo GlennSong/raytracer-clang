@@ -21,7 +21,7 @@ struct Kind {
     uint base;       // this kind's first instance row
     float yOffset;   // above the link's height (half a car's height; a person's middle)
     float maxDist;
-    float pad;
+    float minDist;   // nearer than this the stand-in is not drawn (up close is the full sim's)
 };
 struct Cmd {         // VkDrawIndexedIndirectCommand
     uint indexCount;
@@ -73,7 +73,8 @@ void main() {
     p.xz += vec2(dir.y, -dir.x) * a.side;
     const Kind k = K[a.kind];
     p.y += k.yOffset;
-    if (distance(p, pc.camNow.xyz) > k.maxDist) return;
+    const float camD = distance(p, pc.camNow.xyz);
+    if (camD > k.maxDist || camD < k.minDist) return;
     for (int f = 0; f < 6; ++f)
         if (dot(pc.planes[f].xyz, p) + pc.planes[f].w < -4.0) return;   // (a body's slack)
     const uint idx = atomicAdd(C[a.kind].instanceCount, 1u);
