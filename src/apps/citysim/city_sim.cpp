@@ -5110,6 +5110,22 @@ std::string CitySim::describeAgent(int i) const {
     return b;
 }
 
+bool CitySim::farDrawPose(int i, Vec2& pos, Vec2& heading) const {
+    if (i < 0 || i >= static_cast<int>(agents_.size()) || !nav_) return false;
+    const Agent& a = agents_[static_cast<std::size_t>(i)];
+    if (a.tier != Agent::Tier::V || a.released || a.playerControlled) return false;
+    if (a.mode == Agent::Mode::Pedestrian && (riding(i) || (!a.moving && a.indoors))) return false;
+    if (a.mode == Agent::Mode::Driver && !a.moving) return false;   // (a parked car is the parked-car pass's)
+    pos = a.pos;
+    heading = a.heading;
+    if (!a.moving || a.speed <= 0 || a.vHold > 0 || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) return true;
+    const Real dt = std::clamp(simSeconds_ - a.vLastTick, Real(0), vRefreshSeconds * 1.5);
+    const engine::NavLink& L = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+    const Real step = std::min(a.speed * dt, std::max(Real(0), L.length - a.distOnLeg));
+    pos = a.pos + a.heading * step;
+    return true;
+}
+
 bool CitySim::restPose(int i, RestPose& out) const {
     if (const SeatSpot* st = seatedOn(i)) {
         out.kind = RestPose::Kind::Seat;

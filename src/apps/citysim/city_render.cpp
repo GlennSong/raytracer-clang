@@ -1187,6 +1187,39 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
       g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
       world.add<InstanceGroup>(pedGroup_, g); }
+    // the mid-range band's stand-ins (RT_NO_FAR_BAND=1: none)
+    farCarGroups_.clear();
+    if (assets && !std::getenv("RT_NO_FAR_BAND")) {
+        farPedGroup_ = world.create();
+        { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
+          g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
+          world.add<InstanceGroup>(farPedGroup_, g); }
+        const std::vector<Vec3> he = carGroupHalfExtents();
+        static const Vec3 kPaint[6] = {{0.55, 0.56, 0.58}, {0.12, 0.13, 0.15}, {0.62, 0.10, 0.09},
+                                       {0.14, 0.22, 0.42}, {0.82, 0.82, 0.80}, {0.30, 0.34, 0.30}};
+        for (int v = 0; v < drawVariantCount(); ++v) {
+            const Vec3 h = v < static_cast<int>(he.size()) ? he[static_cast<std::size_t>(v)] : Vec3(0.9, 0.7, 2.2);
+            // a body and a cabin, centred like the full model (it is placed half its height above the road)
+            engine::RenderMesh body = MeshBuilder::box(Vec3(h.x * 2, h.y * 1.1, h.z * 2));
+            MeshBuilder::transform(body, Mat4::translate(0, -h.y * 0.45, 0));
+            engine::RenderMesh cabin = MeshBuilder::box(Vec3(h.x * 1.7, h.y * 0.9, h.z * 1.0));
+            MeshBuilder::transform(cabin, Mat4::translate(0, h.y * 0.55, -h.z * 0.1));
+            const Vec3 paint = kPaint[v % 6];
+            for (engine::Vertex& vx : body.vertices) vx.color = paint;
+            for (engine::Vertex& vx : cabin.vertices) vx.color = Vec3(0.06, 0.07, 0.08);
+            MeshBuilder::append(body, cabin);
+            InstanceGroup g;
+            g.mesh = assets->acquireMesh(body, "city:farcar" + std::to_string(v));
+            g.material.albedo = Vec3(1, 1, 1);
+            g.material.roughness = 0.45f;
+            g.material.metallic = 0.3f;
+            g.renderLayer = engine::LayerSim;
+            g.drawClass = engine::DrawClass::SimBody;
+            const Entity e = world.create();
+            world.add<InstanceGroup>(e, g);
+            farCarGroups_.push_back(e);
+        }
+    }
     if (assets) {
         pedSeatedGroup_ = world.create();
         InstanceGroup g; g.mesh = assets->acquireMesh(buildSeatedPersonMesh(0), "city:ped_seated"); g.material = pedMaterial();
@@ -2411,6 +2444,50 @@ void CityRenderSystem::syncGroups(World& world) {
         }
     }
 
+    // THE MID-RANGE BAND: far agents in reach, as stand-ins, run on from their last coarse tick
+    farDrawn_ = 0;
+    if (!farCarGroups_.empty() && sim_.hasTierCenter()) {
+        std::vector<InstanceGroup*> fc;
+        for (Entity e : farCarGroups_) {
+            InstanceGroup* g = world.get<InstanceGroup>(e);
+            if (g) g->transforms.clear();
+            fc.push_back(g);
+        }
+        InstanceGroup* fp = farPedGroup_.valid() ? world.get<InstanceGroup>(farPedGroup_) : nullptr;
+        if (fp) fp->transforms.clear();
+        const std::vector<Vec3> heFar = carGroupHalfExtents();
+        if (farY_.size() != sim_.agents().size()) {
+            farY_.assign(sim_.agents().size(), 0);
+            farYAt_.assign(sim_.agents().size(), Vec2(1e30, 1e30));
+        }
+        const Vec2 c = sim_.tierCenter();
+        for (int vi : sim_.farAgents()) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(vi)];
+            const bool car = a.mode == Agent::Mode::Driver;
+            const Real rad = car ? farCarRadius : farPedRadius;
+            const Vec2 d = a.pos - c;
+            if (d.x * d.x + d.y * d.y > rad * rad) continue;
+            Vec2 p, h;
+            if (!sim_.farDrawPose(vi, p, h)) continue;
+            const std::size_t k = static_cast<std::size_t>(vi);
+            if ((p - farYAt_[k]).lengthSquared() > 25.0) { farY_[k] = groundAt(p.x, p.y); farYAt_[k] = p; }
+            const Real yaw = std::atan2(h.x, h.y);
+            if (car) {
+                int v = drawSlotFor(vi);
+                if (v < 0 || v >= static_cast<int>(fc.size()) || !fc[static_cast<std::size_t>(v)]) continue;
+                const Real hy = v < static_cast<int>(heFar.size()) ? heFar[static_cast<std::size_t>(v)].y : 0.7;
+                fc[static_cast<std::size_t>(v)]->transforms.push_back(
+                    Mat4::trs(Vec3(p.x, farY_[k] + hy, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+            } else if (fp) {
+                fp->transforms.push_back(
+                    Mat4::trs(Vec3(p.x, farY_[k] + 0.9, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+            }
+            ++farDrawn_;
+        }
+        for (InstanceGroup* g : fc) refreshBounds(g);
+        refreshBounds(fp);
+    }
+
     for (InstanceGroup* c : cars) refreshBounds(c);
     refreshBounds(ped);
     refreshBounds(pedSeated);
@@ -2956,7 +3033,7 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << ", far(V) " << vTier << ", dormant(D) " << dormant
                  << ", moving " << moving << ", rolling " << rolling
                  << ", asleep " << sim_.sleepingAgents()
-                 << " | parked cars drawn " << parkedDrawn_;
+                 << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_;
         simMs = syncMs = 0.0;
         calls = 0;
     }

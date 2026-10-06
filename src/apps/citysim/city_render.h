@@ -497,6 +497,15 @@ private:
     engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
     engine::Entity pedGroundGroup_;   // ... sitting on the grass (a picnic)
     engine::Entity pedLieGroup_;      // ... lying on it (in the sun)
+    // THE MID-RANGE BAND (the 100k plan's M band; Glenn: "increase the number of people throughout the island"):
+    // far (V) agents within farCarRadius / farPedRadius, drawn from CitySim::farDrawPose as cheap stand-ins -- a
+    // two-box car per body slot, the box person -- in groups of their own (no physics proxy, no lamps)
+    std::vector<engine::Entity> farCarGroups_;
+    engine::Entity farPedGroup_;
+    std::vector<Real> farY_;            // per agent: the ground under it, re-sampled once it has moved 5 m
+    std::vector<engine::Vec2> farYAt_;
+    int farDrawn_ = 0;
+    Real farCarRadius = 900.0, farPedRadius = 700.0;
     // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
     // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.
     engine::Entity indoorSitGroup_, indoorBodyGroup_;

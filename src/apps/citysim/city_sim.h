@@ -562,6 +562,12 @@ public:
     const std::vector<Agent>& agents() const { return agents_; }
     // Every K agent (the simulated-in-full, drawn tier), ascending: what a drawer walks instead of agents()
     const std::vector<int>& nearAgents() const { return kIdx_; }
+    // Every V agent (simulated coarsely, not drawn in full), ascending: the drawers' mid-range band
+    const std::vector<int>& farAgents() const { return vIdx_; }
+    // A far agent's drawn pose: its last coarse pose run on along its heading at its speed for the time since that
+    // tick (capped, and never past its link's end), so a far crowd moves rather than hopping once a second. False
+    // for an agent with nothing to show: not far, indoors at rest, riding, released.
+    bool farDrawPose(int agentIndex, engine::Vec2& pos, engine::Vec2& heading) const;
     // Vehicles hashed near (c, r), ascending -- a superset: every car is placed where it last parked (a driven one's
     // entry is stale; the caller skips cars with a driver)
     void parkedNear(engine::Vec2 c, Real r, std::vector<int>& out) const { parkedGrid_.query(c, r, out); }
