@@ -1824,6 +1824,12 @@ void CitySim::scheduleDormantEvent(int i) {
 }
 
 void CitySim::runDormantEvents() {
+    static const bool off = std::getenv("RT_NO_DORMANT_EVENTS") != nullptr;   // A/B: sleepers frozen, as before
+    if (off) return;
+    const auto t0 = std::chrono::steady_clock::now();
+    struct Stamp { std::chrono::steady_clock::time_point t0; double& acc;
+                   ~Stamp() { acc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); } }
+        stamp{t0, dormantEventMs_};
     int budget = 400;   // a backlog (a long pause, a clock jump) spreads over ticks instead of a hitch
     while (!dormantHeap_.empty() && budget > 0 && dormantHeap_.top().at <= clockTotalHours_) {
         const DormantEvent ev = dormantHeap_.top();
@@ -2952,8 +2958,10 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     if (!nav_ || routes <= 0 || busCount <= 0) return;
     buses_.build(*nav_, routes, stopsPerRoute, rng_ ? rng_ : 1u);
     if (buses_.empty()) return;
-    // Each loop driven both ways round: as many buses again, so each direction keeps the headway one direction had.
-    if (buses_.twoWay()) busCount *= 2;
+    // Each loop is driven both ways round by the SAME fleet, split between the directions. Doubling it (so each
+    // direction kept its old headway) put 80 buses on metro_planned and gridlocked its centre: regional buses
+    // queued nose to tail at their stops, junction boxes held 400+ stuck cars. A level wanting more sets "buses".
+
     if (busTable_.stateCount() == 0) busTable_ = busGoals();
     // Buses come off the DRIVER pool, spread by index like the cabs, and are
     // dealt across the routes BY LAP TIME -- one each first, then to whichever

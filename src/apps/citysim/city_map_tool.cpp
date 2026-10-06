@@ -135,7 +135,7 @@ void CityMapToolSystem::startWorker(engine::FrameContext& ctx) {
         for (int r = 0; r < net.routeCount(); ++r) {
             TransitLine l;
             for (const Vec2& p : net.route(r).path) l.path.push_back({p.x, p.y});
-            const engine::Vec3 c = routeColour(r);
+            const engine::Vec3 c = routeColour(net.lineOf(r));
             l.r = static_cast<float>(c.x);
             l.g = static_cast<float>(c.y);
             l.b = static_cast<float>(c.z);
@@ -380,7 +380,7 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
         // STOPS: a dot in the route's colour; an interchange (a hub stop,
         // where routes meet) bigger and ringed.
         for (int r = 0; r < net.routeCount(); ++r) {
-            const engine::Vec3 rc = routeColour(r);
+            const engine::Vec3 rc = routeColour(net.lineOf(r));
             const float col[4] = {static_cast<float>(rc.x), static_cast<float>(rc.y),
                                   static_cast<float>(rc.z), 1.0f};
             const BusRoute& route = net.route(r);
@@ -402,7 +402,7 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
             const Vec2 s = toPx(agents[static_cast<std::size_t>(i)].pos.x,
                                 agents[static_cast<std::size_t>(i)].pos.y);
             if (!onPanel(s, -6.0f)) continue;
-            const engine::Vec3 rc = routeColour(r);
+            const engine::Vec3 rc = routeColour(city_.sim().buses().lineOf(r));
             const float col[4] = {static_cast<float>(rc.x), static_cast<float>(rc.y),
                                   static_cast<float>(rc.z), 1.0f};
             Quad back = Quad::rect(static_cast<float>(s.x) - 8, static_cast<float>(s.y) - 8,
@@ -450,9 +450,11 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
         }
     }
 
-    // THE LEGEND: each route's colour, in route order (the HUD names them).
+    // THE LEGEND: each LINE's colour, in route order (the HUD names them). Twins come after every loop, so the
+    // lines are the first routes.
     if (city_.built()) {
-        const int n = city_.sim().buses().routeCount();
+        int n = 0;
+        while (n < city_.sim().buses().routeCount() && city_.sim().buses().lineOf(n) == n) ++n;
         const float x0 = p.x0 + 16, y0 = p.y0 + 16;
         if (n > 0)
             q.push_back(tinted(Quad::rect(x0 - 8, y0 - 8, x0 + 48, y0 + n * 22.0f + 2), kFrame));

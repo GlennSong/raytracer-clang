@@ -126,7 +126,8 @@ int buildBusStopProps(
                     if (nav.links[static_cast<std::size_t>(li)].to == stop.node) { in = li; break; }
             std::vector<int>& at = routesAt[{stop.node, in}];
             if (at.empty()) kerbOrder.push_back({stop.node, in});
-            if (std::find(at.begin(), at.end(), r) == at.end()) at.push_back(r);
+            const int line = net.lineOf(r);   // both directions of a line are one flag
+            if (std::find(at.begin(), at.end(), line) == at.end()) at.push_back(line);
         }
     }
 

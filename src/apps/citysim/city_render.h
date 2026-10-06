@@ -522,6 +522,8 @@ private:
     std::vector<float> crowdLinkLen_;   // per link: its length as the shader measures it (xz, end to end)
     Real farCarDistance = 4000.0, farPedDistance = 1500.0;
     int crowdLive_ = 0, crowdDrawnSeen_ = 0;
+    long lastDormantEvents_ = 0;      // the stats line's sleepers' events since the last line
+    double lastDormantMs_ = 0;
     Real farCarRadius = 900.0, farPedRadius = 700.0;
     // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
     // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.

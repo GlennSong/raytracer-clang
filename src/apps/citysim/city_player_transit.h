@@ -82,6 +82,9 @@ public:
         int boardableRoute = -1;
         int ridingRoute = -1;            // -1 in a cab
         engine::Real nextStopDistance = -1;
+        // per route: its line (a twin is its loop's line the other way round) and whether it is the twin
+        std::vector<int> lineOf;
+        std::vector<char> reversed;
     };
     const Hud& hud() const { return hud_; }
     int seatHeld() const { return seatIdx_; }            // -1 standing

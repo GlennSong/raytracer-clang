@@ -591,6 +591,10 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
     const CitySim& sim = city_.sim();
     const BusNetwork& net = sim.buses();
     if (net.routeCount() == 0) return;              // no buses on this level
+    for (int r = 0; r < net.routeCount(); ++r) {
+        hud_.lineOf.push_back(net.lineOf(r));
+        hud_.reversed.push_back(net.lineOf(r) != r ? 1 : 0);
+    }
     // Driving a car of your own: the bus is not your problem.
     if (riding_ < 0 && ctx.actions.context() == engine::InputContext::InVehicle) return;
 
@@ -737,13 +741,16 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
-    auto routeText = [](int route) {
+    auto routeText = [this](int route) {
         // Lifted toward white: the sign colours are for paint in daylight, and
         // dark red or blue text on a dark panel was hard to read.
-        const engine::Vec3 c = routeColour(route);
+        const bool known = route >= 0 && route < static_cast<int>(hud_.lineOf.size());
+        const int line = known ? hud_.lineOf[static_cast<std::size_t>(route)] : route;
+        const bool back = known && hud_.reversed[static_cast<std::size_t>(route)];
+        const engine::Vec3 c = routeColour(line);
         auto lift = [](Real v) { return static_cast<float>(v + (1.0 - v) * 0.4); };
         ImGui::TextColored(ImVec4(lift(c.x), lift(c.y), lift(c.z), 1.0f),
-                           "route %d (%s)", route, routeColourName(route));
+                           "route %d (%s)%s", line, routeColourName(line), back ? " the other way" : "");
     };
     if (hud_.mode == Hud::Mode::Riding) {
         if (hud_.ridingRoute >= 0) {

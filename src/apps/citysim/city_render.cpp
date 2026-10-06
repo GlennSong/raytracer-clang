@@ -663,7 +663,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // build warm-up therefore runs everything K, exactly as before.
     sim_.tieringEnabled = params_.tieredAgents;
     // RT_NEAR_TARGET=<n>: hold about n agents in the full sim round the player (the ring adapts; the GPU crowd shows
-    // the rest) -- for populations past what a full ring can carry
+    // the rest) -- for populations past what a full ring can carry. The island at 309k: 28 -> 66 fps at 1500 (K
+    // 3,501 -> 1,350; ring x0.46). NOT on by default: metro_planned's ring holds more than 1500, and the smaller
+    // ring there lets a junction near (45, -195) gridlock (eastbound, northbound and southbound queues all
+    // waiting), which strands the regional bus and its riders (metro_planned_regional_bus_joins_the_towns).
     if (const char* nt = std::getenv("RT_NEAR_TARGET")) sim_.nearTarget = std::max(0, std::atoi(nt));
     if (const char* ft = std::getenv("RT_FAR_TARGET")) sim_.farTarget = std::max(0, std::atoi(ft));
     sim_.dormancyEnabled = params_.dormantAgents;
@@ -3064,7 +3067,11 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << ", moving " << moving << ", rolling " << rolling
                  << ", asleep " << sim_.sleepingAgents()
                  << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_
-                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale() << " far ring x" << sim_.farScale();
+                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale() << " far ring x" << sim_.farScale()
+                 << " | sleepers' events " << (sim_.dormantEvents() - lastDormantEvents_) << " in "
+                 << (sim_.dormantEventMs() - lastDormantMs_) / calls << " ms per step";
+        lastDormantEvents_ = sim_.dormantEvents();
+        lastDormantMs_ = sim_.dormantEventMs();
         simMs = syncMs = 0.0;
         calls = 0;
     }

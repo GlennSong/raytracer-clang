@@ -1904,7 +1904,7 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     for (int ri = 0; ri < net.routeCount(); ++ri) {
         citysim::TransitLine l;
         for (const auto& pt : net.route(ri).path) l.path.push_back({pt.x, pt.y});
-        const engine::Vec3 c = citysim::routeColour(ri);
+        const engine::Vec3 c = citysim::routeColour(net.lineOf(ri));
         l.r = static_cast<float>(c.x); l.g = static_cast<float>(c.y); l.b = static_cast<float>(c.z);
         lines.push_back(l);
     }
@@ -1933,7 +1933,7 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     int hit = 0, tried = 0, worstRoute = 100;
     for (int ri = 0; ri < net.routeCount(); ++ri) {
         const auto& path = net.route(ri).path;
-        const engine::Vec3 c = citysim::routeColour(ri);
+        const engine::Vec3 c = citysim::routeColour(net.lineOf(ri));
         int rh = 0, rt = 0;
         for (std::size_t k = 0; k < path.size(); k += std::max<std::size_t>(1, path.size() / 40)) {
             const int x = static_cast<int>((path[k].x - (v.cx - v.w * 0.5 * v.metresPerPixel)) / v.metresPerPixel);

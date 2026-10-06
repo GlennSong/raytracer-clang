@@ -128,7 +128,14 @@ public:
                     return true;   // (planTrip's own test, to the bit)
         return false;
     }
-    // Routes driven both ways round (each loop and its twin): the fleet is doubled for them (setBuses).
+    // A route's LINE: a twin is the same line the other way round, so it wears its loop's colour and number
+    // (the map, the stop flags, the HUD).
+    int lineOf(int r) const {
+        if (r < 0 || r >= routeCount()) return r;
+        const int t = routes_[static_cast<std::size_t>(r)].twin;
+        return t >= 0 && t < r ? t : r;
+    }
+    // Routes driven both ways round (each loop and its twin).
     bool twoWay() const {
         for (const BusRoute& r : routes_) if (r.twin >= 0) return true;
         return false;

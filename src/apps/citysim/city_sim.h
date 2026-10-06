@@ -624,6 +624,7 @@ public:
     Real farScale() const { return farScale_; }
     long resumedTrips() const { return resumedTrips_; }
     long dormantEvents() const { return dormantEventsRun_; }   // schedule events run for sleeping agents
+    double dormantEventMs() const { return dormantEventMs_; }   // ...and the wall time they took, in all
     Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
     Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
     Real pedPromoteRadius = 280.0;
@@ -1732,6 +1733,7 @@ private:
     std::priority_queue<DormantEvent, std::vector<DormantEvent>, std::greater<DormantEvent>> dormantHeap_;
     std::vector<double> dormantEventAt_;   // per agent: its live event's time (-1 none)
     long dormantEventsRun_ = 0;
+    double dormantEventMs_ = 0;
     void scheduleDormantEvent(int i);
     void runDormantEvents();
     std::vector<int> crowdDirty_;  // takeCrowdChanges

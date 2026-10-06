@@ -179,7 +179,7 @@ TEST_CASE(buses_drive_their_loop_and_carry_riders) {
     int busCount = 0;
     for (std::size_t i = 0; i < sim.agents().size(); ++i)
         if (sim.isBus(static_cast<int>(i))) ++busCount;
-    CHECK(busCount == 16);   // doubled with the twins: each direction keeps the headway
+    CHECK(busCount == 8);   // the fleet asked for, split over both directions
 
     // Where every bus starts, so we can prove they went somewhere.
     std::vector<Vec2> busStart(sim.agents().size(), Vec2(0, 0));
@@ -337,7 +337,7 @@ TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
         for (std::size_t k = 1; k < starts.size(); ++k)
             CHECK(starts[k] - starts[k - 1] >= n / m - 1);
     }
-    CHECK(dealt == 16);
+    CHECK(dealt == 8);
 }
 
 // BOTH WAYS ROUND (Glenn: "Buses should probably go in both directions"). Every loop has a twin over the same
