@@ -504,8 +504,7 @@ private:
     // two-box car per body slot, the box person -- in groups of their own (no physics proxy, no lamps)
     std::vector<engine::Entity> farCarGroups_;
     engine::Entity farPedGroup_;
-    std::vector<Real> farY_;            // per agent: the ground under it, re-sampled once it has moved 5 m
-    std::vector<engine::Vec2> farYAt_;
+    // (far band ground heights: in the agent's draw cache below)
     int farDrawn_ = 0;
     Real farCarRadius = 900.0, farPedRadius = 700.0;
     // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
@@ -580,8 +579,27 @@ private:
     // car bodies the frame actually pays for. This was computed and discarded,
     // which left the car share of the frame a guess with a 2.7x spread.
     int parkedDrawn_ = 0;
-    std::vector<Real> prevCarSpeed_;
-    mutable std::vector<engine::Vec3> smoothUp_;   // per-agent tilt low-pass
+    // THE DRAW CACHE (bytes per agent; Glenn: "Why do you keep putting off this work?"): what the drawers keep per
+    // agent -- its last car pose, its tilt low-pass, its speed for the brake-light test, its far-band ground height
+    // -- for the agents actually DRAWN (the near and mid-range ~2,000), not five arrays sized for all 100,000
+    // (~230 bytes each). Entries not touched for a while are swept.
+    struct PoseCache { Real x = 0, z = 0, hx = 0, hz = 0; int slot = -1; bool valid = false; engine::Mat4 m; };
+    struct AgentDrawCache {
+        PoseCache pose;
+        engine::Vec3 smoothUp{0, 0, 0};
+        Real prevSpeed = 0;
+        bool fresh = true;              // prevSpeed not yet seeded (the first look sees no deceleration)
+        Real farY = 0;
+        engine::Vec2 farYAt{1e30, 1e30};
+        uint32_t used = 0;
+    };
+    mutable std::unordered_map<int, AgentDrawCache> drawCache_;
+    mutable uint32_t drawBake_ = 0;
+    AgentDrawCache& drawCache(int ai) const {
+        AgentDrawCache& c = drawCache_[ai];
+        c.used = drawBake_;
+        return c;
+    }
     Real bakeDt_ = 1.0 / 60.0;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
@@ -605,9 +623,7 @@ private:
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<uint8_t> siteShared_;  // by link: its signal shares an earlier one's pole and head (draws no lens)
     std::vector<int> postLinkOf_;      // per signal-post instance: the link whose state its head shows
-    // per agent: its last four-wheel car pose and what it was computed for (a car that has not moved reuses it)
-    struct PoseCache { Real x = 0, z = 0, hx = 0, hz = 0; int slot = -1; bool valid = false; engine::Mat4 m; };
-    mutable std::vector<PoseCache> poseCache_;
+
     std::vector<int> parkedScratch_;   // the vehicles near the player (syncGroups)
     // Each signal's three lens poses (red, amber, green), parallel to signalLinks_: the poles never move, and
     // working them out every bake (a ground sample apiece) was 10.6 ms of the island's 13 ms sync for 4,727 signals

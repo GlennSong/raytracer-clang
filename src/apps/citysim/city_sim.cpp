@@ -3215,7 +3215,7 @@ void CitySim::refreshPose(Agent& a) {
         // a.lane, so the car glides across the dashes instead of teleporting.
         const Real flMax = Real(lanes - 1) +
             (LL.klass == engine::RoadClass::Freeway ? Real(1) : Real(0));
-        const Real fl = std::min(std::max(a.laneF, Real(0)), flMax);
+        const Real fl = std::min(std::max(Real(a.laneF), Real(0)), flMax);
         const Real spacing = laneSpacingFor(link);
         Real off = (0.5 + fl) * spacing;
         if (LL.oneWay) off -= lanes * 0.5 * spacing;
@@ -3804,7 +3804,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             constexpr Real w = 1.8, kMaxRate = 0.6;
             const Real e = Real(a.lane) - a.laneF;
             a.laneVel += (w * w * e - 2 * w * a.laneVel) * dt;
-            a.laneVel = std::max(-kMaxRate, std::min(kMaxRate, a.laneVel));
+            a.laneVel = std::max(-kMaxRate, std::min(kMaxRate, Real(a.laneVel)));
             a.laneF += a.laneVel * dt;
             if (std::fabs(Real(a.lane) - a.laneF) < 0.002 && std::fabs(a.laneVel) < 0.01) {
                 a.laneF = Real(a.lane);
@@ -6635,7 +6635,7 @@ void CitySim::vAdvance(Agent& a, Real dt) {
     Real t = dt;
     while (t > 1e-9 && a.leg < legCount) {
         if (a.busDwell > 0) {   // a bus standing at its stop
-            const Real h = std::min(a.busDwell, t);
+            const Real h = std::min(Real(a.busDwell), t);
             a.busDwell -= h;
             t -= h;
             a.speed = 0;

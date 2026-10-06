@@ -190,11 +190,11 @@ struct Agent {
     // departWork is the TARGET ARRIVAL at work (Glenn, 2026-09-17: "the agent
     // would have to leave home earlier to get to work at 8"). The actual
     // departure is derived: arrival minus the trip, via departWorkHour().
-    Real departWork = 8.0, departHome = 17.0;
+    float departWork = 8.0f, departHome = 17.0f;
     // What this agent's own commute COSTS, in seconds. Rate-free on purpose:
     // assignPlaces runs before the clock rate is set, and the sky changes the
     // rate at runtime, so an hour baked at assignment would be wrong twice.
-    Real commuteSeconds = 0;
+    float commuteSeconds = 0;
     Activity activity = Activity::AtHome;
     // Goal layer (ADR-0064): the agent's current state in its archetype's
     // GoalTable, plus the in-world hours spent resting in it (feeds the
@@ -219,7 +219,7 @@ struct Agent {
     bool indoors = false;
     // This rest's own length in in-world hours, when the stop sets it (a
     // coffee outlasts a look in a shop window); 0 = the goal state's dwell.
-    Real restDwell = 0;
+    float restDwell = 0;
     // The venue (CitySim::venues_) this trip is heading for, -1 for none.
     int tripVenue = -1;
     // A SEAT this trip is for (CitySim::seats_, reserved by this agent), -1 for none; and where the agent is in
@@ -227,7 +227,7 @@ struct Agent {
     int tripSeat = -1;
     uint8_t seatPhase = 0;
     engine::Vec2 seatBack{0, 0};
-    Real loopS = 0;   // running a loop (a Jog spot): how far round it (m)
+    float loopS = 0;   // running a loop (a Jog spot): how far round it (m)
     int tripActivity = -1;   // the catalog activity this trip is for (CitySim::catalog_), -1 none
     int atActivity = -1;     // ...and the one it arrived for, while it stays (telemetry: `activities?`)
     int session = -1;        // the group activity session it is in (CitySim::sessions_), -1 none
@@ -251,7 +251,7 @@ struct Agent {
     // (Glenn, 2026-09-18: "they should stop and give people time to get on and
     // off"). The next trip is already routed; the bus just does not move until
     // this runs out. Both tiers honour it (advance, vAdvance).
-    Real busDwell = 0;
+    float busDwell = 0;
     // PULLING OUT OF A SPACE: the car's drawn position eases from where it was
     // parked into its lane over `pullLen` metres of driving (pullS so far),
     // instead of appearing in the lane in one frame -- which read as "jump
@@ -263,16 +263,16 @@ struct Agent {
     // rather than moving it, so a placement is never drawn as a slide.
     engine::Vec2 tickFromPos{0, 0};
     engine::Vec2 tickFromHeading{0, 1};
-    Real tickFromPullS = 0;   // pullS at the tick's start (the easing interpolates too)
+    float tickFromPullS = 0;   // pullS at the tick's start (the easing interpolates too)
     engine::Vec2 pullOffset{0, 0};    // parked position minus lane start
     // The turn from the lane heading back to the parked one, SIGNED and fixed
     // at departure (radians): the drawn yaw is the sim's plus this, fading.
     // Taking the shortest turn afresh each frame flipped direction whenever
     // the sim heading swung past the opposite of the parked one (a 136-degree
     // pivot mid-merge).
-    Real pullYawOffset = 0;
-    Real pullLen = 0;
-    Real pullS = 0;
+    float pullYawOffset = 0;
+    float pullLen = 0;
+    float pullS = 0;
 
     // Think cadence (ADR-0062): agents DECIDE on a slow clock and COMMIT — the
     // reactive scan (what do I see, which way do I lean) runs only when
@@ -299,28 +299,28 @@ struct Agent {
     // Carriageway grade (dY/m of travel) on the current link — the render
     // pitches an ELEVATED car from this, since it cannot sample the deck the
     // way it samples the ground (device: "adhere ... with all 4 wheels").
-    Real grade = 0;
+    float grade = 0;
     // Absolute deck height (corridor decks/ramps): when set (> -1e29) the
     // render places the car at deckY directly instead of ground+elevation —
     // ground varies BETWEEN chain nodes on hilly terrain, which made deck
     // traffic hover/sink by the difference (device: "still hovering").
-    Real deckY = -1e30;
+    float deckY = -1e30;
     int lane = 0;
     // Fractional lane position CHASING `lane` (device: "see the cars change
     // lanes ... signal with their turn signals"): a lane change is laneF
     // easing toward the new integer lane over a couple of seconds; the render
     // reads the gap to blink the correct indicator. laneTimer paces the next
     // discretionary change.
-    Real laneF = 0;
-    Real laneVel = 0;   // d(laneF)/dt, lanes/s: the glide is a damped spring, so it eases in and out (S-curve)
-    Real laneTimer = 5.0;
+    float laneF = 0;
+    float laneVel = 0;   // d(laneF)/dt, lanes/s: the glide is a damped spring, so it eases in and out (S-curve)
+    float laneTimer = 5.0;
     // Tether (ADR-0062): while set, this planner ghost may not LEAD `tetherAnchor`
     // (its physical car) by more than `tetherLead` metres — it waits instead. The
     // host feeds the car's real position each step, so the plan can never outrun
     // the physics (a collision, a hill, a slow start no longer strands the car).
     bool tethered = false;
     engine::Vec2 tetherAnchor;
-    Real tetherLead = 10.0;
+    float tetherLead = 10.0;
     // Continuous sideways lean off the path (ADR-0061), rate-limited, so a walker
     // steers smoothly around what it sees instead of popping. Decays back to 0.
     Real lateralOffset = 0;
@@ -332,7 +332,7 @@ struct Agent {
     // Imperfect perception (ADR-0060): each step the agent perceives obstacles
     // with probability `reliability`; otherwise it misses (a fault). `brain` is a
     // per-agent deterministic RNG so faults reproduce from the sim seed.
-    Real reliability = 1.0;
+    float reliability = 1.0;
     uint32_t brain = 1;
     // This agent's own stream for TRIP decisions (lane choice, wander goal),
     // separate from `brain`'s fault stream. Per-agent so a decision depends only
@@ -350,7 +350,7 @@ struct Agent {
     // nominal speed — a timid driver holds ~0.85x the limit, a pushy one ~1.15x,
     // and walkers stroll or stride. Derived from `brain`'s bits at build (no rng
     // draw, so seeded scenarios are unchanged); traffic stops moving in lockstep.
-    Real speedFactor = 1.0;
+    float speedFactor = 1.0;
 
     // Cached world pose (XZ + a height for bridges); what a renderer reads.
     engine::Vec2 pos;

@@ -1631,9 +1631,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // Per-agent speed history for the brake-light hard-decel test (ADR-0065
     // follow-up); seeded to the warmed-up speed so the first bake sees no spurious
     // deceleration.
-    prevCarSpeed_.assign(sim_.agents().size(), 0.0);
-    for (std::size_t i = 0; i < sim_.agents().size(); ++i)
-        prevCarSpeed_[i] = sim_.agents()[i].speed;
+    drawCache_.clear();   // (an agent's speed history seeds on its first look: AgentDrawCache::fresh)
 
     built_ = true;
     syncGroups(world);
@@ -1735,9 +1733,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     // unindexed callers).
     auto smoothedUp = [&](Vec3 up) {
         if (agentIdx < 0 || !car) return up;
-        if (smoothUp_.size() <= static_cast<std::size_t>(agentIdx))
-            smoothUp_.resize(sim_.agents().size(), Vec3(0, 0, 0));
-        Vec3& su = smoothUp_[agentIdx];
+        Vec3& su = drawCache(agentIdx).smoothUp;
         // Gain from the bake interval (tau ~0.7 s), so the filter behaves the
         // same at the viewer's 60 Hz and the tests' 10 Hz.
         const Real k = 1.0 - std::exp(-bakeDt_ / 0.7);
@@ -1849,7 +1845,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
         const Real fl = drawHeading.length();
         // A CAR THAT HAS NOT MOVED (at a light, in a queue, at the kerb) sits exactly where it sat: its last pose,
         // not four surface samples and a fit again every bake
-        PoseCache* pc = agentIdx >= 0 && agentIdx < static_cast<int>(poseCache_.size()) ? &poseCache_[static_cast<std::size_t>(agentIdx)] : nullptr;
+        PoseCache* pc = agentIdx >= 0 ? &drawCache(agentIdx).pose : nullptr;
         if (pc && pc->valid && pc->x == x && pc->z == z && pc->hx == drawHeading.x && pc->hz == drawHeading.y && pc->slot == slot)
             return pc->m;
         if (wheels && fl > 1e-6) {
@@ -2092,8 +2088,6 @@ void CityRenderSystem::syncCarLamps(World& world) {
     if (turn) turn->transforms.clear();
 
     const std::vector<Agent>& agents = sim_.agents();
-    if (prevCarSpeed_.size() != agents.size())
-        prevCarSpeed_.assign(agents.size(), 0.0);
 
     // Externally-owned cars aren't drawn by this bridge (carGroups_ empty), so
     // their lamps aren't either. We still update prevCarSpeed_ below.
@@ -2109,8 +2103,10 @@ void CityRenderSystem::syncCarLamps(World& world) {
     for (int nearIdx : sim_.nearAgents()) {
         const std::size_t ai = static_cast<std::size_t>(nearIdx);
         const Agent& a = agents[ai];
-        const Real prev = prevCarSpeed_[ai];
-        prevCarSpeed_[ai] = a.speed;   // record for next step's decel test
+        AgentDrawCache& dcl = drawCache(static_cast<int>(ai));
+        const Real prev = dcl.fresh ? a.speed : dcl.prevSpeed;
+        dcl.prevSpeed = a.speed;   // record for next step's decel test
+        dcl.fresh = false;
         if (!drawCars) continue;
         if (a.mode != Agent::Mode::Driver) continue;
         if (a.released) continue;      // commandeered: the physical car owns its lamps
@@ -2266,7 +2262,10 @@ void CityRenderSystem::syncGroups(World& world) {
         secT = n;
     };
     const auto& agents = sim_.agents();
-    if (poseCache_.size() != agents.size()) poseCache_.assign(agents.size(), PoseCache{});
+    // the draw cache: a new bake; every 600, drop what has not been drawn for that long
+    if (++drawBake_ % 600 == 0)
+        for (auto it = drawCache_.begin(); it != drawCache_.end();)
+            it = drawBake_ - it->second.used > 600 ? drawCache_.erase(it) : std::next(it);
     // the K tier only, ascending (agents() order): a far agent has no render membership
     for (int nearIdx : sim_.nearAgents()) {
         const std::size_t ai = static_cast<std::size_t>(nearIdx);
@@ -2462,10 +2461,6 @@ void CityRenderSystem::syncGroups(World& world) {
         InstanceGroup* fp = farPedGroup_.valid() ? world.get<InstanceGroup>(farPedGroup_) : nullptr;
         if (fp) fp->transforms.clear();
         const std::vector<Vec3> heFar = carGroupHalfExtents();
-        if (farY_.size() != sim_.agents().size()) {
-            farY_.assign(sim_.agents().size(), 0);
-            farYAt_.assign(sim_.agents().size(), Vec2(1e30, 1e30));
-        }
         const Vec2 c = sim_.tierCenter();
         for (int vi : sim_.farAgents()) {
             const Agent& a = sim_.agents()[static_cast<std::size_t>(vi)];
@@ -2475,18 +2470,18 @@ void CityRenderSystem::syncGroups(World& world) {
             if (d.x * d.x + d.y * d.y > rad * rad) continue;
             Vec2 p, h;
             if (!sim_.farDrawPose(vi, p, h)) continue;
-            const std::size_t k = static_cast<std::size_t>(vi);
-            if ((p - farYAt_[k]).lengthSquared() > 25.0) { farY_[k] = groundAt(p.x, p.y); farYAt_[k] = p; }
+            AgentDrawCache& dcf = drawCache(vi);
+            if ((p - dcf.farYAt).lengthSquared() > 25.0) { dcf.farY = groundAt(p.x, p.y); dcf.farYAt = p; }
             const Real yaw = std::atan2(h.x, h.y);
             if (car) {
                 int v = drawSlotFor(vi);
                 if (v < 0 || v >= static_cast<int>(fc.size()) || !fc[static_cast<std::size_t>(v)]) continue;
                 const Real hy = v < static_cast<int>(heFar.size()) ? heFar[static_cast<std::size_t>(v)].y : 0.7;
                 fc[static_cast<std::size_t>(v)]->transforms.push_back(
-                    Mat4::trs(Vec3(p.x, farY_[k] + hy, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    Mat4::trs(Vec3(p.x, dcf.farY + hy, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
             } else if (fp) {
                 fp->transforms.push_back(
-                    Mat4::trs(Vec3(p.x, farY_[k] + 0.9, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    Mat4::trs(Vec3(p.x, dcf.farY + 0.9, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
             }
             ++farDrawn_;
         }
