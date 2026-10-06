@@ -269,18 +269,38 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 
         // SITTING (the furniture library, M5): the walker is drawn seated on its bench or chair -- hip on the seat,
         // facing out -- and its capsule parks inside the seat, out of everyone's way, until it gets up.
-        if (const CitySim::SeatSpot* st = sim.seatedOn(w.agentId)) {
+        // ...and on the grass (a picnic), or lying on it (in the sun): the same, on the ground under it
+        CitySim::RestPose rp;
+        if (sim.restPose(w.agentId, rp)) {
             city_.simMutable().clearAgentTether(w.agentId);
+            const Real gy = rp.kind == CitySim::RestPose::Kind::Seat ? rp.hip - 0.45 : city_.groundHeightAt(rp.pos.x, rp.pos.y);
             if (cc && cc->characterId != engine::INVALID_CHARACTER)
-                pw.setCharacterPosition(cc->characterId, Vec3(st->pos.x, st->hip - 0.45 + kCapsuleHalf + kCapsuleRadius, st->pos.y));
-            auto it = seatedMeshes_.find(w.outfit);
-            if (it == seatedMeshes_.end())
-                it = seatedMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildSeatedPersonMesh(w.outfit),
-                                                                           "citywalk:seated" + std::to_string(w.outfit))).first;
-            if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = it->second;
-            w.facing = st->face;
-            t->position = Vec3(st->pos.x, st->hip, st->pos.y);
-            t->orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(st->face.x, st->face.y));
+                pw.setCharacterPosition(cc->characterId, Vec3(rp.pos.x, gy + kCapsuleHalf + kCapsuleRadius, rp.pos.y));
+            const Quat yaw = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(rp.face.x, rp.face.y));
+            engine::MeshHandle mesh;
+            if (rp.kind == CitySim::RestPose::Kind::Seat) {
+                auto it = seatedMeshes_.find(w.outfit);
+                if (it == seatedMeshes_.end())
+                    it = seatedMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildSeatedPersonMesh(w.outfit),
+                                                                               "citywalk:seated" + std::to_string(w.outfit))).first;
+                mesh = it->second;
+                t->position = Vec3(rp.pos.x, rp.hip, rp.pos.y);
+                t->orientation = yaw;
+            } else if (rp.kind == CitySim::RestPose::Kind::SitGround) {
+                auto it = groundSitMeshes_.find(w.outfit);
+                if (it == groundSitMeshes_.end())
+                    it = groundSitMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildGroundSittingPersonMesh(w.outfit),
+                                                                                  "citywalk:groundsit" + std::to_string(w.outfit))).first;
+                mesh = it->second;
+                t->position = Vec3(rp.pos.x, gy + kGroundSitHip, rp.pos.y);
+                t->orientation = yaw;
+            } else {   // lying on its back, feet the way it faces
+                mesh = poseMesh(ctx.assets, w.outfit, 0);
+                t->position = Vec3(rp.pos.x, gy + kLieHalfDepth, rp.pos.y);
+                t->orientation = yaw * Quat::fromAxisAngle(Vec3(1, 0, 0), -engine::PI * 0.5);
+            }
+            if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = mesh;
+            w.facing = rp.face;
             if (PrevTransform* pt = world.get<PrevTransform>(w.entity)) pt->value = *t;
             w.haveLast = false;
             continue;
@@ -540,6 +560,39 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                       tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
                       onWalks, studentsOnWalks, joggers, jogBooked, games, playing, gathering, signedUp);
         ctx.settings.setString("walkers.telemetry", b);
+        // WHAT EVERYONE IS DOING (`activities?`): per activity in the catalog, how many are at it and how many on the
+        // way; its groups going and the nearest one to the bubble's centre (where to go and look)
+        {
+            const ActivityCatalog& cat = sm.activityCatalog();
+            std::vector<int> at(cat.defs.size(), 0), going(cat.defs.size(), 0), groups(cat.defs.size(), 0);
+            std::vector<Real> nearD(cat.defs.size(), 1e30);
+            std::vector<Vec2> nearAt(cat.defs.size());
+            for (const Agent& a : sm.agents()) {
+                if (a.moving) {
+                    if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(cat.defs.size()))
+                        ++going[static_cast<std::size_t>(a.tripActivity)];
+                    continue;
+                }
+                if (a.atActivity < 0 || a.atActivity >= static_cast<int>(cat.defs.size())) continue;
+                const std::size_t d = static_cast<std::size_t>(a.atActivity);
+                ++at[d];
+                const Real dd = (a.pos - sm.tierCenter()).lengthSquared();
+                if (dd < nearD[d]) { nearD[d] = dd; nearAt[d] = a.pos; }
+            }
+            for (const CitySim::Session& se : sm.sessions())
+                if (se.state != CitySim::Session::State::Dead && se.def >= 0 && se.def < static_cast<int>(cat.defs.size()))
+                    ++groups[static_cast<std::size_t>(se.def)];
+            std::string out;
+            char line[200];
+            for (std::size_t d = 0; d < cat.defs.size(); ++d) {
+                if (!at[d] && !going[d] && !groups[d]) continue;
+                std::snprintf(line, sizeof line, "%s%s %d (+%d coming)", out.empty() ? "" : " | ", cat.defs[d].name.c_str(), at[d], going[d]);
+                out += line;
+                if (groups[d]) { std::snprintf(line, sizeof line, " %d groups", groups[d]); out += line; }
+                if (at[d]) { std::snprintf(line, sizeof line, " nearest %.0f %.0f", nearAt[d].x, nearAt[d].y); out += line; }
+            }
+            ctx.settings.setString("activities.telemetry", out.empty() ? "nobody out" : out);
+        }
         tel_ = Telemetry{};
     }
 }
@@ -549,6 +602,8 @@ void CityWalkerSystem::onStop(engine::FrameContext&) {
     // same no-removal-hook note as the vehicle bridge — fine at level teardown).
     walkers_.clear();
     poseMeshes_.clear();
+    seatedMeshes_.clear();
+    groundSitMeshes_.clear();
 }
 
 }  // namespace citysim

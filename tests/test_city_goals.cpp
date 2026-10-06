@@ -715,6 +715,9 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     for (PlaceType ty : types)
         for (int i = 0; i < 4; ++i, ++k) places.add(ty, Vec2(-450.0 + (k % 8) * 120.0, -450.0 + (k / 8) * 110.0), nav, 6, 23);
     const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 0), nav);
+    // a cafe out at the town's far corner: somewhere ACROSS town (1.2-3 km) from most of it
+    places.add(PlaceType::Cafe, Vec2(560, 560), nav, 6, 23);
+    places.add(PlaceType::Cafe, Vec2(-560, 560), nav, 6, 23);
     const PlaceId lib = places.add(PlaceType::Civic, Vec2(60, 40), nav, 7, 23);
     const PlaceId field = places.add(PlaceType::Park, Vec2(250, 50), nav);
     places.setCampus(quad, 4); places.setCampus(lib, 2); places.setCampus(field, 5);
@@ -733,7 +736,11 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     sim.setSpots(spots);
     CitySim::ActivityArea pitch;
     pitch.kind = "pitch"; pitch.center = Vec2(250, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
-    sim.setAreas({pitch});
+    CitySim::ActivityArea lawnQ;   // the quad's lawn
+    lawnQ.kind = "lawn"; lawnQ.center = Vec2(0, -30); lawnQ.axis = Vec2(1, 0); lawnQ.halfL = 18; lawnQ.halfW = 10;
+    CitySim::ActivityArea lawnP = lawnQ;   // a park's in town
+    lawnP.center = Vec2(-330, 300); lawnP.halfL = 25; lawnP.halfW = 14;
+    sim.setAreas({pitch, lawnQ, lawnP});
     sim.assignPlaces(places, nav);
     sim.seedFromSchedule(8.0);
 
@@ -745,7 +752,7 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
         longest = std::max(longest, hi / 60.0 + d.gatherMinutes / 60.0);
     }
     longest += 0.25;
-    int leaked = 0, stuck = 0, strayMember = 0, deadWithMembers = 0, runningSamples = 0;
+    int leaked = 0, stuck = 0, strayMember = 0, deadWithMembers = 0, runningSamples = 0, offArea = 0;
     std::vector<double> usingSince(sim.agents().size(), -1);
     std::vector<int> used(cat.defs.size(), 0);
     const double dtH = 0.5 * 0.0004;
@@ -775,17 +782,135 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
         for (const auto& se : sim.sessions()) {
             if (se.state == CitySim::Session::State::Dead && !se.members.empty()) ++deadWithMembers;
             if (se.state == CitySim::Session::State::Running) ++runningSamples;
+            if (se.state == CitySim::Session::State::Dead) continue;
+            // every member settled in its place is on its area (a ring, a pair, sunbathers alike)
+            const auto& ar = sim.areas()[static_cast<std::size_t>(se.area)];
+            for (int m : se.members) {
+                const Agent& p = ag[static_cast<std::size_t>(m)];
+                if (p.seatPhase != 2 || p.speed > 0) continue;
+                const Vec2 d = p.pos - ar.center, side(ar.axis.y, -ar.axis.x);
+                if (std::fabs(dot(d, ar.axis)) > ar.halfL + 0.5 || std::fabs(dot(d, side)) > ar.halfW + 0.5) ++offArea;
+            }
         }
     }
     std::string unused;
     for (std::size_t d = 0; d < cat.defs.size(); ++d)
         if (!used[d]) unused += " " + cat.defs[d].name;
     std::printf("    [every activity] %zu activities; leaked reservations %d, stuck %d, stray session members %d, dead sessions with "
-                "members %d; a game on in %d samples; never taken up:%s\n", cat.defs.size(), leaked, stuck, strayMember, deadWithMembers, runningSamples,
-                unused.empty() ? " none" : unused.c_str());
+                "members %d; a group on in %d samples; settled off their area %d; never taken up:%s\n", cat.defs.size(), leaked, stuck,
+                strayMember, deadWithMembers, runningSamples, offArea, unused.empty() ? " none" : unused.c_str());
     CHECK(leaked == 0);
     CHECK(stuck == 0);
     CHECK(strayMember == 0);
     CHECK(deadWithMembers == 0);
+    CHECK(offArea == 0);
     CHECK(unused.empty());
+}
+
+// THE LAWN GROUPS (settled formations): a chat is a ring standing round its middle, facing in, that grows as people
+// join it; a picnic's ring sits on the grass; sunbathers lie side by side; a game of catch is two, about ten metres
+// apart, facing. Several groups share a lawn, never on top of each other.
+namespace {
+struct LawnRun {
+    int sessions = 0, maxMembers = 0, maxConcurrent = 0;
+    int settledSamples = 0, notFacingIn = 0, tooClose = 0, sitGround = 0, lying = 0, standing = 0;
+    int groupsTooClose = 0;
+    double pairLo = 1e9, pairHi = 0;
+};
+LawnRun runLawn(const char* activity, int walkers, double startHour) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, walkers, 33);
+    ActivityCatalog cat = defaultActivityCatalog();
+    Menu m;
+    m.name = "lawn";
+    { MenuBand b; b.first = {{activity, 1.0, 0}}; m.bands.push_back(b); }
+    cat.menus.push_back(m);
+    sim.setActivityCatalog(cat);
+    GoalTable t;
+    t.addState("Go", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(t.setMenu("Go", "lawn"));
+    t.addState("Be", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.3);
+    CHECK(t.addTransition("Go", GoalEvent::Arrived, "Be"));
+    CHECK(t.addTransition("Go", GoalEvent::NoRoute, "Be"));
+    CHECK(t.addTransition("Be", GoalEvent::DwellDone, "Go"));
+    CHECK(t.setEntry("Be"));
+    sim.setGoalTables(t, t);
+    PlaceMap places;
+    places.add(PlaceType::Park, Vec2(50, 50), nav);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 150.0, -250), nav);
+    CitySim::ActivityArea lawn;
+    lawn.kind = "lawn"; lawn.center = Vec2(50, 50); lawn.axis = Vec2(1, 0); lawn.halfL = 22; lawn.halfW = 14;
+    sim.setAreas({lawn});
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(startHour);
+    LawnRun r;
+    std::vector<int> seen(128, 0);
+    for (int i = 0; i < 30000; ++i) {
+        sim.step(0.5, 0.0003);
+        const auto& ses = sim.sessions();
+        int live = 0;
+        for (std::size_t k = 0; k < ses.size(); ++k) {
+            const auto& se = ses[k];
+            if (se.state == CitySim::Session::State::Dead) { if (k < seen.size()) seen[k] = 0; continue; }
+            if (se.def != cat.find(activity)) continue;   // (a day off's own picnics and chats go on round it)
+            ++live;
+            if (k < seen.size() && !seen[k]) { seen[k] = 1; ++r.sessions; }
+            r.maxMembers = std::max(r.maxMembers, static_cast<int>(se.members.size()));
+            for (std::size_t o = k + 1; o < ses.size(); ++o)
+                if (ses[o].state != CitySim::Session::State::Dead && (ses[o].center - se.center).length() < 4.0) ++r.groupsTooClose;
+            std::vector<Vec2> settled;
+            for (int mi : se.members) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(mi)];
+                if (a.seatPhase != 2 || a.speed > 0) continue;
+                ++r.settledSamples;
+                settled.push_back(a.pos);
+                CitySim::RestPose rp;
+                if (!sim.restPose(mi, rp)) ++r.standing;
+                else if (rp.kind == CitySim::RestPose::Kind::SitGround) ++r.sitGround;
+                else if (rp.kind == CitySim::RestPose::Kind::Lie) ++r.lying;
+                if (se.formation == Formation::Circle && se.members.size() >= 2) {
+                    const Vec2 in = se.center - a.pos;
+                    if (in.length() > 0.1 && dot(normalize(in), a.heading) < 0.95) ++r.notFacingIn;
+                }
+            }
+            for (std::size_t x = 0; x < settled.size(); ++x)
+                for (std::size_t y = x + 1; y < settled.size(); ++y) {
+                    const Real dd = (settled[x] - settled[y]).length();
+                    if (se.formation == Formation::Pair) { r.pairLo = std::min(r.pairLo, dd); r.pairHi = std::max(r.pairHi, dd); }
+                    else if (dd < 0.6) ++r.tooClose;
+                }
+        }
+        r.maxConcurrent = std::max(r.maxConcurrent, live);
+    }
+    return r;
+}
+}  // namespace
+
+TEST_CASE(lawn_groups_take_their_formations_and_poses) {
+    const LawnRun chat = runLawn("chat", 40, 9.0);
+    std::printf("    [chat] %d circles, most in one %d, at once %d; settled %d (facing out %d, shoulder to shoulder %d), groups on "
+                "top of each other %d\n", chat.sessions, chat.maxMembers, chat.maxConcurrent, chat.settledSamples, chat.notFacingIn,
+                chat.tooClose, chat.groupsTooClose);
+    CHECK(chat.sessions >= 2);
+    CHECK(chat.maxMembers >= 3 && chat.maxMembers <= 6);   // joined, up to six
+    // (one step's lag when someone joins and the ring re-spaces: the rest turn on the next)
+    CHECK(chat.settledSamples > 0 && chat.notFacingIn * 1000 < chat.settledSamples && chat.tooClose == 0);
+    CHECK(chat.sitGround == 0 && chat.lying == 0);
+    CHECK(chat.groupsTooClose == 0);
+    const LawnRun pic = runLawn("picnic", 30, 11.5);
+    std::printf("    [picnic] %d picnics, most in one %d, at once %d; sitting on the grass %d of %d settled\n", pic.sessions, pic.maxMembers,
+                pic.maxConcurrent, pic.sitGround, pic.settledSamples);
+    CHECK(pic.sessions >= 2 && pic.maxConcurrent >= 2);
+    CHECK(pic.sitGround > 0 && pic.sitGround == pic.settledSamples);
+    CHECK(pic.groupsTooClose == 0);
+    const LawnRun sun = runLawn("sunbathe", 30, 11.0);
+    std::printf("    [sunbathe] %d groups, lying %d of %d settled\n", sun.sessions, sun.lying, sun.settledSamples);
+    CHECK(sun.lying > 0 && sun.lying == sun.settledSamples);
+    CHECK(sun.tooClose == 0);
+    const LawnRun cat = runLawn("catch", 30, 10.0);
+    std::printf("    [catch] %d games, %.1f-%.1f m apart\n", cat.sessions, cat.pairLo, cat.pairHi);
+    CHECK(cat.sessions >= 1 && cat.maxMembers == 2);
+    CHECK(cat.pairLo >= 6.0 && cat.pairHi <= 12.5);
+    CHECK(cat.standing == cat.settledSamples);
 }

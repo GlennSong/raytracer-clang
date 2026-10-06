@@ -56,7 +56,7 @@ std::vector<std::string> strings(lua_State* L, int t, const char* key) {
 }
 bool knownSite(const std::string& k) {
     static const char* kinds[] = {"cafe", "restaurant", "shop", "supermarket", "civic", "park", "library", "teaching", "quad",
-                                  "field", "office", "seat", "bed", "stand", "loop", "pitch", "watch", "street"};
+                                  "field", "office", "seat", "bed", "stand", "loop", "pitch", "lawn", "watch", "street"};
     for (const char* x : kinds) if (k == x) return true;
     return false;
 }
@@ -134,6 +134,11 @@ bool loadActivityCatalog(ScriptVM& vm, citysim::ActivityCatalog& out, std::strin
                 r.n = static_cast<int>(num(L, ri, "n", 1));
                 pair(L, ri, "speed", r.speedLo, r.speedHi);
                 r.zone = static_cast<int>(num(L, ri, "zone", -1));
+                const std::string ps = str(L, ri, "pose");
+                if (ps.empty() || ps == "stand") r.pose = citysim::Pose::Stand;
+                else if (ps == "sit_ground") r.pose = citysim::Pose::SitGround;
+                else if (ps == "lie") r.pose = citysim::Pose::Lie;
+                else { lua_settop(L, base); return fail(err, "activities." + name + ": unknown pose `" + ps + "`"); }
                 d.roles.push_back(r);
                 lua_pop(L, 1);
             }
@@ -143,6 +148,14 @@ bool loadActivityCatalog(ScriptVM& vm, citysim::ActivityCatalog& out, std::strin
         d.gatherMinutes = num(L, dt, "gather_minutes", 20);
         d.swapAt = num(L, dt, "swap_at", 0);
         d.during = str(L, dt, "during");
+        // formation = "roam" | "circle" | "pair" | "spread", radius
+        const std::string fm = str(L, dt, "formation");
+        if (fm.empty() || fm == "roam") d.formation = citysim::Formation::Roam;
+        else if (fm == "circle") d.formation = citysim::Formation::Circle;
+        else if (fm == "pair") d.formation = citysim::Formation::Pair;
+        else if (fm == "spread") d.formation = citysim::Formation::Spread;
+        else { lua_settop(L, base); return fail(err, "activities." + name + ": unknown formation `" + fm + "`"); }
+        d.radius = num(L, dt, "radius", 0);
         if (d.perform == citysim::Perform::Roam && d.roles.empty()) {
             lua_settop(L, base);
             return fail(err, "activities." + name + ": a roaming group needs its roles");

@@ -20,6 +20,25 @@ bool spotKindFromName(const std::string& name, SpotKind& out) {
     return false;
 }
 
+const char* formationName(Formation f) {
+    switch (f) {
+        case Formation::Roam: return "roam";
+        case Formation::Circle: return "circle";
+        case Formation::Pair: return "pair";
+        case Formation::Spread: return "spread";
+    }
+    return "?";
+}
+
+const char* poseName(Pose p) {
+    switch (p) {
+        case Pose::Stand: return "stand";
+        case Pose::SitGround: return "sit_ground";
+        case Pose::Lie: return "lie";
+    }
+    return "?";
+}
+
 uint32_t spotTagFromName(const std::string& name) {
     if (name == "campus") return spot_tag::kCampus;
     if (name == "park") return spot_tag::kPark;
@@ -56,11 +75,13 @@ std::string ActivityCatalog::describe() const {
                       d.walkersOnly ? 1 : 0, d.inShift ? 1 : 0, d.bringOwnEighths, d.fromHome ? 1 : 0, static_cast<int>(d.perform));
         out += b;
         for (const RoleDef& r : d.roles) {
-            std::snprintf(b, sizeof b, "  role %s n=%d speed=%g-%g zone=%d\n", r.name.c_str(), r.n, r.speedLo, r.speedHi, r.zone);
+            std::snprintf(b, sizeof b, "  role %s n=%d speed=%g-%g zone=%d pose=%s\n", r.name.c_str(), r.n, r.speedLo, r.speedHi,
+                          r.zone, poseName(r.pose));
             out += b;
         }
         if (!d.roles.empty() || !d.during.empty()) {
-            std::snprintf(b, sizeof b, "  group min=%d gather=%g swap=%g during=%s\n", d.minPlayers, d.gatherMinutes, d.swapAt, d.during.c_str());
+            std::snprintf(b, sizeof b, "  group min=%d gather=%g swap=%g during=%s formation=%s radius=%g\n", d.minPlayers,
+                          d.gatherMinutes, d.swapAt, d.during.c_str(), formationName(d.formation), d.radius);
             out += b;
         }
     }
@@ -90,6 +111,7 @@ void siteKindMinutes(const std::string& k, double& lo, double& hi) {
     else if (k == "loop") { lo = 19.8; hi = 34.8; }
     else if (k == "street") { lo = 0.6; hi = 2.4; }
     else if (k == "pitch") { lo = 30; hi = 45; }
+    else if (k == "lawn") { lo = 15; hi = 40; }
     else { lo = 6; hi = 18; }   // a shop, anything else
 }
 
@@ -136,6 +158,22 @@ ActivityCatalog defaultActivityCatalog() {
     { ActivityDef& d = def("watch_game", {"seat"}); d.tags = spot_tag::kSports; d.distHi = 900; d.nearest = 6;
       d.perform = Perform::Spot; d.minutesLo = 15; d.minutesHi = 40; d.during = "kickabout"; }
 
+    // ON THE LAWNS (a park's, the quad's): groups that settle rather than run about. A CHAT -- a ring standing,
+    // facing in, that anyone passing may join (up to six); a PICNIC -- a ring sitting on the grass; SUNBATHING -- lying
+    // side by side; CATCH -- two, ten metres apart, stepping about
+    auto lawnGroup = [&](const char* name, Formation f, double radius, const char* role, int n, Pose pose, int minP,
+                         double gather, double mLo, double mHi, double hLo, double hHi) {
+        ActivityDef& d = def(name, {"lawn"});
+        d.distHi = 650; d.nearest = 4; d.perform = Perform::Roam; d.formation = f; d.radius = radius;
+        d.minPlayers = minP; d.gatherMinutes = gather; d.minutesLo = mLo; d.minutesHi = mHi; d.hourLo = hLo; d.hourHi = hHi;
+        RoleDef r; r.name = role; r.n = n; r.pose = pose; r.speedLo = 1.1; r.speedHi = 1.6;
+        d.roles = {r};
+    };
+    lawnGroup("chat", Formation::Circle, 0.8, "talker", 6, Pose::Stand, 2, 12, 10, 25, 7, 22);
+    lawnGroup("picnic", Formation::Circle, 0.85, "picnicker", 4, Pose::SitGround, 1, 15, 30, 60, 11, 15.5);
+    lawnGroup("sunbathe", Formation::Spread, 1.1, "sunbather", 2, Pose::Lie, 1, 10, 20, 45, 10, 17);
+    lawnGroup("catch", Formation::Pair, 9.0, "catcher", 2, Pose::Stand, 2, 10, 10, 25, 9, 20);
+
     // THE ERRAND on the way home (the old fixed "shop near home"): a supermarket or a store near HOME, one of the three
     // nearest open
     { ActivityDef& d = def("errand", {"supermarket", "shop"}); d.fromHome = true; d.distHi = 700; d.nearest = 3; }
@@ -154,11 +192,13 @@ ActivityCatalog defaultActivityCatalog() {
     band(5.0, 10.5, 0.20, 0.10, {{"coffee", 0, 4.0}, {"park_visit", 0, 3.0}, {"groceries", 0, 0.5}, {"civic_visit", 0, 0.3},
                                 {"walk_round_block", 0, 3.0}});
     band(10.5, 14.0, 0.25, 0.14, {{"browse", 0, 2.5}, {"meal", 0, 2.0}, {"coffee", 0, 2.0}, {"park_visit", 0, 3.0},
-                                 {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 2.0}});
+                                 {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 2.0}, {"picnic", 0, 1.5},
+                                 {"sunbathe", 0, 0.8}, {"chat", 0, 1.0}});
     band(14.0, 17.5, 0.30, 0.14, {{"browse", 0, 2.5}, {"groceries", 0, 1.5}, {"park_visit", 0, 3.0}, {"coffee", 0, 1.5},
-                                 {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 3.0}});
+                                 {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 3.0}, {"sunbathe", 0, 1.0},
+                                 {"catch", 0, 0.8}, {"chat", 0, 1.0}, {"picnic", 0, 0.5}});
     band(17.5, 23.0, 0.15, 0.10, {{"meal", 0, 3.0}, {"coffee", 0, 1.0}, {"park_visit", 0, 1.5}, {"groceries", 0, 1.0},
-                                 {"walk_round_block", 0, 2.0}});
+                                 {"walk_round_block", 0, 2.0}, {"chat", 0, 1.0}, {"catch", 0, 0.5}});
     band(23.0, 5.0, 0.0, 0.0, {{"walk_round_block", 0, 1.0}, {"park_visit", 0, 0.5}});
     c.menus.push_back(outing);
     Menu errand;
@@ -173,12 +213,16 @@ ActivityCatalog defaultActivityCatalog() {
     // three) or the quad -- the old single roll's thresholds as chances tried in order
     Menu brk;
     brk.name = "student_break";
+    // (and on the quad's lawns: a chat, a lie in the sun, a game of catch, a picnic lunch)
     { MenuBand b; b.hourLo = 11.5; b.hourHi = 13.5; b.first = {{"lunch", 0.45, 0}, {"campus_bench", 0.55, 0}};
-      b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}}; brk.bands.push_back(b); }
+      b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}, {"chat", 0, 1.5}, {"picnic", 0, 1.0}, {"sunbathe", 0, 0.6}};
+      brk.bands.push_back(b); }
     { MenuBand b; b.hourLo = 15.0; b.hourHi = 19.5;
       b.first = {{"kickabout", 0.2, 0}, {"watch_game", 0.15, 0}, {"jog", 0.25, 0}, {"campus_bench", 0.667, 0}};
-      b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}}; brk.bands.push_back(b); }
-    { MenuBand b; b.first = {{"campus_bench", 0.75, 0}}; b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}}; brk.bands.push_back(b); }
+      b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}, {"chat", 0, 1.5}, {"catch", 0, 1.0}, {"sunbathe", 0, 0.6}};
+      brk.bands.push_back(b); }
+    { MenuBand b; b.first = {{"campus_bench", 0.75, 0}};
+      b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}, {"chat", 0, 1.2}, {"sunbathe", 0, 0.5}}; brk.bands.push_back(b); }
     c.menus.push_back(brk);
     return c;
 }

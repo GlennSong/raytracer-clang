@@ -222,6 +222,7 @@ struct Agent {
     engine::Vec2 seatBack{0, 0};
     Real loopS = 0;   // running a loop (a Jog spot): how far round it (m)
     int tripActivity = -1;   // the catalog activity this trip is for (CitySim::catalog_), -1 none
+    int atActivity = -1;     // ...and the one it arrived for, while it stays (telemetry: `activities?`)
     int session = -1;        // the group activity session it is in (CitySim::sessions_), -1 none
     int sessionRole = -1;    // its role in it (the definition's roles)
     engine::Vec2 roamTarget{0, 0};   // where it is running to on the area
@@ -1174,6 +1175,10 @@ public:
         double gatherUntil = 0, startedAt = 0, endAt = 0;   // clockTotalHours_
         bool swapped = false;
         std::vector<int> members, roles;   // agent index, its role
+        // where on its area it is (a ring's middle, a pair's midpoint; the area's centre for a roaming game) and its
+        // own axis (the pair's line)
+        engine::Vec2 center{0, 0}, axis{1, 0};
+        Formation formation = Formation::Roam;   // the definition's
         int roleCount(int role) const;
     };
     const std::vector<Session>& sessions() const { return sessions_; }
@@ -1187,6 +1192,18 @@ public:
     // The agent's seat while it is SITTING on it (seatPhase 2 on a Sit or Lie spot), else nullptr: the renderer and
     // the walker system draw a seated body there. A jogger is not seated: it is drawn on the move where it runs.
     const SeatSpot* seatedOn(int agentIndex) const;
+    // HOW A RESTING BODY IS HELD, for whoever draws it: on a seat (a bench, a chair, a fountain's rim: `hip` is world
+    // Y), or in its place in a group on the grass -- sitting on the ground or lying there (`hip` 0: the drawer puts
+    // it on the ground under `pos`). False for a body on its feet (walking, standing, running about).
+    struct RestPose {
+        enum class Kind : uint8_t { Seat, SitGround, Lie };
+        Kind kind = Kind::Seat;
+        engine::Vec2 pos, face{0, 1};
+        Real hip = 0;
+    };
+    bool restPose(int agentIndex, RestPose& out) const;
+    // A group member's place in its session (formations other than Roam) and the way it faces there.
+    engine::Vec2 memberPlace(const Session& s, int agentIndex, engine::Vec2* face) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0
     // once it has merged into its lane (see Agent::pullOffset).
     // `pullS`: how far into the pull the DRAWN car is (interpolated through
@@ -1575,6 +1592,9 @@ private:
     std::vector<Session> sessions_;
     int joinSession(Agent& a, int def, engine::Vec2 here, Real distLo, Real distHi, int nearest);
     void leaveSession(Agent& a);
+    bool clearOfWalks(engine::Vec2 p, Real r) const;
+    int joinSettled(Agent& a, int def, const std::vector<std::pair<Real, int>>& cand,
+                    const std::function<int(const Session&)>& freeRole);
     void stepSessions();
     engine::Vec2 zonePoint(const Session& s, int role, uint32_t bits) const;   // a point in that role's zone
     void releaseSeat(Agent& a);

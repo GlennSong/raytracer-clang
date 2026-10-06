@@ -17,7 +17,7 @@ constexpr std::size_t kBuildingParamsSize = 496;   // 432 before the party walls
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 10, kLotsVersion = 12, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 10, kLotsVersion = 13, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -108,6 +108,8 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         putPolys(w, lb.loops);   // lots v11: a track to run
         w.put<uint32_t>(static_cast<uint32_t>(lb.areas.size()));   // lots v12: areas (a pitch)
         for (const LotBuilding::Area& ar : lb.areas) { w.putStr(ar.kind); putVec2(w, ar.center); putVec2(w, ar.axis); w.put<double>(ar.halfL); w.put<double>(ar.halfW); }
+        w.put<uint32_t>(static_cast<uint32_t>(lb.sitSpots.size()));   // lots v13: places to sit (a fountain's rim)
+        for (const LotBuilding::SitSpot& sp : lb.sitSpots) { putVec2(w, sp.at); putVec2(w, sp.face); w.put<double>(sp.hip); }
     }
 }
 
@@ -143,6 +145,8 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         uint32_t na = 0; if (!r.get(na)) return false; lb.areas.resize(na);
         for (LotBuilding::Area& ar : lb.areas)
             if (!r.getStr(ar.kind) || !getVec2(r, ar.center) || !getVec2(r, ar.axis) || !r.get(ar.halfL) || !r.get(ar.halfW)) return false;
+        uint32_t ns = 0; if (!r.get(ns)) return false; lb.sitSpots.resize(ns);
+        for (LotBuilding::SitSpot& sp : lb.sitSpots) if (!getVec2(r, sp.at) || !getVec2(r, sp.face) || !r.get(sp.hip)) return false;
     }
     return r.ok();
 }

@@ -832,6 +832,8 @@ struct CitySimConfig {
     // AREAS an activity happens on (a pitch): kind, centre x z, long axis x z, half length, half width.
     struct ActivityAreaSpec { std::string kind; double cx = 0, cz = 0, ax = 1, az = 0, halfL = 0, halfW = 0; };
     std::vector<ActivityAreaSpec> activityAreas;
+    // PLACES TO SIT that are not furniture (a fountain's rim): x, z, face x, face z, hip (above the ground).
+    std::vector<std::array<double, 5>> sitSpots;
 };
 
 // Build-time street furniture (device: "place the stop lights when we build

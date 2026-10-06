@@ -57,7 +57,7 @@ struct ActivityQuery {
 //
 // SITE KINDS (strings, so Lua names them): the city's places -- "cafe", "restaurant", "shop", "supermarket", "civic",
 // "park", "library", "teaching", "quad", "field" -- its activity spots -- "seat" (Sit), "bed" (Lie), "stand" (Stand),
-// "loop" (Jog), "watch" (Watch) -- its activity AREAS -- "pitch" -- and "street" (a street corner to walk to).
+// "loop" (Jog), "watch" (Watch) -- its activity AREAS -- "pitch", "lawn" -- and "street" (a street corner to walk to).
 
 // What the body does once there.
 enum class Perform : uint8_t {
@@ -65,8 +65,22 @@ enum class Perform : uint8_t {
     Outside,   // stays out at the site (a park, the quad)
     Spot,      // the spot's own use: sit, lie, stand at it, run its loop (stepSeats)
     Wander,    // a walk to a street corner and a look about
-    Roam,      // a GROUP on an area (a pitch): each role runs to point after point in its zone (a session)
+    Roam,      // a GROUP on an area (a pitch, a lawn): a session, its members placed by the activity's formation
 };
+
+// How a group's members stand on its area (perform Roam).
+enum class Formation : uint8_t {
+    Roam,     // each role runs to point after point in its zone (a kickabout); one session to an area
+    Circle,   // a ring facing its middle, sized to who is in it (a chat, a picnic); joinable, several to a lawn
+    Pair,     // two facing each other `radius` apart, stepping about (a game of catch)
+    Spread,   // side by side, a body's width and a bit apart (sunbathers)
+};
+// How a member's body is held once it is in its place.
+enum class Pose : uint8_t { Stand, SitGround, Lie };
+const char* formationName(Formation f);
+const char* poseName(Pose p);
+// Area site kinds: a session on one of the city's areas rather than a spot or a place.
+inline bool isAreaSiteKind(const std::string& k) { return k == "pitch" || k == "lawn"; }
 
 // A ROLE in a group activity: how many take it, how fast they move, and which part of the area is theirs (-1 the
 // whole of it, 0 / 1 its first / second half along its length -- swapped at the session's half time).
@@ -75,6 +89,7 @@ struct RoleDef {
     int n = 1;
     double speedLo = 1.2, speedHi = 1.6;
     int zone = -1;
+    Pose pose = Pose::Stand;   // held in its place (formations other than Roam)
 };
 
 struct ActivityDef {
@@ -98,6 +113,10 @@ struct ActivityDef {
     int minPlayers = 0;
     double gatherMinutes = 20;
     double swapAt = 0;
+    // How the members stand (Roam: zones; Circle, Pair, Spread: places round the session's middle) and the size of it
+    // (a ring's least radius, the pair's distance apart, the spread's spacing; 0 the formation's own).
+    Formation formation = Formation::Roam;
+    double radius = 0;
     // Offered only while a session of this activity is running within `distHi` (watching a game).
     std::string during;
 };

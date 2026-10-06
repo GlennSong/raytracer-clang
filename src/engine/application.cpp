@@ -913,6 +913,8 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok staged";
     }
     if (cmd.name == "walkers?") return "ok " + settingsStore.getString("walkers.telemetry", "none");
+    // what the city's people are out doing (citysim activities): per activity, at it / coming, groups, the nearest
+    if (cmd.name == "activities?") return "ok " + settingsStore.getString("activities.telemetry", "none");
     if (cmd.name == "interact?") return "ok " + settingsStore.getString("interact.status", "none");
 
     if (cmd.name == "keys?") {

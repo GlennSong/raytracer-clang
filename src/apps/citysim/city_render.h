@@ -490,6 +490,8 @@ private:
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
+    engine::Entity pedGroundGroup_;   // ... sitting on the grass (a picnic)
+    engine::Entity pedLieGroup_;      // ... lying on it (in the sun)
     // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
     // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.
     engine::Entity indoorSitGroup_, indoorBodyGroup_;
@@ -498,7 +500,8 @@ private:
     std::unordered_map<int, PlaceId> buildingPlace_;        // record index -> its place (kNoPlace: none)
     std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
-    std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches (CitySimConfig)
+    std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches, the lawns (CitySimConfig)
+    std::vector<std::array<double, 5>> sitSpots_;   // seats that are not furniture: a fountain's rim (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
 public:

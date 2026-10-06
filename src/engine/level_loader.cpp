@@ -5964,6 +5964,8 @@ bool LevelLoader::load(const std::string& path,
                     }
                     for (const engine::LotBuilding::Walk& k : lb.walks)
                         cfg.footpaths.push_back({k.a.x, k.a.y, k.b.x, k.b.y, k.streetEnds ? k.width : -k.width});
+                    for (const engine::LotBuilding::SitSpot& sp : lb.sitSpots)
+                        cfg.sitSpots.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, sp.hip});
                     for (const engine::LotBuilding::Area& ar : lb.areas)
                         cfg.activityAreas.push_back({ar.kind, ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, ar.halfL, ar.halfW});
                     for (const engine::Poly2& lp : lb.loops) {

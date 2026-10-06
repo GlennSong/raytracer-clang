@@ -2341,9 +2341,9 @@ int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool count
                 on = true;
         if (!on) return -1;
     }
-    // AREAS (a group activity: a session on a pitch)
+    // AREAS (a group activity: a session on a pitch, a lawn)
     for (const std::string& k : d.sites)
-        if (k == "pitch") {
+        if (isAreaSiteKind(k)) {
             if (countOnly) {
                 for (const ActivityArea& ar : areas_)
                     if (ar.kind == k && (ar.tags & d.tags) == d.tags &&
@@ -4571,7 +4571,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             a.restDwell = 1e9;
             a.seatPhase = 1;
             a.seatBack = a.pos;
-            a.roamTarget = zonePoint(se, a.sessionRole, tripRnd(a));
+            a.roamTarget = se.formation != Formation::Roam ? memberPlace(se, indexOf(a), nullptr) : zonePoint(se, a.sessionRole, tripRnd(a));
             seated = true;
         } else if (a.tripSeat >= 0 && a.tripSeat < static_cast<int>(seats_.size()) &&
             seats_[static_cast<std::size_t>(a.tripSeat)].node == node &&
@@ -4612,6 +4612,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         }
         a.indoors = inside && a.mode == Agent::Mode::Pedestrian;
         a.outingTo = -1;   // arrived: the next outing chooses afresh
+        a.atActivity = a.tripActivity;
         a.tripActivity = -1;
         // Outside: a spot of its own, not the sidewalk point everyone arriving
         // along this street ends on.
@@ -4929,8 +4930,15 @@ void CitySim::setSpots(std::vector<ActivitySpot> seats) {
 }
 
 void CitySim::tagSpots() {
+    // IN A PARK: near a park's site (its door is its middle when it has no gate)
+    auto nearPark = [&](Vec2 p, Real reach) {
+        for (const Venue& v : venues_)
+            if (v.type == PlaceType::Park && (v.door - p).lengthSquared() < reach * reach) return true;
+        return false;
+    };
     for (ActivityArea& ar : areas_) {
-        ar.tags &= ~(spot_tag::kCampus | spot_tag::kSports);
+        ar.tags &= ~(spot_tag::kCampus | spot_tag::kSports | spot_tag::kPark);
+        if (nearPark(ar.center, 60.0)) ar.tags |= spot_tag::kPark;
         for (const Venue& v : venues_) {
             if (v.campus != 4 && v.campus != 5) continue;
             if ((v.door - ar.center).lengthSquared() >= 200.0 * 200.0) continue;
@@ -4939,7 +4947,8 @@ void CitySim::tagSpots() {
         }
     }
     for (ActivitySpot& s : seats_) {
-        s.tags &= ~(spot_tag::kCampus | spot_tag::kSports);
+        s.tags &= ~(spot_tag::kCampus | spot_tag::kSports | spot_tag::kPark);
+        if (s.kind == SpotKind::Sit && nearPark(s.pos, 60.0)) s.tags |= spot_tag::kPark;
         for (const Venue& v : venues_) {
             if (v.campus != 4 && v.campus != 5) continue;
             // (a track's far side is a field's width from its door)
@@ -4986,6 +4995,30 @@ const CitySim::ActivitySpot* CitySim::usingSpot(int i) const {
     const Agent& a = agents_[static_cast<std::size_t>(i)];
     if (a.seatPhase != 2 || a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) return nullptr;
     return &seats_[static_cast<std::size_t>(a.tripSeat)];
+}
+
+bool CitySim::restPose(int i, RestPose& out) const {
+    if (const SeatSpot* st = seatedOn(i)) {
+        out.kind = RestPose::Kind::Seat;
+        out.pos = st->pos;
+        out.face = st->face;
+        out.hip = st->hip;
+        return true;
+    }
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return false;
+    const Agent& a = agents_[static_cast<std::size_t>(i)];
+    if (a.seatPhase != 2 || a.speed > 0 || a.session < 0 || a.session >= static_cast<int>(sessions_.size())) return false;
+    const Session& se = sessions_[static_cast<std::size_t>(a.session)];
+    if (se.formation == Formation::Roam || se.def < 0) return false;
+    const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(se.def)];
+    if (a.sessionRole < 0 || a.sessionRole >= static_cast<int>(d.roles.size())) return false;
+    const Pose pose = d.roles[static_cast<std::size_t>(a.sessionRole)].pose;
+    if (pose == Pose::Stand) return false;
+    out.kind = pose == Pose::Lie ? RestPose::Kind::Lie : RestPose::Kind::SitGround;
+    out.pos = a.pos;
+    out.face = a.heading;
+    out.hip = 0;
+    return true;
 }
 
 const CitySim::SeatSpot* CitySim::seatedOn(int i) const {
@@ -5075,6 +5108,9 @@ int CitySim::joinSession(Agent& a, int di, Vec2 here, Real distLo, Real distHi, 
         }
         return best;
     };
+    // A SETTLED GROUP (a ring, a pair, sunbathers) shares its lawn: a chat anyone may join anywhere in reach first,
+    // then a fresh one wherever a lawn has room for it
+    if (d.formation != Formation::Roam) return joinSettled(a, di, cand, freeRole);
     for (const auto& c : cand) {
         // a session already here, of this activity, with room
         int si = -1, role = -1;
@@ -5092,6 +5128,8 @@ int CitySim::joinSession(Agent& a, int di, Vec2 here, Real distLo, Real distHi, 
             se.def = di;
             se.area = c.second;
             se.gatherUntil = clockTotalHours_ + d.gatherMinutes / 60.0;
+            se.center = areas_[static_cast<std::size_t>(c.second)].center;
+            se.axis = areas_[static_cast<std::size_t>(c.second)].axis;
             for (int k = 0; k <= static_cast<int>(sessions_.size()); ++k)
                 if (k == static_cast<int>(sessions_.size()) || sessions_[static_cast<std::size_t>(k)].state == Session::State::Dead) {
                     if (k == static_cast<int>(sessions_.size())) sessions_.push_back(se); else sessions_[static_cast<std::size_t>(k)] = se;
@@ -5112,6 +5150,145 @@ int CitySim::joinSession(Agent& a, int di, Vec2 here, Real distLo, Real distHi, 
         return c.second;
     }
     return -1;
+}
+
+// a small integer hash (lowbias32): places and beats that must be the same whoever asks
+static uint32_t hash32(uint32_t x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+
+// Is `p` at least `r` from every footpath's line (a walk's half width counted in)?
+bool CitySim::clearOfWalks(Vec2 p, Real r) const {
+    if (!nav_) return true;
+    for (const engine::NavLink& L : nav_->links) {
+        if (!L.footpath) continue;
+        const Vec2 ab = L.footB - L.footA;
+        const Real l2 = ab.lengthSquared();
+        const Real t = l2 > 1e-9 ? std::clamp(dot(p - L.footA, ab) / l2, Real(0), Real(1)) : 0;
+        if ((L.footA + ab * t - p).lengthSquared() < (r + 1.0) * (r + 1.0)) return false;
+    }
+    return true;
+}
+
+int CitySim::joinSettled(Agent& a, int di, const std::vector<std::pair<Real, int>>& cand,
+                         const std::function<int(const Session&)>& freeRole) {
+    const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(di)];
+    auto enlist = [&](int si, int role) {
+        Session& se = sessions_[static_cast<std::size_t>(si)];
+        se.members.push_back(indexOf(a));
+        se.roles.push_back(role);
+        if (se.state == Session::State::Gathering)
+            se.gatherUntil = std::max(se.gatherUntil, clockTotalHours_ + d.gatherMinutes / 60.0 * 0.5);
+        a.session = si;
+        a.sessionRole = role;
+        return se.area;
+    };
+    // join one going (gathering or under way) with a place free, on the nearest area that has one
+    for (const auto& c : cand)
+        for (int k = 0; k < static_cast<int>(sessions_.size()); ++k) {
+            const Session& se = sessions_[static_cast<std::size_t>(k)];
+            if (se.area != c.second || se.def != di) continue;
+            if (se.state != Session::State::Gathering && se.state != Session::State::Running) continue;
+            const int role = freeRole(se);
+            if (role >= 0) return enlist(k, role);
+        }
+    // start one: a spot on the area clear of the groups already on it (and of a game: a lawn with a kickabout on it is
+    // the kickabout's), the farthest of a few tries from them
+    const Real need = std::max(Real(2.0), static_cast<Real>(d.radius)) + 3.0;
+    for (const auto& c : cand) {
+        const ActivityArea& ar = areas_[static_cast<std::size_t>(c.second)];
+        bool game = false;
+        std::vector<Vec2> taken;
+        for (const Session& se : sessions_) {
+            if (se.area != c.second || se.state == Session::State::Dead) continue;
+            if (se.formation == Formation::Roam) game = true;
+            taken.push_back(se.center);
+        }
+        if (game) continue;
+        const Vec2 side(ar.axis.y, -ar.axis.x);
+        // a pair needs its length along the area, a ring its width
+        const Real reachL = static_cast<Real>(d.formation == Formation::Pair ? d.radius * 0.5 + 1.0 : 2.0);
+        const Real inL = ar.halfL - reachL, inW = ar.halfW - 2.0;
+        if (inL <= 0 || inW <= 0) continue;
+        Vec2 best;
+        Real bestD = -1;
+        uint32_t h = hash32(static_cast<uint32_t>(indexOf(a)) * 2654435761u ^ static_cast<uint32_t>(clockTotalHours_ * 3600.0));
+        for (int t = 0; t < 16; ++t) {
+            h = hash32(h + 0x9E37u);
+            const Real fu = static_cast<Real>(h & 0xFFFF) / 65535.0 * 2 - 1, fv = static_cast<Real>(h >> 16) / 65535.0 * 2 - 1;
+            const Vec2 p = ar.center + ar.axis * (inL * fu) + side * (inW * fv);
+            // not on a walk (a lawn's box takes in the walks across it): a ring's edge, or each end of a pair
+            if (d.formation == Formation::Pair) {
+                if (!clearOfWalks(p - ar.axis * (d.radius * 0.5), 1.5) || !clearOfWalks(p + ar.axis * (d.radius * 0.5), 1.5)) continue;
+            } else if (!clearOfWalks(p, std::max(Real(1.0), static_cast<Real>(d.radius)) + 1.2)) continue;
+            Real dmin = 1e9;
+            for (const Vec2& q : taken) dmin = std::min(dmin, (q - p).length());
+            if (dmin > bestD) { bestD = dmin; best = p; }
+        }
+        if (bestD < 2 * need) continue;   // this lawn is full
+        Session se;
+        se.def = di;
+        se.area = c.second;
+        se.formation = d.formation;
+        se.center = best;
+        se.axis = ar.axis;
+        se.gatherUntil = clockTotalHours_ + d.gatherMinutes / 60.0;
+        int si = -1;
+        for (int k = 0; k <= static_cast<int>(sessions_.size()); ++k)
+            if (k == static_cast<int>(sessions_.size()) || sessions_[static_cast<std::size_t>(k)].state == Session::State::Dead) {
+                if (k == static_cast<int>(sessions_.size())) sessions_.push_back(se); else sessions_[static_cast<std::size_t>(k)] = se;
+                si = k;
+                break;
+            }
+        const int role = freeRole(sessions_[static_cast<std::size_t>(si)]);
+        if (role < 0) { sessions_[static_cast<std::size_t>(si)].state = Session::State::Dead; continue; }
+        return enlist(si, role);
+    }
+    return -1;
+}
+
+// A SETTLED GROUP'S PLACES: a ring round its middle facing in (a body's shoulders apart, never tighter than the
+// definition's radius); a pair `radius` apart along the session's axis, facing, each stepping a little to and fro
+// every few seconds (a catch); sunbathers side by side, feet the same way.
+Vec2 CitySim::memberPlace(const Session& se, int agentIndex, Vec2* face) const {
+    const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(se.def)];
+    int k = 0;
+    const int n = std::max(1, static_cast<int>(se.members.size()));
+    for (int i = 0; i < static_cast<int>(se.members.size()); ++i)
+        if (se.members[static_cast<std::size_t>(i)] == agentIndex) k = i;
+    const Vec2 side(se.axis.y, -se.axis.x);
+    Vec2 p = se.center, f = se.axis;
+    switch (se.formation) {
+        case Formation::Circle: {
+            const Real r = std::max(static_cast<Real>(d.radius), Real(0.75) * n / Real(6.2831853));
+            const Real ang = 6.2831853 * k / n + static_cast<Real>(se.def) * 0.7;
+            const Vec2 out(std::cos(ang), std::sin(ang));
+            p = se.center + out * (n == 1 ? 0.0 : r);
+            f = n == 1 ? se.axis : out * -1.0;
+            break;
+        }
+        case Formation::Pair: {
+            const Real s = k == 0 ? -1.0 : 1.0;
+            // a step this way or that every four seconds or so, as the throws come
+            const uint32_t beat = static_cast<uint32_t>(clockTotalHours_ * 3600.0 / 4.0);
+            const uint32_t h = hash32(static_cast<uint32_t>(agentIndex) * 2246822519u + beat);
+            const Real lat = (static_cast<Real>(h & 0xFF) / 255.0 * 2 - 1) * 1.2;
+            const Real lon = (static_cast<Real>((h >> 8) & 0xFF) / 255.0 * 2 - 1) * 0.8;
+            p = se.center + se.axis * (s * (d.radius * 0.5 + lon)) + side * lat;
+            f = se.axis * -s;
+            break;
+        }
+        case Formation::Spread: {
+            const Real gap = d.radius > 0 ? d.radius : 1.1;
+            p = se.center + side * ((k - (n - 1) * 0.5) * gap);
+            f = se.axis;
+            break;
+        }
+        case Formation::Roam: break;
+    }
+    if (face) *face = f;
+    return p;
 }
 
 void CitySim::leaveSession(Agent& a) {
@@ -5144,7 +5321,7 @@ void CitySim::stepSessions() {
                 se.state = Session::State::Running;
                 se.startedAt = clockTotalHours_;
                 double lo = d.minutesLo, hi = d.minutesHi;
-                if (hi <= 0) siteKindMinutes("pitch", lo, hi);
+                if (hi <= 0) siteKindMinutes(d.sites.empty() ? "pitch" : d.sites.front(), lo, hi);
                 const Real f = static_cast<Real>(rnd() % 1000u) / 999.0;
                 se.endAt = clockTotalHours_ + (lo + (hi - lo) * f) / 60.0;
             } else if (clockTotalHours_ >= se.gatherUntil) {
@@ -5223,6 +5400,26 @@ void CitySim::stepSeats(Real dt) {
                                       ? &d.roles[static_cast<std::size_t>(a.sessionRole)] : nullptr;
             Vec2 target = a.seatPhase == 3 ? a.seatBack : a.roamTarget;
             Real speed = kWalk;
+            if (a.seatPhase == 2 && se.formation != Formation::Roam) {
+                // A SETTLED GROUP: to its place (it moves as the ring grows, or with the catch), then held there,
+                // facing its way -- gathering or under way alike
+                Vec2 face;
+                const Vec2 place = memberPlace(se, indexOf(a), &face);
+                const Vec2 dd = place - a.pos;
+                const Real L = dd.length();
+                const Real pace = se.formation == Formation::Pair ? 1.6 : kWalk;
+                if (L <= pace * dt || L < 0.02) {
+                    a.pos = place;
+                    a.heading = face;
+                    a.speed = 0;
+                } else {
+                    a.pos = a.pos + dd * (std::min(L, pace * dt) / L);
+                    a.heading = dd * (1.0 / L);
+                    a.speed = pace;
+                }
+                grid_.place(indexOf(a), a.pos);
+                continue;
+            }
             if (a.seatPhase == 2) {
                 if (se.state != Session::State::Running) {   // gathering: stand by, facing the middle
                     a.speed = 0;

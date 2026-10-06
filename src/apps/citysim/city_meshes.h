@@ -29,6 +29,11 @@ int personOutfitCount();
 // chair -- seat height 0.45, upright back, hands in the lap -- in `outfit`'s colours. ORIGIN IS THE HIP, facing
 // +Z: put the hip on the seat.
 engine::RenderMesh buildSeatedPersonMesh(int outfit);
+// Sitting on the ground (origin at the hip, kGroundSitHip above the grass); lying down is the standing body turned
+// onto its back, its middle kLieHalfDepth above the grass.
+constexpr engine::Real kGroundSitHip = 0.10;
+constexpr engine::Real kLieHalfDepth = 0.13;
+engine::RenderMesh buildGroundSittingPersonMesh(int outfit);
 int playerOutfit();
 
 // --- the shared walk cycle ---------------------------------------------------

@@ -159,6 +159,17 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
     }
 
     g.sealed.push_back(Poly2(rim, rim + PN));   // the plaza: no grass on it
+    {   // THE LAWN as an activity area (a picnic, catch, a chat, the sun): the park's box drawn in off its edges
+        const OBB2 ob = orientedBoundingBox(poly);
+        const int la = ob.longAxis();
+        LotBuilding::Area ar;
+        ar.kind = "lawn";
+        ar.center = ob.center;
+        ar.axis = ob.axis[la];
+        ar.halfL = ob.half[la] - 3.0;
+        ar.halfW = ob.half[1 - la] - 3.0;
+        if (ar.halfL > 4.0 && ar.halfW > 3.0 && A > 300.0) g.areas.push_back(ar);
+    }
     for (int k = 0; k < PN; ++k)                // ...and a ring across it for the walkers' network
         g.walks.push_back({c + (rim[k] - c) * 0.6, c + (rim[(k + 1) % PN] - c) * 0.6, 1.2});
     // Walking-path SPOKES: from the plaza out to the midpoints of the longest
@@ -515,6 +526,12 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
     // walk standing proud of the lawn
     RenderMesh pool;
     discInto(pool, c, fr - 0.18, py + 0.36, water, false);
+    // THE RIM is a place to sit too (a hip on the stone, looking out): the citysim's seats like the benches'
+    for (int k = 0; k < 12; ++k) {
+        const Real a = 6.2831853 * (k + 0.25) / 12;
+        const Vec2 d(std::cos(a), std::sin(a));
+        g.sitSpots.push_back({c + d * (fr + 0.12), d, py + 0.48});
+    }
     box(c, py, ua, Vec3(1.3, 0.55, 1.3), PartId::Trim, stone * 0.9);          // the plinth
     box(c, py + 0.55, ua, Vec3(0.5, 1.35, 0.5), PartId::Trim, stone);        // the column
     box(c, py + 1.9, ua, Vec3(1.9, 0.16, 1.9), PartId::Trim, stone * 0.95);   // the upper bowl ...
@@ -602,6 +619,22 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
     }
     // THE AVENUE: trees down both sides of the long walk, lamps between them, benches facing the walk
     const Real off = wMain / 2 + 2.2;
+    // THE LAWNS (activity areas: a picnic, a game of catch, a circle chatting, someone in the sun): the four quarters
+    // past the round, out beyond the avenue's trees
+    {
+        const Real l0 = R + 2.5, l1 = hl - 2.0, w0 = off + 1.8, w1 = hw - 1.5;
+        if (l1 - l0 > 6.0 && w1 - w0 > 4.0)
+            for (int su : {-1, 1})
+                for (int sv : {-1, 1}) {
+                    LotBuilding::Area ar;
+                    ar.kind = "lawn";
+                    ar.center = Q(su * (l0 + l1) * 0.5, sv * (w0 + w1) * 0.5);
+                    ar.axis = ua;
+                    ar.halfL = (l1 - l0) * 0.5;
+                    ar.halfW = (w1 - w0) * 0.5;
+                    g.areas.push_back(ar);
+                }
+    }
     const Real step = 8.0;
     int idx = 0;
     for (Real u = R + 4.0; u < hl - 2.5; u += step, ++idx)

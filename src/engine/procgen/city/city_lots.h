@@ -134,6 +134,10 @@ struct LotBuilding {
     // length and width, world XZ -- the citysim's activity areas (a kickabout's two halves)
     struct Area { std::string kind; Vec2 center, axis{1, 0}; Real halfL = 0, halfW = 0; };
     std::vector<Area> areas;
+    // PLACES TO SIT that are not furniture (a fountain's rim): point, the way it faces, seat height, world XZ / Y
+    // above the ground -- the citysim's seats like the benches'
+    struct SitSpot { Vec2 at, face{0, 1}; Real hip = 0.45; };
+    std::vector<SitSpot> sitSpots;
     // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
     std::vector<BuildingUnit> units;
     // SITE PLAN (skyscrapers v2, ADR-0086): the lot's ground around the

@@ -230,7 +230,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
         footpaths_ = c.footpaths;     // the parks' and the quad's walks
         jogLoops_ = c.jogLoops;       // the tracks to run
-        activityAreas_ = c.activityAreas;   // the pitches
+        activityAreas_ = c.activityAreas;   // the pitches, the lawns
+        sitSpots_ = c.sitSpots;             // a fountain's rim
     });
 
     // Merge every RoadEntity's constrained graph into one combined graph (a level
@@ -572,6 +573,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 }
             }
         });
+        // THE RIMS (a fountain's): seats with no furniture, the hip measured from the ground under them
+        for (const auto& q : sitSpots_) {
+            CitySim::SeatSpot s;
+            s.pos = Vec2(q[0], q[1]);
+            s.face = normalize(Vec2(q[2], q[3]));
+            s.hip = (heightAt_ ? heightAt_(q[0], q[1]) : 0.0) + q[4];
+            seats.push_back(s);
+        }
         // THE TRACKS (activity spots, behaviour plan step 3): each loop the sim's, with eight places round it to start a
         // run from -- a jogger walks onto the track there, runs laps, and walks off
         {
@@ -597,7 +606,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         const std::size_t offered = seats.size();
         sim_.setSeats(std::move(seats));
-        {   // THE AREAS a group plays on (a pitch)
+        {   // THE AREAS a group plays on (a pitch) or settles on (a lawn)
             std::vector<CitySim::ActivityArea> areas;
             for (const auto& a : activityAreas_) {
                 CitySim::ActivityArea ar;
@@ -609,7 +618,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 areas.push_back(ar);
             }
             sim_.setAreas(std::move(areas));
-            if (!sim_.areas().empty()) LOG_INFO << "[citysim] activity areas: " << sim_.areas().size() << " (pitches)";
+            if (!sim_.areas().empty()) LOG_INFO << "[citysim] activity areas: " << sim_.areas().size() << " (pitches, lawns)";
         }
         if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
     }
@@ -1161,6 +1170,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         world.add<InstanceGroup>(pedSeatedGroup_, g);
         indoorSitGroup_ = world.create();
         world.add<InstanceGroup>(indoorSitGroup_, g);
+        pedGroundGroup_ = world.create();
+        InstanceGroup gs = g;
+        gs.mesh = assets->acquireMesh(buildGroundSittingPersonMesh(0), "city:ped_ground_sit");
+        world.add<InstanceGroup>(pedGroundGroup_, gs);
+        pedLieGroup_ = world.create();
+        InstanceGroup gl = g;
+        gl.mesh = pedMesh;
+        world.add<InstanceGroup>(pedLieGroup_, gl);
         indoorBodyGroup_ = world.create();
         InstanceGroup b = g;
         b.mesh = pedMesh;
@@ -2124,6 +2141,10 @@ void CityRenderSystem::syncGroups(World& world) {
     InstanceGroup* ped = world.get<InstanceGroup>(pedGroup_);
     InstanceGroup* pedSeated = pedSeatedGroup_.valid() ? world.get<InstanceGroup>(pedSeatedGroup_) : nullptr;
     if (pedSeated) pedSeated->transforms.clear();
+    InstanceGroup* pedGround = pedGroundGroup_.valid() ? world.get<InstanceGroup>(pedGroundGroup_) : nullptr;
+    InstanceGroup* pedLie = pedLieGroup_.valid() ? world.get<InstanceGroup>(pedLieGroup_) : nullptr;
+    if (pedGround) pedGround->transforms.clear();
+    if (pedLie) pedLie->transforms.clear();
     InstanceGroup* sig[3];
     for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
@@ -2168,10 +2189,18 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
-            if (const CitySim::SeatSpot* st = sim_.seatedOn(static_cast<int>(ai))) {   // sitting (M5)
-                if (pedSeated)
-                    pedSeated->transforms.push_back(Mat4::translate(st->pos.x, st->hip, st->pos.y) *
-                                                    Mat4::rotateY(std::atan2(st->face.x, st->face.y)));
+            CitySim::RestPose rp;
+            if (sim_.restPose(static_cast<int>(ai), rp)) {   // sitting (M5), on the grass, lying in the sun
+                const Mat4 yaw = Mat4::rotateY(std::atan2(rp.face.x, rp.face.y));
+                if (rp.kind == CitySim::RestPose::Kind::Seat) {
+                    if (pedSeated) pedSeated->transforms.push_back(Mat4::translate(rp.pos.x, rp.hip, rp.pos.y) * yaw);
+                } else if (rp.kind == CitySim::RestPose::Kind::SitGround) {
+                    if (pedGround)
+                        pedGround->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip, rp.pos.y) * yaw);
+                } else if (pedLie) {   // on its back, head away from the way it faces (its feet point there)
+                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kLieHalfDepth, rp.pos.y) *
+                                                 yaw * Mat4::rotateX(-engine::PI * 0.5));
+                }
                 continue;
             }
             ped->transforms.push_back(agentPose(a));
@@ -2288,6 +2317,9 @@ void CityRenderSystem::syncGroups(World& world) {
 
     for (InstanceGroup* c : cars) refreshBounds(c);
     refreshBounds(ped);
+    refreshBounds(pedSeated);
+    refreshBounds(pedGround);
+    refreshBounds(pedLie);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
 
     // SEE-INTO VEHICLES. The clear glass rides exactly its bodies' transforms

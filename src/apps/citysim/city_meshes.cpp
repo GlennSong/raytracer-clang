@@ -98,6 +98,21 @@ engine::RenderMesh buildSeatedPersonMesh(int outfit) {
     op.skin = o.skin;
     return engine::buildSeatedOccupant(op);
 }
+// SITTING ON THE GRASS (a picnic): the seated body with its hip a hand off the ground, knees drawn up, feet flat in
+// front, leaning back a touch, hands round the knees. Origin at the hip, like the bench sitter's.
+engine::RenderMesh buildGroundSittingPersonMesh(int outfit) {
+    const PersonOutfit& o = kOutfits[((outfit % kNumOutfits) + kNumOutfits) % kNumOutfits];
+    engine::OccupantParams op;
+    op.hipToHeel = kGroundSitHip - 0.02;
+    op.thighRise = 38.0;
+    op.sittingHeight = 0.86;
+    op.backAngle = 14.0;
+    op.armReach = 42.0;
+    op.shirt = o.shirt;
+    op.trousers = o.pants;
+    op.skin = o.skin;
+    return engine::buildSeatedOccupant(op);
+}
 int playerOutfit() { return kNumOutfits - 1; }
 
 Real walkPoseSwing(int pose) {
