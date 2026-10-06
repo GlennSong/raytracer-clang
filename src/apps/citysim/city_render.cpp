@@ -88,6 +88,24 @@ void refreshBounds(InstanceGroup* g) {
 
 }  // namespace
 
+Vec2 CityRenderSystem::drawnAgentPos(int i, Vec2* heading) const {
+    const Agent& a = sim_.agents()[static_cast<std::size_t>(i)];
+    if (heading) *heading = a.heading;
+    const Real period = sim_.tickPeriod();
+    if (period <= 0.0 || a.released) return a.pos;
+    const Vec2 d = a.pos - a.tickFromPos;
+    if (d.x * d.x + d.y * d.y >= 8.0 * 8.0) return a.pos;   // a placement snaps, never slides
+    const Real t = std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1));
+    if (heading) {
+        Real dy = std::atan2(a.heading.x, a.heading.y) - std::atan2(a.tickFromHeading.x, a.tickFromHeading.y);
+        while (dy > engine::PI) dy -= 2 * engine::PI;
+        while (dy < -engine::PI) dy += 2 * engine::PI;
+        const Real yw = std::atan2(a.tickFromHeading.x, a.tickFromHeading.y) + dy * t;
+        *heading = Vec2(std::sin(yw), std::cos(yw));
+    }
+    return a.tickFromPos + d * t;
+}
+
 Real CityRenderSystem::groundAt(Real x, Real z) const {
     // ON a road: the deck the mesher drew (RoadDeck). The terrain under a road
     // is carved 0.22 m below the profile on purpose; sampling it put every

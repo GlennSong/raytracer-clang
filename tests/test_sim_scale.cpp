@@ -11,7 +11,9 @@
 #include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/metro.h"
+#include <algorithm>
 #include <chrono>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 
@@ -185,5 +187,61 @@ TEST_CASE(metro_v2_density_target_prints) {
         std::printf("    [metro] %-6s %d agents: %.3f ms/tick  K %d  V %d  D %d\n",
                     tiered ? "tiered" : "flat", static_cast<int>(sim.agents().size()), ms, k, v, d);
         CHECK(sim.agents().size() > 0);
+    }
+}
+
+// 100,000 ON AN ISLAND-SIZED CITY (the 100k plan's stage 0, rewritten 2026-10-05; Glenn: "rewrite the plan and
+// start measuring"). An 8 km grid -- the island's scale, not the 2.4 km bench above, where 100k would be denser
+// than Manhattan -- at 25k, 50k and 100k, tiered round a player in the middle: what it costs to BUILD, what a tick
+// costs (median, 99th percentile, worst: a hitch is what you see), where the tick goes, how much memory the agents
+// take, and the same again with the player DRIVING across town (15 m/s), which churns the tier bubble.
+// Heavy: only under RT_SIM_SCALE=1.
+TEST_CASE(sim_scale_100k_island_prints) {
+    if (!std::getenv("RT_SIM_SCALE")) return;
+    const NavGraph nav = citytest::cityNav(4000, 120, 11);
+    std::printf("    [100k] nav: %zu nodes, %zu links (8 km grid); sizeof(Agent) %zu bytes\n", nav.nodes.size(),
+                nav.links.size(), sizeof(citysim::Agent));
+    for (int n : {25000, 50000, 100000}) {
+        for (int moving = 0; moving < 2; ++moving) {
+            const auto b0 = std::chrono::steady_clock::now();
+            CitySim sim;
+            sim.build(nav, n / 2, n - n / 2, 7);
+            sim.tieringEnabled = true;
+            sim.dormancyEnabled = true;
+            Vec2 player(0, 0);
+            sim.setTierCenter(player);
+            const double buildS = std::chrono::duration<double>(std::chrono::steady_clock::now() - b0).count();
+            for (int i = 0; i < 30; ++i) sim.step(1.0 / 30.0, 0.05);
+            sim.resetPhaseTimes();
+            std::vector<double> ms;
+            const int ticks = 300;
+            for (int i = 0; i < ticks; ++i) {
+                if (moving) { player = player + Vec2(15.0 / 30.0, 0); sim.setTierCenter(player); }
+                const auto t0 = std::chrono::steady_clock::now();
+                sim.step(1.0 / 30.0, 0.05);   // the island's localHz: a tick every 30th of a second
+                ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+            std::vector<double> s = ms;
+            std::sort(s.begin(), s.end());
+            int k = 0, v = 0, d = 0, mov = 0;
+            for (const auto& a : sim.agents()) {
+                if (a.tier == citysim::Agent::Tier::K) ++k;
+                else if (a.tier == citysim::Agent::Tier::V) ++v;
+                else ++d;
+                mov += a.moving ? 1 : 0;
+            }
+            const auto& ph = sim.phaseTimes();
+            const double st = ph.steps > 0 ? ph.steps : 1;
+            std::printf("    [100k] %6d agents %-7s build %5.1f s | tick ms p50 %7.2f p99 %7.2f max %7.2f | K %5d V %6d D %6d "
+                        "moving %6d sleeping %6d | agents %.0f MB\n",
+                        static_cast<int>(sim.agents().size()), moving ? "driving" : "still", buildS, s[s.size() / 2],
+                        s[s.size() * 99 / 100], s.back(), k, v, d, mov, sim.sleepingAgents(),
+                        sim.agents().size() * sizeof(citysim::Agent) / 1048576.0);
+            std::printf("    [100k]   phases us/tick: rehash %8.1f tier %8.1f active %8.1f goals %8.1f gaps %8.1f advance %8.1f "
+                        "(move %7.1f pairs %7.1f pop %7.1f solver %7.1f) total %9.1f\n",
+                        ph.rehash / st, ph.tierPass / st, ph.activeList / st, ph.goals / st, ph.gaps / st, ph.advance / st,
+                        ph.advMove / st, ph.advPairs / st, ph.advPop / st, ph.advSolver / st, ph.total / st);
+            CHECK(!sim.agents().empty());
+        }
     }
 }

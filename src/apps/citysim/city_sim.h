@@ -317,6 +317,10 @@ struct Agent {
     // Continuous sideways lean off the path (ADR-0061), rate-limited, so a walker
     // steers smoothly around what it sees instead of popping. Decays back to 0.
     Real lateralOffset = 0;
+    // Where the CROWD has put it off its path (the overlap floor's push, KEPT): re-applied each tick, so a packed
+    // doorway is spaced out once and stays spaced, rather than snapped back onto the path line and shoved apart
+    // afresh every tick (1.5-3 m hops at 13 m/s, the speed watchdog's "avoiding" walkers). Eases back to the path.
+    engine::Vec2 crowdOffset{0, 0};
 
     // Imperfect perception (ADR-0060): each step the agent perceives obstacles
     // with probability `reliability`; otherwise it misses (a fault). `brain` is a
@@ -1202,6 +1206,9 @@ public:
         Real hip = 0;
     };
     bool restPose(int agentIndex, RestPose& out) const;
+    // EVERYTHING ABOUT ONE AGENT, on one line (the `who?` and `speeders?` debug commands): tier, where, how fast,
+    // what it is doing (trip, seat, activity, session), its route leg and link, its rest, its leash.
+    std::string describeAgent(int agentIndex) const;
     // A group member's place in its session (formations other than Roam) and the way it faces there.
     engine::Vec2 memberPlace(const Session& s, int agentIndex, engine::Vec2* face) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0
@@ -1621,6 +1628,8 @@ private:
     Real lastLiveRate_ = 0;   // the rate sleepers' wake times were last valid at
     void rerateSleep(Real newRate);
     Real simSeconds_ = 0;   // seconds since build — the time base memory decays on
+    std::vector<engine::Vec2> crowdBase_;   // scratch: each walker's pose before the crowd offset (Agent::crowdOffset)
+    std::vector<uint8_t> crowdHas_;
     Real thinkPeriod_ = 0.35;   // reactive re-decide cadence (s), staggered per agent
     bool wander_ = false;       // lab mode: perpetual random trips, no schedule
     // Three-tier traffic state (P4): the fed bubble centre, the fixed-frame

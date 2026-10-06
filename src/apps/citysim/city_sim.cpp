@@ -4899,6 +4899,14 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
         a.tickFromPullS = a.pullS;
     }
     stepTick(simDt, hoursPerSecond);
+    // RT_TRACE_AGENT=<id>: that agent's plan, every tick (with the speed watchdog: what a flickering one is doing)
+    static const int traceId = std::getenv("RT_TRACE_AGENT") ? std::atoi(std::getenv("RT_TRACE_AGENT")) : -1;
+    if (traceId >= 0 && traceId < static_cast<int>(agents_.size())) {
+        const Agent& t = agents_[static_cast<std::size_t>(traceId)];
+        std::fprintf(stderr, "[trace %d] dt %.3f from %.2f %.2f -> %.2f %.2f (%.2f m) heading %.2f %.2f speed %.2f lean %.2f -> %.2f leg %d dist %.2f state %d\n",
+                     traceId, simDt, t.tickFromPos.x, t.tickFromPos.y, t.pos.x, t.pos.y, (t.pos - t.tickFromPos).length(),
+                     t.heading.x, t.heading.y, t.speed, t.lateralOffset, t.leanTarget, t.leg, t.distOnLeg, static_cast<int>(t.state));
+    }
 }
 
 // ---- SEATS (the furniture library, M5) ------------------------------------------------------------------------
@@ -4995,6 +5003,36 @@ const CitySim::ActivitySpot* CitySim::usingSpot(int i) const {
     const Agent& a = agents_[static_cast<std::size_t>(i)];
     if (a.seatPhase != 2 || a.tripSeat < 0 || a.tripSeat >= static_cast<int>(seats_.size())) return nullptr;
     return &seats_[static_cast<std::size_t>(a.tripSeat)];
+}
+
+std::string CitySim::describeAgent(int i) const {
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return "no such agent";
+    const Agent& a = agents_[static_cast<std::size_t>(i)];
+    static const char* kStates[] = {"resting", "walking", "avoiding", "waiting", "cruising", "following", "yielding", "turning"};
+    const int st = static_cast<int>(a.state);
+    auto actName = [&](int d) { return d >= 0 && d < static_cast<int>(catalog_.defs.size()) ? catalog_.defs[static_cast<std::size_t>(d)].name.c_str() : "-"; };
+    int link = -1;
+    bool foot = false;
+    if (a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
+        link = a.route.links[static_cast<std::size_t>(a.leg)];
+        if (nav_ && link >= 0 && link < nav_->linkCount()) foot = nav_->links[static_cast<std::size_t>(link)].footpath;
+    }
+    const char* sess = "-";
+    if (a.session >= 0 && a.session < static_cast<int>(sessions_.size())) {
+        static const char* kSes[] = {"gathering", "running", "ending", "dead"};
+        sess = kSes[static_cast<int>(sessions_[static_cast<std::size_t>(a.session)].state)];
+    }
+    char b[640];
+    std::snprintf(b, sizeof b,
+                  "agent %d %s tier %c pos %.1f %.1f speed %.2f heading %.2f %.2f moving %d state %s indoors %d visible %d | trip venue %d "
+                  "seat %d phase %d activity %s (at %s) session %d %s role %d | route leg %d/%zu link %d%s dist %.1f | rest %.3f h "
+                  "goal %.3f h | tethered %d lag %.2f player %d | lean %.2f -> %.2f",
+                  i, a.mode == Agent::Mode::Pedestrian ? "walker" : "driver", "DVK"[static_cast<int>(a.tier)], a.pos.x, a.pos.y,
+                  a.speed, a.heading.x, a.heading.y, a.moving ? 1 : 0, st >= 0 && st < 8 ? kStates[st] : "?", a.indoors ? 1 : 0,
+                  pedVisible(i) ? 1 : 0, a.tripVenue, a.tripSeat, a.seatPhase, actName(a.tripActivity), actName(a.atActivity),
+                  a.session, sess, a.sessionRole, a.leg, a.route.links.size(), link, foot ? " (footpath)" : "", a.distOnLeg,
+                  a.restDwell, a.goalHours, a.tethered ? 1 : 0, a.bodyLag, a.playerControlled ? 1 : 0, a.lateralOffset, a.leanTarget);
+    return b;
 }
 
 bool CitySim::restPose(int i, RestPose& out) const {
@@ -5391,6 +5429,13 @@ void CitySim::stepSeats(Real dt) {
     stepSessions();
     for (Agent& a : agents_) {
         if (a.seatPhase == 0) continue;
+        // THE LEASH (ADR-0062) holds off the paths too: a plan that has got its lead ahead of its body -- across a
+        // lawn, round a fountain -- waits for it. Unleashed, the body fell behind, stuck, and was teleported up to
+        // its plan (a sunbather 9.8 m in one step, found by the speed watchdog).
+        if (a.tethered && (a.pos - a.tetherAnchor).lengthSquared() > a.tetherLead * a.tetherLead) {
+            a.speed = 0;
+            continue;
+        }
         // A GROUP'S PLAYER (a session): onto the area to its first point; there, standing by while the group gathers,
         // or running to point after point of its zone; and, the session over, back to where it left the path
         if (a.session >= 0 && a.session < static_cast<int>(sessions_.size())) {
@@ -5851,8 +5896,10 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // the same spot. Deterministic (index order); resets to the sidewalk each
     // step, so the sidestep is a transient lean while someone is in view.
     phaseMark(phase_.advPairs);
+    crowdBase_.resize(agents_.size());
+    crowdHas_.assign(agents_.size(), 0);
     for (Agent& a : agents_)
-        if (!a.moving) { a.state = Agent::State::Resting; a.lateralOffset = 0; }
+        if (!a.moving) { a.state = Agent::State::Resting; a.lateralOffset = 0; a.crowdOffset = Vec2(0, 0); }
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         Agent& a = agents_[i];
         if (!a.moving) continue;
@@ -5972,6 +6019,10 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
 
         a.pos.x += rightv.x * a.lateralOffset;
         a.pos.y += rightv.y * a.lateralOffset;
+        // ...and where the crowd had it last tick (kept below, after the overlap floor)
+        crowdBase_[i] = a.pos;
+        crowdHas_[i] = 1;
+        a.pos = a.pos + a.crowdOffset;
         // Turn to face where it's actually moving (forward walk + the sideways
         // drift), so the body visibly rotates as it steers away. Uses the ped's
         // OWN speed (personality-scaled), not the nominal walk speed.
@@ -5990,6 +6041,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             const std::size_t i = static_cast<std::size_t>(ai);
             if (a.mode != Agent::Mode::Pedestrian || !a.moving)
                 continue;
+            // a walker HELD by its leash this tick (not stepped) stands its ground like anyone standing: nothing
+            // re-anchors it, so a shove would stay -- and the walkers round it now keep their spacing, so they press
+            if (!advanced[i]) continue;
             // THE BIG ONE. This was `for (j = i + 1; j < agents_.size(); ++j)`
             // -- every agent in the city, per active walker, SIX TIMES a tick,
             // with a sqrt on most of them. Measured: 163,259 us of a 178,607 us
@@ -6016,7 +6070,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 // them. (Only walker pairs were separated, so a walker could brush through someone standing at
                 // a stop or sitting on a bench -- the one overlapping pair macOS CI caught.) Walker pairs are
                 // visited once (j > i); a still body never runs this loop, so it is visited from every walker.
-                const bool still = !b.moving && pedVisible(gj);
+                const bool still = (!b.moving || !advanced[j]) && pedVisible(gj);
                 if (!still && (!b.moving || j <= i)) continue;
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
@@ -6039,6 +6093,26 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 }
             }
         }
+
+    // KEEP THE CROWD'S SPACING: what the floor (and the offset carried in) moved each walker off its path this tick is
+    // its crowd offset next tick -- at most 1.5 m, shrinking 0.4 m/s once nobody presses, so it drifts back to its
+    // path as the crowd thins rather than hopping there.
+    for (int ai : active_) {
+        const std::size_t i = static_cast<std::size_t>(ai);
+        if (i >= crowdHas_.size() || !crowdHas_[i]) continue;
+        Agent& a = agents_[i];
+        // not at a kerb (waiting to cross: the crowd's push must never carry it into the road), and sideways no
+        // further than the lean's own limit, lean and push together
+        if (a.state == Agent::State::Waiting) { a.crowdOffset = Vec2(0, 0); continue; }
+        Vec2 off = a.pos - crowdBase_[i];
+        const Vec2 rightv(a.heading.y, -a.heading.x);
+        const Real side = dot(off, rightv), room = std::max(Real(0), kPedMaxLateral - std::fabs(a.lateralOffset));
+        if (std::fabs(side) > room) off = off - rightv * (side - std::copysign(room, side));
+        Real L = off.length();
+        if (L > 1.5) { off = off * (1.5 / L); L = 1.5; }
+        const Real shrink = 0.4 * dt;
+        a.crowdOffset = L > shrink ? off * ((L - shrink) / L) : Vec2(0, 0);
+    }
 
     // Hard radial push-out from static obstacles (signal poles) and the PLAYER: a
     // walker never ends up standing inside a pole — or brushing through the

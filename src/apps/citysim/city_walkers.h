@@ -74,7 +74,26 @@ private:
         engine::Real heldFor = 0;          // seconds its plan has been leashed
                                            // to a body that is not CLOSING on it
         engine::Real lastLead = -1;        // last distance body -> ghost
+        engine::Vec2 drawnLast{0, 0};      // where it was DRAWN last step (the speed watchdog)
+        bool drawnValid = false;
+        int drawnPath = -1;                // how: 0 resting (seat/grass), 1 bodyless (posed from the plan), 2 body
+        engine::Vec2 handoff{0, 0};        // a body given up: where it was against its plan, eased away (bodyless)
     };
+    // THE SPEED WATCHDOG (`speeders?`; Glenn: "npcs going superspeed across the street ... some way to debug what
+    // some agents are doing when they're flickering around the world"): every drawn person, whichever way it is
+    // drawn, against how fast a person can go. A step past that is recorded with the agent's whole state.
+    struct SpeedEvent {
+        double at = 0;          // seconds since start
+        int agent = -1;
+        engine::Vec2 from, to;
+        engine::Real speed = 0;
+        int pathFrom = -1, pathTo = -1;
+        std::string state;
+    };
+    std::vector<SpeedEvent> speedEvents_;   // ring, newest last
+    long speedEventCount_ = 0;
+    double clockSec_ = 0;
+    void watchDrawn(Walker& w, engine::Vec2 p, int path, engine::Real dt, const CitySim& sim);
 
     // PHYSICAL-BODY BUDGET. A walker's Jolt capsule is stepped every tick and
     // separated against every other body, so the per-step cost is

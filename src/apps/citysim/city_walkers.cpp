@@ -44,6 +44,34 @@ constexpr Real kBackoffTime = 0.8;      // blocked -> stand still this long, re-
 // The walk cycle (kWalkPoses / walkPoseSwing / walkPoseIndex, city_meshes.h) is
 // SHARED with the third-person player body — one set of constants, one phase
 // rule, so the player and the crowd stride identically.
+void CityWalkerSystem::watchDrawn(Walker& w, Vec2 p, int path, Real dt, const CitySim& sim) {
+    constexpr Real kFastest = 5.0;   // m/s: past a sprint (the kickabout's runners top out at 4)
+    if (w.drawnValid && dt > 1e-6) {
+        const Real d = (p - w.drawnLast).length();
+        const Real sp = d / dt;
+        if (sp > kFastest && d > 0.2) {
+            SpeedEvent e;
+            e.at = clockSec_;
+            e.agent = w.agentId;
+            e.from = w.drawnLast;
+            e.to = p;
+            e.speed = sp;
+            e.pathFrom = w.drawnPath;
+            e.pathTo = path;
+            e.state = sim.describeAgent(w.agentId);
+            ++speedEventCount_;
+            if (std::getenv("RT_SPEED_LOG"))
+                std::fprintf(stderr, "[speeder] %.1f s: %.1f m/s, %.2f m (%.1f %.1f -> %.1f %.1f) drawn %d -> %d | %s\n", e.at, sp, d,
+                             e.from.x, e.from.y, e.to.x, e.to.y, e.pathFrom, e.pathTo, e.state.c_str());
+            speedEvents_.push_back(std::move(e));
+            if (speedEvents_.size() > 64) speedEvents_.erase(speedEvents_.begin());
+        }
+    }
+    w.drawnLast = p;
+    w.drawnValid = true;
+    w.drawnPath = path;
+}
+
 engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
                                               int outfit, int pose) {
     int key = outfit * kWalkPoses + pose;
@@ -220,6 +248,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
     const CitySim& sim = city_.sim();
     PhysicsWorld& pw = physics_.physicsWorld();
     Real dt = ctx.clock.fixedStep();
+    clockSec_ += dt;
 
     // Vehicle poses + speeds once for all walkers (the knockdown trigger): the
     // REAL vehicles (player's / promoted), plus the ambient planner cars — with
@@ -271,7 +300,14 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // facing out -- and its capsule parks inside the seat, out of everyone's way, until it gets up.
         // ...and on the grass (a picnic), or lying on it (in the sun): the same, on the ground under it
         CitySim::RestPose rp;
-        if (sim.restPose(w.agentId, rp)) {
+        bool restNow = sim.restPose(w.agentId, rp);
+        // A BODY sits down only once it has got there: its plan reaches the seat first, and drawing it on the seat
+        // at once snapped it the last metres (the watchdog: body -> resting at 40-170 m/s). Until then it walks on.
+        if (restNow && cc && cc->characterId != engine::INVALID_CHARACTER) {
+            const Vec3 bp = pw.characterPosition(cc->characterId);
+            if ((Vec2(bp.x, bp.z) - rp.pos).length() > 0.6 && w.drawnPath == 2) restNow = false;
+        }
+        if (restNow) {
             city_.simMutable().clearAgentTether(w.agentId);
             const Real gy = rp.kind == CitySim::RestPose::Kind::Seat ? rp.hip - 0.45 : city_.groundHeightAt(rp.pos.x, rp.pos.y);
             if (cc && cc->characterId != engine::INVALID_CHARACTER)
@@ -303,6 +339,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             w.facing = rp.face;
             if (PrevTransform* pt = world.get<PrevTransform>(w.entity)) pt->value = *t;
             w.haveLast = false;
+            watchDrawn(w, Vec2(t->position.x, t->position.z), 0, dt, sim);
             continue;
         }
 
@@ -320,15 +357,25 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             // it queued at minGap. That is what "a bunch of guys stuck on a
             // fence" actually was: not the fence, the budget.
             city_.simMutable().clearAgentTether(w.agentId);
-            t->position = Vec3(g.pos.x, city_.groundHeightAt(g.pos.x, g.pos.y) +
-                                            kCapsuleHalf + kCapsuleRadius,
-                               g.pos.y);
-            if (g.speed > 0.05) w.facing = g.heading;
+            Vec2 hd;
+            Vec2 dp = city_.drawnAgentPos(w.agentId, &hd);   // through the tick, not hopping at it
+            // A BODY JUST GIVEN UP (the nearest-bodies budget): it was a metre or two behind its plan; ease that away
+            // over half a second instead of jumping to the plan (the watchdog: body -> posed at ~90 m/s)
+            if (w.drawnPath == 2 && w.drawnValid) w.handoff = w.drawnLast - dp;
+            if (w.drawnPath != 2 && w.drawnPath != 1) w.handoff = Vec2(0, 0);
+            {
+                const Real L = w.handoff.length(), ease = 3.0 * dt;
+                w.handoff = L > ease ? w.handoff * ((L - ease) / L) : Vec2(0, 0);
+                dp = dp + w.handoff;
+            }
+            t->position = Vec3(dp.x, city_.groundHeightAt(dp.x, dp.y) + kCapsuleHalf + kCapsuleRadius, dp.y);
+            if (g.speed > 0.05) w.facing = hd;
             t->orientation = Quat::fromAxisAngle(
                 Vec3(0, 1, 0), std::atan2(w.facing.x, w.facing.y));
             const int pose = walkPoseIndex(w.stride, g.speed, dt);
             if (Renderable* r = world.get<Renderable>(w.entity))
                 r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+            watchDrawn(w, Vec2(t->position.x, t->position.z), 1, dt, sim);
             continue;
         }
 
@@ -484,6 +531,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             w.heldFor = 0;
         }
         w.lastLead = lead;
+        watchDrawn(w, posXZ, 2, dt, sim);
 
         // The plan waits for the body (never outruns a blocked/downed walker),
         // and the debug widgets ring the REAL walker.
@@ -501,6 +549,22 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
     spawnWalkers(ctx);
     driveWalkers(ctx);
+    // `who? <id>`: one agent's whole state, answered every step while asked (poll `who?`); its drawn body too
+    {
+        const std::string q = ctx.settings.getString("who.query", "");
+        if (!q.empty()) {
+            const int id = std::atoi(q.c_str());
+            std::string r = city_.sim().describeAgent(id);
+            for (const Walker& w : walkers_)
+                if (w.agentId == id) {
+                    char b[160];
+                    std::snprintf(b, sizeof b, " | drawn at %.1f %.1f as %s", w.drawnLast.x, w.drawnLast.y,
+                                  w.drawnPath == 0 ? "resting" : w.drawnPath == 1 ? "posed from the plan" : w.drawnPath == 2 ? "a body" : "?");
+                    r += b;
+                }
+            ctx.settings.setString("who.result", q + ": " + r);
+        }
+    }
     // Publish the jitter telemetry every 2 s of sim, then start a fresh window.
     tel_.window += ctx.clock.fixedStep();
     if (tel_.window >= 2.0) {
@@ -592,6 +656,24 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 if (at[d]) { std::snprintf(line, sizeof line, " nearest %.0f %.0f", nearAt[d].x, nearAt[d].y); out += line; }
             }
             ctx.settings.setString("activities.telemetry", out.empty() ? "nobody out" : out);
+        }
+        // THE SPEEDERS (`speeders?`): how many drawn steps went past a sprint, and the latest few, each with the
+        // agent's state at that moment and how it was drawn before and after (0 resting, 1 posed from the plan, 2 body)
+        {
+            std::string out;
+            char line[200];
+            std::snprintf(line, sizeof line, "%ld steps past 5 m/s since start; sim ticking at 1/%d of its rate (adaptive load)",
+                          speedEventCount_, city_.loadMultiplier());
+            out += line;
+            const std::size_t n = speedEvents_.size();
+            for (std::size_t k = n > 6 ? n - 6 : 0; k < n; ++k) {
+                const SpeedEvent& e = speedEvents_[k];
+                std::snprintf(line, sizeof line, " || %.1f s: %.1f m/s %.1f %.1f -> %.1f %.1f drawn %d->%d: ", e.at, e.speed, e.from.x,
+                              e.from.y, e.to.x, e.to.y, e.pathFrom, e.pathTo);
+                out += line;
+                out += e.state;
+            }
+            ctx.settings.setString("speeders.telemetry", out);
         }
         tel_ = Telemetry{};
     }

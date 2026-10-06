@@ -290,6 +290,11 @@ public:
         return pedAgentIds_;
     }
     Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
+    // Where an agent is DRAWN this step: one tick behind, interpolated through the sim's tick (the same rule the
+    // crowd's instances follow -- agentPose). Between ticks the raw position holds still and then hops; at a slowed
+    // tick (the adaptive rate, down to 7.5 Hz) a walker posed from it read as flickering at superspeed.
+    engine::Vec2 drawnAgentPos(int agentIndex, engine::Vec2* heading = nullptr) const;
+    int loadMultiplier() const { return loadMul_; }
     // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
     // public so the gate can assert paint never leaves the carriageway.
     engine::RenderMesh buildRoadMarkings() const;
