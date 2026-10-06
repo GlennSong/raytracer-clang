@@ -1673,6 +1673,7 @@ private:
     // the bubble calls it back. Ascending order keeps every pass's order, and so its result, as it was.
     std::vector<int> kIdx_, vIdx_, tierScan_;
     std::vector<int> pinned_;   // the followed agents (pinAgent)
+    std::vector<int> seatScan_;   // stepSeats' K + V, ascending
     bool rehashAll_ = true;   // a bulk move (build, seedFromSchedule): re-place EVERYONE in the grid next tick
     void setTier(int agentIndex, Agent::Tier t);
     void rebuildTierLists();

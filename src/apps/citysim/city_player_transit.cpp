@@ -521,8 +521,10 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                     if (!indoors) {
                         const std::vector<Agent>& ag = sim0.agents();
                         Real bestD = kBoardRadius;
-                        for (std::size_t i = 0; i < ag.size(); ++i) {
-                            const int ai = static_cast<int>(i);
+                        // (a bus or cab a few metres off is near: the near list, not all 100k agents 4 times a second)
+                        for (int ni : sim0.nearAgents()) {
+                            const std::size_t i = static_cast<std::size_t>(ni);
+                            const int ai = ni;
                             if (!(sim0.isBus(ai) || sim0.isTaxi(ai)) || ag[i].speed > 2.0) continue;
                             const Real dx = ag[i].pos.x - pt->position.x, dz = ag[i].pos.y - pt->position.z;
                             const Real d = std::sqrt(dx * dx + dz * dz);
@@ -542,9 +544,10 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                     const std::vector<Agent>& ag = sim0.agents();
                     Real bestD = kCarRideReach + 1.0;
                     int best = -1;
-                    for (std::size_t i = 0; i < ag.size(); ++i) {
+                    for (int ni : sim0.nearAgents()) {
+                        const std::size_t i = static_cast<std::size_t>(ni);
                         const Agent& a = ag[i];
-                        const int ai = static_cast<int>(i);
+                        const int ai = ni;
                         if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || a.playerControlled) continue;
                         if (sim0.isBus(ai) || sim0.isTaxi(ai)) continue;
                         const Real dx = a.pos.x - pt->position.x, dz = a.pos.y - pt->position.z;

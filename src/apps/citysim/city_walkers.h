@@ -130,6 +130,7 @@ private:
     std::unordered_map<int, engine::MeshHandle> seatedMeshes_;   // by outfit: the walker sitting (M5)
     std::unordered_map<int, engine::MeshHandle> groundSitMeshes_;   // by outfit: sitting on the grass
     std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
+    std::vector<int> haveSet_;       // ...the ids marked (cleared next step, not the whole array)
 };
 
 }  // namespace citysim

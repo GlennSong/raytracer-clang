@@ -26,11 +26,18 @@ void CityTrafficAudioSystem::update(engine::FrameContext& ctx) {
         engine::Real dist2;
     };
     std::vector<Candidate> heard;
-    for (std::size_t i = 0; i < agents.size(); ++i) {
+    // (the near list: a far car has no body and no note -- not all 100k agents a frame; and a cheap reject on the
+    // plan's position before working out a pose)
+    for (int ni : city_.sim().nearAgents()) {
+        const std::size_t i = static_cast<std::size_t>(ni);
         const Agent& a = agents[i];
         if (a.mode != Agent::Mode::Driver) continue;
         if (a.far()) continue;        // no body, no note
         if (a.released) continue;     // the player's car — VehicleSystem's voice
+        {
+            const engine::Real px = a.pos.x - ear.x, pz = a.pos.y - ear.z, r = kAudibleRange + 20.0;
+            if (px * px + pz * pz > r * r) continue;
+        }
         Vec3 pos;
         Vec2 heading;
         if (!city_.agentWorldPose(static_cast<int>(i), pos, heading)) continue;

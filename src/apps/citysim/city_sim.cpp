@@ -5,6 +5,7 @@
 #include "../../profile.h"
 
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 #include <fstream>
 #include <filesystem>
@@ -1600,6 +1601,7 @@ void CitySim::setTier(int i, Agent::Tier t) {
     else dGrid_.remove(i);
     a.tier = t;
     if (t == Agent::Tier::D) {
+        releaseSeat(a);   // a bench, a place in a group: let go (it was holding them for ever)
         // DORMANT: rebuilt from its schedule on waking (placeFromSchedule plans afresh), so it keeps no trip -- its
         // route and its sensing memory go back to the heap (at 100k, most of the agents' heap)
         std::vector<int>().swap(a.route.links);
@@ -5500,7 +5502,11 @@ void CitySim::stepSeats(Real dt) {
     constexpr Real kWalk = 1.2;   // an amble across the grass
     constexpr Real kJog = 2.8;    // a steady run
     stepSessions();
-    for (Agent& a : agents_) {
+    // the K and V tiers merged ascending (the old all-agents order): a dormant agent holds no seat (setTier)
+    seatScan_.clear();
+    std::merge(kIdx_.begin(), kIdx_.end(), vIdx_.begin(), vIdx_.end(), std::back_inserter(seatScan_));
+    for (int si : seatScan_) {
+        Agent& a = agents_[static_cast<std::size_t>(si)];
         if (a.seatPhase == 0) continue;
         // THE LEASH (ADR-0062) holds off the paths too: a plan that has got its lead ahead of its body -- across a
         // lawn, round a fountain -- waits for it. Unleashed, the body fell behind, stuck, and was teleported up to

@@ -128,12 +128,16 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         walkers_.pop_back();
     }
     // Membership of the CURRENT walker set, then grow the missing K peds.
-    haveWalker_.assign(agents.size(), 0);
+    if (haveWalker_.size() != agents.size()) haveWalker_.assign(agents.size(), 0);
+    else for (int id : haveSet_) haveWalker_[static_cast<std::size_t>(id)] = 0;   // (last step's marks only)
+    haveSet_.clear();
+    for (const Walker& w : walkers_) if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size())) haveSet_.push_back(w.agentId);
     for (const Walker& w : walkers_)
         if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size()))
             haveWalker_[w.agentId] = 1;
-    for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
-        const Agent& a = agents[i];
+    // (a visible pedestrian is never far: the near list, in the same order -- not all 100k agents every step)
+    for (int i : sim.nearAgents()) {
+        const Agent& a = agents[static_cast<std::size_t>(i)];
         if (!sim.pedVisible(i)) continue;
         if (haveWalker_[i]) continue;
 
