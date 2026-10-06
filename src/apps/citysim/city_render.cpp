@@ -1808,6 +1808,11 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             slot >= 0 && slot < static_cast<int>(carWheels_.size()) && carWheels_[static_cast<std::size_t>(slot)].size() >= 3
                 ? &carWheels_[static_cast<std::size_t>(slot)] : nullptr;
         const Real fl = drawHeading.length();
+        // A CAR THAT HAS NOT MOVED (at a light, in a queue, at the kerb) sits exactly where it sat: its last pose,
+        // not four surface samples and a fit again every bake
+        PoseCache* pc = agentIdx >= 0 && agentIdx < static_cast<int>(poseCache_.size()) ? &poseCache_[static_cast<std::size_t>(agentIdx)] : nullptr;
+        if (pc && pc->valid && pc->x == x && pc->z == z && pc->hx == drawHeading.x && pc->hz == drawHeading.y && pc->slot == slot)
+            return pc->m;
         if (wheels && fl > 1e-6) {
             const Vec2 f = drawHeading * (1.0 / fl);
             const Vec2 r(f.y, -f.x);                  // +X, the car's right
@@ -1851,6 +1856,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
             m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
             m.m[0][3] = x; m.m[1][3] = cy; m.m[2][3] = z;
+            if (pc) *pc = PoseCache{x, z, drawHeading.x, drawHeading.y, slot, true, m};
             return m;
         }
     }
@@ -2221,6 +2227,7 @@ void CityRenderSystem::syncGroups(World& world) {
         secT = n;
     };
     const auto& agents = sim_.agents();
+    if (poseCache_.size() != agents.size()) poseCache_.assign(agents.size(), PoseCache{});
     // the K tier only, ascending (agents() order): a far agent has no render membership
     for (int nearIdx : sim_.nearAgents()) {
         const std::size_t ai = static_cast<std::size_t>(nearIdx);
@@ -2301,8 +2308,10 @@ void CityRenderSystem::syncGroups(World& world) {
         // Vehicle that replaced it, so the bridge must not draw it a second
         // time. The owner is released, not its car — the ownership link is kept
         // deliberately, so the agent can later discover the car is gone.
+        // (a released or player-controlled agent never leaves the K tier: the near list holds them all)
         std::vector<char> suppressed(vehicles.size(), 0);
-        for (const Agent& a : sim_.agents()) {
+        for (int ni : sim_.nearAgents()) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
             if (!a.released && !a.playerControlled) continue;
             if (a.car >= 0 && a.car < static_cast<int>(vehicles.size()))
                 suppressed[a.car] = 1;
@@ -2314,7 +2323,12 @@ void CityRenderSystem::syncGroups(World& world) {
         const Real rad = params_.sceneryRadius;
         const Real rad2 = rad * rad;
         int drawn = 0;
-        for (std::size_t vi = 0; vi < vehicles.size(); ++vi) {
+        // only the cars hashed within the draw radius (ascending, the same order), not the city's every vehicle
+        parkedScratch_.clear();
+        if (haveCentre && rad > 0) sim_.parkedNear(centre, rad, parkedScratch_);
+        else for (int vi = 0; vi < static_cast<int>(vehicles.size()); ++vi) parkedScratch_.push_back(vi);
+        for (int vidx : parkedScratch_) {
+            const std::size_t vi = static_cast<std::size_t>(vidx);
             const SimVehicle& sv = vehicles[vi];
             if (sv.driver >= 0) continue;      // someone is driving it: the agent
                                                // bake above already drew it

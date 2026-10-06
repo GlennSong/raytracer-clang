@@ -562,6 +562,9 @@ public:
     const std::vector<Agent>& agents() const { return agents_; }
     // Every K agent (the simulated-in-full, drawn tier), ascending: what a drawer walks instead of agents()
     const std::vector<int>& nearAgents() const { return kIdx_; }
+    // Vehicles hashed near (c, r), ascending -- a superset: every car is placed where it last parked (a driven one's
+    // entry is stale; the caller skips cars with a driver)
+    void parkedNear(engine::Vec2 c, Real r, std::vector<int>& out) const { parkedGrid_.query(c, r, out); }
     const std::vector<SimVehicle>& vehicles() const { return vehicles_; }
 
     // Curbside parallel-parking bays (roads-v2.1 R6b, plan 4d phase 1):

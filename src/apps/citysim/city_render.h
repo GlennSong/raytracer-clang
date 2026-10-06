@@ -594,6 +594,10 @@ private:
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
     std::vector<uint8_t> siteShared_;  // by link: its signal shares an earlier one's pole and head (draws no lens)
     std::vector<int> postLinkOf_;      // per signal-post instance: the link whose state its head shows
+    // per agent: its last four-wheel car pose and what it was computed for (a car that has not moved reuses it)
+    struct PoseCache { Real x = 0, z = 0, hx = 0, hz = 0; int slot = -1; bool valid = false; engine::Mat4 m; };
+    mutable std::vector<PoseCache> poseCache_;
+    std::vector<int> parkedScratch_;   // the vehicles near the player (syncGroups)
     // Each signal's three lens poses (red, amber, green), parallel to signalLinks_: the poles never move, and
     // working them out every bake (a ground sample apiece) was 10.6 ms of the island's 13 ms sync for 4,727 signals
     std::vector<std::array<engine::Mat4, 3>> signalLensCache_;
