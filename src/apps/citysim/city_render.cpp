@@ -761,9 +761,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // What this LEVEL asked for, beside the density line above. Nothing used
     // to print it, so a level that silently failed to opt into tiering looked
     // exactly like one that had (2026-09-16).
-    LOG_INFO << "[citysim] buses: " << params_.buses << " on "
-             << sim_.buses().routeCount() << " derived routes of " << params_.busStops
+    {
+    int fleet = 0;
+    for (int r = 0; r < sim_.buses().routeCount(); ++r) fleet += sim_.buses().fleetOf(r);
+    LOG_INFO << "[citysim] buses: " << fleet << " on "
+             << sim_.buses().routeCount() << " derived routes" << (sim_.buses().twoWay() ? " (each loop both ways)" : "")
+             << " of " << params_.busStops
              << " stops; riders walk <= " << params_.busMaxWalk << " m to a stop";
+    }
     for (int r = 0; r < sim_.buses().routeCount(); ++r) {
         const BusRoute& br = sim_.buses().route(r);
         const Real lap = sim_.buses().rideSeconds(r, 0, 0);

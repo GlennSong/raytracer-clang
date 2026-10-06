@@ -1795,6 +1795,9 @@ void CitySim::scheduleDormantEvent(int i) {
     Agent& a = agents_[static_cast<std::size_t>(i)];
     dormantEventAt_[static_cast<std::size_t>(i)] = -1.0;
     if (a.tier != Agent::Tier::D || hoursPerSecond_ <= 0 || !nav_) return;
+    // A bus or a cab runs its own table, not a day: placeFromSchedule leaves its trip as it was, so an "arrival"
+    // here only reset its clock -- and far away the cab drove the same stretch again, for ever (the 23:00 census).
+    if (isBus(i) || isTaxi(i)) return;
     double at = -1;
     if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
         // mid-trip: when it gets there, at its modelled pace
@@ -5383,7 +5386,8 @@ CitySim::Census CitySim::census() const {
     Census c;
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
         const Agent& a = agents_[static_cast<std::size_t>(i)];
-        if (isBus(i)) continue;
+        if (isBus(i)) { c.busesMoving += a.moving ? 1 : 0; continue; }
+        if (isTaxi(i)) { c.cabsMoving += a.moving ? 1 : 0; continue; }   // service, not a resident's day
         ++c.agents;
         const int r = std::min(3, static_cast<int>(a.role));
         ++c.byRole[r];

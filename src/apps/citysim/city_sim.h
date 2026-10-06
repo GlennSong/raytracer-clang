@@ -1259,6 +1259,7 @@ public:
         int agents = 0, walkers = 0, drivers = 0;
         int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, riding = 0, waiting = 0;
         int byRole[4] = {0, 0, 0, 0}, outsideByRole[4] = {0, 0, 0, 0};   // Agent::Role: commuter, shopkeeper, stroller, student
+        int busesMoving = 0, cabsMoving = 0;   // the service fleet, outside every count above
     };
     Census census() const;
     // A group member's place in its session (formations other than Roam) and the way it faces there.

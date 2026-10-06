@@ -3782,17 +3782,20 @@ TEST_CASE(metro_day_census_prints) {
     CHECK(city.build(world, &assets, nullptr));
     std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, riding, waiting) | by role out%% "
                 "commuter/shopkeeper/stroller/student | boardings in 5 min | bus plans asked / taken / not worth it\n");
+    const char* only = std::getenv("RT_CENSUS_HOUR");   // one hour of the seven, to look closer
     for (Real hour : {8.0, 10.0, 12.5, 15.0, 17.5, 20.0, 23.0}) {
+        if (only && std::fabs(std::atof(only) - hour) > 1e-6) continue;
         city.setWorldClock(hour, 1.0 / 3600.0);
         for (int i = 0; i < 3000; ++i) city.step(world, 0.1);   // settle 5 min
         const long b0 = city.sim().busBoardAttempts();
         const auto ps0 = city.sim().buses().planStats();
-        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[4] = {0, 0, 0, 0}, rAll[4] = {0, 0, 0, 0};
+        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[4] = {0, 0, 0, 0}, rAll[4] = {0, 0, 0, 0}, bm = 0, cm = 0;
         int samples = 0;
         for (int i = 0; i < 3000; ++i) {
             city.step(world, 0.1);
             if (i % 100 != 0) continue;   // every 10 s
             const citysim::CitySim::Census c = city.sim().census();
+            bm += c.busesMoving; cm += c.cabsMoving;
             wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; rd += c.riding; wt += c.waiting; ag += c.agents;
             for (int r = 0; r < 4; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; }
             ++samples;
@@ -3805,5 +3808,23 @@ TEST_CASE(metro_day_census_prints) {
                     hour, pct(out, all), wo / n, wm / n, dm / n, rd / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
                     pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]), city.sim().busBoardAttempts() - b0, ps.asked - ps0.asked,
                     ps.ok - ps0.ok, ps.noSaving - ps0.noSaving);
+        std::printf("    [census] %5.1f | service: buses moving %.0f, cabs moving %.0f\n", hour, bm / n, cm / n);
+        if (hour >= 23.0) {   // WHO DRIVES AT NIGHT: the drivers still moving, by tier / activity / bus or cab
+            static const char* kAct[] = {"AtHome", "Commuting", "AtWork", "Returning", "Shopping", "Outing", "Lunch"};
+            std::map<std::string, int> why;
+            const citysim::CitySim& sim = city.sim();
+            for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
+                const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+                if (a.mode != citysim::Agent::Mode::Driver || !a.moving) continue;
+                const char tier = a.tier == citysim::Agent::Tier::K ? 'K' : a.tier == citysim::Agent::Tier::V ? 'V' : 'D';
+                const int act = static_cast<int>(a.activity);
+                char key[96];
+                std::snprintf(key, sizeof key, "%s tier %c %s role %d departHome %.0f",
+                              sim.isBus(i) ? "bus" : sim.isTaxi(i) ? "cab" : "car", tier, act >= 0 && act < 7 ? kAct[act] : "?",
+                              static_cast<int>(a.role), std::floor(a.departHome));
+                ++why[key];
+            }
+            for (const auto& kv : why) std::printf("    [census night] %5d  %s\n", kv.second, kv.first.c_str());
+        }
     }
 }
