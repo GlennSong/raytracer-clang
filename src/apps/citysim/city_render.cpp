@@ -88,6 +88,12 @@ void refreshBounds(InstanceGroup* g) {
 
 }  // namespace
 
+bool CityRenderSystem::carOccupied(int ai) const {
+    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size())) return false;
+    if (ai == playerRidingAgent_ || ai == playerSeatAgent_) return true;   // the car you are in
+    return sim_.agents()[static_cast<std::size_t>(ai)].moving || sim_.isBus(ai) || sim_.isTaxi(ai);
+}
+
 Vec2 CityRenderSystem::drawnAgentPos(int i, Vec2* heading) const {
     const Agent& a = sim_.agents()[static_cast<std::size_t>(i)];
     if (heading) *heading = a.heading;
@@ -2521,6 +2527,7 @@ void CityRenderSystem::syncGroups(World& world) {
                     if (!cars[v] || carSeeInto_[v]) continue;
                     for (int ai : carAgentIds_[v]) {
                         if (ai < 0) continue;
+                        if (!carOccupied(ai)) continue;   // a car left at the kerb is not swapped: nobody in it
                         const Real d = (ags[static_cast<std::size_t>(ai)].pos - c).length();
                         if (d < (nearSwap_.count(ai) ? kNearOut : kNearIn)) cand.push_back({d, ai});
                     }
@@ -2570,6 +2577,10 @@ void CityRenderSystem::syncGroups(World& world) {
                 if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
+                // NOBODY SITS IN A PARKED CAR (Glenn: "npc bodies sitting dormant in their parked cars ... They should
+                // either be in a house dormant or disappeared"): a driver is in the seat only while the car is on a
+                // trip -- moving, or a bus or a cab on duty; at rest the person is indoors and the car stands empty
+                if (!carOccupied(ai)) continue;
                 if (hasDriver && drv)
                     drv->transforms.push_back(
                         xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)));

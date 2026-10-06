@@ -294,6 +294,8 @@ public:
     // crowd's instances follow -- agentPose). Between ticks the raw position holds still and then hops; at a slowed
     // tick (the adaptive rate, down to 7.5 Hz) a walker posed from it read as flickering at superspeed.
     engine::Vec2 drawnAgentPos(int agentIndex, engine::Vec2* heading = nullptr) const;
+    // Is anyone in this driver's car? Only while it is on a trip (moving; a bus or a cab on duty; the car you ride)
+    bool carOccupied(int agentIndex) const;
     int loadMultiplier() const { return loadMul_; }
     // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
     // public so the gate can assert paint never leaves the carriageway.
