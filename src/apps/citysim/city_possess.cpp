@@ -610,7 +610,8 @@ void CityPossessSystem::driveCar(engine::FrameContext& ctx) {
     // Don't rear-end the city: sense along the route against every nearby sim
     // driver plus any player-driven physical car, and yield to the leader.
     std::vector<engine::SensedBody> bodies;
-    for (const Agent& a : city_.sim().agents()) {
+    for (int ni : city_.sim().nearAgents()) {   // (50 m from the possessed car: the near tier)
+        const Agent& a = city_.sim().agents()[static_cast<std::size_t>(ni)];
         if (a.mode != Agent::Mode::Driver || a.released) continue;
         const engine::Real dx = a.pos.x - pos.x, dz = a.pos.y - pos.z;
         if (dx * dx + dz * dz > 50.0 * 50.0) continue;

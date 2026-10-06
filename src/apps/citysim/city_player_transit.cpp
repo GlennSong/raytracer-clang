@@ -686,8 +686,9 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
 
     // What E would do right now: the same test the boarding code applies.
     Real nearest = kBoardRadius;
-    for (std::size_t i = 0; i < agents.size(); ++i) {
-        const int ai = static_cast<int>(i);
+    for (int ni : sim.nearAgents()) {   // (a bus or cab you could board is near)
+        const std::size_t i = static_cast<std::size_t>(ni);
+        const int ai = ni;
         const bool isBus = sim.isBus(ai), isTaxi = sim.isTaxi(ai);
         if (!isBus && !isTaxi) continue;
         if (agents[i].speed > 2.0) continue;

@@ -268,7 +268,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         carSpeed.push_back(s);
     });
-    for (const Agent& a : sim.agents()) {
+    for (int ni : sim.nearAgents()) {   // (the near list: a far car has no body -- see below)
+        const Agent& a = sim.agents()[static_cast<std::size_t>(ni)];
         if (a.mode != Agent::Mode::Driver || a.released || !a.moving) continue;
         // FAR CARS CANNOT RUN ANYONE OVER. This was the only place in citysim
         // that iterated far-tier agents: it gathered every moving driver in the

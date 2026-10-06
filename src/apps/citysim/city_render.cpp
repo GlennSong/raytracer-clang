@@ -2711,8 +2711,11 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
         inside.push_back({&set, set.building, it->second, p.entrance + (p.site - p.entrance) * 0.4});
     });
     // who is in: indoors, at rest, at that door
+    // (the near list: interiors stream in round the player, and whoever rests inside one is near -- this was every
+    // indoor agent in the city against every streamed building, once a second)
     if (!inside.empty())
-        for (const Agent& a : sim_.agents()) {
+        for (int ni : sim_.nearAgents()) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
             if (!a.indoors || a.moving) continue;
             for (Inside& in : inside)
                 if ((a.pos - in.door).lengthSquared() < 0.25) { ++in.people; break; }
