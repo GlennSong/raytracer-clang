@@ -219,6 +219,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busCommuteShare = c.busCommuteShare;
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
+        // RT_MAX_AMBIENT=<n>: the population cap per class for this run (scale tests on a real level without
+        // editing it -- the bake never sees it)
+        if (const char* m = std::getenv("RT_MAX_AMBIENT")) params_.maxAmbient = std::max(6, std::atoi(m));
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.startHour = c.startHour;
@@ -2042,7 +2045,9 @@ void CityRenderSystem::syncCarLamps(World& world) {
     // the sim clock keeps determinism intact.
     const bool blinkOn = std::fmod(sim_.seconds() * kTurnBlinkHz, 1.0) < 0.5;
 
-    for (std::size_t ai = 0; ai < agents.size(); ++ai) {
+    // (the K tier only: a far car has no drawn body and no lamps -- its speed is recorded once it is near again)
+    for (int nearIdx : sim_.nearAgents()) {
+        const std::size_t ai = static_cast<std::size_t>(nearIdx);
         const Agent& a = agents[ai];
         const Real prev = prevCarSpeed_[ai];
         prevCarSpeed_[ai] = a.speed;   // record for next step's decel test
@@ -2201,7 +2206,9 @@ void CityRenderSystem::syncGroups(World& world) {
         secT = n;
     };
     const auto& agents = sim_.agents();
-    for (std::size_t ai = 0; ai < agents.size(); ++ai) {
+    // the K tier only, ascending (agents() order): a far agent has no render membership
+    for (int nearIdx : sim_.nearAgents()) {
+        const std::size_t ai = static_cast<std::size_t>(nearIdx);
         const Agent& a = agents[ai];
         // P4: a far (V) agent has NO render membership — no instance, no lamp,
         // no kinematic proxy (the physics diff keys off these id lists).

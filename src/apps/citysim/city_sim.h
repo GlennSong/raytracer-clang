@@ -553,6 +553,8 @@ public:
     Real timeOfDay() const { return clockHours_; }
     Real seconds() const { return simSeconds_; }   // monotonic sim clock (memory time base)
     const std::vector<Agent>& agents() const { return agents_; }
+    // Every K agent (the simulated-in-full, drawn tier), ascending: what a drawer walks instead of agents()
+    const std::vector<int>& nearAgents() const { return kIdx_; }
     const std::vector<SimVehicle>& vehicles() const { return vehicles_; }
 
     // Curbside parallel-parking bays (roads-v2.1 R6b, plan 4d phase 1):
