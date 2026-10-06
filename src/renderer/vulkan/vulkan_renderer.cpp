@@ -334,7 +334,21 @@ struct DrawItem {
     // frame's instance buffer, read by the vertex shader at instance rate. drawMesh is a
     // one-instance draw; drawMeshInstanced is one draw for the whole visible set.
     uint32_t firstInstance = 0, instanceCount = 1;
+    // WHERE IT IS: a world bounding sphere round every instance (radius < 0: unknown, always drawn). The shadow
+    // cascades cull against it -- each cascade used to draw the whole frame's queue (the island: 9.7 ms of GPU,
+    // three times the recording)
+    float worldCenter[3] = {0, 0, 0};
+    float worldRadius = -1.0f;
 };
+
+// The sphere round a mesh's bounds under a transform (its largest axis scale), into an item's world bounds.
+static void sphereOf(const BoundingSphere& b, const Mat4& t, Vec3& c, Real& r) {
+    c = t.transformPoint(b.center);
+    Real sc = 0;
+    for (int col = 0; col < 3; ++col)
+        sc = std::max(sc, std::sqrt(t.m[0][col] * t.m[0][col] + t.m[1][col] * t.m[1][col] + t.m[2][col] * t.m[2][col]));
+    r = b.radius * sc;
+}
 
 bool hasValidationLayer() {
     uint32_t count = 0;
@@ -657,6 +671,17 @@ struct VulkanRenderer::Impl {
 
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> imageAvailable{};
     std::array<VkFence, MAX_FRAMES_IN_FLIGHT> inFlightFences{};
+    // GPU PASS TIMES (RT_GPU_TIMES=1; Glenn: "get a breakdown"): a timestamp after each stage of the frame, one
+    // query pool per frame slot, read when that slot's fence has passed (no stall). Logged every 120 frames.
+    static constexpr int kGpuMarks = 9;   // start, shadows, scene, clouds, bloom, ssao, ssr, occlusion+dof, composite+ui
+    std::array<VkQueryPool, MAX_FRAMES_IN_FLIGHT> gpuTimePool{};
+    std::array<bool, MAX_FRAMES_IN_FLIGHT> gpuTimeWritten{};
+    double gpuTickNs = 0, gpuAccumMs[kGpuMarks] = {};
+    int gpuFrames = 0;
+    double cpuWaitMs = 0, cpuRecordMs = 0, cpuQueueMs = 0;   // endFrame's CPU: fence wait, recording, submit + present
+    void gpuMark(VkCommandBuffer cmd, int k) {
+        if (gpuTimePool[currentFrame]) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, gpuTimePool[currentFrame], static_cast<uint32_t>(k));
+    }
     std::vector<VkSemaphore> renderFinished;     // one per swapchain image
     std::vector<VkFence> imagesInFlight;
     uint32_t currentFrame = 0;
@@ -3440,6 +3465,18 @@ bool VulkanRenderer::Impl::createSyncObjects() {
             LOG_ERROR("[vulkan] failed to create render-finished semaphore");
             return false;
         }
+    if (std::getenv("RT_GPU_TIMES") && !gpuTimePool[0]) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(physicalDevice, &props);
+        gpuTickNs = props.limits.timestampPeriod;
+        VkQueryPoolCreateInfo q{};
+        q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        q.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        q.queryCount = kGpuMarks;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            if (gpuTickNs <= 0 || vkCreateQueryPool(device, &q, nullptr, &gpuTimePool[i]) != VK_SUCCESS) gpuTimePool[i] = VK_NULL_HANDLE;
+        LOG_INFO("[vulkan] GPU pass timing on (tick %.2f ns)", gpuTickNs);
+    }
     return true;
 }
 
@@ -4983,6 +5020,7 @@ VkDescriptorSet VulkanRenderer::Impl::allocMaterialSet(const DrawItem& item) {
 }
 
 void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
+    static const bool shadowCullOff = std::getenv("RT_NO_SHADOW_CULL") != nullptr;   // A/B
     // Render every cascade layer so all are in READ_ONLY layout for sampling;
     // inactive cascades are cleared only (no draws). cascadeCount==0 => sun casts
     // no shadow, but the clears still leave the array valid to sample (lit).
@@ -5005,9 +5043,34 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             vkCmdSetDepthBias(cmd, shadowDepthBiasConst, 0.0f, shadowDepthBiasSlope);
             VkPipeline bound = VK_NULL_HANDLE;
+            // THIS CASCADE'S SIDES: the four planes of its light view-projection across the light (left, right,
+            // bottom, top). Not near/far: a caster up toward the sun, or beyond, still throws its shadow in.
+            float planes[4][4];
+            {
+                const float* M = cpuGlobals.cascadeVP[c];   // column-major: row r = M[r], M[4+r], M[8+r], M[12+r]
+                auto row = [&](int r, int k) { return M[k * 4 + r]; };
+                for (int pi = 0; pi < 4; ++pi) {
+                    const int r = pi / 2;
+                    const float sgn = (pi % 2 == 0) ? 1.0f : -1.0f;
+                    float len = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        planes[pi][k] = row(3, k) + sgn * row(r, k);
+                        if (k < 3) len += planes[pi][k] * planes[pi][k];
+                    }
+                    len = std::sqrt(std::max(len, 1e-20f));
+                    for (int k = 0; k < 4; ++k) planes[pi][k] /= len;
+                }
+            }
             for (const DrawItem& item : drawQueue) {
                 GpuMesh* m = meshes.get(item.mesh);
                 if (!m || m->indexCount == 0) continue;
+                if (item.worldRadius >= 0 && !shadowCullOff) {
+                    bool out = false;
+                    for (int pi = 0; pi < 4 && !out; ++pi)
+                        out = planes[pi][0] * item.worldCenter[0] + planes[pi][1] * item.worldCenter[1] +
+                                  planes[pi][2] * item.worldCenter[2] + planes[pi][3] < -item.worldRadius;
+                    if (out) continue;
+                }
                 // Debug-gizmo overlays (FLAG_OVERLAY) and ground cover (FLAG_GRASS) cast no shadows.
                 if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) continue;
                 // alpha-cut surfaces (leaf cards) cut their shadow too, when their albedo map is bound
@@ -5282,9 +5345,15 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &begin);
+    if (gpuTimePool[currentFrame]) {
+        vkCmdResetQueryPool(cmd, gpuTimePool[currentFrame], 0, kGpuMarks);
+        gpuTimeWritten[currentFrame] = true;
+    }
+    gpuMark(cmd, 0);
 
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
     recordShadowPass(cmd);
+    gpuMark(cmd, 1);
 
     // Scene pass → offscreen HDR + world-normal G-buffer (sky + geometry).
     std::array<VkClearValue, 3> clears{};
@@ -5430,6 +5499,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     }
 
     vkCmdEndRenderPass(cmd);
+    gpuMark(cmd, 2);
 
     // Volumetric clouds (port of the Metal cinematic-sky wiring): half-res
     // march, then the bilateral composite onto the HDR scene — BEFORE the post
@@ -5477,12 +5547,17 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 
     // Bloom + SSAO read the scene outputs (always run so their views stay
     // sampleable; composite gates whether they're applied).
+    gpuMark(cmd, 3);
     recordBloom(cmd);
+    gpuMark(cmd, 4);
     recordSsao(cmd);
+    gpuMark(cmd, 5);
     recordSsr(cmd);
+    gpuMark(cmd, 6);
     recordOcclusion(cmd);
     // DOF (off by default) blurs the HDR scene; composite reads dofView when on.
     if (dofEnabledFrame) recordDof(cmd);
+    gpuMark(cmd, 7);
 
     // Composite pass → swapchain: tonemap (ACES/AgX) + grade + exposure of the
     // HDR scene target, plus bloom. (Phase 5b continues with SSAO/SSR/lens/DOF.)
@@ -5541,6 +5616,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     }
 #endif
     vkCmdEndRenderPass(cmd);
+    gpuMark(cmd, 8);
 
     // Frame capture (armed this frame): copy the composited swapchain image
     // into the host-visible capture buffer — the same post-composite,
@@ -5588,7 +5664,30 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 void VulkanRenderer::Impl::drawFrame() {
     if (!initialized || width == 0 || height == 0) return;
 
+    using GpuClock = std::chrono::steady_clock;
+    const auto cw0 = GpuClock::now();
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    if (gpuTimePool[currentFrame]) cpuWaitMs += std::chrono::duration<double, std::milli>(GpuClock::now() - cw0).count();
+    // This slot's GPU pass times are in (its fence passed): read, accumulate, report every 120 frames
+    if (gpuTimePool[currentFrame] && gpuTimeWritten[currentFrame]) {
+        uint64_t ts[kGpuMarks] = {};
+        if (vkGetQueryPoolResults(device, gpuTimePool[currentFrame], 0, kGpuMarks, sizeof ts, ts, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            for (int k = 1; k < kGpuMarks; ++k) gpuAccumMs[k] += (ts[k] - ts[k - 1]) * gpuTickNs * 1e-6;
+            gpuAccumMs[0] += (ts[kGpuMarks - 1] - ts[0]) * gpuTickNs * 1e-6;
+            if (++gpuFrames == 120) {
+                const double n = gpuFrames;
+                LOG_INFO("[gpu] ms per frame: shadows %.2f scene %.2f clouds %.2f bloom %.2f ssao %.2f ssr %.2f occlusion+dof %.2f "
+                         "composite+ui %.2f | total %.2f || cpu in endFrame: fence wait %.2f record %.2f submit+present %.2f",
+                         gpuAccumMs[1] / n, gpuAccumMs[2] / n, gpuAccumMs[3] / n, gpuAccumMs[4] / n, gpuAccumMs[5] / n,
+                         gpuAccumMs[6] / n, gpuAccumMs[7] / n, gpuAccumMs[8] / n, gpuAccumMs[0] / n, cpuWaitMs / n,
+                         cpuRecordMs / n, cpuQueueMs / n);
+                for (double& m : gpuAccumMs) m = 0;
+                cpuWaitMs = cpuRecordMs = cpuQueueMs = 0;
+                gpuFrames = 0;
+            }
+        }
+    }
     // This slot's occlusion depth is finished: it becomes the snapshot the next culling reads.
     if (occPending[currentFrame].valid && occMapped[currentFrame]) {
         OcclusionDepth& o = occPending[currentFrame];
@@ -5684,7 +5783,10 @@ void VulkanRenderer::Impl::drawFrame() {
 
     VkCommandBuffer cmd = commandBuffers[currentFrame];
     vkResetCommandBuffer(cmd, 0);
+    const auto cr0 = GpuClock::now();
     recordCommandBuffer(cmd, imageIndex);
+    const auto cr1 = GpuClock::now();
+    if (gpuTimePool[currentFrame]) cpuRecordMs += std::chrono::duration<double, std::milli>(cr1 - cr0).count();
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submit{};
@@ -5711,6 +5813,7 @@ void VulkanRenderer::Impl::drawFrame() {
     present.pSwapchains = &swapchain;
     present.pImageIndices = &imageIndex;
     VkResult result = vkQueuePresentKHR(presentQueue, &present);
+    if (gpuTimePool[currentFrame]) cpuQueueMs += std::chrono::duration<double, std::milli>(GpuClock::now() - cr1).count();
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized)
         recreateSwapchain();
     else if (result != VK_SUCCESS)
@@ -5909,6 +6012,8 @@ void VulkanRenderer::shutdown() {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (impl->imageAvailable[i]) vkDestroySemaphore(impl->device, impl->imageAvailable[i], nullptr);
         if (impl->inFlightFences[i]) vkDestroyFence(impl->device, impl->inFlightFences[i], nullptr);
+        if (impl->gpuTimePool[i]) vkDestroyQueryPool(impl->device, impl->gpuTimePool[i], nullptr);
+        impl->gpuTimePool[i] = VK_NULL_HANDLE;
         impl->imageAvailable[i] = VK_NULL_HANDLE;
         impl->inFlightFences[i] = VK_NULL_HANDLE;
     }
@@ -6701,6 +6806,13 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     item.opacity = material.opacity;
     item.firstInstance = impl->pushInstance(transform);
     item.instanceCount = 1;
+    if (const GpuMesh* gm = impl->meshes.get(handle); gm && gm->bounds.radius > 0) {
+        Vec3 c; Real r;
+        sphereOf(gm->bounds, transform, c, r);
+        item.worldCenter[0] = static_cast<float>(c.x); item.worldCenter[1] = static_cast<float>(c.y);
+        item.worldCenter[2] = static_cast<float>(c.z);
+        item.worldRadius = static_cast<float>(r);
+    }
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;
 }
@@ -6715,6 +6827,7 @@ bool VulkanRenderer::setPresentSync(bool enabled) {
 
 void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector<Mat4>& transforms,
                                        const RenderMaterial& material) {
+    // (bounds: the box round every instance's sphere, then the sphere round that box)
     if (transforms.empty()) return;
     // RT_NO_INSTANCING=1: one draw per instance, as before ADR-0097 (A/B frames and timings).
     static const bool noInstancing = [] { const char* e = std::getenv("RT_NO_INSTANCING"); return e && e[0] == '1'; }();
@@ -6725,6 +6838,21 @@ void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector<Mat4
     DrawItem& item = impl->drawQueue.back();
     for (std::size_t i = 1; i < transforms.size(); ++i) impl->pushInstance(transforms[i]);
     item.instanceCount = static_cast<uint32_t>(transforms.size());
+    if (const GpuMesh* gm = impl->meshes.get(handle); gm && gm->bounds.radius > 0) {
+        Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+        for (const Mat4& t : transforms) {
+            Vec3 c; Real r;
+            sphereOf(gm->bounds, t, c, r);
+            lo = Vec3(std::min(lo.x, c.x - r), std::min(lo.y, c.y - r), std::min(lo.z, c.z - r));
+            hi = Vec3(std::max(hi.x, c.x + r), std::max(hi.y, c.y + r), std::max(hi.z, c.z + r));
+        }
+        const Vec3 mid = (lo + hi) * 0.5;
+        item.worldCenter[0] = static_cast<float>(mid.x); item.worldCenter[1] = static_cast<float>(mid.y);
+        item.worldCenter[2] = static_cast<float>(mid.z);
+        item.worldRadius = static_cast<float>((hi - lo).length() * 0.5);
+    } else {
+        item.worldRadius = -1.0f;
+    }
     impl->stats.entitiesSubmitted += transforms.size() - 1;
 }
 
