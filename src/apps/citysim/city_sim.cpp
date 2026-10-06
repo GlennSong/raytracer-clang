@@ -670,6 +670,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         const Vec2 pad(kGridPad, kGridPad);
         grid_.configure(lo - pad, hi + pad, kAgentGridCell,
                         static_cast<int>(agents_.size()));
+        rebuildTierLists();
+        rehashAll_ = true;
         for (std::size_t i = 0; i < agents_.size(); ++i)
             grid_.place(static_cast<int>(i), agents_[i].pos);
         // PARKED CARS get their own index. A car left at the kerb is nowhere
@@ -1395,6 +1397,7 @@ void CitySim::seedFromSchedule(Real clock) {
 
     for (std::size_t i = 0; i < agents_.size(); ++i)
         placeFromSchedule(static_cast<int>(i));
+    rehashAll_ = true;   // everyone moved
 }
 
 // Put ONE agent where its day says it should be, right now. Shared by the
@@ -1563,11 +1566,41 @@ void CitySim::placeFromSchedule(int idx) {
 // precisely the tier whose job is to be approximate; by the time the player is
 // close enough for the difference to matter, the promote pass has already run
 // its catch-up and handed over an exact lane pose.
+void CitySim::rebuildTierLists() {
+    kIdx_.clear();
+    vIdx_.clear();
+    for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
+        const Agent::Tier t = agents_[static_cast<std::size_t>(i)].tier;
+        if (t == Agent::Tier::K) kIdx_.push_back(i);
+        else if (t == Agent::Tier::V) vIdx_.push_back(i);
+    }
+}
+
+void CitySim::setTier(int i, Agent::Tier t) {
+    Agent& a = agents_[static_cast<std::size_t>(i)];
+    if (a.tier == t) return;
+    auto drop = [&](std::vector<int>& v) {
+        const auto it = std::lower_bound(v.begin(), v.end(), i);
+        if (it != v.end() && *it == i) v.erase(it);
+    };
+    auto add = [&](std::vector<int>& v) { v.insert(std::lower_bound(v.begin(), v.end(), i), i); };
+    if (a.tier == Agent::Tier::K) drop(kIdx_);
+    else if (a.tier == Agent::Tier::V) drop(vIdx_);
+    a.tier = t;
+    if (t == Agent::Tier::K) add(kIdx_);
+    else if (t == Agent::Tier::V) add(vIdx_);
+    // entering the drawn and stepped tiers: interpolate from here, not from where it was last listed
+    if (t != Agent::Tier::D) {
+        a.tickFromPos = a.pos;
+        a.tickFromHeading = a.heading;
+    }
+}
+
 void CitySim::wakeDormant(int idx) {
     if (idx < 0 || idx >= static_cast<int>(agents_.size())) return;
     Agent& a = agents_[static_cast<std::size_t>(idx)];
     placeFromSchedule(idx);
-    a.tier = Agent::Tier::V;
+    setTier(idx, Agent::Tier::V);
     a.vLastTick = simSeconds_;   // its next coarse tick advances from now
     a.vHold = 0;
     // Any wake time it was carrying belongs to a day that has since moved on.
@@ -4674,7 +4707,7 @@ void CitySim::computeGaps() {
         return static_cast<long long>(li) * 4096 + laneKey;
     };
     std::unordered_map<long long, std::vector<std::pair<Real, int>>> lanes;
-    for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
+    for (int i : kIdx_) {
         const Agent& a = agents_[i];
         if (a.far()) continue;   // far tier: not on the road
         if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
@@ -4724,7 +4757,7 @@ void CitySim::computeGaps() {
     // overlap the leader as they cross a node (same-lane keys don't span it). We
     // chain across up to a couple of short links so a leader that has already moved
     // onto the link-after-next is still seen.
-    for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
+    for (int i : kIdx_) {
         const Agent& a = agents_[i];
         if (gaps_[i] != INF) continue;                 // has a same-link leader already
         if (a.far()) continue;        // far tier: no following
@@ -4893,11 +4926,13 @@ void CitySim::step(Real dt, Real hoursPerSecond) {
     tickAccum_ = 0.0;
     sinceTick_ = 0.0;
     // The interpolation origin for this tick: where everyone was before it.
-    for (Agent& a : agents_) {
-        a.tickFromPos = a.pos;
-        a.tickFromHeading = a.heading;
-        a.tickFromPullS = a.pullS;
-    }
+    for (const std::vector<int>* tierList : {&kIdx_, &vIdx_})
+        for (int ti : *tierList) {
+            Agent& a = agents_[static_cast<std::size_t>(ti)];
+            a.tickFromPos = a.pos;
+            a.tickFromHeading = a.heading;
+            a.tickFromPullS = a.pullS;
+        }
     stepTick(simDt, hoursPerSecond);
     // RT_TRACE_AGENT=<id>: that agent's plan, every tick (with the speed watchdog: what a flickering one is doing)
     static const int traceId = std::getenv("RT_TRACE_AGENT") ? std::atoi(std::getenv("RT_TRACE_AGENT")) : -1;
@@ -5550,8 +5585,16 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
 
     // P4.1: re-hash the population. place() early-outs on an unchanged cell,
     // so a V agent (whose pose only moves on its coarse tick) costs a compare.
-    for (std::size_t i = 0; i < agents_.size(); ++i)
-        grid_.place(static_cast<int>(i), agents_[i].pos);
+    // Only what can have moved: the K and V tiers (a dormant agent stands where it went under) -- unless a bulk
+    // move put everyone somewhere new
+    if (rehashAll_) {
+        for (std::size_t i = 0; i < agents_.size(); ++i)
+            grid_.place(static_cast<int>(i), agents_[i].pos);
+        rehashAll_ = false;
+    } else {
+        for (int i : kIdx_) grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
+        for (int i : vIdx_) grid_.place(i, agents_[static_cast<std::size_t>(i)].pos);
+    }
     phaseMark(phase_.rehash);
     // Record the rate BEFORE tierPass: waking a dormant agent reconstructs it
     // through scheduleSnapshot, which converts commute seconds into a share of
@@ -5579,7 +5622,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // once. It reappears the instant its own schedule calls for it.
     active_.clear();
     sleeping_ = 0;
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
+    for (int ki : kIdx_) {
+        const std::size_t i = static_cast<std::size_t>(ki);
         const Agent& a = agents_[i];
         if (a.far()) continue;
         // A held clock (rate 0) keeps sleepers under: nothing on their
@@ -5898,9 +5942,12 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     phaseMark(phase_.advPairs);
     crowdBase_.resize(agents_.size());
     crowdHas_.assign(agents_.size(), 0);
-    for (Agent& a : agents_)
+    for (int ki : kIdx_) {
+        Agent& a = agents_[static_cast<std::size_t>(ki)];
         if (!a.moving) { a.state = Agent::State::Resting; a.lateralOffset = 0; a.crowdOffset = Vec2(0, 0); }
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
+    }
+    for (int ki : kIdx_) {
+        const std::size_t i = static_cast<std::size_t>(ki);
         Agent& a = agents_[i];
         if (!a.moving) continue;
         if (a.mode == Agent::Mode::Driver) continue;   // driver FSM is set in advance()
@@ -6119,7 +6166,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // player (a wider berth, so a near miss reads as a step-around). The cone
     // bias above makes it lean away in advance; this is the physical backstop.
     phaseMark(phase_.advSolver);
-    for (Agent& a : agents_) {
+    for (int ki : kIdx_) {
+        Agent& a = agents_[static_cast<std::size_t>(ki)];
         if (a.mode != Agent::Mode::Pedestrian || !a.moving ||
             a.far())
             continue;
@@ -6208,7 +6256,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         div = std::max(1, std::min(div, vTickDivisor));
         const uint32_t bucket =
             static_cast<uint32_t>(frameIndex_ % static_cast<uint64_t>(div));
-        for (std::size_t i = 0; i < agents_.size(); ++i) {
+        tierScan_ = vIdx_;
+        for (int vi : tierScan_) {
+            const std::size_t i = static_cast<std::size_t>(vi);
             Agent& a = agents_[i];
             if (a.tier != Agent::Tier::V) continue;
             if (a.playerControlled || a.released) continue;
@@ -6219,13 +6269,15 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     ++frameIndex_;
 
     // A possessed car mirrors its driver; an unpossessed (parked) car stays put.
-    for (Agent& a : agents_) {
-        if (a.mode == Agent::Mode::Driver && a.vehicle >= 0 &&
-            a.vehicle < static_cast<int>(vehicles_.size())) {
-            vehicles_[a.vehicle].pos = a.pos;
-            vehicles_[a.vehicle].heading = a.heading;
+    for (const std::vector<int>* tierList : {&kIdx_, &vIdx_})
+        for (int ti : *tierList) {
+            Agent& a = agents_[static_cast<std::size_t>(ti)];
+            if (a.mode == Agent::Mode::Driver && a.vehicle >= 0 &&
+                a.vehicle < static_cast<int>(vehicles_.size())) {
+                vehicles_[a.vehicle].pos = a.pos;
+                vehicles_[a.vehicle].heading = a.heading;
+            }
         }
-    }
     // RIDERS (city_transit.h) take their driver's pose. LAST, after every
     // driver has advanced, so a passenger lands on its driver's final position
     // for the tick rather than trailing it by one. rides() is sorted ascending
@@ -6246,11 +6298,13 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // whichever path moved it. Counting it inside advance() missed the
     // stop-line approach, which moves the car and returns early -- the pull
     // then advanced on alternate ticks only, a stutter in the easing.
-    for (Agent& a : agents_) {
-        if (a.pullLen <= 0) continue;
-        a.pullS += (a.pos - a.tickFromPos).length();
-        if (a.pullS >= a.pullLen) a.pullLen = 0;
-    }
+    for (const std::vector<int>* tierList : {&kIdx_, &vIdx_})
+        for (int ti : *tierList) {
+            Agent& a = agents_[static_cast<std::size_t>(ti)];
+            if (a.pullLen <= 0) continue;
+            a.pullS += (a.pos - a.tickFromPos).length();
+            if (a.pullS >= a.pullLen) a.pullLen = 0;
+        }
     phaseMark(phase_.advance);
     phase_.total += std::chrono::duration<double, std::micro>(
                         std::chrono::steady_clock::now() - stepBegin).count();
@@ -6266,7 +6320,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
 void CitySim::tierPass(Real hoursPerSecond) {
     if (!tieringEnabled || !haveTierCenter_) return;   // no player: all K
     const Vec2 c = tierCenter_;
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
+    tierScan_ = kIdx_;   // (a copy: demotions edit the list)
+    for (int ki : tierScan_) {
+        const std::size_t i = static_cast<std::size_t>(ki);
         Agent& a = agents_[i];
         if (a.tier != Agent::Tier::K) continue;
         // Player-adjacent agents never demote: host-driven, released to the
@@ -6276,7 +6332,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
                                                       : pedDemoteRadius;
         const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
         if (dx * dx + dy * dy <= dr * dr) continue;
-        a.tier = Agent::Tier::V;
+        setTier(static_cast<int>(i), Agent::Tier::V);
         a.vLastTick = simSeconds_;   // its first coarse tick advances from here
         a.vHold = 0;
         // Strip K-only transients: wreck/hold state would be minutes stale at
@@ -6292,7 +6348,9 @@ void CitySim::tierPass(Real hoursPerSecond) {
     // is wasted, so it stops being simulated and will be rebuilt from its own
     // schedule when the player returns. Its car is deliberately left alone.
     if (dormancyEnabled) {
-        for (std::size_t i = 0; i < agents_.size(); ++i) {
+        tierScan_ = vIdx_;
+        for (int vi : tierScan_) {
+            const std::size_t i = static_cast<std::size_t>(vi);
             Agent& a = agents_[i];
             if (a.tier != Agent::Tier::V) continue;
             if (a.playerControlled || a.released || a.tethered) continue;
@@ -6305,7 +6363,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
             if (isBus(static_cast<int>(i)) || buses_.tripOf(static_cast<int>(i))) continue;
             const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
             if (dx * dx + dy * dy <= dormantRadius * dormantRadius) continue;
-            a.tier = Agent::Tier::D;
+            setTier(static_cast<int>(i), Agent::Tier::D);
             a.dormantSince = simSeconds_;
             ++dormancies_;
         }
@@ -6339,7 +6397,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
         // no snap. Render + kinematic proxy pick it up on this step's bake.
         tickV(idx, hoursPerSecond);
         if (!clearPromotion(idx)) continue;   // no room behind: stays far, retries
-        a.tier = Agent::Tier::K;
+        setTier(idx, Agent::Tier::K);
         grid_.place(idx, a.pos);
         ++promotions_;
     }

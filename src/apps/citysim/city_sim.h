@@ -1645,6 +1645,13 @@ private:
     // the far/V tier), resolved once per step in step(). Ascending, so the
     // passes keep their original iteration order.
     std::vector<int> active_;
+    // THE TIER LISTS (the 100k plan, stage 1): every K agent and every V agent, ascending, kept by setTier. The
+    // per-tick passes walk these, never the whole population -- a dormant agent (93% of 100k) is touched only when
+    // the bubble calls it back. Ascending order keeps every pass's order, and so its result, as it was.
+    std::vector<int> kIdx_, vIdx_, tierScan_;
+    bool rehashAll_ = true;   // a bulk move (build, seedFromSchedule): re-place EVERYONE in the grid next tick
+    void setTier(int agentIndex, Agent::Tier t);
+    void rebuildTierLists();
     bool haveTierCenter_ = false;
     uint64_t frameIndex_ = 0;
     long promotions_ = 0;
