@@ -866,6 +866,7 @@ struct StreetFurniture {
         Vec3 base;      // pole foot (on the road deck)
         Vec3 face;      // head faces this way (toward its approaching traffic)
         int link = -1;  // NavGraph link the signal governs
+        bool shared = false;   // an earlier signal's pole and head (two links on one approach): no head of its own
     };
     std::vector<Signal> signalPoles;   // ("signals" is a Qt macro — editor includes this)
     std::vector<Vec3> lampHeads;  // street-lamp bulb positions (night lights)

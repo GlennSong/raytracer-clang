@@ -6726,8 +6726,27 @@ bool LevelLoader::load(const std::string& path,
             engine::StreetFurniture sf;
             sf.navLinkCount = nav.linkCount();
             sf.lampHeads = fplan.lampHeads;
-            for (const engine::SignalSpot& s : fplan.signals)
-                sf.signalPoles.push_back({s.base, s.face, s.link});
+            // ONE POLE PER APPROACH: a signalled link whose pole would stand within 2.5 m of one already placed,
+            // facing the same way (two links on one approach), shares that pole -- it planted its own a metre or
+            // two off, two heads staggered over each other (Glenn: "the stoplights are doubled up"; 9 on the
+            // island). Its lens then lights on the shared head; only one post is drawn.
+            std::vector<char> sharedPole;
+            for (const engine::SignalSpot& s : fplan.signals) {
+                engine::StreetFurniture::Signal sig{s.base, s.face, s.link, false};
+                bool shared = false;
+                for (const auto& o : sf.signalPoles) {
+                    const Vec3 d = o.base - s.base;
+                    if (d.x * d.x + d.z * d.z < 2.5 * 2.5 && o.face.x * s.face.x + o.face.z * s.face.z > 0.94) {
+                        sig.base = o.base;
+                        sig.face = o.face;
+                        shared = true;
+                        break;
+                    }
+                }
+                sig.shared = shared;
+                sf.signalPoles.push_back(sig);
+                sharedPole.push_back(shared ? 1 : 0);
+            }
             {
                 const double hubRadius =
                     root.contains("citysim") && root["citysim"].is_object()
@@ -6773,7 +6792,9 @@ bool LevelLoader::load(const std::string& path,
                                             "city:signalpost");
                 g.material.albedo = Vec3(1, 1, 1);   // colour rides the verts
                 g.material.roughness = 0.6f;
-                for (const auto& s : sf.signalPoles) {
+                for (std::size_t si = 0; si < sf.signalPoles.size(); ++si) {
+                    if (sharedPole[si]) continue;   // its pole is an earlier one's
+                    const auto& s = sf.signalPoles[si];
                     const Real yaw = std::atan2(s.face.x, s.face.z);
                     g.transforms.push_back(Mat4::trs(
                         s.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
@@ -6920,6 +6941,74 @@ bool LevelLoader::load(const std::string& path,
             }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "
                      << fplan.lampBases.size() << " street lamps";
+            // DOUBLED SIGNALS (Glenn: "the stoplights are doubled up ... staggered over each other and z-fighting"):
+            // poles within 2.5 m of another facing the same way -- two signalled links on one approach
+            {
+                std::map<std::pair<int, int>, std::vector<int>> cell;
+                for (int i = 0; i < static_cast<int>(sf.signalPoles.size()); ++i) {
+                    const Vec3& b0 = sf.signalPoles[static_cast<std::size_t>(i)].base;
+                    cell[{static_cast<int>(std::floor(b0.x / 5.0)), static_cast<int>(std::floor(b0.z / 5.0))}].push_back(i);
+                }
+                int doubled = 0;
+                std::string where;
+                for (int i = 0; i < static_cast<int>(sf.signalPoles.size()); ++i) {
+                    const auto& A = sf.signalPoles[static_cast<std::size_t>(i)];
+                    const int cx = static_cast<int>(std::floor(A.base.x / 5.0)), cz = static_cast<int>(std::floor(A.base.z / 5.0));
+                    bool dup = false;
+                    for (int dx = -1; dx <= 1 && !dup; ++dx)
+                        for (int dz = -1; dz <= 1 && !dup; ++dz) {
+                            auto it = cell.find({cx + dx, cz + dz});
+                            if (it == cell.end()) continue;
+                            for (int j : it->second) {
+                                if (j <= i) continue;
+                                const auto& B = sf.signalPoles[static_cast<std::size_t>(j)];
+                                const Vec3 d = A.base - B.base;
+                                const double d2 = d.x * d.x + d.z * d.z;   // (a shared pole is the same pole: not a double)
+                                if (d2 > 1e-4 && d2 < 2.5 * 2.5 && A.face.x * B.face.x + A.face.z * B.face.z > 0.94) { dup = true; break; }
+                            }
+                        }
+                    if (dup) {
+                        ++doubled;
+                        if (doubled <= 6) where += " (" + std::to_string(static_cast<int>(A.base.x)) + "," + std::to_string(static_cast<int>(A.base.z)) + ")";
+                    }
+                }
+                LOG_INFO << "[furniture] signal poles doubled (another within 2.5 m, same facing): " << doubled << where;
+                {   // ...and HEADS crowding each other, whichever way they face: what reads as "stacked" lights
+                    const engine::SignalParams sp0;
+                    std::vector<Vec3> heads;
+                    for (const auto& P : sf.signalPoles) {
+                        if (P.shared) continue;
+                        const Vec3 side(P.face.z, 0, -P.face.x);
+                        heads.push_back(P.base + Vec3(0, sp0.armHeight - 0.65, 0) + side * (sp0.armLength - 0.2));
+                    }
+                    int crowded = 0;
+                    std::string at;
+                    for (std::size_t i = 0; i < heads.size(); ++i)
+                        for (std::size_t j = 0; j < heads.size(); ++j) {
+                            if (i == j) continue;
+                            const Vec3 d = heads[i] - heads[j];
+                            if (d.x * d.x + d.z * d.z < 1.5 * 1.5 && std::fabs(d.y) < 1.0) {
+                                if (++crowded <= 6) at += " (" + std::to_string(static_cast<int>(heads[i].x)) + "," + std::to_string(static_cast<int>(heads[i].z)) + ")";
+                                break;
+                            }
+                        }
+                    LOG_INFO << "[furniture] signal heads within 1.5 m of another head: " << crowded << " of " << heads.size() << at;
+                }
+                // RT_SIGNAL_NEAR=x,z,r: every pole within r of (x, z) -- base, facing, its link's ends, width, lanes
+                if (const char* q = std::getenv("RT_SIGNAL_NEAR")) {
+                    double qx = 0, qz = 0, qr = 40;
+                    std::sscanf(q, "%lf,%lf,%lf", &qx, &qz, &qr);
+                    for (std::size_t i = 0; i < sf.signalPoles.size(); ++i) {
+                        const auto& P = sf.signalPoles[i];
+                        if ((P.base.x - qx) * (P.base.x - qx) + (P.base.z - qz) * (P.base.z - qz) > qr * qr) continue;
+                        const auto& L = nav.links[static_cast<std::size_t>(P.link)];
+                        LOG_INFO << "[signal near] pole " << i << (sharedPole[i] ? " (shared)" : "") << " base " << P.base.x << " "
+                                 << P.base.y << " " << P.base.z << " face " << P.face.x << " " << P.face.z << " | link " << P.link
+                                 << " " << nav.nodes[L.from].x << "," << nav.nodes[L.from].y << " -> " << nav.nodes[L.to].x << ","
+                                 << nav.nodes[L.to].y << " width " << L.width << " lanes " << L.lanes << " layer " << L.layer;
+                    }
+                }
+            }
             world.add<engine::StreetFurniture>(world.create(), std::move(sf));
         }
     }

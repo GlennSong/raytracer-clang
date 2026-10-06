@@ -304,6 +304,7 @@ NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<
     if (segs.empty() || nodes.empty()) return rep;
     const int firstNew = nodeCount(), firstLink = linkCount();
     if (streetNodes < 0) streetNodes = firstNew;
+    if (streetLinks < 0) streetLinks = firstLink;
     footNode.resize(nodes.size(), 0);
     // the walk nodes: every end, merged within 0.8 m
     std::vector<Vec2> pts;

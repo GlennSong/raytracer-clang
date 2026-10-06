@@ -941,7 +941,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (assets) {
         pedMesh = assets->acquireMesh(buildPersonMesh(0.0, 0), "city:ped");
         Real e = params_.signalLensSize;
-        lensMesh = assets->acquireMesh(MeshBuilder::box(Vec3(e, e, e)), "city:signal");
+        // a thin plate, turned with the head (signalLensPose), a centimetre proud of the head's own lamp -- it was a
+        // 0.34 m CUBE, unturned, poking crooked through the lamp it lit (Glenn: "the stoplights are doubled up ...
+        // staggered over each other and z-fighting")
+        lensMesh = assets->acquireMesh(MeshBuilder::box(Vec3(e, e, 0.02)), "city:signal");
     }
 
     // One instance group per fleet slot; each is a body TYPE + SIZE (from the sim's
@@ -1249,11 +1252,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // but the city decided where every pole stands.
     siteByLink_.clear();
     siteHasLink_.clear();
+    siteShared_.clear();
     engine::Entity adoptedPosts{};
     world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
-        if (f.navLinkCount != nav_.linkCount() || f.signalPoles.empty()) return;
+        // (the STREETS' links: the walks appended since are not the loader's. Comparing the whole count, every
+        // level with footpaths stopped adopting the placed poles and drew a second set of its own beside them --
+        // every signal on the island doubled, staggered. Glenn: "multiple traffic lights next to one another")
+        if (f.navLinkCount != nav_.streetLinkCount() || f.signalPoles.empty()) {
+            if (!f.signalPoles.empty())
+                LOG_WARN << "[citysim] the placed signal poles were built on a different street graph (" << f.navLinkCount
+                         << " links, the sim has " << nav_.streetLinkCount() << "): drawing our own";
+            return;
+        }
         siteByLink_.assign(nav_.linkCount(), SignalSite{});
         siteHasLink_.assign(nav_.linkCount(), 0);
+        siteShared_.assign(nav_.linkCount(), 0);
         for (const auto& s : f.signalPoles) {
             if (s.link < 0 || s.link >= nav_.linkCount()) continue;
             SignalSite st;
@@ -1263,6 +1276,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             st.yaw = std::atan2(s.face.x, s.face.z);
             siteByLink_[s.link] = st;
             siteHasLink_[s.link] = 1;
+            if (s.shared) siteShared_[s.link] = 1;
         }
         adoptedPosts = f.postGroup;
     });
@@ -1983,8 +1997,10 @@ Mat4 CityRenderSystem::signalLensPose(int link, SignalState s) const {
     Vec3 headTop = st.base + Vec3(0, sp.armHeight - 0.1, 0) + st.side * (sp.armLength - 0.2);
     Vec3 headCenter = headTop + Vec3(0, -0.55, 0);
     Real slotY = (s == SignalState::Red) ? 0.42 : (s == SignalState::Green) ? -0.42 : 0.0;
-    Vec3 p = headCenter + Vec3(0, slotY, 0) + st.face * 0.22;
-    return Mat4::trs(p, Quat(), Vec3(1, 1, 1));
+    // the head's lamp discs stand 0.22 m out and are 0.06 thick (street_kit::emitTrafficSignal): the plate's back
+    // face 1 cm in front of them, turned the way the head faces
+    Vec3 p = headCenter + Vec3(0, slotY, 0) + st.face * 0.27;
+    return Mat4::trs(p, Quat::fromAxisAngle(Vec3(0, 1, 0), st.yaw), Vec3(1, 1, 1));
 }
 
 // The turn side (-1 left / +1 right / 0 none) a car will take at the coming node,
@@ -2335,6 +2351,9 @@ void CityRenderSystem::syncGroups(World& world) {
     }
     for (std::size_t sk = 0; sk < signalLinks_.size(); ++sk) {
         const int li = signalLinks_[sk];
+        // a link sharing an earlier signal's pole lights nothing of its own: the head shows its approach's main
+        // link (two lit lamps on one head read as a broken light)
+        if (li < static_cast<int>(siteShared_.size()) && siteShared_[static_cast<std::size_t>(li)]) continue;
         SignalState st = sc.stateForLink(li);
         int s = static_cast<int>(st);
         if (sig[s]) sig[s]->transforms.push_back(signalLensCache_[sk][static_cast<std::size_t>(s)]);

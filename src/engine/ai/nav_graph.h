@@ -111,6 +111,10 @@ struct NavGraph {
     // over all nodes put agents on the walks and, by moving the dice, changed the whole population.
     int streetNodes = -1;
     int streetNodeCount() const { return streetNodes >= 0 ? streetNodes : nodeCount(); }
+    // ...and links: the streets' are [0, streetLinkCount()), the walks appended after them. What a graph built
+    // elsewhere from the same streets (the loader's furniture plan) must match.
+    int streetLinks = -1;
+    int streetLinkCount() const { return streetLinks >= 0 ? streetLinks : linkCount(); }
     int linkCount() const { return static_cast<int>(links.size()); }
 
     // True if `node` is an intersection (three or more distinct neighbours) — a

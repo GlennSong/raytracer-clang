@@ -50,7 +50,7 @@ struct CityRenderParams {
     Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0060)
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
-    Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
+    Real signalLensSize = 0.28;            // lit emissive lens: a plate this wide, over the head's own lamp (m)
     // How far from the player a PARKED scenery car still draws (m). A city-wide
     // instance group cannot be partially frustum-culled, so without this every
     // parked car in the city is submitted every frame, in both the colour and
@@ -592,6 +592,7 @@ private:
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
+    std::vector<uint8_t> siteShared_;  // by link: its signal shares an earlier one's pole and head (draws no lens)
     // Each signal's three lens poses (red, amber, green), parallel to signalLinks_: the poles never move, and
     // working them out every bake (a ground sample apiece) was 10.6 ms of the island's 13 ms sync for 4,727 signals
     std::vector<std::array<engine::Mat4, 3>> signalLensCache_;
