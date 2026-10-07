@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <utility>
 #include <queue>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -1282,6 +1283,14 @@ public:
         int busesMoving = 0, cabsMoving = 0;   // the service fleet, outside every count above
     };
     Census census() const;
+    // WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic"): every
+    // visible walker of the full sim whose spot is inside a street's carriageway (closer to its centreline than half
+    // its width), counted by why -- its state, moving or standing, waiting for a bus, and whether the street it is in
+    // is the one it is walking along (it should be on the pavement) or one it is crossing. Slow (every link per
+    // walker): a test's measurement, not a per-frame call.
+    std::map<std::string, int> walkersInRoad(int* visible = nullptr) const;
+    // A junction's box radius (the stop lines and a walker's wait are measured from it).
+    Real junctionBox(int node) const { return junctionRadius(node); }
     // A group member's place in its session (formations other than Roam) and the way it faces there.
     engine::Vec2 memberPlace(const Session& s, int agentIndex, engine::Vec2* face) const;
     // 1 while a departing car is still drawn at its parking space, easing to 0

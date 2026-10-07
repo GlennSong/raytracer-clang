@@ -22,7 +22,9 @@ bool stoppedAtRed(const CitySim& sim, const NavGraph& nav, const Agent& a) {
     int li = a.route.links[a.leg];
     if (!nav.isJunction(nav.links[li].to)) return false;
     Real distToEnd = nav.links[li].length - a.distOnLeg;
-    Real window = (a.mode == Agent::Mode::Driver) ? 18.0 : 3.0;
+    // a walker waits at the corner on the pavement (the junction box's edge and a step -- stopLineBack), not 0.5 m
+    // short of the node in the street it is about to cross
+    Real window = (a.mode == Agent::Mode::Driver) ? 18.0 : sim.junctionBox(nav.links[li].to) + 3.0;
     return distToEnd < window && a.speed < 0.5 &&
            const_cast<CitySim&>(sim).signals().stateForLink(li) == SignalState::Red;
 }

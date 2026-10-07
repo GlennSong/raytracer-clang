@@ -33,6 +33,7 @@ constexpr Real kBusDwellPerRider = 3.0;
 constexpr Real kBusDwellMax = 40.0;
 // How far from its destination a driver will park and walk: a few blocks.
 constexpr Real kParkSearch = 250.0;
+constexpr Real kWalkerKerbStep = 0.6;   // a walker's wait at a junction: this far back from the box's edge
 constexpr Real kWalkSpeed = 1.4;
 // "Wakes on nothing": a rest with no dwell and no commute. Large enough to mean
 // never in any real session, finite so the arithmetic stays ordinary.
@@ -4127,7 +4128,10 @@ CitySim::JunctionAhead CitySim::junctionAhead(const Agent& a, Real horizon) cons
 // (Gating the rules on the raw setback used to disable box occupancy + turn
 // yield entirely on short approaches — exactly where junctions are densest.)
 Real CitySim::stopLineBack(const Agent& a, const JunctionAhead& ja) const {
-    Real stopSetback = 0.5;
+    // A WALKER waits at the corner, ON THE PAVEMENT: the junction box's edge (it spans the widest street meeting
+    // there) and a step. 0.5 m short of the node stood every walker held at a light inside the street it was about to
+    // cross (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic").
+    Real stopSetback = junctionRadius(ja.node) + kWalkerKerbStep;
     if (a.mode == Agent::Mode::Driver) {
         Real halfLen = 2.1;   // sedan fallback
         if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size()))
@@ -4745,7 +4749,10 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // interior around the node, so a hold any later parks the walker IN
         // the carriageway. Past the wait band the walker is committed —
         // stopping mid-box would be strictly worse than walking on.
-        const Real kerb = nav_->links[li].width * 0.5 + 3.0;
+        // (and never less than the junction box's edge: measured on its OWN street's width, a walker coming down a
+        // narrow street to a wide one waited inside the wide one -- walkersInRoad's "waiting, in a street it is
+        // crossing")
+        const Real kerb = std::max(nav_->links[li].width * 0.5 + 3.0, junctionRadius(toNode) + kWalkerKerbStep + 1.8);
         if (nav_->isJunction(toNode) && !signals_.hasSignal(li) &&
             toEnd < kerb && toEnd > kerb - 1.8) {
             const Vec2 nodeP = nav_->nodes[toNode];
@@ -5738,6 +5745,43 @@ CitySim::Census CitySim::census() const {
         }
     }
     return c;
+}
+
+std::map<std::string, int> CitySim::walkersInRoad(int* visible) const {
+    std::map<std::string, int> out;
+    if (visible) *visible = 0;
+    if (!nav_) return out;
+    static const char* kSt[] = {"resting", "walking", "avoiding", "waiting", "cruising", "following", "yielding", "turning"};
+    for (int i : kIdx_) {
+        if (!pedVisible(i)) continue;
+        if (visible) ++*visible;
+        const Agent& a = agents_[static_cast<std::size_t>(i)];
+        int best = -1;
+        Real bestD = 1e30;
+        for (int li = 0; li < nav_->linkCount(); ++li) {
+            const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+            if (L.footpath || L.layer != 0 || L.elevAbsolute || L.klass == engine::RoadClass::Freeway) continue;
+            const Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)], B = nav_->nodes[static_cast<std::size_t>(L.to)];
+            const Vec2 ab = B - A;
+            const Real l2 = ab.lengthSquared();
+            Real t = l2 > 1e-12 ? dot(a.pos - A, ab) / l2 : 0;
+            t = std::clamp(t, Real(0), Real(1));
+            const Real d = (a.pos - (A + ab * t)).length() - L.width * 0.5;
+            if (d < bestD) { bestD = d; best = li; }
+        }
+        if (best < 0 || bestD > -0.2) continue;   // on the pavement (or within a hand of the kerb)
+        int leg = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+        const engine::NavLink& in = nav_->links[static_cast<std::size_t>(best)];
+        const bool along = leg >= 0 && (leg == best || (nav_->links[static_cast<std::size_t>(leg)].from == in.to &&
+                                                         nav_->links[static_cast<std::size_t>(leg)].to == in.from));
+        const bool crossingLeg = leg >= 0 && nav_->links[static_cast<std::size_t>(leg)].footpath;
+        std::string k = kSt[std::min(7, static_cast<int>(a.state))];
+        k += a.moving ? (a.speed > 0.2 ? " moving" : " stopped-on-route") : " at rest";
+        if (awaitingRide(i) || buses_.tripOf(i)) k += " bus-rider";
+        k += along ? " | in the street it walks along" : crossingLeg ? " | on a walk/crossing link" : leg >= 0 ? " | in a street it is crossing" : " | no route";
+        ++out[k];
+    }
+    return out;
 }
 
 std::string CitySim::describeAgent(int i) const {

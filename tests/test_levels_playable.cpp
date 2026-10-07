@@ -3842,3 +3842,54 @@ TEST_CASE(metro_day_census_prints) {
         }
     }
 }
+
+// WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic ... they can
+// walk through vehicles"). Print-only under RT_ROADWALK=1: the island (or RT_CENSUS_LEVEL), a player standing
+// downtown where they were seen (RT_ROADWALK_AT="x z"), at the morning and the evening -- every visible walker of
+// the full sim whose spot is inside a carriageway, by why (CitySim::walkersInRoad).
+TEST_CASE(walkers_in_the_road_prints) {
+    if (!std::getenv("RT_ROADWALK")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : std::string("assets/levels/island_8_nature.json"), world,
+                                          *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    Real px = -3358, pz = -438;
+    if (const char* at = std::getenv("RT_ROADWALK_AT")) std::sscanf(at, "%lf %lf", &px, &pz);
+    {   // the player: the tier bubble's centre
+        Entity p = world.create();
+        Transform t;
+        t.position = Vec3(px, 15, pz);
+        world.add<Transform>(p, t);
+        world.add<engine::ControlledBy>(p, engine::ControlledBy{});
+    }
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    for (Real hour : {8.25, 17.5}) {
+        city.setWorldClock(hour, 1.0 / 3600.0);
+        for (int i = 0; i < 1800; ++i) city.step(world, 0.1);   // settle 3 min
+        std::map<std::string, int> all;
+        int visible = 0, samples = 0;
+        for (int s = 0; s < 5; ++s) {
+            for (int i = 0; i < 300; ++i) city.step(world, 0.1);
+            int v = 0;
+            for (const auto& kv : city.sim().walkersInRoad(&v)) all[kv.first] += kv.second;
+            visible += v;
+            ++samples;
+        }
+        int inRoad = 0;
+        for (const auto& kv : all) inRoad += kv.second;
+        std::printf("    [road walkers] %4.1f h: %.0f visible walkers near the player, %.0f of them in a carriageway (%.0f%%)\n",
+                    hour, visible / double(samples), inRoad / double(samples), visible ? 100.0 * inRoad / visible : 0.0);
+        std::vector<std::pair<int, std::string>> rows;
+        for (const auto& kv : all) rows.push_back({kv.second, kv.first});
+        std::sort(rows.rbegin(), rows.rend());
+        for (std::size_t r = 0; r < rows.size() && r < 12; ++r)
+            std::printf("    [road walkers]        %6.1f  %s\n", rows[r].first / double(samples), rows[r].second.c_str());
+    }
+}
