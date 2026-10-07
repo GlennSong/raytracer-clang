@@ -195,6 +195,12 @@ BuildingRecipe architectBigBox(uint32_t seed);
 // THE CAMPUS's buildings by role (Lot::campus): 1 a teaching hall, 2 the library, 3 a residence hall, 4 the QUAD (a
 // green with paths, trees and benches; Massing::Park), 5 the SPORTS FIELD (a pitch, goals, bleachers).
 BuildingRecipe architectCampus(int role, uint32_t seed);
+// THE OPEN-AIR MALL (Santana Row; Glenn: "outdoor pedestrian walkways like they do at these upscale malls"): role 1 a
+// two- or three-storey building of shops fronting the paseo (stucco or stone, awnings, the mall's trade mix), role 2
+// the paseo -- Park massing, sculpted by the lot pass (sculptPaseo).
+BuildingRecipe architectPaseo(int role, uint32_t seed);
+// THE INDOOR MALL: a big-box site's box (bigBox 5) -- a concourse of shop units, an anchor, a food court (mallLayout).
+BuildingRecipe architectMall(uint32_t seed);
 // The chain's look on `p` (walls, cladding, the band's colour) and p.bigBox = chain.
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed);
 

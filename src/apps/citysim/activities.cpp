@@ -174,6 +174,7 @@ ActivityCatalog defaultActivityCatalog() {
         d.roles = {r};
     };
     lawnGroup("chat", Formation::Circle, 0.8, "talker", 6, Pose::Stand, 2, 12, 10, 25, 7, 22);
+    c.defs.back().sites = {"lawn", "plaza"};   // (chat: on a paseo too, an open-air mall's plaza)
     lawnGroup("picnic", Formation::Circle, 0.85, "picnicker", 4, Pose::SitGround, 1, 15, 30, 60, 11, 15.5);
     lawnGroup("sunbathe", Formation::Spread, 1.1, "sunbather", 2, Pose::Lie, 1, 10, 20, 45, 10, 17);
     lawnGroup("catch", Formation::Pair, 9.0, "catcher", 2, Pose::Stand, 2, 10, 10, 25, 9, 20);

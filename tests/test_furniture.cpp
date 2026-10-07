@@ -808,6 +808,43 @@ TEST_CASE(shop_units_take_their_trades_width_and_their_streets_mix) {
     CHECK(outOfRange == 0);
 }
 
+// THE INDOOR MALL (~/.claude/plans/nightlife-and-malls.md stage 2): its units front the concourse (indoors, with
+// signs' fascias), each furnished as its trade; the anchor is stocked and the food court has its tables.
+TEST_CASE(an_indoor_mall_is_a_concourse_of_shops) {
+    BuildingRecipe rec = architectMall(1234u);
+    BuildingParams p = rec.params;
+    p.faceDir = Vec3(0, 0, -1);
+    const Poly2 plan = {{0, 0}, {120, 0}, {120, 48}, {0, 48}};   // the front (z = 0) faces -z
+    const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
+    const BuildingMesh in = growInterior(plan, p, 3.0, nullptr, 0, 1);
+    int furnished = 0, stocked = 0, tables = 0;
+    for (const ShopFront& f : fronts) {
+        CHECK(f.indoor);
+        CHECK(f.fasciaY1 > f.fasciaY0 + 0.2);
+        const Vec2 d = normalize(f.b - f.a);
+        const Real len = (f.b - f.a).length();
+        bool any = false;
+        for (const PlacedPiece& pp : in.furniture) {
+            if (pp.piece == static_cast<uint8_t>(Piece::CeilingLight)) continue;
+            const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+            const Real along = dot(at - f.a, d), depth = dot(f.a - at, f.n);
+            if (along > 0.2 && along < len - 0.2 && depth > 0 && depth < 14.0) { any = true; break; }
+        }
+        if (any) ++furnished;
+    }
+    for (const PlacedPiece& pp : in.furniture) {
+        const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+        if (at.x < 30 && (pp.piece == static_cast<uint8_t>(Piece::Gondola) || pp.piece == static_cast<uint8_t>(Piece::ClothesRack))) ++stocked;
+        if (at.x > 92 && pp.piece == static_cast<uint8_t>(Piece::BistroTable)) ++tables;
+    }
+    std::printf("    [mall] %zu units, %d furnished; anchor %d pieces of stock, food court %d tables\n", fronts.size(), furnished,
+                stocked, tables);
+    CHECK(fronts.size() >= 8);
+    CHECK(furnished >= static_cast<int>(fronts.size()) - 1);
+    CHECK(stocked > 4);
+    CHECK(tables > 4);
+}
+
 TEST_CASE(a_bar_is_not_painted_like_an_office) {
     const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
     int bars = 0, light = 0;

@@ -6002,6 +6002,10 @@ bool LevelLoader::load(const std::string& path,
                             sp.hasEntrance = true;
                             sp.ex = static_cast<float>(sf.door.x + sf.n.x * 1.5);
                             sp.ez = static_cast<float>(sf.door.y + sf.n.y * 1.5);
+                            if (sf.indoor) {   // a mall's unit: in through the mall's own doors
+                                sp.ex = static_cast<float>(sf.entry.x);
+                                sp.ez = static_cast<float>(sf.entry.y);
+                            }
                             ++tradePlaces[tr->name];
                             // ITS NAME, and the board over its fascia that carries it (shop_signs.h)
                             const uint32_t nameSeed = static_cast<uint32_t>(std::lround(sf.door.x * 4.0)) * 73856093u ^

@@ -57,7 +57,7 @@ struct ActivityQuery {
 //
 // SITE KINDS (strings, so Lua names them): the city's places -- "cafe", "restaurant", "shop", "supermarket", "civic",
 // "park", "library", "teaching", "quad", "field" -- its activity spots -- "seat" (Sit), "bed" (Lie), "stand" (Stand),
-// "loop" (Jog), "watch" (Watch) -- its activity AREAS -- "pitch", "lawn" -- and "street" (a street corner to walk to).
+// "loop" (Jog), "watch" (Watch) -- its activity AREAS -- "pitch", "lawn", "plaza" (a paseo) -- and "street" (a street corner to walk to).
 
 // What the body does once there.
 enum class Perform : uint8_t {
@@ -80,7 +80,7 @@ enum class Pose : uint8_t { Stand, SitGround, Lie };
 const char* formationName(Formation f);
 const char* poseName(Pose p);
 // Area site kinds: a session on one of the city's areas rather than a spot or a place.
-inline bool isAreaSiteKind(const std::string& k) { return k == "pitch" || k == "lawn"; }
+inline bool isAreaSiteKind(const std::string& k) { return k == "pitch" || k == "lawn" || k == "plaza"; }
 
 // A ROLE in a group activity: how many take it, how fast they move, and which part of the area is theirs (-1 the
 // whole of it, 0 / 1 its first / second half along its length -- swapped at the session's half time).

@@ -530,7 +530,8 @@ struct BuildingParams {
     bool  backDoor = false;
     bool  fireEscape = false;
     // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
-    // improvement, 4 discount store. The front edge wears the chain's sign and canopy, the rear its loading docks,
+    // improvement, 4 discount store -- or 5, an INDOOR MALL (architectMall: a concourse of shop units, an anchor store,
+    // a food court; mallLayout). The front edge wears the chain's sign and canopy, the rear its loading docks,
     // a band in the chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
     uint8_t bigBox = 0;
     // A UNIVERSITY building (the campus): 0 none, 1 a teaching hall (lecture halls, classrooms, labs), 2 the library
@@ -552,6 +553,10 @@ struct ShopFront {
     // its FASCIA (the sign band over the glazing), metres above the storey's base, standing `fasciaProud` proud of
     // the wall; fasciaY1 <= fasciaY0 when the storey is too low to carry one
     Real fasciaY0 = 0, fasciaY1 = 0, fasciaProud = 0.16;
+    // INDOORS: a unit of an indoor mall (bigBox 5), its front on the concourse -- no terrace, and the sim's way in is
+    // the mall's own street door (`entry`), not this one
+    bool indoor = false;
+    Vec2 entry;
 };
 std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& params);
 // The SHOP ROOMS growInterior fits out behind those fronts (a unit too shallow, or squeezed out at a corner, has

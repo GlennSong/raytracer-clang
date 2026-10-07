@@ -3954,6 +3954,15 @@ TEST_CASE(level_print_shop_interiors) {
                             r.params.core, r.params.groundHeight);
         }
     }
+    if (std::getenv("RT_SHOP_SPOTS"))   // the indoor malls: their street doors and a unit front on the concourse
+        for (const BuildingRecord& r : cb->records) {
+            if (r.params.bigBox != 5) continue;
+            const std::vector<ShopFront> fr = shopFrontsOf(r.plan, r.params);
+            if (fr.empty()) { std::printf("    [mall] at %.0f %.0f: no units\n", r.plan[0].x, r.plan[0].y); continue; }
+            const ShopFront& f = fr[fr.size() / 2];
+            std::printf("    [mall] %zu units, enterable %d; doors %.2f %.2f; a front %.2f %.2f %.2f %.3f %.3f\n", fr.size(),
+                        r.enterable ? 1 : 0, f.entry.x, f.entry.y, f.door.x, r.baseY, f.door.y, f.n.x, f.n.y);
+        }
     if (std::getenv("RT_SHOP_SPOTS")) {   // the nightlife strips: where the low-rise nightlife buildings are
         std::map<std::pair<int, int>, int> cells;
         for (const BuildingRecord& r : cb->records)

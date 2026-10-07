@@ -1871,8 +1871,13 @@ BuildingParams architectRowUnit(uint32_t seed, int floors) {
 
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed) {
     Hash rng(seed | 1u);
-    p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 4));
+    p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 5));
     switch (p.bigBox) {
+        case 5:   // the indoor mall: warm stone, a deep teal band
+            dress(p, FacadeStyle::Sandstone, rng);
+            p.wallColor = Vec3(0.80, 0.72, 0.60);
+            p.trimColor = Vec3(0.08, 0.36, 0.38);
+            break;
         case 1:   // warehouse club: grey corrugated steel, a red band
             dress(p, FacadeStyle::Metal, rng);
             p.wallColor = Vec3(0.62, 0.63, 0.64);
@@ -1906,6 +1911,16 @@ BuildingRecipe architectBigBox(uint32_t seed) {
     return out;
 }
 
+BuildingRecipe architectMall(uint32_t seed) {
+    BuildingRecipe out = architectBigBox(seed);
+    Hash rng(seed * 40503u ^ 0x3a11u);
+    dressBigBox(out.params, 5, rng.next());
+    out.params.groundHeight = rng.range(9.0, 10.5);   // one tall storey: a skylit concourse
+    out.params.shopMix = 3;
+    out.name = "indoor_mall";
+    return out;
+}
+
 BuildingRecipe architectCampus(int role, uint32_t seed) {
     Hash rng(seed * 2654435761u ^ 0x5eed0c47u);
     BuildingRecipe out;
@@ -1931,6 +1946,31 @@ BuildingRecipe architectCampus(int role, uint32_t seed) {
             out.name = "campus_quad";
             break;
     }
+    return out;
+}
+
+BuildingRecipe architectPaseo(int role, uint32_t seed) {
+    Hash rng(seed * 2246822519u ^ 0x9a5e0u);
+    BuildingRecipe out;
+    out.params.seed = rng.next();
+    if (role == 2) {
+        out.massing = BuildingRecipe::Massing::Park;
+        out.placeType = "park";
+        out.name = "paseo";
+        return out;
+    }
+    BuildingParams& p = out.params;
+    p.floors = rng.unit() < 0.7 ? 1 : 2;   // over the shops: one storey (flats, offices) or two
+    p.groundRetail = true;
+    const Real r = rng.unit();
+    dress(p, r < 0.45 ? FacadeStyle::Stucco : r < 0.8 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
+    p.groundHeight = 5.2;   // tall shopfronts
+    p.awning = true;
+    if (rng.unit() < 0.5) { p.window.head = OpeningStyle::Head::Round; p.window.hood = OpeningStyle::Hood::Arch; }
+    p.curtainWall = false;
+    p.shopMix = 3;
+    out.placeType = "shop";
+    out.name = "paseo_shops";
     return out;
 }
 

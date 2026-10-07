@@ -56,7 +56,7 @@ std::vector<std::string> strings(lua_State* L, int t, const char* key) {
 }
 bool knownSite(const std::string& k) {
     static const char* kinds[] = {"cafe", "restaurant", "bar", "club", "shop", "supermarket", "civic", "park", "library", "teaching", "quad",
-                                  "field", "office", "seat", "bed", "stand", "loop", "pitch", "lawn", "watch", "street"};
+                                  "field", "office", "seat", "bed", "stand", "loop", "pitch", "lawn", "plaza", "watch", "street"};
     for (const char* x : kinds) if (k == x) return true;
     return false;
 }

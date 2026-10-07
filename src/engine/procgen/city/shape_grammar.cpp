@@ -3829,8 +3829,16 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
 // front), behind them the sales floor in the chain's own stock (furniture.cpp: pallet racks, gondolas, televisions,
 // racks of clothes), and across the back the STOCKROOM behind a wall with two doors. Rooms carry the trade:
 // Shop styles 7-10 the chain's floor (7 + chain - 1), 11 the checkouts, 12 the stockroom.
+static std::vector<ShopFront> mallFronts(const Poly2& plan, const BuildingParams& params);   // (after mallLayout)
+
 std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& params) {
     std::vector<ShopFront> out;
+    if (params.bigBox == 5) {   // an indoor mall: its units' fronts on the concourse
+        Poly2 pl = planIn;
+        if (pl.size() < 3) return out;
+        ensureCCW(pl);
+        return mallFronts(pl, params);
+    }
     Poly2 plan = planIn;
     if (plan.size() < 3 || !params.groundRetail || !params.walkableGround) return out;
     ensureCCW(plan);
@@ -3859,6 +3867,98 @@ std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& p
         }
     }
     return out;
+}
+
+// THE INDOOR MALL (bigBox 5; ~/.claude/plans/nightlife-and-malls.md stage 2): inside the store's box, a CONCOURSE
+// 8 m wide running its length, parallel to the front; a row of shop UNITS either side of it, each a trade of the mall
+// mix with a glass front and a door onto the concourse; at one end the ANCHOR (a department store, the full depth);
+// at the other the FOOD COURT; from the front doors a vestibule through the front row. One layout for the rooms
+// (mallRoomPlan), the shopfronts (shopFrontsOf: places, signs) and the tests.
+struct MallLayout {
+    RoomPlan rp;
+    std::vector<ShopFront> fronts;
+};
+static MallLayout mallLayout(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
+    MallLayout ml;
+    RoomPlan& rp = ml.rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = false;
+    rp.finish = interiorFinishFor(params);
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    if (params.bigBox != 5 || plan.size() != 4 || entranceEdge >= plan.size()) return ml;
+    const Real inset = interiorInset(params);
+    const Vec2 a = plan[entranceEdge], b = plan[(entranceEdge + 1) % 4];
+    const Real W = (b - a).length();
+    const Vec2 d = (b - a) * (1.0 / std::max(W, Real(1e-6))), nOut(d.y, -d.x);
+    Real D = 0;
+    for (const Vec2& v : plan) D = std::max(D, dot(a - v, nOut));
+    if (W < 60 || D < 30) return ml;
+    auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
+    const Real cw = 8.0, vc0 = D * 0.5 - cw * 0.5, vc1 = D * 0.5 + cw * 0.5;   // the concourse
+    const Real A = std::clamp(W * 0.22, Real(20), Real(34)), F = std::clamp(W * 0.18, Real(16), Real(26));
+    const Real xa = inset + A, xf = W - inset - F;                              // the anchor's and food court's walls
+    const Real xv0 = W * 0.5 - 4.0, xv1 = W * 0.5 + 4.0;                        // the vestibule
+    uint32_t h = positionHash(Vec3(a.x + 0.41, 0.0, a.y + 0.17)) ^ static_cast<uint32_t>(params.seed);
+    auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+    auto wall = [&](const Vec2& p0, const Vec2& p1, Real doorAt = -1, bool glass = false) {
+        RoomWall w; w.a = p0; w.b = p1; w.doorAt = doorAt; w.glass = glass;
+        rp.walls.push_back(w);
+    };
+    // the anchor and the food court: full depth, open to the concourse
+    {
+        Room an; an.kind = RoomKind::Shop; an.style = 10; an.edge = entranceEdge;   // the department store's floor (discount-store fit)
+        an.rect = {P(xa, inset), P(inset, inset), P(inset, D - inset), P(xa, D - inset)};
+        rp.rooms.push_back(an);
+        Room fc; fc.kind = RoomKind::Shop; fc.style = 0; fc.edge = entranceEdge;     // the food court: counters, tables
+        fc.rect = {P(W - inset, inset), P(xf, inset), P(xf, D - inset), P(W - inset, D - inset)};
+        rp.rooms.push_back(fc);
+        for (Real x : {xa, xf}) { wall(P(x, inset), P(x, vc0)); wall(P(x, vc1), P(x, D - inset)); }
+    }
+    // the rows: units cut by trade along each, x0..x1; `front` the row's concourse edge, `back` its outer wall
+    auto row = [&](Real x0, Real x1, bool frontRow) {
+        const Real vf = frontRow ? vc0 : vc1, vb = frontRow ? inset : D - inset;
+        const Real bay = 4.0;
+        int left = static_cast<int>((x1 - x0) / bay);
+        Real x = x0;
+        while (left >= 2) {
+            const uint8_t trade = pickTrade(next(), left, 3);
+            const int g = tradeBays(trade, left, next());
+            const Real ux0 = x, ux1 = left - g < 2 ? x1 : x + g * bay;   // the last takes the rest of the run
+            Room r; r.kind = RoomKind::Shop; r.style = trade; r.edge = entranceEdge;
+            // (from the front edge, winding as the street shops do: the counter goes to the back)
+            r.rect = frontRow ? Poly2{P(ux1, vf), P(ux0, vf), P(ux0, vb), P(ux1, vb)}
+                              : Poly2{P(ux0, vf), P(ux1, vf), P(ux1, vb), P(ux0, vb)};
+            rp.rooms.push_back(r);
+            wall(P(ux0, vf), P(ux1, vf), 0.5, true);                        // the glass front and its door
+            if (ux1 < x1 - 0.05) wall(P(ux1, vf), P(ux1, vb));             // the party wall to the next
+            ShopFront f;
+            // its outward normal points INTO the concourse: from the front row away from the street, from the back
+            // row toward it; the board stands on the wall's concourse face
+            f.n = frontRow ? nOut * -1.0 : nOut;
+            f.a = (frontRow ? P(ux1, vf) : P(ux0, vf)) + f.n * 0.06;
+            f.b = (frontRow ? P(ux0, vf) : P(ux1, vf)) + f.n * 0.06;
+            f.door = (f.a + f.b) * 0.5;
+            f.trade = trade;
+            f.fasciaY0 = 3.5; f.fasciaY1 = 4.2; f.fasciaProud = 0.02;
+            f.indoor = true;
+            f.entry = P(W * 0.5, -1.5);   // the mall's doors, out on the street side
+            ml.fronts.push_back(f);
+            x = ux1;
+            left = static_cast<int>((x1 - x + 1e-6) / bay);
+        }
+    };
+    row(xa, xv0, true);
+    row(xv1, xf, true);
+    row(xa, xf, false);
+    // the vestibule's sides: from the street wall to the concourse (the front row's ends there)
+    wall(P(xv0, inset), P(xv0, vc0));
+    wall(P(xv1, inset), P(xv1, vc0));
+    return ml;
+}
+
+static std::vector<ShopFront> mallFronts(const Poly2& plan, const BuildingParams& params) {
+    return mallLayout(plan, params, entranceEdgeFor(plan, params)).fronts;
 }
 
 static RoomPlan bigBoxRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
@@ -4607,7 +4707,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
         if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
         // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
-        RoomPlan rp = ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
+        RoomPlan rp = ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
+                    : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
                     : ki == 0 && !params.campus ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
                                              il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
                                              il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30))

@@ -5,7 +5,7 @@
 --
 -- activities.<name> = {
 --   sites      = { kinds } -- places: cafe restaurant bar club shop supermarket civic park library teaching quad field office;
---                             spots: seat bed stand loop pitch watch; or street (a corner to walk to)
+--                             spots: seat bed stand loop pitch watch; areas: lawn pitch plaza (a paseo); or street
 --   tags       = { campus | park | sports }   -- a spot site must carry them all
 --   hours      = { lo, hi }    when it is offered (default all day; may wrap midnight)
 --   minutes    = { lo, hi }    how long (default: what that kind of site keeps a visitor)
@@ -76,7 +76,7 @@ activities = {
   -- ON THE LAWNS (a park's, the quad's): groups that settle rather than run about. A CHAT -- a ring standing, facing
   -- in, that anyone passing may join (up to six); a PICNIC -- a ring sitting on the grass; SUNBATHING -- lying side
   -- by side; CATCH -- two, ten metres apart, stepping about
-  chat             = { sites = { "lawn" }, hours = { 7, 22 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  chat             = { sites = { "lawn", "plaza" }, hours = { 7, 22 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "circle", radius = 0.8, minutes = { 10, 25 }, min_players = 2, gather_minutes = 12,
                        roles = { { name = "talker", n = 6, speed = { 1.1, 1.6 }, pose = "stand" } } },
   picnic           = { sites = { "lawn" }, hours = { 11, 15.5 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
