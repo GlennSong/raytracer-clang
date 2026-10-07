@@ -135,22 +135,11 @@ private:
     int entry_ = 0;
 };
 
-// The built-in defaults — bit-exact mirrors of the pre-table control flow.
-// The daily schedule: AtHome -> CommuteToWork -> AtWork -> ReturnHome -> ...
-GoalTable defaultScheduleGoals();
+// The residents' days are built from their ROLES (city_roles.h: buildDayTable). The tables below are the rest:
 // Wander (the agent lab): one perpetual GoTo(Random) loop. A driver CHAINS
 // straight through the arrival node (Arrived self-loop onto a GoTo state); a
 // walker rests one tick at the kerb first (Arrived -> RoamRest -Idle-> Roam).
 GoalTable wanderGoals(bool driver);
-// A day OUT (Glenn, 2026-09-19: "non workers and pedestrians who are out for a
-// stroll or going to public spaces"): from home, a chain of nearby stops --
-// park, cafe, store, a walk round the block -- each with a pause, until the
-// outing window closes and they head home. The Stroller role's table.
-GoalTable strollerGoals();
-// A STUDENT's day (campus milestone 4): from the residence hall to class in the
-// teaching hall, a break between classes, back to class, until the day's window
-// closes and they go back to the hall.
-GoalTable studentGoals();
 // A TAXI's day: cruise until dispatched, collect, deliver, cruise again.
 GoalTable taxiGoals();
 // A BUS's day: drive the loop, for ever. One state.

@@ -22,9 +22,9 @@ using namespace citysim;
 // / work till 5pm / go shopping / go home"). It no longer mirrors the
 // pre-table control flow, which had no errand leg.
 TEST_CASE(goal_default_table_is_the_daily_round) {
-    GoalTable t = defaultScheduleGoals();
+    GoalTable t = builtinDayTable("commuter");
     int home = t.findState("AtHome");
-    int commute = t.findState("CommuteToWork");
+    int commute = t.findState("ToWork");
     int work = t.findState("AtWork");
     int ret = t.findState("ReturnHome");
     CHECK(t.stateCount() == 14);   // the day's ten, and a night out's four (addNightOut)
@@ -47,8 +47,8 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
     CHECK(t.onEvent(ret, GoalEvent::Arrived) == home);
     // Lunch OUT, about four hours into the shift; no lunch (brought one, car
     // commuter, nothing open) carries straight on into the afternoon.
-    const int lunchGo = t.findState("GoLunch");
-    const int lunchAt = t.findState("AtLunch");
+    const int lunchGo = t.findState("GoBreak");
+    const int lunchAt = t.findState("OnBreak");
     const int back = t.findState("BackToWork");
     const int pm = t.findState("AtWorkPM");
     CHECK(t.state(work).dwellHours > 3.0);
@@ -69,7 +69,7 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
 
 TEST_CASE(goal_stroller_table_is_an_outing) {
     // A day OUT: from home, stop after stop until the window closes.
-    GoalTable t = strollerGoals();
+    GoalTable t = builtinDayTable("stroller");
     const int home = t.findState("AtHome");
     const int go = t.findState("Outing");
     const int pause = t.findState("OutAndAbout");
@@ -122,7 +122,7 @@ TEST_CASE(installing_the_default_tables_changes_nothing) {
     CitySim a, b;
     a.build(nav, 16, 8, 17);
     b.build(nav, 16, 8, 17);
-    b.setGoalTables(defaultScheduleGoals(), defaultScheduleGoals());
+    b.setGoalTables(builtinDayTable("commuter"), builtinDayTable("commuter"));
     bool same = true;
     for (int i = 0; i < 6000; ++i) {
         a.step(0.1, 0.5);

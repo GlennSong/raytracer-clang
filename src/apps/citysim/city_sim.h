@@ -9,6 +9,7 @@
 #include "agent_id.h"
 #include "activities.h"
 #include "city_goals.h"
+#include "city_roles.h"   // every resident's day comes from its role (RoleCatalog, buildDayTable)
 #include "city_bus.h"
 #include "city_dispatch.h"
 #include "city_transit.h"
@@ -538,12 +539,8 @@ public:
     // A NIGHT OUT (Glenn, 2026-10-06: "we would want restaurants and clubs and such for a night life"): whether
     // tonight -- noon to noon -- is one of this agent's nights out, and its evening if so: out between 18:30 and 21:00,
     // home two to five and a half hours later (by 02:30 at the latest). Its own bits and the night's number: a
-    // different crowd every night, the same one for the same night. The share is by role (setNightOutShares).
+    // different crowd every night, the same one for the same night. The share is the role's (ResidentRole::nightOutShare).
     bool eveningPlan(const Agent& a, Real& start, Real& end) const;
-    // Of commuters, shopkeepers, strollers and students: the share out on any one night (default 22/15/30/40%).
-    void setNightOutShares(Real commuter, Real shopkeeper, Real stroller, Real student) {
-        nightOutShare_[0] = commuter; nightOutShare_[1] = shopkeeper; nightOutShare_[2] = stroller; nightOutShare_[3] = student;
-    }
     Real departWorkHour(const Agent& a) const {
         const Real travel = a.commuteSeconds * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
         Real h = std::fmod(a.departWork - travel, 24.0);
@@ -1166,9 +1163,12 @@ public:
     // walker, someone waiting at a stop or pausing outside -- not someone
     // indoors, riding, or far. The walker system and the renderer both ask.
     bool pedVisible(int i) const;
-    // The Stroller role's table (strollerGoals by default; a level script may
-    // replace it -- agents.lua `stroller`).
-    void setStrollerTable(GoalTable t) { strollerTable_ = std::move(t); }
+    // THE ROLES (city_roles.h): every resident's day is its role's, built by buildDayTable from the catalog
+    // (roles.lua at level load; defaultRoleCatalog otherwise). Re-seats every agent on its new table.
+    void setRoleCatalog(RoleCatalog c);
+    const RoleCatalog& roles() const { return roles_; }
+    // One role's table replaced outright (a level script's own day for it); false when the role is unknown.
+    bool setRoleTable(const std::string& role, GoalTable t);
     // Places people go out to (everything but homes), for outings and lunch.
     struct Venue {
         PlaceType type = PlaceType::Shop;
@@ -1308,11 +1308,6 @@ public:
         hailMinMetres_ = minMetres;
     }
     bool isTaxi(int i) const;
-    // Keyed by ARCHETYPE (see goalsFor): pass an agent's `archetype`, not its
-    // current `mode`.
-    const GoalTable& goalTable(Agent::Mode archetype) const {
-        return archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
-    }
 
     // Make agents LIVE in the city (ADR-0066 Phase 3). Assign each agent a home
     // (a Home place) and a job (a routable Shop/Office/Civic place), pin its
@@ -1410,39 +1405,26 @@ private:
     // picks inside startWanderTrip; Fare/Drop come from the Dispatch).
     int goalNodeFor(const Agent& a, GoalTarget target) const;
     void applyTaxiFraction();
-    // Selects by ARCHETYPE (what the agent is), never by `mode` (how it happens
-    // to be moving). An agent that parks and walks to a door must keep running
-    // the same day — if this read `mode`, getting out of the car would swap it
-    // onto the pedestrian schedule mid-commute.
-    GoalTable& goalsFor(Agent::Mode archetype) {
-        return archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
-    }
-    // A CAB runs the taxi table instead of its archetype's -- the one place a
-    // per-AGENT table beats a per-archetype one, because being a taxi is a job,
-    // not a species. Everything else still goes through goalsFor.
-    GoalTable& tableFor(const Agent& a) {
-        const int i = indexOf(a);
-        if (isBus(i)) return busTable_;
-        if (isTaxi(i)) return taxiTable_;
-        if (outingStroller(a)) return strollerTable_;
-        if (student(a)) return studentTable_;
-        return goalsFor(a.archetype);
-    }
+    // WHAT AN AGENT'S DAY IS: its ROLE's table (setRoleCatalog) -- by what the agent is (role, archetype), never
+    // by `mode` (how it happens to be moving: a driver who parks and walks to a door keeps its day). A bus or a cab
+    // runs its service table; the agent lab's wanderers their perpetual loop (goalPed_ / goalDriver_).
     const GoalTable& tableFor(const Agent& a) const {
         const int i = indexOf(a);
         if (isBus(i)) return busTable_;
         if (isTaxi(i)) return taxiTable_;
-        if (outingStroller(a)) return strollerTable_;
-        if (student(a)) return studentTable_;
-        return a.archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
+        if (wander_) return a.archetype == Agent::Mode::Driver ? goalDriver_ : goalPed_;
+        return roleTables_[static_cast<std::size_t>(dayRoleOf(a))];
     }
-    // A walker with the day off runs the outing table (strollerGoals); a
-    // driving stroller keeps the historical park-as-destination schedule.
-    bool outingStroller(const Agent& a) const {
-        return !wander_ && a.role == Agent::Role::Stroller &&
-               a.archetype == Agent::Mode::Pedestrian && !venues_.empty();
+    GoalTable& tableFor(const Agent& a) { return const_cast<GoalTable&>(static_cast<const CitySim&>(*this).tableFor(a)); }
+    // The role whose day an agent runs: its own -- except a stroller with no day out to take (one who drives, or
+    // a city with nowhere to go), whose park is its "work": the commuter's day (the historical park-as-destination).
+    int dayRoleOf(const Agent& a) const {
+        const int r = static_cast<int>(a.role);
+        if (r < 0 || r >= static_cast<int>(roleTables_.size())) return 0;
+        if (a.role == Agent::Role::Stroller && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return 0;
+        return r;
     }
-    bool student(const Agent& a) const { return !wander_ && a.role == Agent::Role::Student; }
+    bool outingStroller(const Agent& a) const { return !wander_ && a.role == Agent::Role::Stroller && dayRoleOf(a) != 0; }
     int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
     int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
     // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.
@@ -1461,6 +1443,8 @@ private:
     int pickLunch(Agent& a, int origin);    // GoalTarget::Lunch  -> a node, or -1
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
+    void rebuildRoleTables();   // every role's day, from roles_
+    void reseatOnTables();      // each agent onto its table's state wearing its label (else the entry)
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
     void seatBusAt(int idx, int node, int queued = 0);   // a bus at rest on a stop
     // The nearest FREE bay to `target` within `maxDist`, claimed for agent
@@ -1663,12 +1647,14 @@ private:
     int dormancies_ = 0;
     int wakes_ = 0;
     SignalController signals_;
-    // Per-archetype goal tables (ADR-0064): what each agent's day IS. Built-in
-    // defaults mirror the historical schedule/wander control flow bit-exactly;
-    // scripting builds may replace them at load via setGoalTables.
-    GoalTable goalPed_ = defaultScheduleGoals();
-    GoalTable strollerTable_ = strollerGoals();
-    GoalTable studentTable_ = studentGoals();
+    // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
+    RoleCatalog roles_ = defaultRoleCatalog();
+    std::vector<GoalTable> roleTables_ = [] {
+        std::vector<GoalTable> v;
+        for (const ResidentRole& r : defaultRoleCatalog().roles) v.push_back(buildDayTable(r.day));
+        return v;
+    }();
+    GoalTable goalPed_ = wanderGoals(false);
     ActivityCatalog catalog_ = defaultActivityCatalog();
     int students_ = 0;
     std::vector<Venue> venues_;
@@ -1687,7 +1673,7 @@ private:
     void releaseSeat(Agent& a);
     int pickSeat(Agent& a, engine::Vec2 here);   // a free seat to walk to, reserved; -1 none
     void stepSeats(Real dt);                     // the walk off the path to a seat and back
-    GoalTable goalDriver_ = defaultScheduleGoals();
+    GoalTable goalDriver_ = wanderGoals(true);
     RelationshipTable relationships_;   // surface-level social graph (ADR-0066)
     long faultCount_ = 0;
     Real commuteSecondsMedian_ = 0;
@@ -1743,7 +1729,6 @@ private:
     std::vector<double> dormantEventAt_;   // per agent: its live event's time (-1 none)
     long dormantEventsRun_ = 0;
     double dormantEventMs_ = 0;
-    Real nightOutShare_[4] = {0.22, 0.15, 0.30, 0.40};   // setNightOutShares
     void scheduleDormantEvent(int i);
     void runDormantEvents();
     std::vector<int> crowdDirty_;  // takeCrowdChanges

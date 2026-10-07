@@ -3,6 +3,7 @@
 #include "../src/apps/citysim/city_goals.h"
 #include "../src/apps/citysim/activities.h"
 #include "../src/apps/citysim/scripting/agent_goals.h"
+#include "../src/apps/citysim/scripting/roles_lua.h"
 #include "../src/engine/scripting/script_vm.h"
 
 #include <cstdio>
@@ -42,17 +43,31 @@ struct AgentsVM {
 
 }  // namespace
 
-TEST_CASE(agents_lua_rebuilds_the_default_schedule_table) {
-    AgentsVM a;
-    CHECK(a.loaded);
-    GoalTable t;
+// THE ROLES (city_roles.h): roles.lua is the built-in catalog, and the days it builds are the built-in days -- the
+// residents' tables come from roles, not from hand-written tables in agents.lua.
+TEST_CASE(roles_lua_is_the_built_in_role_catalog) {
+    ScriptVM vm;
     std::string err;
-    bool ok = loadGoalTable(a.vm, "schedule", t, &err);
+    std::ifstream f("assets/scripts/roles.lua");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    CHECK(!ss.str().empty());
+    CHECK(vm.doString(ss.str(), &err));
+    citysim::RoleCatalog lua;
+    const bool ok = loadRoleCatalog(vm, lua, &err);
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
-    if (t.describe() != defaultScheduleGoals().describe())
-        std::printf("    LUA:\n%s\n    C++:\n%s\n", t.describe().c_str(), defaultScheduleGoals().describe().c_str());
-    CHECK(t.describe() == defaultScheduleGoals().describe());
+    const std::string a = lua.describe(), b = citysim::defaultRoleCatalog().describe();
+    if (a != b) std::printf("    LUA:\n%s\n    C++:\n%s\n", a.c_str(), b.c_str());
+    CHECK(a == b);
+    for (const citysim::ResidentRole& r : lua.roles)
+        CHECK(buildDayTable(r.day).describe() == citysim::builtinDayTable(r.name).describe());
+    // the first four are the built-in Agent::Role ids
+    CHECK(lua.find("commuter") == 0 && lua.find("shopkeeper") == 1 && lua.find("stroller") == 2 && lua.find("student") == 3);
+    ScriptVM bad;
+    CHECK(bad.doString("roles = { order = { 'x' }, x = { day = { pause = { target = 'moon' } } } }", &err));
+    citysim::RoleCatalog none;
+    CHECK(!loadRoleCatalog(bad, none, &err));
 }
 
 TEST_CASE(agents_lua_rebuilds_the_wander_tables) {
@@ -63,14 +78,6 @@ TEST_CASE(agents_lua_rebuilds_the_wander_tables) {
     CHECK(d.describe() == wanderGoals(true).describe());
     CHECK(loadGoalTable(a.vm, "wander_pedestrian", p));
     CHECK(p.describe() == wanderGoals(false).describe());
-}
-
-TEST_CASE(agents_lua_rebuilds_the_stroller_table) {
-    AgentsVM a;
-    CHECK(a.loaded);
-    GoalTable t;
-    CHECK(loadGoalTable(a.vm, "stroller", t));
-    CHECK(t.describe() == strollerGoals().describe());
 }
 
 TEST_CASE(agents_lua_custom_table_carries_action_params) {

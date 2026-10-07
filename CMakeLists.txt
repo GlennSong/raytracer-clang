@@ -418,6 +418,7 @@ add_library(citysim STATIC
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
+    src/apps/citysim/city_roles.cpp
     src/apps/citysim/activities.cpp
     src/apps/citysim/city_transit.cpp   # carrying people: the shared ride primitive
     src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
@@ -441,6 +442,7 @@ if(RT_ENABLE_SCRIPTING)
     target_sources(citysim PRIVATE
         src/apps/citysim/scripting/agent_goals.cpp
         src/apps/citysim/scripting/activities_lua.cpp
+        src/apps/citysim/scripting/roles_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )
 endif()

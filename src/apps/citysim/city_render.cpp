@@ -26,6 +26,7 @@
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
+#include "scripting/roles_lua.h"         // the role catalog (roles.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../engine/scripting/procgen_bindings.h"
@@ -826,6 +827,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             }
         }
     }
+    {   // THE ROLES (roles.lua): every resident's day, built from its role's parts
+        const std::string code = engine::loadScriptCode("roles.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            citysim::RoleCatalog roles;
+            if (vm.doString(code, &err) && engine::loadRoleCatalog(vm, roles, &err) && roles.roles.size() >= 4) {
+                LOG_INFO << "[citysim] roles: " << roles.roles.size() << " (roles.lua)";
+                sim_.setRoleCatalog(std::move(roles));
+            } else {
+                LOG_WARN << "[citysim] roles.lua: " << (err.empty() ? "fewer than the four built-in roles" : err)
+                         << " (using the built-in roles)";
+            }
+        }
+    }
     if (!params_.agentScript.empty()) {
         engine::ScriptVM vm;
         std::string err;
@@ -836,11 +852,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::loadGoalTable(vm, pedName, ped, &err) &&
             engine::loadGoalTable(vm, drvName, driver, &err)) {
             sim_.setGoalTables(std::move(ped), std::move(driver));
-            // The day-off walkers' outing table, when the script has one.
+            // The stroller role's own day, when the script has one.
             citysim::GoalTable stroll;
             std::string serr;
             if (!params_.wander && engine::loadGoalTable(vm, "stroller", stroll, &serr))
-                sim_.setStrollerTable(std::move(stroll));
+                sim_.setRoleTable("stroller", std::move(stroll));
         } else {
             LOG_WARN << "citysim agents script: " << err << " (using built-ins)";
         }

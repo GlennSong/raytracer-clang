@@ -484,8 +484,9 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     }
     // Goal tables (ADR-0064): a rebuild resets to the built-ins matching the
     // (persistent) wander flag; a host with custom tables re-installs after.
-    goalPed_ = wander_ ? wanderGoals(false) : defaultScheduleGoals();
-    goalDriver_ = wander_ ? wanderGoals(true) : defaultScheduleGoals();
+    goalPed_ = wanderGoals(false);
+    goalDriver_ = wanderGoals(true);
+    rebuildRoleTables();
 
     const int nAll = graph.nodeCount();
     if (nAll == 0) return;
@@ -1850,7 +1851,8 @@ void CitySim::runDormantEvents() {
 }
 
 bool CitySim::eveningPlan(const Agent& a, Real& start, Real& end) const {
-    const Real share = nightOutShare_[std::min(3, static_cast<int>(a.role))];
+    const int r = static_cast<int>(a.role);
+    const Real share = r >= 0 && r < static_cast<int>(roles_.roles.size()) ? roles_.roles[static_cast<std::size_t>(r)].nightOutShare : 0;
     if (share <= 0) return false;
     const long night = static_cast<long>(std::floor((clockTotalHours_ - 12.0) / 24.0));   // noon to noon
     uint32_t h = a.brain ^ (static_cast<uint32_t>(night) * 0x9E3779B9u);
@@ -2557,8 +2559,42 @@ void CitySim::rerateSleep(Real newRate) {
 // agent's current activity label, else the entry state. Mid-trip agents keep
 // driving — only their next transition consults the new table.
 void CitySim::installGoalTables(GoalTable pedestrian, GoalTable driver) {
-    goalPed_ = std::move(pedestrian);
-    goalDriver_ = std::move(driver);
+    if (wander_) {
+        goalPed_ = std::move(pedestrian);
+        goalDriver_ = std::move(driver);
+    } else {
+        // A host's own day for the working roles (a test's errand loop, a level script's schedule): the commuter's
+        // and the shopkeeper's (they share a day). One table for both archetypes: a role's day is the same on foot or
+        // at the wheel.
+        (void)driver;
+        for (const char* r : {"commuter", "shopkeeper"}) {
+            const int id = roles_.find(r);
+            if (id >= 0 && id < static_cast<int>(roleTables_.size())) roleTables_[static_cast<std::size_t>(id)] = pedestrian;
+        }
+    }
+    reseatOnTables();
+}
+
+void CitySim::rebuildRoleTables() {
+    roleTables_.clear();
+    for (const ResidentRole& r : roles_.roles) roleTables_.push_back(buildDayTable(r.day));
+}
+
+void CitySim::setRoleCatalog(RoleCatalog c) {
+    roles_ = std::move(c);
+    rebuildRoleTables();
+    reseatOnTables();
+}
+
+bool CitySim::setRoleTable(const std::string& role, GoalTable t) {
+    const int id = roles_.find(role);
+    if (id < 0 || id >= static_cast<int>(roleTables_.size())) return false;
+    roleTables_[static_cast<std::size_t>(id)] = std::move(t);
+    reseatOnTables();
+    return true;
+}
+
+void CitySim::reseatOnTables() {
     for (Agent& a : agents_) {
         const GoalTable& t = tableFor(a);
         int mapped = t.entry();
@@ -3286,8 +3322,10 @@ bool CitySim::isTaxi(int i) const {
 
 void CitySim::setWander(bool on) {
     wander_ = on;
-    installGoalTables(on ? wanderGoals(false) : defaultScheduleGoals(),
-                      on ? wanderGoals(true) : defaultScheduleGoals());
+    goalPed_ = wanderGoals(false);
+    goalDriver_ = wanderGoals(true);
+    rebuildRoleTables();
+    reseatOnTables();
 }
 
 // Is the spawn area at `node` free of moving cars? Agents departing from rest
