@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <utility>
 #include <queue>
+#include <unordered_map>
 #include <vector>
 
 namespace citysim {
@@ -493,8 +494,10 @@ public:
     // and (later) lets an agent sleep through hours of world time and be
     // reconstructed on demand when the player comes near.
     struct Snapshot {
-        enum class Where : uint8_t { AtHome, AtWork, ToWork, ToHome };
+        // ...and the night out (eveningPlan): on the way to tonight's place, there, on the way home from it
+        enum class Where : uint8_t { AtHome, AtWork, ToWork, ToHome, ToEvening, AtEvening, FromEvening };
         Where where = Where::AtHome;
+        int venue = -1;   // the evening's: an index into venues_ (eveningVenue)
         // For the travelling cases: how long the agent has been under way, in
         // sim-seconds. Zero when it is at either end.
         Real elapsedSeconds = 0;
@@ -541,6 +544,10 @@ public:
     // home two to five and a half hours later (by 02:30 at the latest). Its own bits and the night's number: a
     // different crowd every night, the same one for the same night. The share is the role's (ResidentRole::nightOutShare).
     bool eveningPlan(const Agent& a, Real& start, Real& end) const;
+    // WHERE TONIGHT, for an agent nobody is simulating (a sleeper, a city seeded at 21:00): one of the six nearest
+    // restaurants, bars or clubs to home, in its own town, within 1.2 km and open when its evening starts -- which
+    // one, from its own bits and the night's number (the same place all evening). -1: nowhere (a night in).
+    int eveningVenue(const Agent& a, Real eveningStart) const;
     Real departWorkHour(const Agent& a) const {
         const Real travel = a.commuteSeconds * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
         Real h = std::fmod(a.departWork - travel, 24.0);
@@ -1271,6 +1278,7 @@ public:
         static constexpr int kRoles = 16;   // by role id (roles().roles: commuter, shopkeeper, stroller, student, the staff...)
         int byRole[kRoles] = {}, outsideByRole[kRoles] = {};
         int atWorkByRole[kRoles] = {};   // resting in a state wearing AtWork (on shift, in class)
+        int outing = 0;                   // wearing Outing: at or on the way to a stop, by day or by night
         int busesMoving = 0, cabsMoving = 0;   // the service fleet, outside every count above
     };
     Census census() const;
@@ -1660,6 +1668,9 @@ private:
     ActivityCatalog catalog_ = defaultActivityCatalog();
     int students_ = 0;
     std::vector<Venue> venues_;
+    // the night's venues (restaurants, bars, clubs) by 250 m cell, for eveningVenue (indexNightVenues)
+    std::unordered_map<int64_t, std::vector<int>> nightVenues_;
+    void indexNightVenues();
     std::vector<SeatSpot> seats_;
     struct Loop { std::vector<engine::Vec2> pts; std::vector<Real> cum; Real length = 0; };
     std::vector<Loop> loops_;

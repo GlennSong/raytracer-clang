@@ -3790,13 +3790,13 @@ TEST_CASE(metro_day_census_prints) {
         const long b0 = city.sim().busBoardAttempts();
         const auto ps0 = city.sim().buses().planStats();
         constexpr int kR = citysim::CitySim::Census::kRoles;
-        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, bm = 0, cm = 0;
+        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, bm = 0, cm = 0, og = 0;
         int samples = 0;
         for (int i = 0; i < 3000; ++i) {
             city.step(world, 0.1);
             if (i % 100 != 0) continue;   // every 10 s
             const citysim::CitySim::Census c = city.sim().census();
-            bm += c.busesMoving; cm += c.cabsMoving;
+            bm += c.busesMoving; cm += c.cabsMoving; og += c.outing;
             wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; rd += c.riding; wt += c.waiting; ag += c.agents;
             for (int r = 0; r < kR; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; rWork[r] += c.atWorkByRole[r]; }
             ++samples;
@@ -3809,7 +3809,8 @@ TEST_CASE(metro_day_census_prints) {
                     hour, pct(out, all), wo / n, wm / n, dm / n, rd / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
                     pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]), city.sim().busBoardAttempts() - b0, ps.asked - ps0.asked,
                     ps.ok - ps0.ok, ps.noSaving - ps0.noSaving);
-        std::printf("    [census] %5.1f | service: buses moving %.0f, cabs moving %.0f\n", hour, bm / n, cm / n);
+        std::printf("    [census] %5.1f | service: buses moving %.0f, cabs moving %.0f | out somewhere (a stop, a night out) %.0f (%.1f%%)\n",
+                    hour, bm / n, cm / n, og / n, pct(og, ag));
         {   // every role: how many, and the share of them out
             std::string line;
             const auto& roles = city.sim().roles().roles;

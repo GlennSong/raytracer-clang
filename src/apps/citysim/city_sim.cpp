@@ -1617,6 +1617,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             }
         }
     }
+    indexNightVenues();   // where the sleepers go out to (eveningVenue)
     commuteStats_ = CommuteStats{};
     commuteStats_.towns = static_cast<int>(townNets.size());
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {   // where the work went, cached or decided
@@ -1720,7 +1721,70 @@ CitySim::Snapshot CitySim::scheduleSnapshot(const Agent& a, Real clock) const {
         return s;
     }
     s.where = atWorkWindow ? Snapshot::Where::AtWork : Snapshot::Where::AtHome;
+    // THE NIGHT OUT, for those nobody is simulating (Glenn: "keep going with the far-away agents following their
+    // roles"): the home half of the day may hold tonight's evening -- on the way there, there, or on the way back.
+    Real es = 0, ee = 0;
+    if (!atWorkWindow && eveningPlan(a, es, ee)) {
+        const int v = eveningVenue(a, es);
+        if (v >= 0) {
+            const Venue& V = venues_[static_cast<std::size_t>(v)];
+            // the straight line: a LOWER bound on the trip, so a sleeper's real arrival (runDormantEvents) always
+            // reads as "there" -- an overestimate would read "still on the way" and start the trip again from home
+            const Real metres = (V.door - a.homeDoor).length();
+            const Real pace = a.archetype == Agent::Mode::Driver ? Real(9.0) : kWalkSpeed * a.speedFactor;
+            const Real travel = metres / std::max(pace, Real(0.3)) * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
+            auto secs = [&](Real h) { return hoursPerSecond_ > 0 ? h / hoursPerSecond_ : 0.0; };
+            if (inWindow(clock, es, ee)) {
+                const Real in = std::fmod(clock - es + 24.0, 24.0);
+                s.venue = v;
+                if (in < travel) { s.where = Snapshot::Where::ToEvening; s.elapsedSeconds = secs(in); }
+                else s.where = Snapshot::Where::AtEvening;
+            } else {
+                const Real after = std::fmod(clock - ee + 24.0, 24.0);
+                if (after < travel) { s.venue = v; s.where = Snapshot::Where::FromEvening; s.elapsedSeconds = secs(after); }
+            }
+        }
+    }
     return s;
+}
+
+void CitySim::indexNightVenues() {
+    nightVenues_.clear();
+    for (int vi = 0; vi < static_cast<int>(venues_.size()); ++vi) {
+        const Venue& v = venues_[static_cast<std::size_t>(vi)];
+        if (v.type != PlaceType::Restaurant && v.type != PlaceType::Bar && v.type != PlaceType::Club) continue;
+        const int64_t cx = static_cast<int64_t>(std::floor(v.door.x / 250.0)), cz = static_cast<int64_t>(std::floor(v.door.y / 250.0));
+        nightVenues_[(cx << 32) ^ (cz & 0xffffffff)].push_back(vi);
+    }
+}
+
+int CitySim::eveningVenue(const Agent& a, Real eveningStart) const {
+    if (nightVenues_.empty() || !nav_ || a.home < 0) return -1;
+    constexpr Real kReach = 1200.0;
+    const Vec2 p = a.homeDoor;
+    const int net = buses_.networkOf(a.home);
+    const Real at = std::fmod(eveningStart + 0.3, Real(24));
+    std::vector<std::pair<Real, int>> near;
+    const int64_t cx = static_cast<int64_t>(std::floor(p.x / 250.0)), cz = static_cast<int64_t>(std::floor(p.y / 250.0));
+    for (int64_t x = cx - 5; x <= cx + 5; ++x)
+        for (int64_t z = cz - 5; z <= cz + 5; ++z) {
+            auto it = nightVenues_.find((x << 32) ^ (z & 0xffffffff));
+            if (it == nightVenues_.end()) continue;
+            for (int vi : it->second) {
+                const Venue& v = venues_[static_cast<std::size_t>(vi)];
+                const Real d2 = (v.door - p).lengthSquared();
+                if (d2 > kReach * kReach || v.node == a.home || !v.openAt(at)) continue;
+                if (net >= 0 && buses_.networkOf(v.node) != net) continue;   // its own town's streets
+                near.push_back({d2, vi});
+            }
+        }
+    if (near.empty()) return -1;
+    const std::size_t k = std::min<std::size_t>(6, near.size());
+    std::partial_sort(near.begin(), near.begin() + static_cast<long>(k), near.end());
+    const long night = static_cast<long>(std::floor((clockTotalHours_ - 12.0) / 24.0));
+    uint32_t h = a.brain * 0x2545F491u ^ static_cast<uint32_t>(night) * 0x9E3779B9u;
+    h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+    return near[h % k].second;
 }
 
 // SEED THE CITY AT AN HOUR instead of stepping up to it.
@@ -1754,13 +1818,25 @@ void CitySim::placeFromSchedule(int idx) {
         const std::size_t i = static_cast<std::size_t>(idx);
         Agent& a = agents_[i];
         if (a.playerControlled || a.released) return;
-        const Snapshot s = scheduleSnapshot(a, clockHours_);
-        const bool travelling = s.where == Snapshot::Where::ToWork ||
-                                s.where == Snapshot::Where::ToHome;
+        Snapshot s = scheduleSnapshot(a, clockHours_);
+        const bool evening = s.where == Snapshot::Where::ToEvening || s.where == Snapshot::Where::AtEvening ||
+                             s.where == Snapshot::Where::FromEvening;
+        // the night out's states, by name (they share their labels with the day's: GoOut wears Outing like a
+        // stroller's Outing): a table without them (a custom day) leaves the agent at home
+        int eveningGoal = -1;
+        if (evening) {
+            const char* name = s.where == Snapshot::Where::ToEvening ? "GoOut"
+                               : s.where == Snapshot::Where::AtEvening ? "OutTonight" : "HomeTonight";
+            eveningGoal = tableFor(a).findState(name);
+            if (eveningGoal < 0) { s = Snapshot{}; }
+        }
+        const bool travelling = s.where == Snapshot::Where::ToWork || s.where == Snapshot::Where::ToHome ||
+                                s.where == Snapshot::Where::ToEvening || s.where == Snapshot::Where::FromEvening;
         const Agent::Activity want =
             s.where == Snapshot::Where::AtHome   ? Agent::Activity::AtHome
             : s.where == Snapshot::Where::AtWork ? Agent::Activity::AtWork
             : s.where == Snapshot::Where::ToWork ? Agent::Activity::Commuting
+            : s.where == Snapshot::Where::ToEvening || s.where == Snapshot::Where::AtEvening ? Agent::Activity::Outing
                                                  : Agent::Activity::Returning;
         // A BUS HAS NO DAY. Re-seating works by finding the table state wearing
         // the schedule's activity label -- and a service vehicle's table has
@@ -1806,6 +1882,7 @@ void CitySim::placeFromSchedule(int idx) {
         int goal = -1;
         for (int st = 0; st < t.stateCount(); ++st)
             if (t.state(st).activity == want) { goal = st; break; }
+        if (eveningGoal >= 0) goal = eveningGoal;
         if (goal < 0) return;   // this table has no such state: leave as built
         a.goal = goal;
         a.goalHours = 0;
@@ -1829,8 +1906,10 @@ void CitySim::placeFromSchedule(int idx) {
         }
 
         if (!travelling) {
-            // At one end of the day. Rest there, and park the car with it.
-            const int node = s.where == Snapshot::Where::AtWork ? a.work : a.home;
+            // At one end of the day (or out for the evening). Rest there, and park the car with it.
+            const bool out = s.where == Snapshot::Where::AtEvening;
+            const Venue* ev = out ? &venues_[static_cast<std::size_t>(s.venue)] : nullptr;
+            const int node = out ? ev->node : s.where == Snapshot::Where::AtWork ? a.work : a.home;
             a.restNode = node;
             a.moving = false;
             a.speed = 0;
@@ -1845,7 +1924,21 @@ void CitySim::placeFromSchedule(int idx) {
             // standing on the sidewalk by the node (the seeded crowd that stood
             // around all day). Someone whose "work" is outdoors (a stroller's
             // park) stays out.
-            if (a.mode == Agent::Mode::Pedestrian) {
+            if (out) {
+                // inside tonight's place for a stop's length (45-90 minutes, its own bits), then on to the next off
+                // its menu (NextStop) -- or home when the evening is over, whichever comes first. A sleeper stays
+                // put: nothing ticks it until its evening ends (runDormantEvents).
+                a.tripVenue = s.venue;
+                a.restDwell = static_cast<float>(0.75 + 0.75 * (((a.brain >> 23) & 0xFF) / 255.0));
+                // ...partway through it, as an evening found already under way would be: everyone placed at the
+                // start of a stop left together, a rush no real evening has
+                Real es = 0, ee = 0;
+                if (eveningPlan(a, es, ee)) {
+                    const Real in = std::fmod(clockHours_ - es + 24.0, 24.0);
+                    a.goalHours = std::fmod(in, static_cast<Real>(a.restDwell));
+                }
+                if (a.mode == Agent::Mode::Pedestrian) { a.pos = ev->door; a.indoors = true; }
+            } else if (a.mode == Agent::Mode::Pedestrian) {
                 const bool atWorkEnd = s.where == Snapshot::Where::AtWork;
                 if (!atWorkEnd && a.homePlace != kNoPlace) {
                     a.pos = a.homeDoor;
@@ -1887,8 +1980,14 @@ void CitySim::placeFromSchedule(int idx) {
             // as long as the schedule says it has been travelling — the same
             // primitive that catches a distant agent up when it is promoted, so
             // a seeded agent and a simulated one move by identical rules.
-            const int from = s.where == Snapshot::Where::ToWork ? a.home : a.work;
-            const int to = s.where == Snapshot::Where::ToWork ? a.work : a.home;
+            int from = s.where == Snapshot::Where::ToWork ? a.home : a.work;
+            int to = s.where == Snapshot::Where::ToWork ? a.work : a.home;
+            if (s.where == Snapshot::Where::ToEvening || s.where == Snapshot::Where::FromEvening) {
+                const int vn = venues_[static_cast<std::size_t>(s.venue)].node;
+                from = s.where == Snapshot::Where::ToEvening ? a.home : vn;
+                to = s.where == Snapshot::Where::ToEvening ? vn : a.home;
+                if (s.where == Snapshot::Where::ToEvening) a.tripVenue = s.venue;
+            }
             releaseBays(a);   // under way: not pulling out of a bay it was seeded in
             a.restNode = from;
             startTrip(a, from, to, /*fromRest=*/true);
@@ -1931,7 +2030,10 @@ void CitySim::scheduleDormantEvent(int i) {
         // at rest: its next departure (to work, or home)
         const Real now = clockHours_;
         double best = 25.0;
-        for (Real h : {departWorkHour(a), Real(a.departHome)}) {
+        std::vector<Real> marks = {departWorkHour(a), Real(a.departHome), Real(12.0)};   // noon: tonight's plan is drawn
+        Real es = 0, ee = 0;
+        if (eveningPlan(a, es, ee)) { marks.push_back(es); marks.push_back(ee); }   // its night out (scheduleSnapshot)
+        for (Real h : marks) {
             double d = std::fmod(h - now + 48.0, 24.0);
             if (d < 1e-4) d += 24.0;
             best = std::min(best, d);
@@ -5585,6 +5687,7 @@ CitySim::Census CitySim::census() const {
         const int r = std::min(Census::kRoles - 1, static_cast<int>(a.role));
         ++c.byRole[r];
         if (!a.moving && a.activity == Activity::AtWork) ++c.atWorkByRole[r];
+        if (a.activity == Activity::Outing) ++c.outing;   // out: a day's stop, a night's (inside or not)
         const bool rides = riding(i);
         if (rides) { ++c.riding; ++c.outsideByRole[r]; continue; }
         if (awaitingRide(i)) { ++c.waiting; ++c.outsideByRole[r]; continue; }
