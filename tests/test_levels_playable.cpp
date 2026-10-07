@@ -3954,6 +3954,29 @@ TEST_CASE(level_print_shop_interiors) {
                             r.params.core, r.params.groundHeight);
         }
     }
+    if (std::getenv("RT_SHOP_SPOTS")) {   // the nightlife strips: where the low-rise nightlife buildings are
+        std::map<std::pair<int, int>, int> cells;
+        for (const BuildingRecord& r : cb->records)
+            if (r.params.shopMix == 2 && r.params.floors <= 2 && r.params.groundRetail)
+                ++cells[{static_cast<int>(std::floor(r.plan[0].x / 150.0)), static_cast<int>(std::floor(r.plan[0].y / 150.0))}];
+        std::vector<std::pair<int, std::pair<int, int>>> top;
+        for (const auto& kv : cells) top.push_back({kv.second, kv.first});
+        std::sort(top.rbegin(), top.rend());
+        for (std::size_t i = 0; i < top.size() && i < 6; ++i) {
+            std::printf("    [nightlife] %d low-rise nightlife buildings round %.0f %.0f\n", top[i].first,
+                        top[i].second.first * 150.0 + 75.0, top[i].second.second * 150.0 + 75.0);
+            for (const BuildingRecord& r : cb->records) {   // one of their fronts: a camera spot on the pavement
+                if (r.params.shopMix != 2 || r.params.floors > 2 || !r.params.groundRetail) continue;
+                if (static_cast<int>(std::floor(r.plan[0].x / 150.0)) != top[i].second.first ||
+                    static_cast<int>(std::floor(r.plan[0].y / 150.0)) != top[i].second.second) continue;
+                const std::vector<ShopFront> fr = shopFrontsOf(r.plan, r.params);
+                if (fr.empty()) continue;
+                const Vec2 c = (fr[0].a + fr[0].b) * 0.5;
+                std::printf("    [nightlife front] %.2f %.2f %.2f %.3f %.3f\n", c.x, r.baseY, c.y, fr[0].n.x, fr[0].n.y);
+                break;
+            }
+        }
+    }
     std::printf("    [shop interiors] %d buildings show shopfronts; %d not enterable; of %d sampled, %d have shop rooms "
                 "furnished behind their fronts, %d have none (%d of %d fronts furnished)\n",
                 withFronts, notEnterable, sampled, furnished, fallback, frontsFurnished, frontsTotal);

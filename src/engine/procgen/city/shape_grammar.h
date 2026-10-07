@@ -537,6 +537,10 @@ struct BuildingParams {
     // (a reading room, the stacks), 3 a residence hall (dorm rooms, a lounge, shared baths). A stair building
     // (core = 1): its floors are rooms either side of a corridor from the stair (campusPlan, room_plan.cpp).
     uint8_t campus = 0;
+    // THE SHOP MIX of its ground floor (trades.h, ~/.claude/plans/nightlife-and-malls.md): 0 everyday (a residential
+    // street's cafes, grocers, pharmacies), 1 high street, 2 nightlife (bars, clubs, restaurants), 3 a mall's. Set
+    // by the lot pass from the district; the trades draw their weights from it.
+    uint8_t shopMix = 1;
 };
 
 // THE SHOPFRONTS of a building's ground storey (buildings: shops; the facade's own ShopUnits): each shop's stretch

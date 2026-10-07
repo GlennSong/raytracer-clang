@@ -22,8 +22,9 @@ struct TradeInfo {
     const char* name;        // "cafe", "restaurant", ...
     const char* placeType;   // the citysim place it is: cafe restaurant bar club shop supermarket
     float openHour, closeHour;   // when customers come (wraps midnight: a bar opens 16, closes 2)
-    int weight;              // how common, among the trades
-    int minBays;             // the fewest bays a unit of it needs (a club wants a wide front)
+    int weight[4];           // how common, among the trades, in each shop mix (BuildingParams::shopMix: everyday,
+                             // high street, nightlife, mall)
+    int minBays, maxBays;    // the unit's width in bays (a bar 2, a restaurant 2-4, a club 3-5)
     Vec3 fascia;             // the sign band's lit colour
     bool terrace;            // sets tables out on the pavement
 };
@@ -43,8 +44,11 @@ const TradeInterior& tradeInterior(uint8_t id);   // a trade with none of its ow
 int tradeCount();
 const TradeInfo& tradeAt(int index);          // by table position
 const TradeInfo* tradeById(uint8_t id);       // by id (a room's style); nullptr if none
-// The trade for a unit of `bays` bays from 32 bits of its own hash: weighted, among the trades that fit.
-uint8_t pickTrade(uint32_t bits, int bays);
+// The trade for a unit with `bays` bays left on its run, in shop mix `mix`, from 32 bits of its own hash: weighted,
+// among those that fit (minBays <= bays).
+uint8_t pickTrade(uint32_t bits, int bays, uint8_t mix = 1);
+// The width of a unit of `trade` with `left` bays on the run: within the trade's range, never leaving a lone bay.
+int tradeBays(uint8_t trade, int left, uint32_t bits);
 
 }  // namespace engine
 

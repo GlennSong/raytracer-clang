@@ -773,6 +773,41 @@ TEST_CASE(students_stand_at_the_lab_benches) {
 // A TRADE'S ROOM IS FINISHED AS ONE (Glenn: "white walls for a bar? Yikes"): a bar's and a club's walls, floor and
 // ceiling -- the room's interior surfaces, inside its rectangle -- are dark, a grocer's light; none of them is the
 // building's own field paint.
+// A TRADE TAKES ITS OWN WIDTH, A STREET ITS OWN MIX (~/.claude/plans/nightlife-and-malls.md): every unit is within
+// its trade's bays (a club 3-5), a residential street has no clubs, a nightlife strip is mostly bars, restaurants
+// and clubs.
+TEST_CASE(shop_units_take_their_trades_width_and_their_streets_mix) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 16}, {0, 16}};
+    std::map<int, std::map<int, int>> byMix;   // mix -> trade -> units
+    int outOfRange = 0;
+    for (uint8_t mixK : {uint8_t(0), uint8_t(1), uint8_t(2), uint8_t(3)})
+        for (uint32_t seed = 1; seed < 160; ++seed) {
+            BuildingParams p;
+            p.floors = 2; p.groundRetail = true; p.walkableGround = true; p.openDoorway = true; p.seed = seed;
+            p.shopMix = mixK;
+            for (const ShopFront& f : shopFrontsOf(plan, p)) {
+                ++byMix[mixK][f.trade];
+                const TradeInfo* t = tradeById(f.trade);
+                const int bays = static_cast<int>(std::lround((f.b - f.a).length() / p.bayWidth));
+                if (t && (bays < t->minBays || bays > t->maxBays + 1)) ++outOfRange;   // (+1: a lone end bay joins)
+            }
+        }
+    auto share = [&](int m, std::initializer_list<int> ids) {
+        int n = 0, all = 0;
+        for (const auto& kv : byMix[m]) { all += kv.second; for (int id : ids) if (kv.first == id) n += kv.second; }
+        return all ? double(n) / all : 0.0;
+    };
+    std::printf("    [mix] everyday nightlife share %.2f, nightlife %.2f, mall boutiques+electronics %.2f; clubs: %d everyday, "
+                "%d nightlife; out of range %d\n", share(0, {13, 14, 15}), share(2, {13, 14, 15}), share(3, {2, 4}),
+                byMix[0][15], byMix[2][15], outOfRange);
+    CHECK(byMix[0][15] == 0);
+    CHECK(byMix[2][15] > 0);
+    CHECK(share(2, {13, 14, 15}) > 0.6);
+    CHECK(share(0, {13, 14, 15}) < 0.3);
+    CHECK(share(3, {2, 4}) > 0.3);
+    CHECK(outOfRange == 0);
+}
+
 TEST_CASE(a_bar_is_not_painted_like_an_office) {
     const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
     int bars = 0, light = 0;

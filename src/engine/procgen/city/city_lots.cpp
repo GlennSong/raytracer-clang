@@ -1956,6 +1956,24 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // From the NEAREST downtown: every financial hub zones a downtown of its own (DistrictMap), and
     // measuring height from `center` alone left a second one — metro_planned's mountain city — a
     // financial district of low-rise.
+    // EACH TOWN'S NIGHTLIFE STRIP: a seeded point in its commercial ring (out past the skyscraper plateau, short of
+    // the residential edge); the lots within reach of it are bars, restaurants and clubs in low buildings.
+    std::vector<Vec2> nightCentres;
+    {
+        std::vector<Vec2> towns{p.center};
+        for (const auto& h : p.hubs) if (h.second == 0) towns.push_back(h.first);
+        for (std::size_t t = 0; t < towns.size(); ++t) {
+            const uint32_t hn = mix(p.seed, 0x9e37u + static_cast<uint32_t>(t) * 977u);
+            const Real ang = (hn & 0xffffu) / 65536.0 * 6.283185307179586;
+            const Real r = 0.5 * (std::max(Real(1), p.innerRadius) + std::max(p.midRadius, p.innerRadius + 1));
+            nightCentres.push_back(towns[t] + Vec2(std::cos(ang), std::sin(ang)) * r);
+        }
+    }
+    const Real nightReach = std::max(Real(90), 0.6 * std::max(Real(1), p.innerRadius));
+    auto nightlifeAt = [&](const Vec2& q) {
+        for (const Vec2& c : nightCentres) if ((q - c).length() < nightReach) return true;
+        return false;
+    };
     auto corenessAt = [&](const Vec2& q) {
         Real d = (q - p.center).length();
         for (const auto& h : p.hubs) if (h.second == 0) d = std::min(d, (q - h.first).length());
@@ -4003,6 +4021,22 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                     coreness,
                                     p.archetypeBook.empty() ? nullptr
                                                             : &p.archetypeBook);
+            // THE SHOP MIX (~/.claude/plans/nightlife-and-malls.md): a residential street's everyday shops, a high
+            // street's eating and drinking, and -- round each town's NIGHTLIFE STRIP -- low-rise buildings of bars,
+            // restaurants and clubs (Glenn: "these all don't need to be located on skyscrapers").
+            {
+                const bool urban = tag == DistrictTag::Commercial || tag == DistrictTag::Financial || tag == DistrictTag::OldTown;
+                const bool night = urban && nightlifeAt(b.site);
+                rec.params.shopMix = night ? 2 : urban ? 1 : 0;
+                if (night && rec.massing == BuildingRecipe::Massing::LotPlan && !lot.wholeBlock && !lot.bigBox &&
+                    !lot.campus && cand.landmark < 0) {
+                    const uint32_t hn = mix(pp.seed, static_cast<uint32_t>(li) * 29u + 11u);
+                    rec.params.floors = std::min(rec.params.floors, 1 + static_cast<int>(hn % 2u));
+                    rec.params.groundRetail = true;
+                    rec.params.curtainWall = false;
+                    ++dbg->nightlifeBuildings;
+                }
+            }
             b.type = rec.placeType;
             b.recipe = rec.name;
             b.block = cand.block;
@@ -4973,7 +5007,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
                  << dbg->lots.size() << " lots (" << dbg->wholeBlocks << " whole-block landmark sites), " << nBuilt << " built ("
                  << dbg->attachedBuilt << " attached of " << dbg->attachedSites << " sites run to a party line, "
-                 << dbg->bigBoxBlocks << " big-box blocks), "
+                 << dbg->bigBoxBlocks << " big-box blocks, " << dbg->nightlifeBuildings << " nightlife buildings), "
                  << nGreen << " green, " << nCourt << " courts | COVER "
                  << static_cast<int>(builtArea) << " m2 of "
                  << static_cast<int>(blockArea) << " m2 buildable ("

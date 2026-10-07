@@ -975,20 +975,21 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
             if (inLobby(b)) { ++b; continue; }
             int run = 0;
             while (b + run < L.bays && !inLobby(b + run)) ++run;
-            // Cut this run into units of two or three bays (a single bay joins its neighbour).
+            // Cut this run into units: the TRADE first (from the building's shop mix), then its own width -- a club
+            // 3-5 bays, a restaurant 2-4, a bar or a cafe 2 (trades.h; a single bay left joins its neighbour).
             int s = b;
             while (s < b + run) {
                 const int left = b + run - s;
-                int g = left <= 3 ? left : 2 + static_cast<int>(next() % 2u);
-                if (left - g == 1) g = (g == 2 ? 3 : 2);
-                if (g < 2) {   // a lone bay: grow the previous unit over it, else leave it to the lobby
+                if (left < 2) {   // a lone bay: grow the previous unit over it, else leave it to the lobby
                     if (!L.shops.empty() && L.shops.back().b1 == s - 1) L.shops.back().b1 = s;
                     break;
                 }
+                const uint8_t trade = pickTrade(next(), left, p.shopMix);
+                const int g = tradeBays(trade, left, next());
                 ShopUnit u;
                 u.b0 = s; u.b1 = s + g - 1;
-                u.door = g == 3 ? s + 1 : s + static_cast<int>(next() % 2u);
-                u.type = pickTrade(next(), g);   // (trades.h: weighted, among those its bays fit)
+                u.door = g >= 3 ? s + g / 2 : s + static_cast<int>(next() % 2u);
+                u.type = trade;
                 L.shops.push_back(u);
                 s += g;
             }
