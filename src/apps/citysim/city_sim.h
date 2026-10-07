@@ -1389,9 +1389,13 @@ public:
     // World-space (XZ) static obstacles pedestrians steer around and never stand
     // inside — chiefly the signal poles on the sidewalks (injected once by the host
     // from the render bridge). Cars ignore these (poles sit off the carriageway).
-    void setStaticObstacles(std::vector<engine::Vec2> obstacles) {
-        staticObstacles_ = std::move(obstacles);
-    }
+    // STATIC OBSTACLES a walker steers round and is never inside: the signal poles (setStaticObstacles), and the
+    // street's furniture -- a bus stop's pole and bench, a cafe's tables, a bench (Glenn: "the npcs probably need to
+    // recognize vehicles and furniture as obstacles to avoid"), each with its own clearance (addStaticObstacles).
+    // Indexed by 8 m cell: a walker reads only the cells round it.
+    void setStaticObstacles(std::vector<engine::Vec2> poles);
+    void addStaticObstacles(const std::vector<engine::Vec2>& at, Real clearance);
+    std::size_t staticObstacleCount() const { return staticObstacles_.size(); }
 
 private:
     // fromRest: the trip starts from a PARKED pose (not chained mid-motion) —
@@ -1463,6 +1467,15 @@ private:
     engine::Vec2 freeStandingSpot(const Agent& a, engine::Vec2 want, engine::Vec2 along) const;
     void installGoalTables(GoalTable pedestrian, GoalTable driver);
     void rebuildRoleTables();   // every role's day, from roles_
+    // A walker on a STREET's pavement (not a walk, not a deck), clear of the junctions at either end where its
+    // crossings start: its road is on its left, and it does not step into it to get round anyone.
+    bool onStreet(const Agent& a) const {
+        if (!nav_ || a.mode != Agent::Mode::Pedestrian || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size()))
+            return false;
+        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+        if (L.footpath || L.layer != 0 || L.elevAbsolute) return false;
+        return a.distOnLeg > junctionRadius(L.from) + 1.0 && a.distOnLeg < L.length - junctionRadius(L.to) - 1.0;
+    }
     void reseatOnTables();      // each agent onto its table's state wearing its label (else the entry)
     bool launchClear(const Agent& a, int node) const;   // no moving car near the spawn
     void seatBusAt(int idx, int node, int queued = 0);   // a bus at rest on a stop
@@ -1622,7 +1635,22 @@ private:
                                         // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<Real> externalHalf_;                // parallel: a vehicle's half length, 0 = a person
-    std::vector<engine::Vec2> staticObstacles_;     // host-injected, static (signal poles)
+    struct StaticObstacle { engine::Vec2 p; Real clearance; };
+    std::vector<StaticObstacle> staticObstacles_;     // host-injected, static (setStaticObstacles / addStaticObstacles)
+    std::unordered_map<int64_t, std::vector<int>> obstacleCells_;   // by 8 m cell
+    Real obstacleMaxClearance_ = 0;
+    template <typename F> void forObstaclesNear(engine::Vec2 p, Real r, F&& f) const {
+        if (staticObstacles_.empty()) return;
+        constexpr Real kCell = 8.0;
+        const int64_t x0 = static_cast<int64_t>(std::floor((p.x - r) / kCell)), x1 = static_cast<int64_t>(std::floor((p.x + r) / kCell));
+        const int64_t z0 = static_cast<int64_t>(std::floor((p.y - r) / kCell)), z1 = static_cast<int64_t>(std::floor((p.y + r) / kCell));
+        for (int64_t x = x0; x <= x1; ++x)
+            for (int64_t z = z0; z <= z1; ++z) {
+                auto it = obstacleCells_.find((x << 32) ^ (z & 0xffffffff));
+                if (it == obstacleCells_.end()) continue;
+                for (int k : it->second) f(staticObstacles_[static_cast<std::size_t>(k)]);
+            }
+    }
     std::vector<std::pair<engine::Vec2, Real>> junctions_;   // centre + box radius
     std::vector<Real> nodeBoxRadius_;   // per node: widest incident half-width (+ pad)
     Real junctionPad_ = 0;              // + this at street intersections (see setJunctionPad)

@@ -1484,7 +1484,24 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::Vec3 base = signalSite(li).base;
             poles.push_back(engine::Vec2(base.x, base.z));
         }
+        const std::size_t poleCount = poles.size();
         sim_.setStaticObstacles(std::move(poles));
+        // ...and the street's FURNITURE: everything placed outdoors and drawn as furniture -- a bus stop's pole and
+        // bench, lamps, signs, benches, a cafe's tables (Glenn: "the npcs probably need to recognize vehicles and
+        // furniture as obstacles to avoid"). Each as a point with a body's clearance: the lean steers round it, the
+        // push-out keeps a walker from standing in it. (Interiors stream in later and are not here: nobody walks the
+        // pavement inside.)
+        std::vector<engine::Vec2> furniture;
+        world.each<engine::InstanceGroup>([&](Entity, engine::InstanceGroup& g) {
+            if (g.drawClass != engine::DrawClass::Furniture) return;
+            for (const Mat4& m : g.transforms) furniture.push_back(engine::Vec2(m.m[0][3], m.m[2][3]));
+        });
+        world.each<engine::Transform, engine::Renderable>([&](Entity, engine::Transform& t, engine::Renderable& r) {
+            if (r.drawClass == engine::DrawClass::Furniture) furniture.push_back(engine::Vec2(t.position.x, t.position.z));
+        });
+        sim_.addStaticObstacles(furniture, 0.75);
+        LOG_INFO << "[citysim] walkers steer round " << sim_.staticObstacleCount() << " static obstacles ("
+                 << poleCount << " signal poles, " << furniture.size() << " pieces of street furniture)";
     }
 
     // Crosswalks are painted into the ROAD TEXTURE now (ADR-0062): the road mesher

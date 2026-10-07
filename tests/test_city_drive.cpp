@@ -157,6 +157,7 @@ TEST_CASE(walkers_keep_a_wide_berth_around_the_player) {
             if (a.mode == Agent::Mode::Pedestrian && a.moving)
                 minDist = std::min(minDist, (a.pos - player).length());
     }
+    std::printf("    [berth] closest walker to the player %.3f m\n", minDist);
     CHECK(minDist >= 1.1 - 1e-3);   // the wide berth held (kPlayerClearance)
     CHECK(minDist < 3.0);           // and someone really did pass nearby
 }

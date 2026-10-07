@@ -528,7 +528,13 @@ TEST_CASE(walkers_gap_accept_at_unsignalled_junctions) {
                 // kerb while a car rolls by is city-normal; the kerb rule's
                 // job is that nobody is UNDER the car. Tightening this to a
                 // clearance gate comes with real crosswalk-band geometry.)
-                if (dx * dx + dy * dy < 1.3 * 1.3) ++contact;
+                if (dx * dx + dy * dy < 1.3 * 1.3) {
+                    ++contact;
+                    if (std::getenv("RT_CONTACT_DEBUG"))
+                        std::printf("    [contact] step %d walker %s | car %s\n", i,
+                                    sim.describeAgent(static_cast<int>(&p - ag.data())).substr(0, 260).c_str(),
+                                    sim.describeAgent(static_cast<int>(&c - ag.data())).substr(0, 200).c_str());
+                }
             }
         }
     }

@@ -97,6 +97,7 @@ constexpr Real kCarMinTurnRadius = 6.0; // tightest arc a car can trace (m)
 constexpr Real kPedVisionRange = 4.5;      // how far ahead a walker perceives (m)
 constexpr Real kPedVisionHalfAngle = 1.2;  // ~69 deg to each side (wide peripheral)
 constexpr Real kPedMaxLateral = 1.6;       // furthest a walker leans off its path (m)
+constexpr Real kPedRoadsideRoom = 0.7;     // ...toward the road: the 1 m verge to the kerb, less a body's 0.3
 constexpr Real kPedLateralRate = 1.6;      // how fast that lean changes (m/s) — smooth, not a pop
 constexpr Real kPedBodyMin = 0.5;          // hard floor: bodies never closer than this
 constexpr Real kPoleClearance = 0.7;       // a walker keeps its centre this far from a pole
@@ -338,6 +339,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     sensed_.clear();
     externalObstacles_.clear();   // a REBUILD must not keep the previous level's
     staticObstacles_.clear();     // player/pole positions as phantom obstacles
+    obstacleCells_.clear();
+    obstacleMaxClearance_ = 0;
     clockHours_ = 8.5;   // start mid morning-rush so agents commute right away
     simSeconds_ = 0;
     faultCount_ = 0;
@@ -2084,6 +2087,23 @@ bool CitySim::eveningPlan(const Agent& a, Real& start, Real& end) const {
     start = 18.5 + 2.5 * u1;
     end = std::fmod(start + 2.0 + 3.5 * u2, Real(24));
     return true;
+}
+
+void CitySim::setStaticObstacles(std::vector<Vec2> poles) {
+    staticObstacles_.clear();
+    obstacleCells_.clear();
+    obstacleMaxClearance_ = 0;
+    addStaticObstacles(poles, kPoleClearance);
+}
+
+void CitySim::addStaticObstacles(const std::vector<Vec2>& at, Real clearance) {
+    for (const Vec2& p : at) {
+        const int k = static_cast<int>(staticObstacles_.size());
+        staticObstacles_.push_back({p, clearance});
+        const int64_t cx = static_cast<int64_t>(std::floor(p.x / 8.0)), cz = static_cast<int64_t>(std::floor(p.y / 8.0));
+        obstacleCells_[(cx << 32) ^ (cz & 0xffffffff)].push_back(k);
+    }
+    obstacleMaxClearance_ = std::max(obstacleMaxClearance_, clearance);
 }
 
 void CitySim::pinAgent(int i, bool on) {
@@ -4800,8 +4820,9 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // Hold a half-step short until it moves on. (Cars sense pedestrians via
     // the vision wedge; walkers get the mirror-image body check here.)
     if (!car && motion > 0) {
-        const Vec2 probe(a.pos.x + a.heading.x * 1.0,
-                         a.pos.y + a.heading.y * 1.0);
+        // (a STEP back from it, not half: at 1 m and 0.35 m a walker crossing held 0.4 m from a passing car's side)
+        const Vec2 probe(a.pos.x + a.heading.x * 1.5,
+                         a.pos.y + a.heading.y * 1.5);
         // Vehicle bodies via their DRIVERS in the grid (P4.1): every vehicle
         // mirrors its driver's pose, so driver candidates near the probe find
         // every body the vehicles_ scan found. 26 m covers the 6 m body test
@@ -4822,7 +4843,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                 v.driver >= 0 && v.driver < static_cast<int>(agents_.size())
                     ? agents_[v.driver].speed
                     : 0.0;
-            if (lx < v.length * 0.5 + 0.35 && ly < v.width * 0.5 + 0.35 &&
+            if (lx < v.length * 0.5 + 0.5 && ly < v.width * 0.5 + 0.5 &&
                 vSpeed > 1.5) {
                 // Only a genuinely SWEEPING body holds the walker — below
                 // that the car's own ped-yield governs, and holding for
@@ -6800,7 +6821,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 if (t.confidence < kMemoryActConfidence) continue;
                 consider(t.pos + t.vel * kPedAnticipation);
             }
-            for (const Vec2& o : staticObstacles_) consider(o);   // signal poles
+            forObstaclesNear(a.pos, kPedVisionRange + 1.0, [&](const StaticObstacle& o) { consider(o.p); });   // poles, furniture
             // Cars are bodies too (device: walkers pinned against a car): the
             // walker considers the CLOSEST POINT on each car's rectangle — not
             // its centre, which sits outside the short vision cone when you're
@@ -6843,7 +6864,13 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         // herd a walker like a boid.
         Real prev = a.lateralOffset;
         Real maxDelta = kPedLateralRate * dt;
-        Real delta = std::max(-maxDelta, std::min(maxDelta, a.leanTarget - prev));
+        // TOWARD THE ROAD (left of travel: a walker keeps to its street's right-hand pavement) only as far as the verge
+        // allows -- a full 1.6 m lean put a walker stepping round someone 0.6 m into the carriageway (walkersInRoad:
+        // "avoiding, in the street it walks along"); toward the buildings, the whole lean
+        // -- and where the road side has not the room for the step, it goes round on the buildings' side instead
+        const Real leanGoal = onStreet(a) && a.leanTarget < -kPedRoadsideRoom ? std::min(-a.leanTarget, kPedMaxLateral)
+                                                                                : a.leanTarget;
+        Real delta = std::max(-maxDelta, std::min(maxDelta, leanGoal - prev));
         a.lateralOffset = prev + delta;
 
         a.pos.x += rightv.x * a.lateralOffset;
@@ -6935,7 +6962,10 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         if (a.state == Agent::State::Waiting) { a.crowdOffset = Vec2(0, 0); continue; }
         Vec2 off = a.pos - crowdBase_[i];
         const Vec2 rightv(a.heading.y, -a.heading.x);
-        const Real side = dot(off, rightv), room = std::max(Real(0), kPedMaxLateral - std::fabs(a.lateralOffset));
+        const Real side = dot(off, rightv);
+        Real room = std::max(Real(0), kPedMaxLateral - std::fabs(a.lateralOffset));
+        if (side < 0 && onStreet(a))   // toward the road: what the verge leaves after the lean
+            room = std::max(Real(0), kPedRoadsideRoom - std::max(Real(0), -a.lateralOffset));
         if (std::fabs(side) > room) off = off - rightv * (side - std::copysign(room, side));
         Real L = off.length();
         if (L > 1.5) { off = off * (1.5 / L); L = 1.5; }
@@ -6964,7 +6994,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 a.pos.x += clearance;        // dead-centre: pick a direction
             }
         };
-        for (const Vec2& o : staticObstacles_) pushOut(o, kPoleClearance);
+        forObstaclesNear(a.pos, obstacleMaxClearance_ + 0.5, [&](const StaticObstacle& o) { pushOut(o.p, o.clearance); });
         for (const Vec2& o : externalObstacles_) pushOut(o, kPlayerClearance);
         // ...and never stand INSIDE a car's footprint (device: walkers stuck
         // bumping a car). The push resolves along the SHALLOWEST axis of the
