@@ -20,6 +20,8 @@ namespace engine {
 
 // A business's name: its trade's patterns, filled from the word lists by `seed` (a hash of its door).
 std::string shopName(uint8_t trade, uint32_t seed);
+// An indoor mall's name ("Kona Galleria", "The Shops at Juniper").
+std::string mallName(uint32_t seed);
 
 struct ShopSign {
     std::string text;

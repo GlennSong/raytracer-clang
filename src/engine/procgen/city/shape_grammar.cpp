@@ -3915,6 +3915,12 @@ static MallLayout mallLayout(const Poly2& planIn, const BuildingParams& params, 
         rp.rooms.push_back(fc);
         for (Real x : {xa, xf}) { wall(P(x, inset), P(x, vc0)); wall(P(x, vc1), P(x, D - inset)); }
     }
+    // THE CONCOURSE itself: a room of its own (style 20: lit, planters and benches down the middle; no walls)
+    {
+        Room cc; cc.kind = RoomKind::Shop; cc.style = 20; cc.edge = entranceEdge;
+        cc.rect = {P(xa, vc0), P(xf, vc0), P(xf, vc1), P(xa, vc1)};
+        rp.rooms.push_back(cc);
+    }
     // the rows: units cut by trade along each, x0..x1; `front` the row's concourse edge, `back` its outer wall
     auto row = [&](Real x0, Real x1, bool frontRow) {
         const Real vf = frontRow ? vc0 : vc1, vb = frontRow ? inset : D - inset;
@@ -4848,13 +4854,34 @@ static void emitBigBoxDress(BuildingMesh& out, const Poly2& plan, std::size_t en
         // the board in the chain's colour by day; the NAME is what lights (LitBand, a warm white at night)
         const Vec3 o = N * 0.26;
         emitBox(out, Scope{fr.at(cx - sw * 0.5, sy0) + N * 0.25, {X, U, N}, Vec3(sw, sy1 - sy0, 0.02)}, PartId::Trim, brand);
-        const int nL = 5 + static_cast<int>(params.seed % 4u);
+        const int nL = params.bigBox == 5 ? 0 : 5 + static_cast<int>(params.seed % 4u);   // (a mall's NAME is lettered from the sign atlas: mallSignOf)
         const Real lh = (sy1 - sy0) * 0.62, lw = std::min(lh * 0.75, sw * 0.8 / nL);
         const Real lx0 = cx - (nL * lw * 1.15) * 0.5;
         for (int k = 0; k < nL; ++k)
             emitBox(out, Scope{fr.at(lx0 + k * lw * 1.15, sy0 + (sy1 - sy0 - lh) * 0.5) + o, {X, U, N},
                                Vec3(lw, lh, full ? 0.12 : 0.02)}, PartId::LitBand, Vec3(1.0, 0.96, 0.88));
     }
+}
+
+bool mallSignOf(const Poly2& planIn, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width) {
+    if (params.bigBox != 5) return false;
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return false;
+    ensureCCW(plan);
+    const std::size_t e = entranceEdgeFor(plan, params);
+    if (e >= plan.size()) return false;
+    const FaceRect fr = planEdgeRect(plan, e, 0.0, params.groundHeight);
+    const Real gh = params.groundHeight, cy = 4.4;
+    const Real sw = std::min(fr.width * 0.4, Real(24.0));
+    // (as emitBigBoxDress lays the board)
+    y0 = std::max(cy + 0.9, gh - 4.6);
+    y1 = std::max(y0 + 2.4, gh - 1.9);
+    if (sw <= 6 || y1 - y0 <= 1.2) return false;
+    const Vec3 c = fr.at(fr.width * 0.5, 0) + fr.n * 0.27;
+    centre = Vec2(c.x, c.z);
+    n = Vec2(fr.n.x, fr.n.z);
+    width = sw;
+    return true;
 }
 
 BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,

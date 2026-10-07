@@ -5988,6 +5988,22 @@ bool LevelLoader::load(const std::string& path,
                     // building with fronts is its shops; without, it stays one generic shop (the citysim deals it a
                     // kind: retailKindFor).
                     int fronts = 0;
+                    for (const engine::BuildingUnit& u : lb.units) {   // an indoor mall's name over its doors
+                        Vec2 mc, mn;
+                        Real my0 = 0, my1 = 0, mw = 0;
+                        if (u.plan.size() < 3 || !engine::mallSignOf(u.plan, u.params, mc, mn, my0, my1, mw)) continue;
+                        engine::ShopSign sign;
+                        sign.text = engine::mallName(static_cast<uint32_t>(std::lround(mc.x)) * 73856093u ^
+                                                     static_cast<uint32_t>(std::lround(mc.y)) * 19349663u);
+                        sign.trade = 2;   // (its board colour: the boutique's)
+                        sign.n = Vec3(mn.x, 0, mn.y);
+                        sign.up = Vec3(0, 1, 0);
+                        sign.right = cross(sign.n * -1.0, sign.up);
+                        sign.width = mw - 0.4;
+                        sign.height = (my1 - my0) - 0.2;
+                        sign.centre = Vec3(mc.x + mn.x * 0.03, u.baseY + 0.5 * (my0 + my1), mc.y + mn.y * 0.03);
+                        shopSigns.push_back(std::move(sign));
+                    }
                     for (const engine::BuildingUnit& u : lb.units) {
                         if (u.plan.size() < 3) continue;
                         for (const engine::ShopFront& sf : engine::shopFrontsOf(u.plan, u.params)) {

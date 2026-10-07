@@ -702,6 +702,25 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         highTables();
                         break;
                     }
+                    case 20: {  // AN INDOOR MALL'S CONCOURSE (mallLayout; its rect runs along side 0): down its
+                                // middle, planters and pairs of benches by turns, the benches back to back facing the shops
+                        const Real mid = F.f.D * 0.5;
+                        int k = 0;
+                        for (Real t = 6.0; t + 2.0 <= F.f.W - 4.0; t += 7.0, ++k) {
+                            if (k % 2 == 0) {
+                                Placement c{&F.f, 0, t, 0.9, 0.9, mid - 0.45};
+                                F.taken.push_back(c.footprint());
+                                F.put(c, Piece::Planter, 0.45, 0.0);
+                            } else {
+                                Placement a{&F.f, 0, t, 1.8, 0.55, mid - 0.55}, b{&F.f, 0, t, 1.8, 0.55, mid};
+                                F.taken.push_back(a.footprint());
+                                F.taken.push_back(b.footprint());
+                                F.put(a, Piece::PlazaBench, 0.9, 0.55, false);   // facing the side-0 row
+                                F.put(b, Piece::PlazaBench, 0.9, 0.0, true);     // facing the far row
+                            }
+                        }
+                        break;
+                    }
                     default:  // a trade with no fit-out yet: a counter
                         counterAtBack();
                         break;

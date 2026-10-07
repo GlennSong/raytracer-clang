@@ -27,6 +27,18 @@ template <std::size_t N> const char* pick(const char* (&a)[N], uint32_t& h) {
 
 }  // namespace
 
+std::string mallName(uint32_t seed) {
+    uint32_t h = seed * 2654435761u + 0x3a11u;
+    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    const char* w = (h % 3u) == 0 ? pick(kHawaiian, h) : (h % 3u) == 1 ? pick(kEnglish, h) : pick(kJapanese, h);
+    switch ((h >> 8) % 4u) {
+        case 0: return std::string(w) + " Galleria";
+        case 1: return std::string(w) + " Center";
+        case 2: return std::string("The Shops at ") + w;
+        default: return std::string(w) + " Plaza";
+    }
+}
+
 std::string shopName(uint8_t trade, uint32_t seed) {
     uint32_t h = seed * 0x9E3779B9u + 0x7F4A7C15u;
     if (!h) h = 1;

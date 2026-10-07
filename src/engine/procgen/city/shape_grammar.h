@@ -563,6 +563,9 @@ std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& par
 // none): each room's floor rectangle and its trade.
 struct ShopRoomRect { Poly2 rect; uint8_t trade = 0; };
 std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& params, Real baseY);
+// An indoor mall's name board over its doors (emitBigBoxDress): its face's centre (XZ), outward normal, its band
+// (y0..y1 above the base) and width. False for anything else.
+bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width);
 
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
