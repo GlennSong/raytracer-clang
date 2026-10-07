@@ -6959,7 +6959,14 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         Agent& a = agents_[i];
         // not at a kerb (waiting to cross: the crowd's push must never carry it into the road), and sideways no
         // further than the lean's own limit, lean and push together
-        if (a.state == Agent::State::Waiting) { a.crowdOffset = Vec2(0, 0); continue; }
+        // (WAITING at a kerb: the crowd's push must not hold it toward the road, so the offset goes -- but DRAINS, at
+        // 3 m/s (half a second for the most it can be), rather than vanishing in one tick: a hop of up to 1.5 m the
+        // speed watchdog caught at every crossing)
+        if (a.state == Agent::State::Waiting) {
+            const Real L0 = a.crowdOffset.length(), drain = 3.0 * dt;
+            a.crowdOffset = L0 > drain ? a.crowdOffset * ((L0 - drain) / L0) : Vec2(0, 0);
+            continue;
+        }
         Vec2 off = a.pos - crowdBase_[i];
         const Vec2 rightv(a.heading.y, -a.heading.x);
         const Real side = dot(off, rightv);
