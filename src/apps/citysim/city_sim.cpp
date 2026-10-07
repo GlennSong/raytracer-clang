@@ -4820,9 +4820,11 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // Hold a half-step short until it moves on. (Cars sense pedestrians via
     // the vision wedge; walkers get the mirror-image body check here.)
     if (!car && motion > 0) {
-        // (a STEP back from it, not half: at 1 m and 0.35 m a walker crossing held 0.4 m from a passing car's side)
-        const Vec2 probe(a.pos.x + a.heading.x * 1.5,
-                         a.pos.y + a.heading.y * 1.5);
+        // (half a step ahead but a WIDER berth, 0.5 m not 0.35: a walker crossing held 0.4 m from a passing car's side.
+        // A 1.5 m look-ahead held walkers for slow cars and their ped-sense held the cars back: 32 of 40 buses on
+        // metro_planned moved in five minutes, not 40)
+        const Vec2 probe(a.pos.x + a.heading.x * 1.0,
+                         a.pos.y + a.heading.y * 1.0);
         // Vehicle bodies via their DRIVERS in the grid (P4.1): every vehicle
         // mirrors its driver's pose, so driver candidates near the probe find
         // every body the vehicles_ scan found. 26 m covers the 6 m body test
