@@ -131,6 +131,13 @@ private:
     std::unordered_map<int, engine::MeshHandle> groundSitMeshes_;   // by outfit: sitting on the grass
     std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
     std::vector<int> haveSet_;       // ...the ids marked (cleared next step, not the whole array)
+    // THE FLICKER WATCH (Glenn: "agents flickering into view and then out"): a body removed and given back to the
+    // same agent within 1.5 s is a flicker -- counted, with why it went and what it was doing when it came back
+    // (`flicker?` on the control channel). Real seconds: what the eye sees.
+    struct Gone { double at; const char* why; engine::Vec2 pos; };
+    std::unordered_map<int, Gone> gone_;
+    long flickers_ = 0;
+    std::vector<std::string> flickerLog_;   // the latest few
 };
 
 }  // namespace citysim

@@ -913,6 +913,7 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok staged";
     }
     if (cmd.name == "walkers?") return "ok " + settingsStore.getString("walkers.telemetry", "none");
+    if (cmd.name == "flicker?") return "ok " + settingsStore.getString("walkers.flicker", "none");
     // what the city's people are out doing (citysim activities): per activity, at it / coming, groups, the nearest
     if (cmd.name == "activities?") return "ok " + settingsStore.getString("activities.telemetry", "none");
     // people drawn moving faster than a sprint (citysim walkers): how many, and the latest with their state
@@ -1351,7 +1352,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?)";
+           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|activities?|who?|pin)";
 }
 
 }  // namespace engine

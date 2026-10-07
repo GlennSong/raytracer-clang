@@ -8,6 +8,7 @@
 #include "../../engine/world.h"
 #include "city_sim.h"
 
+#include <chrono>
 #include <cmath>
 
 namespace citysim {
@@ -111,6 +112,16 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
             w.agentId < 0 || w.agentId >= static_cast<int>(agents.size()) ||
             !sim.pedVisible(w.agentId);
         if (!stale) { ++wi; continue; }
+        if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size())) {
+            const Agent& ga = agents[static_cast<std::size_t>(w.agentId)];
+            const char* why = ga.mode != Agent::Mode::Pedestrian ? "got in a car"
+                              : ga.far()                          ? "left the near tier"
+                              : sim.riding(w.agentId)             ? "boarded a ride"
+                              : ga.indoors                        ? "went indoors"
+                                                                  : "stopped (not moving, not indoors?)";
+            gone_[w.agentId] = Gone{std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                    why, ga.pos};
+        }
         if (world.alive(w.entity)) {
             if (CharacterController* cc = world.get<CharacterController>(w.entity))
                 if (cc->characterId != engine::INVALID_CHARACTER)
@@ -140,6 +151,19 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         const Agent& a = agents[static_cast<std::size_t>(i)];
         if (!sim.pedVisible(i)) continue;
         if (haveWalker_[i]) continue;
+        if (auto g = gone_.find(i); g != gone_.end()) {
+            const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (now - g->second.at < 1.5) {
+                ++flickers_;
+                char b[600];
+                std::snprintf(b, sizeof b, "agent %d gone %.2f s (%s) at %.1f %.1f, back at %.1f %.1f: %s", i,
+                              now - g->second.at, g->second.why, g->second.pos.x, g->second.pos.y, a.pos.x, a.pos.y,
+                              sim.describeAgent(i).substr(0, 300).c_str());
+                flickerLog_.push_back(b);
+                if (flickerLog_.size() > 12) flickerLog_.erase(flickerLog_.begin());
+            }
+            gone_.erase(g);
+        }
 
         Entity e = world.create();
         // Spawn a little above the ghost's spot; the character settles under
@@ -629,6 +653,13 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                       tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
                       onWalks, studentsOnWalks, joggers, jogBooked, games, playing, gathering, signedUp);
         ctx.settings.setString("walkers.telemetry", b);
+        {   // the flicker watch: the count, the latest few (newest last); old departures forgotten
+            std::string f = std::to_string(flickers_) + " flickers (a body gone and back within 1.5 s)";
+            for (const std::string& e : flickerLog_) f += " || " + e;
+            ctx.settings.setString("walkers.flicker", f);
+            const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            for (auto it = gone_.begin(); it != gone_.end();) it = now - it->second.at > 2.0 ? gone_.erase(it) : std::next(it);
+        }
         // WHAT EVERYONE IS DOING (`activities?`): per activity in the catalog, how many are at it and how many on the
         // way; its groups going and the nearest one to the bubble's centre (where to go and look)
         {

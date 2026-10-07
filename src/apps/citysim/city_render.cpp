@@ -2497,7 +2497,8 @@ void CityRenderSystem::syncGroups(World& world) {
 
     // THE MID-RANGE BAND: far agents in reach, as stand-ins, run on from their last coarse tick
     farDrawn_ = 0;
-    if (!farCarGroups_.empty() && sim_.hasTierCenter() && !gpuCrowd_) {   // (the GPU crowd draws them when it can)
+    if (!farCarGroups_.empty() && sim_.hasTierCenter() && !gpuCrowd_ && crowdInit_) {   // (the GPU crowd draws them
+        // when it can -- and until feedGpuCrowd has decided whether it can, nothing: see its note)
         std::vector<InstanceGroup*> fc;
         for (Entity e : farCarGroups_) {
             InstanceGroup* g = world.get<InstanceGroup>(e);
@@ -3087,6 +3088,12 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << ", asleep " << sim_.sleepingAgents()
                  << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_
                  << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale() << " far ring x" << sim_.farScale()
+                 << " | stand-ins left in the CPU band's groups " << [&] {
+                        std::size_t n = 0;   // (0 whenever the GPU crowd draws them: anything else is frozen boxes)
+                        for (Entity e : farCarGroups_)
+                            if (const InstanceGroup* g = world.get<InstanceGroup>(e)) n += g->transforms.size();
+                        return n;
+                    }()
                  << " | sleepers' events " << (sim_.dormantEvents() - lastDormantEvents_) << " in "
                  << (sim_.dormantEventMs() - lastDormantMs_) / calls << " ms per step";
         lastDormantEvents_ = sim_.dormantEvents();
@@ -3135,6 +3142,14 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
         }
         ctx.renderer.setCrowdLinks(L);
         gpuCrowd_ = true;
+        // THE CPU BAND STOPS HERE, so empty what it drew. It runs in the fixed step and this in the frame's update: a
+        // fixed step before the first update filled the stand-in groups with every far car round the spawn, and with
+        // the band off nothing cleared them -- a frozen first-frame snapshot of box cars on the streets and the
+        // freeway for the whole session, drawn by the ordinary instanced path, no collider (Glenn: "a black small
+        // cube on top of a gray bigger rectilinear block. I could pass through them").
+        for (Entity e : farCarGroups_)
+            if (InstanceGroup* g = world.get<InstanceGroup>(e)) g->transforms.clear();
+        if (InstanceGroup* g = world.get<InstanceGroup>(farPedGroup_)) g->transforms.clear();
         LOG_INFO << "[citysim] GPU crowd on: " << kinds.size() << " kinds, " << nav_.linkCount() << " links";
     }
     if (!gpuCrowd_) return;
