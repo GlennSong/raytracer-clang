@@ -1,4 +1,5 @@
 #include "shape_grammar.h"
+#include "trades.h"   // a shop unit's trade: one table for the facade, its interior and its place
 #include "core_plan.h"
 #include "room_plan.h"
 #include "furniture.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
@@ -889,7 +890,6 @@ struct BayOpening {
 // (inclusive), its door in bay `door`, its trade.
 struct ShopUnit { int b0 = 0, b1 = 0, door = 0; uint8_t type = 0; };
 constexpr Real kShopHead = 3.45;   // a storefront's glazing head; its fascia sign sits just above
-constexpr int kShopTypes = 7;   // cafe, grocery, boutique, bookshop, electronics, pharmacy, bakery
 struct FacadeLayout {
     std::vector<ShopUnit> shops;   // the storefront face's shops (empty elsewhere)
     int bays = 1;
@@ -983,7 +983,7 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                 ShopUnit u;
                 u.b0 = s; u.b1 = s + g - 1;
                 u.door = g == 3 ? s + 1 : s + static_cast<int>(next() % 2u);
-                u.type = static_cast<uint8_t>(next() % static_cast<uint32_t>(kShopTypes));
+                u.type = pickTrade(next(), g);   // (trades.h: weighted, among those its bays fit)
                 L.shops.push_back(u);
                 s += g;
             }
@@ -4806,8 +4806,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         if (mode == FacadeMode::Retail || mode == FacadeMode::Entrance) {
             const FaceRect sfr = planEdgeRect(plan, i, y, gh);
             const FacadeLayout SL = facadeLayout(sfr, mode, params);
-            static const Vec3 kTrade[7] = {{0.95, 0.70, 0.35}, {0.35, 0.85, 0.40}, {0.95, 0.45, 0.65}, {0.40, 0.65, 1.00},
-                                           {0.30, 0.85, 1.00}, {0.35, 1.00, 0.55}, {1.00, 0.85, 0.50}};
+            auto fasciaOf = [](uint8_t trade) { const TradeInfo* t = tradeById(trade); return t ? t->fascia : Vec3(0.9, 0.9, 0.9); };
             RenderMesh lit, letters;
             for (const ShopUnit& u : SL.shops) {
                 const Real x0 = SL.open[static_cast<std::size_t>(u.b0)].x0 + 0.15;
@@ -4822,7 +4821,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 const Vec3 o = sfr.n * (proud + 0.005);
                 emitQuad(lit, sfr.at(x0 + 0.05, yb + 0.05) + o, sfr.at(x1 - 0.05, yb + 0.05) + o,
                          sfr.at(x1 - 0.05, yt - 0.05) + o, sfr.at(x0 + 0.05, yt - 0.05) + o, sfr.n,
-                         kTrade[u.type % 7]);
+                         fasciaOf(u.type));
                 if (full) {   // the name: letter blocks centred on the board
                     const int nLetters = 4 + static_cast<int>((u.type * 3 + u.b0) % 5);
                     const Real lw = 0.22, gap = 0.06, total = nLetters * lw + (nLetters - 1) * gap;

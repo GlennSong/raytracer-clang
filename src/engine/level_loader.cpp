@@ -44,6 +44,8 @@
 #include "../job_system.h"   // lodSurfaceHeight: the drawn ground
 #include "drawn_road.h"               // DrawnRoad: the road as built, for planting
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
+#include "procgen/city/trades.h"     // one place per shop unit, of its trade (storefronts stage 1)
+#include "procgen/city/shape_grammar.h"   // shopFrontsOf
 #include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
 #include "procgen/city/roads/road_entity.h"
@@ -5722,6 +5724,7 @@ bool LevelLoader::load(const std::string& path,
             // The road as drawn, for the lot trees below (drawn_road.h).
             const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world);
             int lotTreesOnRoad = 0;
+            std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             // Street-tree kit for parks + unbuilt greens (device: "empty lots had
             // vegetation like trees and grass"): a few shared varieties, one mesh
@@ -5977,7 +5980,32 @@ bool LevelLoader::load(const std::string& path,
                     if (p.campus && std::getenv("RT_CAMPUS_DEBUG"))
                         std::fprintf(stderr, "[campus place] %s role %d door (%.1f, %.1f) site (%.1f, %.1f) floor y %.2f beds %d\n",
                                      lb.recipe.c_str(), p.campus, p.ex, p.ez, p.x, p.z, static_cast<double>(lb.baseY), p.capacity);
-                    cfg.places.push_back(std::move(p));
+                    // ONE BUSINESS PER SHOP UNIT (storefronts plan, stage 1): each shopfront of the ground storey is
+                    // its own place, of its trade's type and hours (trades.h), its door the entrance, its site a step
+                    // inside -- the trade the facade drew, the interior was furnished for, and the fascia wears. A shop
+                    // building with fronts is its shops; without, it stays one generic shop (the citysim deals it a
+                    // kind: retailKindFor).
+                    int fronts = 0;
+                    for (const engine::BuildingUnit& u : lb.units) {
+                        if (u.plan.size() < 3) continue;
+                        for (const engine::ShopFront& sf : engine::shopFrontsOf(u.plan, u.params)) {
+                            const engine::TradeInfo* tr = engine::tradeById(sf.trade);
+                            if (!tr) continue;
+                            engine::AuthoredPlace sp;
+                            sp.type = tr->placeType;
+                            sp.x = static_cast<float>(sf.door.x - sf.n.x * 2.5);
+                            sp.z = static_cast<float>(sf.door.y - sf.n.y * 2.5);
+                            sp.openHour = tr->openHour;
+                            sp.closeHour = tr->closeHour;
+                            sp.hasEntrance = true;
+                            sp.ex = static_cast<float>(sf.door.x + sf.n.x * 1.5);
+                            sp.ez = static_cast<float>(sf.door.y + sf.n.y * 1.5);
+                            ++tradePlaces[tr->name];
+                            cfg.places.push_back(std::move(sp));
+                            ++fronts;
+                        }
+                    }
+                    if (!(fronts > 0 && lb.type == "shop")) cfg.places.push_back(std::move(p));
                 }
 
                 // One tree (bark + leaf entities) planted at a world spot —
@@ -6132,6 +6160,12 @@ bool LevelLoader::load(const std::string& path,
                      << treesOffPad << " skipped (not placeable on their pad), "
                      << treesNoPad << " planted with no pad to test, "
                      << lotTreesOnRoad << " kept off the drawn road";
+            if (!tradePlaces.empty()) {
+                std::string line;
+                int all = 0;
+                for (const auto& kv : tradePlaces) { line += " " + kv.first + " " + std::to_string(kv.second); all += kv.second; }
+                LOG_INFO << "[citylots] " << all << " shop units are places of their trade:" << line;
+            }
             if (!buildingsMc.indices.empty()) {
                 // Jolt mesh triangles are SINGLE-SIDED, and the grown plans
                 // arrive with mixed winding (offset/prow/courtyard plans flip

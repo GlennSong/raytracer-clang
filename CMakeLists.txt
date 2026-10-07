@@ -118,6 +118,7 @@ add_library(engine_core STATIC
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
+    src/engine/procgen/city/trades.cpp
     src/engine/procgen/city/city_svg.cpp
     src/engine/procgen/city/parcel.cpp
     src/engine/procgen/city/plan/city_plan.cpp

@@ -552,7 +552,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     return n;
                 };
                 const Real xa = 1.0, xb = F.f.W - 1.0, xm = F.f.W * 0.5;
-                if (room.style >= 7) {
+                if (room.style >= 7 && room.style <= 12) {   // (the big-box store's rooms; 13+ are trades: trades.h)
                     switch (room.style) {
                         case 7:   // WAREHOUSE CLUB: pallet racking, wide aisles for the forklifts
                         case 9:   // HOME IMPROVEMENT: the same racking, wider aisles
@@ -586,7 +586,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     }
                     break;
                 }
-                switch (room.style % 7) {
+                switch (room.style) {   // the unit's TRADE (trades.h)
                     case 0:   // CAFE
                         counterAtBack();
                         along(Piece::DrinksFridge, 0.8, 0.75, {2, 1, 3}, 1);
@@ -618,10 +618,29 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         counterAtBack();
                         F.fill(Piece::Gondola, 2.4, 1.0, 1.2, 1.6);
                         break;
-                    default:  // BAKERY
+                    case 6:   // BAKERY
                         along(Piece::DisplayCase, 1.6, 0.7, {2}, 2);
                         counterAtBack();
                         bistro(0.6);
+                        break;
+                    case 13:  // RESTAURANT: the pass at the back, a host's stand by the door, the dining room's tables
+                        counterAtBack();
+                        if (F.place(0.6, 0.5, {0, 1, 3}, p)) F.put(p, Piece::DisplayCase, 0.3, 0.0);
+                        bistro(0.8);
+                        break;
+                    case 14:  // BAR: the counter down a long wall, the back bar's fridges, tables in the rest
+                        if (F.place(3.6, 1.6, {1, 3}, p)) F.put(p, Piece::ShopCounter, 1.8, 0.0, true);
+                        along(Piece::DrinksFridge, 0.8, 0.75, {2}, 3);
+                        bistro(1.1);
+                        break;
+                    case 15:  // CLUB: the bar along the back, the floor kept clear for dancing (stools, a booth or two
+                              // round the edges -- the fit-out with a DJ booth and lights is stage 5)
+                        counterAtBack();
+                        along(Piece::DrinksFridge, 0.8, 0.75, {2}, 2);
+                        along(Piece::Sofa, 2.0, 0.9, {1, 3}, 2);
+                        break;
+                    default:  // a trade with no fit-out yet: a counter
+                        counterAtBack();
                         break;
                 }
                 break;

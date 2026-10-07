@@ -1,4 +1,5 @@
 #include "city_lots.h"
+#include "trades.h"
 
 #include <unordered_map>
 #include <memory>
@@ -4885,7 +4886,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // facing across it -- clear of the shop's door. Sat on like any chair.
             if (paved && planOk && b.pavedLot.size() >= 3) {
                 for (const ShopFront& sf : shopFrontsOf(plan, bp)) {
-                    if (sf.trade != 0 && sf.trade != 6) continue;   // cafe, bakery
+                    { const TradeInfo* tr = tradeById(sf.trade); if (!tr || !tr->terrace) continue; }   // cafe, bakery, restaurant (trades.h)
                     const Vec2 d0 = sf.b - sf.a;
                     const Real L = d0.length();
                     if (L < 2.4) continue;
