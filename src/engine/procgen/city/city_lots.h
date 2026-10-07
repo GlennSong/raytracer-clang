@@ -273,6 +273,10 @@ struct LotParams {
     // hillside neighbourhoods that the skirt drape had just made viable —
     // Glenn: "the buildings are gone, which seems incorrect".)
     Real maxPadRelief = 8.0;
+    // A BIG-BOX STORE's site is ONE flat floor and its parking lot: the streets round its block may climb at most this
+    // much (measured on the streets themselves where streetHeight is set). maxPadRelief let 8 m through and six of the
+    // island's ten stores sat 3-5.6 m below a street on some side (Glenn: "a massive sunken building").
+    Real maxBigBoxRelief = 2.0;
     // Host hook (floorplan-conformance round): rebuild the ground sampler
     // with EXTRA flatten regions folded in priority-correctly (one region
     // set, one applyFlatten). The in-pass block-grade fold uses this so

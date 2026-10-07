@@ -2956,15 +2956,25 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             const Real shortS = 2 * std::min(fb.half[0], fb.half[1]), longS = 2 * std::max(fb.half[0], fb.half[1]);
             const Real blockA = std::fabs(area(foot));
             Hash bbRng(mix(bf.pp.seed, 0xB16B0Bu));
-            bool ok = shortS >= 55 && longS >= 70 && longS <= 260 && blockA >= 4500 && blockA <= 40000 &&
+            // (62 across: after the setbacks the store layout needs 54 -- a 30 m store and its 24 m lot; at 55 the
+            // site came out ~50 deep, the layout failed, and the box fallback filled the block with no parking)
+            bool ok = shortS >= 62 && longS >= 70 && longS <= 260 && blockA >= 4500 && blockA <= 40000 &&
                       blockA > 0.6 * shortS * longS && corenessAt(centroid(foot)) < 0.35 && bbRng.unit() < 0.35 &&
                       !padOnCarriageway(foot);
             // ...and spread out: a store's catchment, not a strip of them (700 m between big boxes)
             for (const Vec2& c : bigBoxCentres) if (ok && (c - centroid(foot)).length() < 700) ok = false;
             if (ok && p.ground) {
+                // THE STREETS ROUND IT: 2 m outside each block vertex, on the street's own height where the host
+                // knows it (a lane city's decks), else the ground there
+                const Vec2 fcen = centroid(foot);
                 Real lo = 1e30, hi = -1e30;
-                for (const Vec2& v : foot) { const Real g = p.ground(v.x, v.y); lo = std::min(lo, g); hi = std::max(hi, g); }
-                ok = hi - lo <= p.maxPadRelief;
+                for (const Vec2& v : foot) {
+                    const Vec2 out = v + normalize(v - fcen) * 2.0;
+                    Real g = 0;
+                    if (!(p.streetHeight && p.streetHeight(out.x, out.y, &g))) g = p.ground(out.x, out.y);
+                    lo = std::min(lo, g); hi = std::max(hi, g);
+                }
+                ok = hi - lo <= std::min(p.maxBigBoxRelief, p.maxPadRelief);
             }
 
             for (std::size_t i = 0; i < foot.size() && ok && nearFreeway; ++i) if (nearFreeway(foot[i])) ok = false;
@@ -4318,9 +4328,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     bp.faceDir = Vec3(-f.v.x, 0, -f.v.y);   // the doors face the lot and the street beyond it
                     if (dbg->bigBoxAt.size() < 4) dbg->bigBoxAt.push_back(centroid(store));
                 } else {
-                    planOk = false;   // too shallow for a store and its lot: the box fallback builds something
+                    planOk = false;   // too shallow for a store and its lot
                 }
             }
+            // A STORE WITH NO LOT IS NOT A STORE: the box fallback filled the whole block with a parking-less box,
+            // seated at the block's lowest corner (Glenn: "a massive sunken building"). A block whose site cannot take
+            // the store and its parking stays open ground.
+            if (rec.massing == BuildingRecipe::Massing::BigBox && parkingPoly.empty()) continue;
             // BOX-MASS recipes (pagoda / cylinder shapes) must reach
             // growBuilding — the plan path can't dispatch a BuildingShape —
             // so a roomy rect-ish lot takes the shrink-fit box fallback
