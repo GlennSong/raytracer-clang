@@ -781,21 +781,50 @@ TEST_CASE(every_trade_is_furnished_as_its_trade) {
         const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
         if (fronts.empty()) continue;
         RenderMesh col;
-        const BuildingMesh in = growInterior(plan, p, 0.0, &col, 0, 1);
-        for (const ShopFront& f : fronts) {
-            const Vec2 d = normalize(f.b - f.a);
-            const Real len = (f.b - f.a).length();
-            ++units[f.trade];
-            for (const PlacedPiece& pp : in.furniture) {
-                const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
-                const Real along = dot(at - f.a, d), depth = dot(f.a - at, f.n);
-                if (along < 0 || along > len || depth < 0 || depth > 10.5) continue;
-                if (pp.piece == static_cast<uint8_t>(Piece::CeilingLight)) continue;
-                ++byTrade[f.trade][furniturePieceName(static_cast<Piece>(pp.piece))];
+        // (off the datum: the shops' dice once hashed the storey's height, and the signs -- grown at 0 -- named a
+        // different trade from the room behind them)
+        const BuildingMesh in = growInterior(plan, p, 23.7, &col, 0, 1);
+        // every room is the trade of the front it stands behind (the bug: a pharmacy's sign over a bookshop's room)
+        const std::vector<ShopRoomRect> rooms = shopRoomsOf(plan, p, 23.7);
+        for (const ShopRoomRect& r : rooms) {
+            const Vec2 c = (r.rect[0] + r.rect[1]) * 0.5;   // the middle of its front edge (rects start there)
+            const ShopFront* behind = nullptr;
+            Real bestDepth = 1e9;
+            for (const ShopFront& f : fronts) {
+                const Vec2 d = normalize(f.b - f.a);
+                const Real along = dot(c - f.a, d), depth = dot(f.a - c, f.n);
+                if (along < 0 || along > (f.b - f.a).length() || depth < 0 || depth > bestDepth) continue;
+                behind = &f;
+                bestDepth = depth;
             }
+            CHECK(behind != nullptr && behind->trade == r.trade);
+        }
+        for (const ShopRoomRect& r : rooms) ++units[r.trade];
+        for (std::size_t i = 0; i < rooms.size(); ++i)   // no two shops share floor (a + at a corner)
+            for (std::size_t j = i + 1; j < rooms.size(); ++j)
+            {
+                Poly2 both = rooms[i].rect, b = rooms[j].rect;
+                if (signedArea(b) < 0) std::reverse(b.begin(), b.end());
+                for (std::size_t k = 0; k < b.size() && both.size() >= 3; ++k) {
+                    const Vec2 ed = b[(k + 1) % b.size()] - b[k], out(ed.y, -ed.x);   // CCW: outward is right
+                    both = clipHalfPlane(both, out, dot(out, b[k]));
+                }
+                CHECK(both.size() < 3 || area(both) < 0.05);
+            }
+        // and furnished as that trade: each piece counts for the room it stands in
+        for (const PlacedPiece& pp : in.furniture) {
+            if (pp.piece == static_cast<uint8_t>(Piece::CeilingLight)) continue;
+            const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+            for (const ShopRoomRect& r : rooms)
+                if (pointInPolygon(r.rect, at)) { ++byTrade[r.trade][furniturePieceName(static_cast<Piece>(pp.piece))]; break; }
         }
     }
-    int empty = 0, noCounter = 0;
+    // what makes each one read as its trade (a room with none of these is a different shop behind the sign)
+    const std::map<int, std::vector<std::string>> signature = {
+        {0, {"bistro_table", "shop_counter"}}, {1, {"gondola"}}, {2, {"clothes_rack"}}, {3, {"bookcase"}},
+        {4, {"tv_unit"}}, {5, {"wall_shelf"}}, {6, {"display_case"}}, {13, {"kitchen_pass", "bistro_table"}},
+        {14, {"bar_counter", "back_bar", "bar_stool"}}, {15, {"dj_booth", "bar_counter"}}};
+    int empty = 0, noCounter = 0, unlike = 0;
     for (int ti = 0; ti < tradeCount(); ++ti) {
         const TradeInfo& t = tradeAt(ti);
         std::string line;
@@ -803,8 +832,12 @@ TEST_CASE(every_trade_is_furnished_as_its_trade) {
         for (const auto& kv : byTrade[t.id]) { line += " " + kv.first + "x" + std::to_string(kv.second); pieces += kv.second; }
         std::printf("    [trade] %-11s %2d units:%s\n", t.name, units[t.id], line.c_str());
         if (units[t.id] > 0 && pieces == 0) ++empty;
-        if (units[t.id] > 0 && byTrade[t.id]["shop_counter"] == 0 && t.id != 1 && t.id != 15) ++noCounter;
+        if (units[t.id] > 0 && byTrade[t.id]["shop_counter"] == 0 && t.id != 1 && t.id < 13) ++noCounter;
+        if (auto it = signature.find(t.id); it != signature.end() && units[t.id] > 0)
+            for (const std::string& pc : it->second)
+                if (byTrade[t.id][pc] == 0) { ++unlike; std::printf("    [trade] %s has no %s\n", t.name, pc.c_str()); }
     }
+    CHECK(unlike == 0);
     CHECK(static_cast<int>(units.size()) == tradeCount());   // every trade turned up
     CHECK(empty == 0);
     CHECK(noCounter == 0);

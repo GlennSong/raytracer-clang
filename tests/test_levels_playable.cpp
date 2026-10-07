@@ -36,6 +36,7 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"   // RoadEntity (signal census)
 #include "../src/engine/procgen/city/building_records.h"
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (the dressing gate)
+#include "../src/engine/procgen/city/trades.h"
 #include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
 #include "../src/engine/procgen/furniture_kit.h"   // Piece (level_print_shop_interiors)
 #include "../src/engine/procgen/city/furniture.h"
@@ -3936,6 +3937,14 @@ TEST_CASE(level_print_shop_interiors) {
             }
             ++frontsTotal;
             if (any) { ++good; ++frontsFurnished; }
+            // RT_SHOP_SPOTS: one furnished front per trade, for a camera script (its centre, outward normal, floor y)
+            static bool spotted[64] = {};
+            if (any && std::getenv("RT_SHOP_SPOTS") && f.trade < 64 && !spotted[f.trade]) {
+                spotted[f.trade] = true;
+                const Vec2 c = (f.a + f.b) * 0.5;
+                std::printf("    [shop spot] %d %s %.2f %.2f %.2f %.3f %.3f %.1f\n", f.trade,
+                            tradeById(f.trade) ? tradeById(f.trade)->name : "?", c.x, r.baseY, c.y, f.n.x, f.n.y, len);
+            }
         }
         if (good > 0) ++furnished; else {
             ++fallback;

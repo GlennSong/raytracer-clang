@@ -551,6 +551,53 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         }
                     return n;
                 };
+                // THE BAR (storefronts stage 5): a run of `n` 1.8 m bays (fewer where the wall is short) -- the back
+                // bar on the wall, the bartender's 0.95 m aisle, the counter, a stool every 0.6 m in front of it.
+                auto barRun = [&](const std::vector<int>& sides, int n) {
+                    for (int k = n; k >= 1; --k) {
+                        const Real w = 1.8 * k, d = 0.5 + 0.95 + 0.75 + 0.5;
+                        if (!F.place(w, d, sides, p, true, 0.6)) continue;
+                        for (int i = 0; i < k; ++i) {
+                            F.put(p, Piece::BackBar, 0.9 + 1.8 * i, 0.0);
+                            F.put(p, Piece::BarCounter, 0.9 + 1.8 * i, 1.45);
+                        }
+                        for (Real x = 0.45; x + 0.3 <= w; x += 0.6) F.put(p, Piece::BarStool, x, 2.26);
+                        return true;
+                    }
+                    return false;
+                };
+                auto booth = [&](const std::vector<int>& sides) {
+                    if (F.place(1.9, 1.3, sides, p, true, 0.5)) F.put(p, Piece::Booth, 0.95, 0.0);
+                };
+                // POSEUR TABLES: a high table and two stools to a 1.6 x 0.8 cell, the cells 1.2 m apart.
+                auto highTables = [&]() {
+                    for (Real z = 0.9; z + 0.8 <= F.f.D - 0.8 + 1e-6; z += 0.8 + 1.2)
+                        for (Real x = 0.6; x + 1.6 <= F.f.W - 0.6 + 1e-6; x += 1.6 + 1.2) {
+                            Placement c{&F.f, 0, x, 1.6, 0.8, z};
+                            const Box2 fp = c.footprint();
+                            bool clear = true;
+                            for (const Box2& b : F.taken)
+                                if (overlaps(fp, b, 0.3)) { clear = false; break; }
+                            if (!clear) continue;
+                            F.taken.push_back(fp);
+                            F.put(c, Piece::HighTable, 0.8, 0.05);
+                            F.put(c, Piece::BarStool, 0.21, 0.19);
+                            F.put(c, Piece::BarStool, 1.39, 0.19);
+                        }
+                };
+                // THE KITCHEN (a restaurant's back): the line on the back wall -- tall unit, hobs, a sink, worktops --
+                // a 1.1 m cooks' aisle, the pass facing the dining room.
+                auto kitchenAndPass = [&]() {
+                    const Real w = std::min(F.f.W - 0.2, Real(6.0));
+                    if (w < 2.6 || !F.place(w, 0.6 + 1.1 + 0.8, {2}, p, true, 0.4)) { counterAtBack(); return; }
+                    // tall units at the two ends only (a run of hobs, worktops and sinks between)
+                    static const Piece kLine[5] = {Piece::KitchenHob, Piece::KitchenHob, Piece::KitchenBase,
+                                                   Piece::KitchenSink, Piece::KitchenBase};
+                    const int n = static_cast<int>(w / 0.6);
+                    for (int i = 0; i < n; ++i)
+                        F.put(p, i == 0 || i == n - 1 ? Piece::KitchenTall : kLine[(i - 1) % 5], 0.3 + 0.6 * i, 0.0);
+                    F.put(p, Piece::KitchenPass, w * 0.5, 1.7);
+                };
                 const Real xa = 1.0, xb = F.f.W - 1.0, xm = F.f.W * 0.5;
                 if (room.style >= 7 && room.style <= 12) {   // (the big-box store's rooms; 13+ are trades: trades.h)
                     switch (room.style) {
@@ -623,22 +670,37 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         counterAtBack();
                         bistro(0.6);
                         break;
-                    case 13:  // RESTAURANT: the pass at the back, a host's stand by the door, the dining room's tables
-                        counterAtBack();
-                        if (F.place(0.6, 0.5, {0, 1, 3}, p)) F.put(p, Piece::DisplayCase, 0.3, 0.0);
+                    case 13: {  // RESTAURANT: the kitchen line and the pass across the back, a host's stand by the
+                                // door, booths down the side walls, the dining room's tables in the rest
+                        kitchenAndPass();
+                        if (F.place(0.7, 0.55, {0}, p)) F.put(p, Piece::Lectern, 0.35, 0.0);
+                        for (int k = 0; k < 2; ++k) booth({1, 3});
                         bistro(0.8);
                         break;
-                    case 14:  // BAR: the counter down a long wall, the back bar's fridges, tables in the rest
-                        if (F.place(3.6, 1.6, {1, 3}, p)) F.put(p, Piece::ShopCounter, 1.8, 0.0, true);
-                        along(Piece::DrinksFridge, 0.8, 0.75, {2}, 3);
-                        bistro(1.1);
+                    }
+                    case 14:    // BAR: the bar down a long wall (back bar, the bartender's aisle, the counter, stools),
+                                // booths along the other, poseur tables between
+                        if (!barRun({1, 3, 2}, 4)) counterAtBack();
+                        for (int k = 0; k < 3; ++k) booth({3, 1, 2});
+                        highTables();
                         break;
-                    case 15:  // CLUB: the bar along the back, the floor kept clear for dancing (stools, a booth or two
-                              // round the edges -- the fit-out with a DJ booth and lights is stage 5)
-                        counterAtBack();
-                        along(Piece::DrinksFridge, 0.8, 0.75, {2}, 2);
-                        along(Piece::Sofa, 2.0, 0.9, {1, 3}, 2);
+                    case 15: {  // CLUB: the DJ at the back, the lit floor in front of the booth, the bar down a side,
+                                // booths and sofas round the edge
+                        if (F.place(3.0, 1.0, {2}, p, true, 0.6)) F.put(p, Piece::DjBooth, 1.5, 0.0);
+                        if (F.f.W >= 5.2 && F.f.D >= 6.5) {
+                            const Real fw = 4.0, z = std::max(Real(1.2), F.f.D - 1.0 - 0.6 - fw - 0.2);
+                            Placement c{&F.f, 0, (F.f.W - fw) * 0.5, fw, fw, z};
+                            const Box2 fp = c.footprint();
+                            bool clear = true;
+                            for (const Box2& b : F.taken) if (overlaps(fp, b, 0.0)) clear = false;
+                            if (clear) { F.taken.push_back(fp); F.put(c, Piece::DanceFloor, fw * 0.5, 0.0); }
+                        }
+                        if (!barRun({1, 3}, 3)) counterAtBack();
+                        for (int k = 0; k < 2; ++k) booth({3, 1});
+                        along(Piece::Sofa, 2.0, 0.9, {3, 1}, 1);
+                        highTables();
                         break;
+                    }
                     default:  // a trade with no fit-out yet: a counter
                         counterAtBack();
                         break;

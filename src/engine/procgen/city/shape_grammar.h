@@ -550,6 +550,10 @@ struct ShopFront {
     Real fasciaY0 = 0, fasciaY1 = 0, fasciaProud = 0.16;
 };
 std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& params);
+// The SHOP ROOMS growInterior fits out behind those fronts (a unit too shallow, or squeezed out at a corner, has
+// none): each room's floor rectangle and its trade.
+struct ShopRoomRect { Poly2 rect; uint8_t trade = 0; };
+std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& params, Real baseY);
 
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);

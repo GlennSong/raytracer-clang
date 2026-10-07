@@ -42,6 +42,7 @@ enum class Piece : uint8_t {
     SingleBed, SchoolDesk, SchoolChair, LectureRow, Lectern, LabBench, ReadingTable,   // the university campus
     AisleStep,   // a lecture hall's aisle stair: two steps up to the tier beside it
     Bleacher,    // a sports field's stand: three tiers of aluminium benches, 6 m long
+    BarCounter, BackBar, BarStool, Booth, HighTable, DjBooth, DanceFloor, KitchenPass,   // restaurants, bars, clubs
     Count
 };
 constexpr int kPieceCount = static_cast<int>(Piece::Count);

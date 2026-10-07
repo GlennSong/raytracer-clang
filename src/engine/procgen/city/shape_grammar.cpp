@@ -959,9 +959,11 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     const int group = windowGroupOf(p, mode, L.retailish);
     // THE SHOPS of a storefront face: its bays grouped into units of two or three, each with its own door, the
     // building's entrance bay and its neighbours kept for the lobby. Seeded by the face's own corner, so the
-    // facade, its far tier and the interior read the same shops.
+    // facade, its far tier and the interior read the same shops -- by its corner IN PLAN: the facade and the interior
+    // grow at the building's world base, the signs and the sim's places (shopFrontsOf) at 0, and with the height in
+    // the hash a pharmacy's sign stood over a bookshop's shelves.
     if (L.retailish && p.groundRetail && !p.campus && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid) {   // (a campus building: no shops)
-        uint32_t h = positionHash(fr.bl + Vec3(0.13, 0.0, 0.29)) ^ static_cast<uint32_t>(p.seed);
+        uint32_t h = positionHash(Vec3(fr.bl.x + 0.13, 0.0, fr.bl.z + 0.29)) ^ static_cast<uint32_t>(p.seed);
         auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
         const int lobby = mode == FacadeMode::Entrance ? centreBay : -100;
         auto inLobby = [&](int b) { return b >= lobby - 1 && b <= lobby + 1; };
@@ -3967,13 +3969,23 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
                 }
             }
             // A corner: the shop on the other edge got there first -- this one is cut shallower until it clears.
+            // (separating axes, not corners-inside: two units crossing in a + at a corner have no corner inside the
+            // other, and both were furnished -- a bar's counter ran through the pharmacy behind it)
             auto clashes = [&](const Poly2& r) {
-                for (const Poly2& t : taken) {
-                    const Vec2 c = centroid(r);
-                    for (const Vec2& v : r) if (pointInPolygon(t, v + (c - v) * 0.02)) return true;
-                    const Vec2 ct = centroid(t);
-                    for (const Vec2& v : t) if (pointInPolygon(r, v + (ct - v) * 0.02)) return true;
-                }
+                auto apart = [](const Poly2& A, const Poly2& B) {
+                    for (const Poly2* P : {&A, &B})
+                        for (std::size_t i = 0; i < P->size(); ++i) {
+                            const Vec2 ed = (*P)[(i + 1) % P->size()] - (*P)[i];
+                            const Vec2 ax(-ed.y, ed.x);
+                            Real a0 = 1e30, a1 = -1e30, b0 = 1e30, b1 = -1e30;
+                            for (const Vec2& v : A) { a0 = std::min(a0, dot(v, ax)); a1 = std::max(a1, dot(v, ax)); }
+                            for (const Vec2& v : B) { b0 = std::min(b0, dot(v, ax)); b1 = std::max(b1, dot(v, ax)); }
+                            const Real slack = 0.02 * ax.length();   // touching (a party wall) is not a clash
+                            if (a1 <= b0 + slack || b1 <= a0 + slack) return true;
+                        }
+                    return false;
+                };
+                for (const Poly2& t : taken) if (!apart(r, t)) return true;
                 return false;
             };
             Poly2 r = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
@@ -4147,6 +4159,24 @@ static void emitFireEscape(BuildingMesh* vis, RenderMesh* col, const Poly2& plan
         yPrev = Y;
     }
     if (vis) appendToPart(*vis, PartId::Metal, steel);
+}
+
+std::vector<ShopRoomRect> shopRoomsOf(const Poly2& planIn, const BuildingParams& params, Real baseY) {
+    std::vector<ShopRoomRect> out;
+    Poly2 plan = planIn;
+    if (plan.size() < 3 || params.bigBox || params.campus) return out;
+    ensureCCW(plan);
+    const std::size_t entranceEdge = entranceEdgeFor(plan, params);
+    const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
+    if (storeys.empty() || (storeys.size() < 2 && !params.groundRetail)) return out;
+    const CorePlan core = coreFor(plan, params, entranceEdge);
+    const bool stair = il.hasStair && storeys.size() > 1;   // (as growInterior: one storey, no stair)
+    const RoomPlan rp = shopRoomPlan(storeys[0].plan, params, entranceEdge, baseY + storeys[0].y0, storeys[0].h, core,
+                                     stair ? il.well : Poly2{}, stair ? il.stairFoot : Vec2(1e30, 1e30));
+    for (const Room& r : rp.rooms)
+        if (r.kind == RoomKind::Shop) out.push_back({r.rect, r.style});
+    return out;
 }
 
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
