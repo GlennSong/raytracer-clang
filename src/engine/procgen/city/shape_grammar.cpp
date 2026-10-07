@@ -3845,6 +3845,10 @@ std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& p
             f.n = n;
             f.door = a + d * ((od.wx0 + od.wx1) * 0.5);
             f.trade = u.type;
+            // (the fascia the facade emits: just above the glazing's head, below the storey's top -- see the shops'
+            // fascia in the facade's dressing)
+            f.fasciaY0 = std::min(params.groundHeight - 1.0, kShopHead + 0.12);
+            f.fasciaY1 = f.fasciaY0 < human::DOOR_HEIGHT + 0.05 ? f.fasciaY0 : f.fasciaY0 + 0.55;
             out.push_back(f);
         }
     }

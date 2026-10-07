@@ -545,6 +545,9 @@ struct BuildingParams {
 struct ShopFront {
     Vec2 a, b, n, door;
     uint8_t trade = 0;
+    // its FASCIA (the sign band over the glazing), metres above the storey's base, standing `fasciaProud` proud of
+    // the wall; fasciaY1 <= fasciaY0 when the storey is too low to carry one
+    Real fasciaY0 = 0, fasciaY1 = 0, fasciaProud = 0.16;
 };
 std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& params);
 

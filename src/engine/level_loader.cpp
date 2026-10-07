@@ -45,6 +45,7 @@
 #include "drawn_road.h"               // DrawnRoad: the road as built, for planting
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
 #include "procgen/city/trades.h"     // one place per shop unit, of its trade (storefronts stage 1)
+#include "procgen/city/shop_signs.h"  // ...its name on its fascia (stage 2)
 #include "procgen/city/shape_grammar.h"   // shopFrontsOf
 #include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
@@ -5725,6 +5726,7 @@ bool LevelLoader::load(const std::string& path,
             const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world);
             int lotTreesOnRoad = 0;
             std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
+            std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             // Street-tree kit for parks + unbuilt greens (device: "empty lots had
             // vegetation like trees and grass"): a few shared varieties, one mesh
@@ -6001,6 +6003,25 @@ bool LevelLoader::load(const std::string& path,
                             sp.ex = static_cast<float>(sf.door.x + sf.n.x * 1.5);
                             sp.ez = static_cast<float>(sf.door.y + sf.n.y * 1.5);
                             ++tradePlaces[tr->name];
+                            // ITS NAME, and the board over its fascia that carries it (shop_signs.h)
+                            const uint32_t nameSeed = static_cast<uint32_t>(std::lround(sf.door.x * 4.0)) * 73856093u ^
+                                                      static_cast<uint32_t>(std::lround(sf.door.y * 4.0)) * 19349663u;
+                            sp.name = engine::shopName(sf.trade, nameSeed);
+                            if (sf.fasciaY1 > sf.fasciaY0 + 0.2) {
+                                const Vec2 d = normalize(sf.b - sf.a);
+                                const Vec2 x0 = sf.a + d * 0.25, x1 = sf.b - d * 0.25;
+                                engine::ShopSign sign;
+                                sign.text = sp.name;
+                                sign.trade = sf.trade;
+                                sign.n = Vec3(sf.n.x, 0, sf.n.y);
+                                sign.up = Vec3(0, 1, 0);
+                                sign.right = cross(sign.n * -1.0, sign.up);   // reads left to right from the street
+                                sign.width = (x1 - x0).length();
+                                sign.height = (sf.fasciaY1 - sf.fasciaY0) - 0.08;
+                                const Vec2 mid = (x0 + x1) * 0.5 + sf.n * (sf.fasciaProud + 0.03);
+                                sign.centre = Vec3(mid.x, u.baseY + 0.5 * (sf.fasciaY0 + sf.fasciaY1), mid.y);
+                                if (sign.width > 1.0) shopSigns.push_back(std::move(sign));
+                            }
                             cfg.places.push_back(std::move(sp));
                             ++fronts;
                         }
@@ -6165,6 +6186,38 @@ bool LevelLoader::load(const std::string& path,
                 int all = 0;
                 for (const auto& kv : tradePlaces) { line += " " + kv.first + " " + std::to_string(kv.second); all += kv.second; }
                 LOG_INFO << "[citylots] " << all << " shop units are places of their trade:" << line;
+            }
+            // THE SHOP SIGNS (storefronts stage 2): each business's name on its fascia, lettered into atlas pages
+            // and merged per 200 m cell, like the street-name blades
+            if (const engine::Font* font = engine::signFont(); font && !shopSigns.empty()) {
+                const engine::ShopSignAtlas atlas = engine::buildShopSignAtlas(*font, shopSigns);
+                const engine::ShopSignMeshes sm = engine::buildShopSignMeshes(shopSigns, atlas);
+                std::vector<TextureHandle> pages;
+                for (const engine::TextImage& pg : atlas.pages)
+                    pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+                int cellNo = 0;
+                for (const engine::ShopSignMeshes::Cell& c : sm.cells) {
+                    if (c.mesh.vertices.empty()) continue;
+                    InstanceGroup g;
+                    g.mesh = assets.acquireMesh(c.mesh, "city:shopsigns:" + std::to_string(cellNo++));
+                    g.material.albedo = Vec3(1, 1, 1);
+                    g.material.roughness = 0.6f;
+                    g.material.albedoMap = pages[static_cast<std::size_t>(c.page)];
+                    g.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
+                    g.transforms.push_back(Mat4());
+                    g.boundsCenter = c.centre;
+                    g.boundsRadius = c.radius + 1.0;
+                    g.drawDistance = 220.0;
+                    g.drawClass = engine::DrawClass::Furniture;
+                    world.add<InstanceGroup>(world.create(), g);
+                }
+                if (std::getenv("RT_SIGN_DEBUG"))
+                    for (std::size_t k = 0; k < shopSigns.size(); k += std::max<std::size_t>(1, shopSigns.size() / 12))
+                        std::fprintf(stderr, "[sign] \"%s\" centre %.1f %.1f %.1f n %.2f %.2f w %.1f h %.2f\n", shopSigns[k].text.c_str(),
+                                     shopSigns[k].centre.x, shopSigns[k].centre.y, shopSigns[k].centre.z, shopSigns[k].n.x, shopSigns[k].n.z,
+                                     shopSigns[k].width, shopSigns[k].height);
+                LOG_INFO << "[signs] " << shopSigns.size() << " shop signs on " << atlas.pages.size()
+                         << " atlas page(s), " << sm.cells.size() << " cells; smallest capitals " << atlas.smallestCapPx << " px";
             }
             if (!buildingsMc.indices.empty()) {
                 // Jolt mesh triangles are SINGLE-SIDED, and the grown plans

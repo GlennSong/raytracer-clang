@@ -1494,6 +1494,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         std::vector<engine::Vec2> furniture;
         world.each<engine::InstanceGroup>([&](Entity, engine::InstanceGroup& g) {
             if (g.drawClass != engine::DrawClass::Furniture) return;
+            // (a MERGED mesh -- the street-name blades, the shop signs -- is one identity instance: not a thing on
+            // the pavement at the world's origin)
+            if (g.transforms.size() == 1 && std::fabs(g.transforms[0].m[0][3]) + std::fabs(g.transforms[0].m[2][3]) < 1e-6) return;
             for (const Mat4& m : g.transforms) furniture.push_back(engine::Vec2(m.m[0][3], m.m[2][3]));
         });
         world.each<engine::Transform, engine::Renderable>([&](Entity, engine::Transform& t, engine::Renderable& r) {
