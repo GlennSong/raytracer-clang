@@ -3789,7 +3789,8 @@ TEST_CASE(metro_day_census_prints) {
         for (int i = 0; i < 3000; ++i) city.step(world, 0.1);   // settle 5 min
         const long b0 = city.sim().busBoardAttempts();
         const auto ps0 = city.sim().buses().planStats();
-        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[4] = {0, 0, 0, 0}, rAll[4] = {0, 0, 0, 0}, bm = 0, cm = 0;
+        constexpr int kR = citysim::CitySim::Census::kRoles;
+        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, bm = 0, cm = 0;
         int samples = 0;
         for (int i = 0; i < 3000; ++i) {
             city.step(world, 0.1);
@@ -3797,7 +3798,7 @@ TEST_CASE(metro_day_census_prints) {
             const citysim::CitySim::Census c = city.sim().census();
             bm += c.busesMoving; cm += c.cabsMoving;
             wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; rd += c.riding; wt += c.waiting; ag += c.agents;
-            for (int r = 0; r < 4; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; }
+            for (int r = 0; r < kR; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; rWork[r] += c.atWorkByRole[r]; }
             ++samples;
         }
         const double n = samples;
@@ -3809,6 +3810,18 @@ TEST_CASE(metro_day_census_prints) {
                     pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]), city.sim().busBoardAttempts() - b0, ps.asked - ps0.asked,
                     ps.ok - ps0.ok, ps.noSaving - ps0.noSaving);
         std::printf("    [census] %5.1f | service: buses moving %.0f, cabs moving %.0f\n", hour, bm / n, cm / n);
+        {   // every role: how many, and the share of them out
+            std::string line;
+            const auto& roles = city.sim().roles().roles;
+            for (int r = 0; r < kR && r < static_cast<int>(roles.size()); ++r) {
+                if (rAll[r] <= 0) continue;
+                char b[96];
+                std::snprintf(b, sizeof b, "%s%s %.0f (%.0f%% out, %.0f%% at work)", line.empty() ? "" : ", ",
+                              roles[static_cast<std::size_t>(r)].name.c_str(), rAll[r] / n, pct(rOut[r], rAll[r]), pct(rWork[r], rAll[r]));
+                line += b;
+            }
+            std::printf("    [census] %5.1f | roles: %s\n", hour, line.c_str());
+        }
         if (hour >= 23.0) {   // WHO DRIVES AT NIGHT: the drivers still moving, by tier / activity / bus or cab
             static const char* kAct[] = {"AtHome", "Commuting", "AtWork", "Returning", "Shopping", "Outing", "Lunch"};
             std::map<std::string, int> why;

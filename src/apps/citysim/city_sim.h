@@ -1268,7 +1268,9 @@ public:
     struct Census {
         int agents = 0, walkers = 0, drivers = 0;
         int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, riding = 0, waiting = 0;
-        int byRole[4] = {0, 0, 0, 0}, outsideByRole[4] = {0, 0, 0, 0};   // Agent::Role: commuter, shopkeeper, stroller, student
+        static constexpr int kRoles = 16;   // by role id (roles().roles: commuter, shopkeeper, stroller, student, the staff...)
+        int byRole[kRoles] = {}, outsideByRole[kRoles] = {};
+        int atWorkByRole[kRoles] = {};   // resting in a state wearing AtWork (on shift, in class)
         int busesMoving = 0, cabsMoving = 0;   // the service fleet, outside every count above
     };
     Census census() const;

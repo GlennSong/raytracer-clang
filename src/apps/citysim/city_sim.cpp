@@ -706,7 +706,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 4;   // bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 5;   // bump when assignPlaces' rules or this record change
 struct Fnv {
     uint64_t h = 1469598103934665603ull;
     void bytes(const void* p, std::size_t n) {
@@ -958,6 +958,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             k.pod(isBus(static_cast<int>(i))); k.pod(isTaxi(static_cast<int>(i)));
         }
         k.real(busCommuteShare_); k.real(busMaxWalk_); k.real(longCommuteShare_); k.real(nearbyTripShare_); k.real(farTripShare_);
+        { const std::string rd = roles_.describe(); k.bytes(rd.data(), rd.size()); }   // the roles hire the staff
         for (int r = 0; r < buses_.routeCount(); ++r) {
             const BusRoute& br = buses_.route(r);
             k.pod(br.regional); k.pod(br.network); k.real(br.pace);
@@ -1413,6 +1414,124 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
 
     // STUDENTS are decided with everyone else, so a cache hit restores them too.
     assignStudents(places, graph);
+
+    // THE STAFF (Glenn: "you'd need teachers for the students, managers for shops, waiters for restaurants etc. a
+    // unified way to define these is better than a lot of one offs"). Every role with a StaffSpec hires the same way:
+    // each place of its kinds pulls the commuters living nearest it -- same town, a commute they can make (by car:
+    // the car graph joins them; on foot: the same walkable streets, 1.5 km at most) -- one hire per place per round,
+    // so every place has its first before any has its second. At most half the commuters become staff: the
+    // population stays what it was, its jobs change. Their hours are the role's (fixed) or the place's.
+    {
+        constexpr Real kCell = 250.0, kReach = 2500.0, kWalkReach = 1500.0;
+        auto cellKey = [](int64_t cx, int64_t cz) { return (cx << 32) ^ (cz & 0xffffffff); };
+        std::unordered_map<int64_t, std::vector<int>> homeCells;
+        int commuters = 0;
+        for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
+            const Agent& a = agents_[static_cast<std::size_t>(i)];
+            if (a.role != Agent::Role::Commuter || isBus(i) || isTaxi(i) || a.homePlace == kNoPlace || a.home < 0) continue;
+            homeCells[cellKey(static_cast<int64_t>(std::floor(a.homeDoor.x / kCell)),
+                              static_cast<int64_t>(std::floor(a.homeDoor.y / kCell)))].push_back(i);
+            ++commuters;
+        }
+        auto placeKind = [&](const Place& p) -> std::string {
+            if (p.type == PlaceType::Civic) return p.campus == 1 ? "teaching" : p.campus == 2 ? "library" : p.campus == 3 ? "residence" : "civic";
+            if (p.type == PlaceType::Park) return p.campus == 4 ? "quad" : p.campus == 5 ? "field" : "park";
+            return placeTypeName(p.type);
+        };
+        struct Job { int role; PlaceId place; int node; int want; int got; };
+        std::vector<Job> openings;
+        for (int r = 0; r < static_cast<int>(roles_.roles.size()); ++r) {
+            const StaffSpec& sp = roles_.roles[static_cast<std::size_t>(r)].staff;
+            if (sp.places.empty() || sp.perPlace <= 0) continue;
+            for (const Place& p : places.places()) {
+                if (std::find(sp.places.begin(), sp.places.end(), placeKind(p)) == sp.places.end()) continue;
+                const int node = nodeOf(p.id);
+                if (node >= 0) openings.push_back({r, p.id, node, sp.perPlace, 0});
+            }
+        }
+        std::vector<char> hired(agents_.size(), 0);
+        // the nearest commuter not yet hired who can get to `j` every day; -1 none within reach
+        auto nearestFor = [&](const Job& j) {
+            const Vec2 at = places[j.place].site;
+            const int jt = townOf(j.node), jnet = buses_.networkOf(j.node);
+            const int64_t cx = static_cast<int64_t>(std::floor(at.x / kCell)), cz = static_cast<int64_t>(std::floor(at.y / kCell));
+            const int64_t rings = static_cast<int64_t>(kReach / kCell) + 1;
+            Real best = kReach * kReach;
+            int pick = -1;
+            for (int64_t r = 0; r <= rings; ++r) {
+                for (int64_t x = cx - r; x <= cx + r; ++x)
+                    for (int64_t z = cz - r; z <= cz + r; ++z) {
+                        if (std::max(std::llabs(x - cx), std::llabs(z - cz)) != r) continue;   // this ring's cells only
+                        auto it = homeCells.find(cellKey(x, z));
+                        if (it == homeCells.end()) continue;
+                        for (int i : it->second) {
+                            if (hired[static_cast<std::size_t>(i)]) continue;
+                            const Agent& a = agents_[static_cast<std::size_t>(i)];
+                            const Real d2 = (a.homeDoor - at).lengthSquared();
+                            if (d2 > best || (d2 == best && i > pick)) continue;
+                            if (townOf(a.home) != jt) continue;
+                            if (a.archetype == Agent::Mode::Driver) {
+                                if (!commutable(a.home, j.node)) continue;
+                            } else if (d2 > kWalkReach * kWalkReach || buses_.networkOf(a.home) != jnet || a.home == j.node) {
+                                continue;
+                            }
+                            best = d2;
+                            pick = i;
+                        }
+                    }
+                if (pick >= 0 && best <= (r * kCell) * (r * kCell)) break;   // nothing in a farther ring is nearer
+            }
+            return pick;
+        };
+        auto wrap24 = [](Real h) { h = std::fmod(h, Real(24)); return h < 0 ? h + 24 : h; };
+        int made = 0;
+        const int quota = commuters / 2;
+        for (bool any = true; any && made < quota;) {
+            any = false;
+            for (Job& j : openings) {
+                if (j.got >= j.want || made >= quota) continue;
+                const int i = nearestFor(j);
+                if (i < 0) { j.want = j.got; continue; }   // nobody near enough: it hires no more
+                any = true;
+                ++j.got;
+                ++made;
+                hired[static_cast<std::size_t>(i)] = 1;
+                Agent& a = agents_[static_cast<std::size_t>(i)];
+                const ResidentRole& role = roles_.roles[static_cast<std::size_t>(j.role)];
+                const StaffSpec& sp = role.staff;
+                const Place& p = places[j.place];
+                a.role = static_cast<Agent::Role>(j.role);
+                a.workPlace = j.place;
+                a.work = j.node;
+                a.workDoor = doorOf(j.place);
+                const Real u0 = static_cast<Real>((a.brain >> 3) & 0xFF) / 255.0, u1 = static_cast<Real>((a.brain >> 11) & 0xFF) / 255.0;
+                if (sp.placeHours) {
+                    Real open = p.openHour, close = p.closeHour;
+                    if (open == close || (open <= 0 && close >= 24)) { open = 9; close = 18; }   // open all day: a day shift
+                    const Real len = std::fmod(close - open + 24.0, 24.0);
+                    Real start = open - 0.5, end = close + 0.25;
+                    if (len > sp.splitOver) {   // two shifts: early, or late (its own bit)
+                        const Real mid = open + len * 0.5;
+                        if ((a.brain >> 19) & 1u) start = mid - 0.5; else end = mid + 0.25;
+                    }
+                    a.departWork = wrap24(start + 0.25 * u0);
+                    a.departHome = wrap24(end);
+                } else {
+                    a.departWork = sp.startLo + (sp.startHi - sp.startLo) * u0;
+                    a.departHome = sp.finishLo + (sp.finishHi - sp.finishLo) * u1;
+                }
+                const bool onFoot = a.archetype == Agent::Mode::Pedestrian;
+                const engine::Route rt = engine::findRoute(graph, a.home, a.work, onFoot);
+                Real secs = 0;
+                for (int li : rt.links) {
+                    const engine::NavLink& L = graph.links[static_cast<std::size_t>(li)];
+                    const Real v = onFoot ? kWalkSpeed : engine::classSpeed(L.klass);
+                    secs += L.length / std::max(Real(0.1), v * a.speedFactor);
+                }
+                a.commuteSeconds = secs;
+            }
+        }
+    }
 
     measureCommute(graph);
     PopTail tail;
@@ -5463,8 +5582,9 @@ CitySim::Census CitySim::census() const {
         if (isBus(i)) { c.busesMoving += a.moving ? 1 : 0; continue; }
         if (isTaxi(i)) { c.cabsMoving += a.moving ? 1 : 0; continue; }   // service, not a resident's day
         ++c.agents;
-        const int r = std::min(3, static_cast<int>(a.role));
+        const int r = std::min(Census::kRoles - 1, static_cast<int>(a.role));
         ++c.byRole[r];
+        if (!a.moving && a.activity == Activity::AtWork) ++c.atWorkByRole[r];
         const bool rides = riding(i);
         if (rides) { ++c.riding; ++c.outsideByRole[r]; continue; }
         if (awaitingRide(i)) { ++c.waiting; ++c.outsideByRole[r]; continue; }

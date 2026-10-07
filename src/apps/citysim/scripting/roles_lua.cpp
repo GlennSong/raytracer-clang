@@ -26,6 +26,16 @@ bool flag(lua_State* L, int t, const char* key, bool def) {
     lua_pop(L, 1);
     return v;
 }
+bool pairOf(lua_State* L, int t, const char* key, double& lo, double& hi) {
+    lua_getfield(L, t, key);
+    const bool ok = lua_istable(L, -1);
+    if (ok) {
+        lua_rawgeti(L, -1, 1); lo = lua_tonumber(L, -1); lua_pop(L, 1);
+        lua_rawgeti(L, -1, 2); hi = lua_tonumber(L, -1); lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    return ok;
+}
 bool target(const std::string& s, citysim::GoalTarget& out) {
     if (s == "lunch") { out = citysim::GoalTarget::Lunch; return true; }
     if (s == "campus") { out = citysim::GoalTarget::Campus; return true; }
@@ -94,6 +104,44 @@ bool loadRoleCatalog(ScriptVM& vm, citysim::RoleCatalog& out, std::string* err) 
         }
         lua_pop(L, 1);   // pause
         lua_pop(L, 1);   // day
+        // staff = { places = { kinds }, per_place = n, hours = "place" | { start = { lo, hi }, finish = { lo, hi } },
+        //           split_over = h }
+        lua_getfield(L, t, "staff");
+        if (lua_istable(L, -1)) {
+            const int st = lua_gettop(L);
+            citysim::StaffSpec& s = r.staff;
+            lua_getfield(L, st, "places");
+            if (lua_istable(L, -1)) {
+                const int n = static_cast<int>(luaL_len(L, -1));
+                for (int i = 1; i <= n; ++i) {
+                    lua_rawgeti(L, -1, i);
+                    if (lua_isstring(L, -1)) s.places.push_back(lua_tostring(L, -1));
+                    lua_pop(L, 1);
+                }
+            }
+            lua_pop(L, 1);
+            s.perPlace = static_cast<int>(num(L, st, "per_place", 0));
+            s.splitOver = num(L, st, "split_over", s.splitOver);
+            lua_getfield(L, st, "hours");
+            if (lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "place") {
+                s.placeHours = true;
+            } else if (lua_istable(L, -1)) {
+                const int ht = lua_gettop(L);
+                if (!pairOf(L, ht, "start", s.startLo, s.startHi) || !pairOf(L, ht, "finish", s.finishLo, s.finishHi)) {
+                    lua_settop(L, base);
+                    return fail(err, "roles." + name + ".staff.hours: { start = { lo, hi }, finish = { lo, hi } }");
+                }
+            } else {
+                lua_settop(L, base);
+                return fail(err, "roles." + name + ".staff.hours: \"place\" or { start, finish }");
+            }
+            lua_pop(L, 1);   // hours
+            if (s.places.empty() || s.perPlace <= 0) {
+                lua_settop(L, base);
+                return fail(err, "roles." + name + ".staff: needs places and per_place");
+            }
+        }
+        lua_pop(L, 1);   // staff
         lua_pop(L, 1);   // role
         c.roles.push_back(r);
     }

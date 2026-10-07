@@ -18,10 +18,16 @@
 --     evening           = "<menu>"       a night out's activity menu (activities.lua); none: never goes out
 --   },
 --   night_out = share                    of this role, the share out on any one night
+--   staff = {                            a STAFF role: each place of these kinds pulls per_place of the commuters living
+--     places = { kinds }, per_place = n, nearest it; their hours are the place's ("place": from half an hour before it
+--     hours = "place" | { start = { lo, hi }, finish = { lo, hi } },   opens to a quarter after it closes, two shifts
+--     split_over = h                     when that is longer than split_over hours) or fixed
+--   }
 -- }
 
 roles = {
-  order = { "commuter", "shopkeeper", "stroller", "student" },
+  order = { "commuter", "shopkeeper", "stroller", "student",
+            "teacher", "librarian", "manager", "waiter", "cook", "clerk", "bartender" },
 
   -- to work, lunch about four hours in (or brought, and stays in), the afternoon, the errand on the way home
   commuter = {
@@ -45,5 +51,48 @@ roles = {
     day = { work_before_break = 0.9, pause = { target = "campus", label = "Outing", hours = 0.25, repeats = true },
             evening = "student_evening" },
     night_out = 0.40,
+  },
+
+  -- THE STAFF (Glenn: "you'd need teachers for the students, managers for shops, waiters for restaurants")
+  -- a teacher's and a librarian's day is a commuter's, on the campus's hours
+  teacher = {
+    day = { work_before_break = 4.0, pause = { target = "lunch", label = "Lunch", hours = 0.6 }, errand = true,
+            evening = "evening" },
+    night_out = 0.15,
+    staff = { places = { "teaching" }, per_place = 4, hours = { start = { 7.5, 8.5 }, finish = { 16.0, 17.5 } } },
+  },
+  librarian = {
+    day = { work_before_break = 4.0, pause = { target = "lunch", label = "Lunch", hours = 0.6 }, errand = true,
+            evening = "evening" },
+    night_out = 0.15,
+    staff = { places = { "library" }, per_place = 2, hours = { start = { 8.5, 9.0 }, finish = { 17.0, 18.5 } } },
+  },
+  -- a manager runs the place: its hours, lunch out, the errand home
+  manager = {
+    day = { work_before_break = 4.0, pause = { target = "lunch", label = "Lunch", hours = 0.6 }, errand = true,
+            evening = "evening" },
+    night_out = 0.12,
+    staff = { places = { "shop", "supermarket", "cafe", "restaurant", "bar", "club" }, per_place = 1, hours = "place" },
+  },
+  -- the floor: on the place's hours, no break out (they eat at work), straight home
+  waiter = {
+    day = { evening = "evening" },
+    night_out = 0.10,
+    staff = { places = { "restaurant", "cafe" }, per_place = 3, hours = "place" },
+  },
+  cook = {
+    day = { evening = "evening" },
+    night_out = 0.08,
+    staff = { places = { "restaurant" }, per_place = 2, hours = "place" },
+  },
+  clerk = {
+    day = { evening = "evening" },
+    night_out = 0.15,
+    staff = { places = { "supermarket", "shop" }, per_place = 2, hours = "place" },
+  },
+  bartender = {
+    day = { evening = "evening" },
+    night_out = 0.05,
+    staff = { places = { "bar", "club" }, per_place = 2, hours = "place" },
   },
 }

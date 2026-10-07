@@ -76,6 +76,14 @@ std::string RoleCatalog::describe() const {
                       d.breakMenu.c_str(), activityLabel(d.breakActivity), d.breakHours, d.breaksRepeat ? 1 : 0,
                       d.errand ? 1 : 0, d.eveningMenu.c_str(), r.nightOutShare);
         out += b;
+        if (!r.staff.places.empty()) {
+            out += "  staff";
+            for (const std::string& k : r.staff.places) out += " " + k;
+            std::snprintf(b, sizeof b, " per=%d placeHours=%d start=%g-%g finish=%g-%g split=%g\n", r.staff.perPlace,
+                          r.staff.placeHours ? 1 : 0, r.staff.startLo, r.staff.startHi, r.staff.finishLo,
+                          r.staff.finishHi, r.staff.splitOver);
+            out += b;
+        }
     }
     return out;
 }
@@ -184,6 +192,30 @@ RoleCatalog defaultRoleCatalog() {
     study.breaksRepeat = true;
     study.eveningMenu = "student_evening";
     add("student", study, 0.40);
+
+    // THE STAFF (Glenn: "you'd need teachers for the students, managers for shops, waiters for restaurants"). Each
+    // place pulls its own from the commuters living nearest it.
+    auto staff = [&](const char* name, RoleDay d, double share, std::vector<std::string> places, int per, bool placeHours,
+                     double sLo = 8, double sHi = 9, double fLo = 17, double fHi = 18) {
+        add(name, d, share);
+        StaffSpec& s = c.roles.back().staff;
+        s.places = std::move(places);
+        s.perPlace = per;
+        s.placeHours = placeHours;
+        s.startLo = sLo; s.startHi = sHi; s.finishLo = fLo; s.finishHi = fHi;
+    };
+    // a teacher's and a librarian's day is a commuter's, on the campus's hours
+    staff("teacher", work, 0.15, {"teaching"}, 4, false, 7.5, 8.5, 16.0, 17.5);
+    staff("librarian", work, 0.15, {"library"}, 2, false, 8.5, 9.0, 17.0, 18.5);
+    // a manager runs the place: its hours, lunch out, the errand home
+    staff("manager", work, 0.12, {"shop", "supermarket", "cafe", "restaurant", "bar", "club"}, 1, true);
+    // the floor: on the place's hours, no break out (they eat at work), straight home
+    RoleDay floor;
+    floor.eveningMenu = "evening";
+    staff("waiter", floor, 0.10, {"restaurant", "cafe"}, 3, true);
+    staff("cook", floor, 0.08, {"restaurant"}, 2, true);
+    staff("clerk", floor, 0.15, {"supermarket", "shop"}, 2, true);
+    staff("bartender", floor, 0.05, {"bar", "club"}, 2, true);
     return c;
 }
 

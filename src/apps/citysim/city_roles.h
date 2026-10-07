@@ -45,10 +45,24 @@ struct RoleDay {
     std::string eveningMenu;
 };
 
+// WHO WORKS WHERE, for a STAFF role (Glenn: "you'd need teachers for the students, managers for shops, waiters for
+// restaurants"): the kinds of place it staffs ("restaurant", "teaching", ... -- CitySim::placeKind), how many each
+// place takes, and its hours -- fixed windows, or the PLACE's own (opening half an hour before it opens, leaving a
+// quarter after it closes; a day longer than `splitOver` hours is two shifts, early and late). Each place pulls its
+// staff from the commuters living nearest it (CitySim::assignStaff): the population is the same, its jobs are not.
+struct StaffSpec {
+    std::vector<std::string> places;   // empty: not a staff role
+    int perPlace = 0;
+    bool placeHours = false;
+    double startLo = 8, startHi = 9, finishLo = 17, finishHi = 18;   // fixed hours (placeHours false)
+    double splitOver = 9;
+};
+
 struct ResidentRole {
     std::string name;
     RoleDay day;
     double nightOutShare = 0;   // of this role, the share out on any one night (CitySim::eveningPlan)
+    StaffSpec staff;
 };
 
 struct RoleCatalog {
@@ -59,7 +73,8 @@ struct RoleCatalog {
     std::string describe() const;
 };
 
-// The built-in catalog: commuter, shopkeeper, stroller, student (in Agent::Role order).
+// The built-in catalog: commuter, shopkeeper, stroller, student (in Agent::Role order), then the staff roles --
+// teacher, librarian, manager, waiter, cook, clerk, bartender.
 RoleCatalog defaultRoleCatalog();
 
 // A day's goal table, composed from its parts. State names are the one vocabulary every role shares: AtHome, ToWork,
