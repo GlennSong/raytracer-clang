@@ -96,6 +96,24 @@ furniture_library = {
         exit = { 0, 0, 1.0 } },
     },
   },
+  -- A BAR STOOL faces back to its counter (-z: the bar runs place them in front of it, turned out into the room).
+  bar_stool = {
+    family = "seating", tags = { "bar" },
+    spots = { { id = "seat", at = seat(0, 0.80, 0.21) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.50, 0.26 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 0.75 } } },
+  },
+  -- A BOOTH: two benches facing across the table (its end to the wall, +z the aisle).
+  booth = {
+    family = "seating", tags = { "bar", "restaurant" },
+    spots = {
+      { id = "l", at = seat(-0.68, 0.56, 0.75) },
+      { id = "r", at = seat(0.68, 0.56, 0.75) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "l" }, eye = { -0.72, 1.24, 0.75 }, look = { 1, -0.10, 0 }, exit = { -0.55, 0, 1.75 } },
+      { verb = "sit", spots = { "r" }, eye = { 0.72, 1.24, 0.75 }, look = { -1, -0.10, 0 }, exit = { 0.55, 0, 1.75 } },
+    },
+  },
   bistro_chair = {
     family = "seating", tags = { "outdoor", "cafe", "kitchen" },
     spots = { { id = "seat", at = seat(0, 0.48, 0.26) } },
