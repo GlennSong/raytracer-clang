@@ -2526,6 +2526,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // and a curtain wall is as enterable as any other (its entrance
             // bay is a real aperture; the leaf is the DoorSystem's).
             if (wantsCore(bp) && coreFor(uplan, bp, entranceEdgeFor(uplan, bp)).valid) return true;
+            // ITS SHOPS, whatever stands above them: a ground-floor shop is a room of its own behind its own door, no
+            // stair needed (storefronts plan, stage 5; Glenn: "What about the interior does it look like a shop would
+            // look?" -- it had never been seen: a tower over shops with no core never streamed its interior, so the
+            // shops' fit-outs were never drawn)
+            if (bp.groundRetail && !shopFrontsOf(uplan, bp).empty()) return true;
         }
         for (const Vec2& pt : p.enterableAt) {
             if (pointInPolygon(uplan, pt)) return true;

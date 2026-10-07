@@ -3908,6 +3908,7 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
     const Real inset = interiorInset(params);
     const Poly2 coreR = core.valid ? core.rect() : well;
     std::vector<Poly2> taken;
+    std::vector<std::pair<std::size_t, std::size_t>> wallsOf;   // each shop room's walls: [first, end) in rp.walls
     for (std::size_t e = 0; e < n; ++e) {
         const FacadeMode mode = groundModeFor(plan, params, e, entranceEdge);
         if (mode != FacadeMode::Retail && mode != FacadeMode::Entrance) continue;
@@ -3921,17 +3922,19 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
         // How deep: to 1.5 m short of the core or stair (only where it stands in front), else 45% of the plate.
         Real across = 0;
         for (const Vec2& v : plan) across = std::max(across, dot(a - v, nOut));
-        Real deep = std::min(Real(10.0), across * 0.45);
-        if (coreR.size() >= 3) {
-            Real t0 = 1e9, t1 = -1e9, dist = 1e9;
-            for (const Vec2& c : coreR) {
-                t0 = std::min(t0, dot(c - a, d)); t1 = std::max(t1, dot(c - a, d));
-                dist = std::min(dist, dot(a - c, nOut));
-            }
-            (void)t0; (void)t1;
-            deep = std::min(deep, dist - 1.5);
+        const Real deep = std::min(Real(10.0), across * 0.45);
+        // The core's span along this edge and its distance in: a unit IN FRONT of it stops 1.5 m short; the others
+        // keep the full depth (the cap used to apply to every unit on the edge: 44 units "too shallow" on the island).
+        Real coreT0 = 1e9, coreT1 = -1e9, coreDist = 1e9;
+        for (const Vec2& c : coreR) {
+            coreT0 = std::min(coreT0, dot(c - a, d)); coreT1 = std::max(coreT1, dot(c - a, d));
+            coreDist = std::min(coreDist, dot(a - c, nOut));
         }
-        if (deep < inset + 3.0) continue;
+        static const bool why = std::getenv("RT_SHOP_WHY") != nullptr;
+        if (deep < inset + 3.0) {
+            if (why) std::fprintf(stderr, "[shop why] edge %zu: too shallow (deep %.1f, across %.1f, core %d)\n", e, deep, across, core.valid ? 1 : 0);
+            continue;
+        }
         auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
         // The STAIR and its approach stay lobby: a shop that would cover them is cut short of them, or left out.
         Poly2 stairZone;
@@ -3943,6 +3946,11 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
         for (const ShopUnit& u : L.shops) {
             const Real x0 = L.open[static_cast<std::size_t>(u.b0)].x0, x1 = L.open[static_cast<std::size_t>(u.b1)].x1;
             Real dpt = deep;
+            if (coreR.size() >= 3 && x1 > coreT0 - 1.0 && x0 < coreT1 + 1.0) dpt = std::min(dpt, coreDist - 1.5);
+            if (dpt < inset + 3.0) {
+                if (why) std::fprintf(stderr, "[shop why] edge %zu: a unit in front of the core is too shallow (%.1f)\n", e, dpt);
+                continue;
+            }
             if (stairZone.size() >= 3) {
                 for (int tries = 0; tries < 8; ++tries) {
                     const Poly2 r0 = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
@@ -3953,18 +3961,32 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
                     if (!hit) break;
                     dpt -= 1.0;
                 }
-                if (dpt < inset + 3.0) continue;
+                if (dpt < inset + 3.0) {
+                    if (why) std::fprintf(stderr, "[shop why] edge %zu: a unit is cut short by the stair to %.1f\n", e, dpt);
+                    continue;
+                }
             }
+            // A corner: the shop on the other edge got there first -- this one is cut shallower until it clears.
+            auto clashes = [&](const Poly2& r) {
+                for (const Poly2& t : taken) {
+                    const Vec2 c = centroid(r);
+                    for (const Vec2& v : r) if (pointInPolygon(t, v + (c - v) * 0.02)) return true;
+                    const Vec2 ct = centroid(t);
+                    for (const Vec2& v : t) if (pointInPolygon(r, v + (ct - v) * 0.02)) return true;
+                }
+                return false;
+            };
             Poly2 r = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
-            // A corner: the shop on the other edge got there first.
-            bool clash = false;
-            for (const Poly2& t : taken) {
-                const Vec2 c = centroid(r);
-                for (const Vec2& v : r) if (pointInPolygon(t, v + (c - v) * 0.02)) clash = true;
-                const Vec2 ct = centroid(t);
-                for (const Vec2& v : t) if (pointInPolygon(r, v + (ct - v) * 0.02)) clash = true;
+            bool clash = clashes(r);
+            while (clash && dpt - 1.0 >= inset + 3.0) {
+                dpt -= 1.0;
+                r = {P(x0, inset), P(x1, inset), P(x1, dpt), P(x0, dpt)};
+                clash = clashes(r);
             }
-            if (clash) continue;
+            if (clash) {
+                if (why) std::fprintf(stderr, "[shop why] edge %zu: a unit clashes with a corner shop\n", e);
+                continue;
+            }
             taken.push_back(r);
             Room rm;
             rm.edge = e;
@@ -3972,6 +3994,7 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
             rm.style = u.type;
             rm.rect = r;
             rp.rooms.push_back(rm);
+            const std::size_t firstWall = rp.walls.size();
             // Its walls: the back, and a party wall at each side (not where the side is the plan's own end).
             RoomWall back; back.a = P(x1, dpt); back.b = P(x0, dpt);
             rp.walls.push_back(back);
@@ -3980,6 +4003,7 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
                 RoomWall w; w.a = P(x, inset); w.b = P(x, dpt);
                 rp.walls.push_back(w);
             }
+            wallsOf.push_back({firstWall, rp.walls.size()});
         }
     }
     // The LOBBY must still reach the stair from the building's entrance: walk it (the shops' walls only, a probe
@@ -3988,13 +4012,41 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
         const Vec2 a = plan[entranceEdge], b = plan[(entranceEdge + 1) % n];
         const Vec2 d = normalize(b - a), nOut(d.y, -d.x);
         const Vec2 entry = (a + b) * 0.5 - nOut * (inset + 0.8);
-        RoomPlan probe;
-        probe.walls = rp.walls;
         Room foot;
         foot.rect = {stairFoot + Vec2(-0.3, -0.3), stairFoot + Vec2(0.3, -0.3), stairFoot + Vec2(0.3, 0.3),
                      stairFoot + Vec2(-0.3, 0.3)};
-        probe.rooms.push_back(foot);
-        if (!floorIsWalkable(probe, plan, entry, well)) return RoomPlan{};
+        // ...and when the shops wall it off, they give way ONE AT A TIME, the nearest the stair first, until the lobby
+        // walks through -- not all of them: a whole ground floor of shopfronts with no shop behind any (56 of the
+        // island's 377 shop buildings) is what the old all-or-nothing rule left
+        std::vector<char> keep(rp.rooms.size(), 1);
+        auto planWith = [&]() {
+            RoomPlan out = rp;
+            out.rooms.clear();
+            out.walls.clear();
+            for (std::size_t k = 0; k < rp.rooms.size(); ++k) {
+                if (!keep[k]) continue;
+                out.rooms.push_back(rp.rooms[k]);
+                for (std::size_t w = wallsOf[k].first; w < wallsOf[k].second; ++w) out.walls.push_back(rp.walls[w]);
+            }
+            return out;
+        };
+        for (std::size_t dropped = 0;; ++dropped) {
+            RoomPlan probe;
+            probe.walls = planWith().walls;
+            probe.rooms.push_back(foot);
+            if (floorIsWalkable(probe, plan, entry, well)) break;
+            if (dropped >= rp.rooms.size()) return RoomPlan{};
+            std::size_t worst = rp.rooms.size();
+            Real best = 1e30;
+            for (std::size_t k = 0; k < rp.rooms.size(); ++k) {
+                if (!keep[k]) continue;
+                const Real dk = (centroid(rp.rooms[k].rect) - stairFoot).lengthSquared();
+                if (dk < best) { best = dk; worst = k; }
+            }
+            if (worst >= rp.rooms.size()) return RoomPlan{};
+            keep[worst] = 0;
+        }
+        return planWith();
     }
     return rp;
 }
@@ -4108,8 +4160,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
     const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
-    // no storeys above ground -- but a BIG BOX is its one tall storey, and that is the store
-    if (storeys.size() < 2 && !params.bigBox) return out;
+    // no storeys above ground -- but a BIG BOX is its one tall storey, and that is the store; and a one-storey row of
+    // SHOPS is its shops (single-storey shop buildings streamed empty: 56 of 377 on the island)
+    const bool shopsOnly = storeys.size() == 1 && params.groundRetail && !params.campus;
+    if (storeys.size() < 2 && !params.bigBox && !shopsOnly) return out;
     // The core (M5) and the storey window [kA, kB).
     const CorePlan core = coreFor(plan, params, entranceEdge);
     const int nS = static_cast<int>(storeys.size());
@@ -4487,8 +4541,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
         RoomPlan rp = ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
                     : ki == 0 && !params.campus ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
-                                             il.hasStair ? il.well : Poly2{},
-                                             il.hasStair ? il.stairFoot : Vec2(1e30, 1e30))
+                                             il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
+                                             il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30))
                               : RoomPlan{};
         if (rp.rooms.empty())
             rp = roomPlan(spk.plan, params, core,

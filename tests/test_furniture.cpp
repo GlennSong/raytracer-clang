@@ -8,6 +8,9 @@
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/trades.h"
+#include <map>
+#include <string>
 #include <cmath>
 #include <cstdio>
 
@@ -761,4 +764,48 @@ TEST_CASE(students_stand_at_the_lab_benches) {
     CHECK(benches > 0);
     CHECK(atBench == benches * 3);
     CHECK(facing == atBench);
+}
+
+// EVERY TRADE'S SHOP LOOKS LIKE ITS TRADE (storefronts plan, stage 5; Glenn: "What about the interior does it look
+// like a shop would look?"). Storefront buildings across seeds until every trade (trades.h) has turned up; each
+// furniture piece of the ground floor is counted to the shop unit whose stretch of the facade it stands behind. Prints
+// each trade's fit-out; holds that every trade's shop has something in it, and that the ones that serve have a counter.
+TEST_CASE(every_trade_is_furnished_as_its_trade) {
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
+    std::map<int, std::map<std::string, int>> byTrade;
+    std::map<int, int> units;
+    for (uint32_t seed = 1; seed < 400 && static_cast<int>(units.size()) < tradeCount(); ++seed) {
+        BuildingParams p;
+        p.floors = 3; p.groundRetail = true; p.walkableGround = true; p.openDoorway = true; p.seed = seed;
+        p.residential = true; p.core = 1;
+        const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
+        if (fronts.empty()) continue;
+        RenderMesh col;
+        const BuildingMesh in = growInterior(plan, p, 0.0, &col, 0, 1);
+        for (const ShopFront& f : fronts) {
+            const Vec2 d = normalize(f.b - f.a);
+            const Real len = (f.b - f.a).length();
+            ++units[f.trade];
+            for (const PlacedPiece& pp : in.furniture) {
+                const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+                const Real along = dot(at - f.a, d), depth = dot(f.a - at, f.n);
+                if (along < 0 || along > len || depth < 0 || depth > 10.5) continue;
+                if (pp.piece == static_cast<uint8_t>(Piece::CeilingLight)) continue;
+                ++byTrade[f.trade][furniturePieceName(static_cast<Piece>(pp.piece))];
+            }
+        }
+    }
+    int empty = 0, noCounter = 0;
+    for (int ti = 0; ti < tradeCount(); ++ti) {
+        const TradeInfo& t = tradeAt(ti);
+        std::string line;
+        int pieces = 0;
+        for (const auto& kv : byTrade[t.id]) { line += " " + kv.first + "x" + std::to_string(kv.second); pieces += kv.second; }
+        std::printf("    [trade] %-11s %2d units:%s\n", t.name, units[t.id], line.c_str());
+        if (units[t.id] > 0 && pieces == 0) ++empty;
+        if (units[t.id] > 0 && byTrade[t.id]["shop_counter"] == 0 && t.id != 1 && t.id != 15) ++noCounter;
+    }
+    CHECK(static_cast<int>(units.size()) == tradeCount());   // every trade turned up
+    CHECK(empty == 0);
+    CHECK(noCounter == 0);
 }

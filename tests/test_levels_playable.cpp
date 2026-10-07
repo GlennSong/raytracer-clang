@@ -37,6 +37,8 @@
 #include "../src/engine/procgen/city/building_records.h"
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (the dressing gate)
 #include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
+#include "../src/engine/procgen/furniture_kit.h"   // Piece (level_print_shop_interiors)
+#include "../src/engine/procgen/city/furniture.h"
 #include "../src/engine/procgen/city/city_svg.h"   // CityMapData (the in-road census)
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/apps/citysim/city_map_raster.h"    // the map tool's picture
@@ -3892,4 +3894,58 @@ TEST_CASE(walkers_in_the_road_prints) {
         for (std::size_t r = 0; r < rows.size() && r < 12; ++r)
             std::printf("    [road walkers]        %6.1f  %s\n", rows[r].first / double(samples), rows[r].second.c_str());
     }
+}
+
+// SHOPS INSIDE AS WELL AS OUT (storefronts plan, stage 5; Glenn: "What about the interior does it look like a shop
+// would look?"). Print-only under RT_SHOP_INTERIORS=1: of the island's buildings whose facade shows shopfronts, how
+// many grow SHOP ROOMS behind them (furniture of a shop -- a counter, gondolas, bistro sets, shelves -- in the 10 m
+// behind a front), and of those that do not, why (not enterable, or the ground floor fell back to the floor plan).
+TEST_CASE(level_print_shop_interiors) {
+    if (!std::getenv("RT_SHOP_INTERIORS")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    CHECK(LevelLoader::load(lvl ? std::string(lvl) : std::string("assets/levels/island_8_nature.json"), world, *renderer,
+                            view, assets, false));
+    const CityBuildings* cb = nullptr;
+    world.each<CityBuildings>([&](Entity, CityBuildings& c) { cb = &c; });
+    CHECK(cb != nullptr);
+    if (!cb) return;
+    int withFronts = 0, sampled = 0, furnished = 0, fallback = 0, notEnterable = 0, frontsTotal = 0, frontsFurnished = 0;
+    for (const BuildingRecord& r : cb->records) {
+        const std::vector<ShopFront> fronts = shopFrontsOf(r.plan, r.params);
+        if (fronts.empty()) continue;
+        ++withFronts;
+        if (!r.enterable) { ++notEnterable; continue; }
+        if (sampled >= 400) continue;
+        ++sampled;
+        const BuildingMesh in = growInterior(r.plan, r.params, r.baseY, nullptr, 0, 1);
+        int good = 0;
+        for (const ShopFront& f : fronts) {
+            const Vec2 d = normalize(f.b - f.a);
+            const Real len = (f.b - f.a).length();
+            bool any = false;
+            for (const PlacedPiece& pp : in.furniture) {
+                if (pp.piece == static_cast<uint8_t>(Piece::CeilingLight)) continue;
+                const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+                const Real along = dot(at - f.a, d), depth = dot(f.a - at, f.n);
+                if (along >= 0 && along <= len && depth >= 0 && depth <= 10.5) { any = true; break; }
+            }
+            ++frontsTotal;
+            if (any) { ++good; ++frontsFurnished; }
+        }
+        if (good > 0) ++furnished; else {
+            ++fallback;
+            if (std::getenv("RT_SHOP_WHY") && fallback <= 6)
+                std::printf("    [shop why] building at %.0f %.0f: %d fronts, %zu pieces inside, floors %d core %d groundH %.1f\n",
+                            r.plan[0].x, r.plan[0].y, static_cast<int>(fronts.size()), in.furniture.size(), r.params.floors,
+                            r.params.core, r.params.groundHeight);
+        }
+    }
+    std::printf("    [shop interiors] %d buildings show shopfronts; %d not enterable; of %d sampled, %d have shop rooms "
+                "furnished behind their fronts, %d have none (%d of %d fronts furnished)\n",
+                withFronts, notEnterable, sampled, furnished, fallback, frontsFurnished, frontsTotal);
 }
