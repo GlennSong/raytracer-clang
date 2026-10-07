@@ -130,6 +130,20 @@ vec3 sampleEnvironment(vec3 dir) {
     return col;
 }
 
+// THE SKY AS AMBIENT LIGHT: the dome and the broad brightening round the sun -- NOT the disc and its tight glow. The sun
+// is lit directly (evaluateLighting); taking it again through the irradiance gave a surface facing the sun ~9x the
+// sky's light, ~3.6x the direct sun, and a white sheen: sunlit leaf cards, bent sky-ward and facing every way, blew
+// out (Glenn: "when they get light cast on them the lighting seems to blow out the leaves").
+vec3 sampleSkyDome(vec3 dir) {
+    float skyBlend = clamp(dir.y, 0.0, 1.0);
+    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    vec3 col = mix(lowerHaze, sky, smoothstep(-0.05, 0.05, dir.y));
+    float sunDot = max(dot(dir, g.skySunDir.xyz), 0.0);
+    col += g.skySunColor.rgb * pow(sunDot, 4.0) * 0.15 * g.skySunDir.w;
+    return col;
+}
+
 // ---- Procedural surface library (ported byte-for-byte from common.metal) ---
 const float SURF_PI = 3.14159265;
 // Lattice hash. The classic fract(sin(x)*43758) collapses once |x| outgrows
@@ -1116,8 +1130,8 @@ void main() {
         irradiance = sampleEquirect(N);
         prefiltered = mix(sampleEquirect(R), irradiance, roughness);
     } else {
-        irradiance = sampleEnvironment(N);
-        prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur
+        irradiance = sampleSkyDome(N);   // (no second sun: see sampleSkyDome)
+        prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur; a mirror keeps the sun
     }
     vec3 Famb = fresnelSchlickRoughness(NdotV, f0, roughness);
     vec3 kd = (1.0 - Famb) * (1.0 - metallic);

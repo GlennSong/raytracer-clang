@@ -424,6 +424,7 @@ struct VulkanRenderer::Impl {
 
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
+    bool depthClamp = false;   // the device clamps depth (shadow pancaking: createShadowPipeline)
     uint32_t graphicsFamily = 0;
     uint32_t presentFamily = 0;
     VkDevice device = VK_NULL_HANDLE;
@@ -1186,6 +1187,15 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
     // VK_POLYGON_MODE_LINE for the wireframe debug view (Renderer::wireframe).
     // Core-but-optional; effectively universal on desktop GPUs.
     features.fillModeNonSolid = VK_TRUE;
+    // DEPTH CLAMP for the shadow pass (shadow pancaking): a cascade's light eye stands only its radius + 50 m up the
+    // sun, so a tower's upper floors lay BEHIND the near cascades' near plane, were clipped, and their shadow on the
+    // street faded out as you walked toward it (Glenn: "As I get close to them the shadows fade away"). Clamped,
+    // they rasterise at depth 0 -- still in front of every receiver. Core-but-optional; universal on desktop GPUs.
+    {
+        VkPhysicalDeviceFeatures have{};
+        vkGetPhysicalDeviceFeatures(physicalDevice, &have);
+        if (have.depthClamp) { features.depthClamp = VK_TRUE; depthClamp = true; }
+    }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
@@ -4945,6 +4955,7 @@ bool VulkanRenderer::Impl::createShadowPipeline() {
     raster.cullMode = VK_CULL_MODE_NONE;
     raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
     raster.depthBiasEnable = VK_TRUE;   // set dynamically per shadow pass
+    raster.depthClampEnable = depthClamp ? VK_TRUE : VK_FALSE;   // casters past the light's near plane still cast
     raster.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{};

@@ -198,7 +198,13 @@ void main() {
 
     // Per-pixel start jitter breaks the shells of constant t; a decorrelated
     // offset for the sun march stops shadow slices locking to view slices.
-    float jitter = clDither(gl_FragCoord.xy);
+    // ...and that pattern's four phases SHIFTED per 2x2 block by a hash: four offsets alone left every cloud edge
+    // stepping between the same four shells -- iso-lines along the clouds' outlines (Glenn: "lines cut contours
+    // through them"). The block keeps its own four stratified (what the 2x2 upsample cancels).
+    uvec2 hb = uvec2(gl_FragCoord.xy) >> 1u;
+    uint hj = hb.x * 7919u + hb.y * 104729u + 1013u;
+    hj = (hj ^ (hj >> 16)) * 0x7feb352du; hj = (hj ^ (hj >> 15)) * 0x846ca68bu; hj ^= hj >> 16;
+    float jitter = fract(clDither(gl_FragCoord.xy) + 0.25 * (float(hj & 0xFFFFu) / 65536.0));
     // (a hash, not IGN: IGN's structure runs ~15 px along x and barely changes along y, and with no
     // temporal accumulation to average it the sun march printed soft VERTICAL COLUMNS over every
     // distant mountain seen through thin cloud)
@@ -226,6 +232,11 @@ void main() {
         float stepLen = stretched
             ? min(ds * (1.0 + float(dryRun)), max(budgetStep, ds * 6.0))
             : ds;
+        // THE RAY ALWAYS REACHES ITS END: what is left of it over the steps left is the least a step may be -- a ray
+        // that ran out of budget was CUT, mid-deck, at a distance that depended on how many rewinds and dry runs came
+        // before it, so far clouds ended along hard lines tracing the nearer ones'. Out of budget, steps coarsen.
+        float leastStep = (t1 - t) / float(max(1, viewSteps - i));
+        stepLen = max(stepLen, leastStep);
         vec3 p = camPos + dir * t;
         // Detail falls away with distance — erosion finer than the pixel
         // footprint can only alias; far banks keep their SHAPE.
@@ -245,7 +256,11 @@ void main() {
             dryRun = 0;
             // Never integrate a stretched stride's worth — a search step
             // treated as a uniform slab paints a plate through the bank.
-            float integrateLen = min(stepLen, ds);
+            // ...and inside cloud, no more than ~half an optical depth a step: at the fixed slab/12 step (58 m on a
+            // 700 m layer) one step through a fair-weather cloud was ~2.8 optical depths, so the first sample inside
+            // took 95% and the march painted each cloud's face onto the sample shells. (Never less than the budget
+            // still left allows: see leastStep.)
+            float integrateLen = max(clamp(0.5 / max(density, 1e-4), ds * 0.25, min(stepLen, ds)), leastStep);
             t += integrateLen;
             stepLen = integrateLen;
             // Sun march over a FIXED SHORT SPAN (240 m), not the whole slab —
