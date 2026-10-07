@@ -70,7 +70,7 @@ std::string shopName(uint8_t trade, uint32_t seed) {
 ShopSignAtlas buildShopSignAtlas(const Font& font, const std::vector<ShopSign>& signs, int pagePx) {
     ShopSignAtlas atlas;
     constexpr int H = 72;   // a board's pixels tall
-    const uint8_t board[4] = {18, 18, 22, 255};
+    const uint8_t board[4] = {7, 7, 9, 255};   // near black: by night (emissive = the page) only the lettering glows
     struct Made { int index; int w; TextImage img; };
     std::vector<Made> made;
     atlas.boards.resize(signs.size());
@@ -167,18 +167,28 @@ ShopSignMeshes buildShopSignMeshes(const std::vector<ShopSign>& signs, const Sho
             out.cells.back().page = b.page;
         }
         RenderMesh& m = out.cells[it->second].mesh;
-        const Real hw = s.width * std::min(1.0f, b.widthFrac) * 0.5, hh = s.height * 0.5;
-        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
+        // THE WHOLE FASCIA is the board (the building's own lit fascia band, a pastel lightbox at night, would
+        // otherwise frame the name); the name's own image in the middle, and either side plain board -- its edge
+        // column of pixels stretched, so the atlas holds only the name's width
+        const Real hwAll = s.width * 0.5, hwName = s.width * std::min(1.0f, b.widthFrac) * 0.5, hh = s.height * 0.5;
         auto vtx = [&](Vec3 pos, float u, float v) {
             Vertex vx(pos, s.n, u, v);
             vx.tangent = s.right;
             m.vertices.push_back(vx);
         };
-        vtx(s.centre - s.right * hw + s.up * hh, b.u0, b.v0);   // TL
-        vtx(s.centre + s.right * hw + s.up * hh, b.u1, b.v0);   // TR
-        vtx(s.centre + s.right * hw - s.up * hh, b.u1, b.v1);   // BR
-        vtx(s.centre - s.right * hw - s.up * hh, b.u0, b.v1);   // BL
-        for (uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(base + k);
+        auto quad = [&](Real x0, Real x1, float u0, float u1) {
+            if (x1 - x0 < 1e-3) return;
+            const uint32_t base = static_cast<uint32_t>(m.vertices.size());
+            vtx(s.centre + s.right * x0 + s.up * hh, u0, b.v0);   // TL
+            vtx(s.centre + s.right * x1 + s.up * hh, u1, b.v0);   // TR
+            vtx(s.centre + s.right * x1 - s.up * hh, u1, b.v1);   // BR
+            vtx(s.centre + s.right * x0 - s.up * hh, u0, b.v1);   // BL
+            for (uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(base + k);
+        };
+        const float px = 0.5f / 2048.0f;   // half a texel in: the board's edge column, never its neighbour's
+        quad(-hwAll, -hwName, b.u0 + px, b.u0 + px);
+        quad(-hwName, hwName, b.u0, b.u1);
+        quad(hwName, hwAll, b.u1 - px, b.u1 - px);
     }
     for (ShopSignMeshes::Cell& c : out.cells) {
         Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);

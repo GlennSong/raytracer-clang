@@ -6203,13 +6203,18 @@ bool LevelLoader::load(const std::string& path,
                     g.material.albedo = Vec3(1, 1, 1);
                     g.material.roughness = 0.6f;
                     g.material.albedoMap = pages[static_cast<std::size_t>(c.page)];
+                    // LIT AT NIGHT (stage 3): the page is its own emissive map, so the lettering glows in its trade's
+                    // colour and the dark board hardly at all; NightGlow ramps it in through dusk
+                    g.material.emissiveMap = pages[static_cast<std::size_t>(c.page)];
                     g.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
                     g.transforms.push_back(Mat4());
                     g.boundsCenter = c.centre;
                     g.boundsRadius = c.radius + 1.0;
                     g.drawDistance = 220.0;
                     g.drawClass = engine::DrawClass::Furniture;
-                    world.add<InstanceGroup>(world.create(), g);
+                    const Entity signs = world.create();
+                    world.add<InstanceGroup>(signs, g);
+                    world.add<engine::NightGlow>(signs, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.1});   // (2.2 washed the colours to white)
                 }
                 if (std::getenv("RT_SIGN_DEBUG"))
                     for (std::size_t k = 0; k < shopSigns.size(); k += std::max<std::size_t>(1, shopSigns.size() / 12))
