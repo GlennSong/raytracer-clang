@@ -642,7 +642,9 @@ fn fs_main(in : VSOut) -> FsOut {
       albedo = vec3<f32>(by & vec3<i32>(~1)) / 255.0;
     }
   }
-  let emission  = d.emissionRough.rgb * emSample * select(vec3<f32>(1.0), paneTint, emissiveTint);
+  // FLAG_EMISSION_FOLLOWS_PAINT (bit 21): the self-light scales with the paint, as the albedo does (mirrors mesh.frag)
+  let emissionPaint = (rawFlags & 2097152u) != 0u;
+  let emission  = d.emissionRough.rgb * emSample * select(select(vec3<f32>(1.0), in.color, emissionPaint), paneTint, emissiveTint);
 
   var N = normalize(in.worldNormal);
   // Normal map (tangent-space -> world via TBN), only with a map + a real tangent.

@@ -770,6 +770,41 @@ TEST_CASE(students_stand_at_the_lab_benches) {
 // like a shop would look?"). Storefront buildings across seeds until every trade (trades.h) has turned up; each
 // furniture piece of the ground floor is counted to the shop unit whose stretch of the facade it stands behind. Prints
 // each trade's fit-out; holds that every trade's shop has something in it, and that the ones that serve have a counter.
+// A TRADE'S ROOM IS FINISHED AS ONE (Glenn: "white walls for a bar? Yikes"): a bar's and a club's walls, floor and
+// ceiling -- the room's interior surfaces, inside its rectangle -- are dark, a grocer's light; none of them is the
+// building's own field paint.
+TEST_CASE(a_bar_is_not_painted_like_an_office) {
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
+    int bars = 0, light = 0;
+    for (uint32_t seed = 1; seed < 400 && bars < 6; ++seed) {
+        BuildingParams p;
+        p.floors = 3; p.groundRetail = true; p.walkableGround = true; p.openDoorway = true; p.seed = seed;
+        p.residential = true; p.core = 1;
+        const std::vector<ShopRoomRect> rooms = shopRoomsOf(plan, p, 5.0);
+        const BuildingMesh in = growInterior(plan, p, 5.0, nullptr, 0, 1);
+        for (const ShopRoomRect& r : rooms) {
+            if (r.trade != 14 && r.trade != 15) continue;
+            Real lum = 0;
+            int n = 0;
+            for (const RenderMesh& m : in.parts) {
+                if (m.materialIndex != static_cast<int>(PartId::Interior)) continue;
+                for (const Vertex& v : m.vertices) {
+                    if (!pointInPolygon(r.rect, Vec2(v.position.x, v.position.z))) continue;
+                    lum += 0.3 * v.color.x + 0.59 * v.color.y + 0.11 * v.color.z;
+                    ++n;
+                }
+            }
+            if (n < 8) continue;
+            ++bars;
+            if (lum / n > 0.35) ++light;
+            std::printf("    [finish] %s seed %u: %d interior vertices, mean paint %.2f\n", r.trade == 14 ? "bar" : "club",
+                        seed, n, lum / n);
+        }
+    }
+    CHECK(bars > 0);
+    CHECK(light == 0);
+}
+
 TEST_CASE(every_trade_is_furnished_as_its_trade) {
     const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
     std::map<int, std::map<std::string, int>> byTrade;

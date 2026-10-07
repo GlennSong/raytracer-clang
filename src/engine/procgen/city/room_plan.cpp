@@ -1324,7 +1324,7 @@ void quad(RenderMesh& m, RenderMesh* col, const Vec3& A, const Vec3& B, const Ve
 // A wall from a to b (world XZ) of thickness t, floor y0 to y0 + h: two
 // skins, end caps, and when `doorAt` >= 0 a doorway with jambs and a head.
 void wallRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real y0, Real h, Real t,
-             Real doorAt, const Vec3& colr) {
+             Real doorAt, const Vec3& colr, const Vec3* colrB = nullptr) {
     const Vec2 dv = b - a;
     const Real L = dv.length();
     if (L < 0.05) return;
@@ -1339,18 +1339,18 @@ void wallRun(RenderMesh& m, RenderMesh* col, const Vec2& a, const Vec2& b, Real 
         d0 = c - kRoomDoorW * 0.5;
         d1 = c + kRoomDoorW * 0.5;
     }
-    auto skin = [&](Real side, const Vec3& nrm) {
+    auto skin = [&](Real side, const Vec3& nrm, const Vec3& paint) {
         auto piece = [&](Real x0, Real x1, Real yb, Real ytop) {
             if (x1 - x0 < 1e-4 || ytop - yb < 1e-4) return;
-            quad(m, col, W(x0, side, yb), W(x1, side, yb), W(x1, side, ytop), W(x0, side, ytop), nrm, colr);
+            quad(m, col, W(x0, side, yb), W(x1, side, yb), W(x1, side, ytop), W(x0, side, ytop), nrm, paint);
         };
         if (d0 < 0) { piece(0, L, y0, yt); return; }
         piece(0, d0, y0, yt);
         piece(d1, L, y0, yt);
         piece(d0, d1, y0 + kRoomDoorH, yt);
     };
-    skin(t * 0.5, nA);
-    skin(-t * 0.5, nB);
+    skin(t * 0.5, nA, colr);
+    skin(-t * 0.5, nB, colrB ? *colrB : colr);   // side B in its own paint, when it has one
     // End caps.
     quad(m, col, W(0, -t * 0.5, y0), W(0, t * 0.5, y0), W(0, t * 0.5, yt), W(0, -t * 0.5, yt), nDm, colr);
     quad(m, col, W(L, t * 0.5, y0), W(L, -t * 0.5, y0), W(L, -t * 0.5, yt), W(L, t * 0.5, yt), nD, colr);
@@ -1512,6 +1512,29 @@ void emitRooms(RoomMeshes& out, RenderMesh* colliderOut, const RoomPlan& rp, Rea
         if (acc && f.kind == WallFinishKind::Masonry) {
             target = &out.accent;
             colr = f.accent;
+        }
+        if (w.faceA.set || w.faceB.set) {   // a shop's own walls: each face its room's paint and panelling
+            const Vec3 ca = w.faceA.set ? w.faceA.paint : colr, cb = w.faceB.set ? w.faceB.paint : colr;
+            wallRun(out.drywall, colliderOut, w.a, w.b, y0, h, kRoomWallT, w.doorAt, ca, &cb);
+            const Real L = (w.b - w.a).length();
+            Real d0 = -1, d1 = -1;   // (the doorway, as wallRun cuts it)
+            if (w.doorAt >= 0 && L > kRoomDoorW + 0.6) {
+                const Real c = std::min(std::max(w.doorAt * L, kRoomDoorW * 0.5 + 0.3), L - kRoomDoorW * 0.5 - 0.3);
+                d0 = c - kRoomDoorW * 0.5;
+                d1 = c + kRoomDoorW * 0.5;
+            }
+            const Vec2 d = (w.b - w.a) * (1.0 / std::max(L, Real(1e-6)));
+            for (int k = 0; k < 2; ++k) {
+                const RoomWall::Face& fc = k == 0 ? w.faceA : w.faceB;
+                if (!fc.set || fc.dadoH <= 0) continue;
+                const Real side = k == 0 ? kRoomWallT * 0.5 : -kRoomWallT * 0.5;
+                if (d0 < 0) dadoFace(out.drywall, w.a, w.b, y0, fc.dadoH, side, fc.dado);
+                else {
+                    dadoFace(out.drywall, w.a, w.a + d * d0, y0, fc.dadoH, side, fc.dado);
+                    dadoFace(out.drywall, w.a + d * d1, w.b, y0, fc.dadoH, side, fc.dado);
+                }
+            }
+            continue;
         }
         wallRun(*target, colliderOut, w.a, w.b, y0, h, kRoomWallT, w.doorAt, colr);
         if (!acc) continue;

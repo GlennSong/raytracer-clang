@@ -751,7 +751,9 @@ void main() {
     if (signalLamp) albedo = pc.albedoMetallic.rgb * inColor / 8.0;
     float metallic = clamp(pc.albedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(pc.emissionRough.a, 0.04, 1.0);
-    vec3 emission = pc.emissionRough.rgb * (emissiveTint ? inColor : vec3(1.0));
+    // FLAG_EMISSION_FOLLOWS_PAINT (bit 21): the self-light scales with the paint, as the albedo does
+    const bool emissionPaint = (pc.surfaceFlags.y & (1u << 21)) != 0u;
+    vec3 emission = pc.emissionRough.rgb * (emissiveTint || emissionPaint ? inColor : vec3(1.0));
     if (signalLamp) emission = inColor / 8.0 * 6.0;
     // A LIT PANE (the interior-mapped, emissive-tinted part) PACKS its glass and its lit tint in the vertex
     // colour (shape_grammar litPaneColour): the glass in the top 7 bits of each channel is the day albedo,

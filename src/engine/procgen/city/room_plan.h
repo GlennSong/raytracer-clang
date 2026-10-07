@@ -64,6 +64,10 @@ struct RoomWall {
     Real doorAt = -1;    // parameter along a->b of a doorway's centre; < 0 = none
     bool glass = false;  // an office front: clear glass instead of drywall
     bool accent = false; // this wall wears the building's interior finish
+    // A FACE OF ITS OWN (a shop's room, trades.h tradeInterior): its paint and a panelled band up to dadoH, on side
+    // A (right of a->b) or B; unset faces take the floor's paint.
+    struct Face { bool set = false; Vec3 paint; Real dadoH = 0; Vec3 dado; };
+    Face faceA, faceB;
 };
 
 // WALL FINISHES (Glenn, 2026-09-15: "do something more interesting with the

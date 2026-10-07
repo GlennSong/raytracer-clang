@@ -331,7 +331,10 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // 0.22, not 0.08: an omni room light grazes a ceiling (no GI
             // bounce in the renderer), so drywall carries the bounce
             // itself -- night-test measured, walls bright / ceiling dark.
-            m.emission = m.albedo * 0.22;
+            // ...in proportion to the PAINT (FLAG_EMISSION_FOLLOWS_PAINT): 0.25 x the usual 0.87 paint is the 0.22 it
+            // was, and a dark shop wall (trades.h) stays dark instead of glowing grey (Glenn: "white walls for a bar?")
+            m.emission = m.albedo * 0.25;
+            m.flags |= RenderMaterial::FLAG_EMISSION_FOLLOWS_PAINT;
             break;
         case PartId::InteriorFloor:
             // Interior flooring BASE recipe (wood). The finish VARIES per
@@ -3897,6 +3900,37 @@ static RoomPlan bigBoxRoomPlan(const Poly2& planIn, const BuildingParams& params
     return rp;
 }
 
+// A shop room's own dice (its wall colour of the trade's three): from its front corner, so the walls (shopRoomPlan)
+// and the floor and ceiling (growInterior) agree.
+static uint32_t shopRoomDice(const Poly2& rect) {
+    return rect.empty() ? 0u : positionHash(Vec3(rect[0].x + 0.37, 0.0, rect[0].y + 0.71));
+}
+static uint32_t shopRoomDice(const Room& r) { return shopRoomDice(r.rect); }
+// EVERY FACE OF A SHOP'S WALLS takes its room's finish (trades.h tradeInterior; Glenn: "white walls for a bar?
+// Yikes"): each side of each wall, the shop room just off it. Neighbours each emit the party wall between them, the
+// copies coincide -- and get the same two faces, so nothing fights.
+static void paintShopRooms(RoomPlan& rp) {
+    for (RoomWall& w : rp.walls) {
+        const Vec2 dv = w.b - w.a;
+        const Real L = dv.length();
+        if (L < 0.05) continue;
+        const Vec2 d = dv * (1.0 / L), nn(d.y, -d.x), mid = (w.a + w.b) * 0.5;
+        for (int k = 0; k < 2; ++k) {
+            const Vec2 probe = mid + nn * (k == 0 ? 0.3 : -0.3);
+            for (const Room& r : rp.rooms) {
+                if (r.kind != RoomKind::Shop || !pointInPolygon(r.rect, probe)) continue;
+                const TradeInterior& ti = tradeInterior(r.style);
+                RoomWall::Face& f = k == 0 ? w.faceA : w.faceB;
+                f.set = true;
+                f.paint = ti.walls[shopRoomDice(r) % 3u];
+                f.dadoH = ti.dadoH;
+                f.dado = ti.dado;
+                break;
+            }
+        }
+    }
+}
+
 static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge, Real y0,
                              Real h, const CorePlan& core, const Poly2& well, const Vec2& stairFoot = Vec2(1e30, 1e30)) {
     RoomPlan rp;
@@ -4058,8 +4092,11 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
             if (worst >= rp.rooms.size()) return RoomPlan{};
             keep[worst] = 0;
         }
-        return planWith();
+        RoomPlan out = planWith();
+        paintShopRooms(out);
+        return out;
     }
+    paintShopRooms(rp);
     return rp;
 }
 
@@ -4583,6 +4620,35 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         if (rp.walls.empty()) continue;
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
+        // A SHOP'S FLOOR AND CEILING in its trade's finish (a checker where it is tiled), just proud of the slab's.
+        if (ki == 0) {
+            const Real fy = baseY + spk.y0 + 0.078;   // (the lobby floor the exterior lays is 7 cm up)
+            const Real cy = baseY + spk.y0 + spk.h - 0.25 - 0.006;   // (under the ceiling the exterior closes the storey with)
+            for (const Room& r : rp.rooms) {
+                if (r.kind != RoomKind::Shop || r.rect.size() != 4) continue;
+                const TradeInterior& ti = tradeInterior(r.style);
+                const Vec2 o = r.rect[0], U = r.rect[1] - o, V = r.rect[3] - o;
+                const Real lu = U.length(), lv = V.length();
+                if (lu < 0.5 || lv < 0.5) continue;
+                const Vec2 u = U * (1.0 / lu), v = V * (1.0 / lv);
+                auto at = [&](Real x, Real z, Real y) { const Vec2 p2 = o + u * x + v * z; return Vec3(p2.x, y, p2.y); };
+                auto flat = [&](Real x0, Real z0, Real x1, Real z1, Real y, bool up, const Vec3& c) {
+                    const Vec3 A = at(x0, z0, y), B = at(x1, z0, y), C = at(x1, z1, y), D = at(x0, z1, y);
+                    emitQuad(rm.drywall, A, B, C, D, Vec3(0, up ? 1 : -1, 0), c);   // (winds itself by the normal)
+                };
+                if (ti.tile > 0) {
+                    const int nu = std::max(1, static_cast<int>(std::ceil(lu / ti.tile)));
+                    const int nv = std::max(1, static_cast<int>(std::ceil(lv / ti.tile)));
+                    for (int i = 0; i < nu; ++i)
+                        for (int j = 0; j < nv; ++j)
+                            flat(i * ti.tile, j * ti.tile, std::min(lu, (i + 1) * ti.tile), std::min(lv, (j + 1) * ti.tile),
+                                 fy, true, ((i + j) & 1) ? ti.floorB : ti.floorA);
+                } else {
+                    flat(0, 0, lu, lv, fy, true, ti.floorA);
+                }
+                flat(0, 0, lu, lv, cy, false, ti.ceiling);
+            }
+        }
         appendToPart(out, PartId::Interior, rm.drywall);
         appendToPart(out, PartId::GlassClear, rm.glass);
         appendToPart(out, rp.finish.part, rm.accent);   // brick, concrete or timber
@@ -4707,6 +4773,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // toward faceDir — the door (and its awning/architrave) lands there.
     // Shared with growInterior (ADR-0080) so both agree on the front door.
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
+    std::vector<ShopRoomRect> shopRooms;   // (the shop rooms, once, for their walls' paint)
+    bool shopRoomsDone = false;
 
     // Swept cornice: three stepped courses following the CURRENT plan outline.
     auto sweptCornice = [&](const Poly2& pl, Real yTop, Real scale) {
@@ -4936,10 +5004,28 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 emitInsetSkin(out, plan, i, y, gh, interiorInset(params),
                               Vec3(1, 1, 1), false, PartId::GlassClear);
             } else {
+                const std::size_t v0 = partMesh(out, PartId::Interior).vertices.size();
                 emitInnerWallRect(out, ifr, facadeLayout(ifr, mode, params),
                                   interiorInset(params), wallColor, plan,
                                   interiorPaintFor(params), params.curtainWall, true,
                                   params.windowInset);
+                // A SHOP'S OUTSIDE WALLS in its own paint (the glazing wall, a corner unit's side): each vertex of
+                // this skin takes the wall colour of the shop room just inside it (trades.h tradeInterior).
+                if (params.groundRetail) {
+                    if (!shopRoomsDone) { shopRooms = shopRoomsOf(plan, params, y); shopRoomsDone = true; }
+                    RenderMesh& im = partMesh(out, PartId::Interior);
+                    const Vec2 nIn(-ifr.n.x, -ifr.n.z);
+                    auto paintOf = [&](const Vec2& at, Vec3& c) {
+                        for (Real reach : {0.35, 0.9})
+                            for (const ShopRoomRect& r : shopRooms)
+                                if (pointInPolygon(r.rect, at + nIn * reach)) {
+                                    c = tradeInterior(r.trade).walls[shopRoomDice(r.rect) % 3u];
+                                    return;
+                                }
+                    };
+                    for (std::size_t vi = v0; vi < im.vertices.size() && !shopRooms.empty(); ++vi)
+                        paintOf(Vec2(im.vertices[vi].position.x, im.vertices[vi].position.z), im.vertices[vi].color);
+                }
             }
         }
     }

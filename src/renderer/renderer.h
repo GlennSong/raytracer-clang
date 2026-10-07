@@ -135,6 +135,10 @@ struct RenderMaterial {
     // A traffic signal's state rides each instance's bottom row (Mat4::m[3][0]: 0 none, 1 green, 2 amber, 3 red);
     // mesh.vert lights the lamp of that colour. One static model per signal; only the number changes.
     static constexpr uint32_t FLAG_SIGNAL_STATE = 1u << 20;
+    // FLAG_EMISSION_FOLLOWS_PAINT (bit 21): the emission is scaled by the vertex colour like the albedo -- a room's
+    // faint self-light (interior drywall) stays in proportion to its paint, so an oxblood bar wall is not lifted to
+    // grey. Vulkan + WebGPU (Metal owed).
+    static constexpr uint32_t FLAG_EMISSION_FOLLOWS_PAINT = 1u << 21;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the

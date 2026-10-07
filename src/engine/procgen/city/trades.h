@@ -28,6 +28,18 @@ struct TradeInfo {
     bool terrace;            // sets tables out on the pavement
 };
 
+// HOW A TRADE'S ROOM IS FINISHED (Glenn: "white walls for a bar? Yikes"): the walls in one of three colours (by the
+// unit's own dice), a band of panelling or tile up to `dadoH` (0: none), the floor plain or a checker of two, the
+// ceiling, and how it is lit.
+struct TradeInterior {
+    Vec3 walls[3];
+    Real dadoH;  Vec3 dado;
+    Vec3 floorA, floorB;  Real tile;   // tile > 0: a checker of floorA / floorB, `tile` m squares
+    Vec3 ceiling;
+    int lights;                        // 0 office panels, 1 round fittings (warm rooms), 2 few and dim (bars, clubs)
+};
+const TradeInterior& tradeInterior(uint8_t id);   // a trade with none of its own: plain shop
+
 int tradeCount();
 const TradeInfo& tradeAt(int index);          // by table position
 const TradeInfo* tradeById(uint8_t id);       // by id (a room's style); nullptr if none

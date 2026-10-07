@@ -1,4 +1,5 @@
 #include "furniture.h"
+#include "trades.h"
 #include "../furniture_library.h"   // descriptions: anchors to dress, clearances to keep (M3)
 #include "../furniture_kit.h"
 #include "../../mesh_builder.h"
@@ -715,15 +716,16 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         // a working room -- office, open plan, meeting room, kitchenette, shop -- a grid of panels every 2.4 m
         // along its long side; a home's room, a round fitting in its middle (a long hall, one every 4 m).
         if (ceilingY > y0 + 2.0) {
-            auto hangAt = [&](Real a, Real b, bool panel) {
+            // kind: 0 an office panel, 1 a round flush fitting, 2 a bar's pendant (on a cord, 0.9 m down)
+            auto hangAt = [&](Real a, Real b, int kind) {
                 const bool alongV = F.f.D > F.f.W;
                 const Vec2 Zd = alongV ? F.f.v : F.f.u;
                 const Vec2 Xd(Zd.y, -Zd.x);
-                const Real half = panel ? 0.61 : 0.21, h = panel ? 0.05 : 0.08;
+                const Real half = kind == 0 ? 0.61 : kind == 1 ? 0.21 : 0.18, h = kind == 0 ? 0.05 : kind == 1 ? 0.08 : 0.90;
                 const Vec2 c = F.f.world(a, b) - Zd * half;
                 PlacedPiece pp;
                 pp.piece = static_cast<uint8_t>(Piece::CeilingLight);
-                pp.variant = panel ? 0u : 32u;
+                pp.variant = kind == 0 ? 0u : kind == 1 ? 32u : 32u | 64u | ((hr & 1u) ? 128u : 0u);   // brass or black
                 Mat4& M = pp.xform;
                 // right-handed: X = Z x up
                 Vec3 X(Xd.x, 0, Xd.y), Z(Zd.x, 0, Zd.y);
@@ -737,17 +739,20 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
             const bool working = room.kind == RoomKind::Office || room.kind == RoomKind::OpenPlan ||
                                  room.kind == RoomKind::Meeting || room.kind == RoomKind::Kitchenette ||
                                  room.kind == RoomKind::Shop;
+            // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
+            const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;
             if (working) {
-                const int nx = std::max(1, static_cast<int>(F.f.W / 2.4)), nz = std::max(1, static_cast<int>(F.f.D / 2.4));
+                const Real pitch = shopLights == 2 ? 3.6 : 2.4;
+                const int nx = std::max(1, static_cast<int>(F.f.W / pitch)), nz = std::max(1, static_cast<int>(F.f.D / pitch));
                 for (int i = 0; i < nx; ++i)
                     for (int j = 0; j < nz; ++j)
-                        hangAt(F.f.W * (i + 0.5) / nx, F.f.D * (j + 0.5) / nz, true);
+                        hangAt(F.f.W * (i + 0.5) / nx, F.f.D * (j + 0.5) / nz, shopLights);
             } else {
                 const Real L = std::max(F.f.W, F.f.D);
                 const int n = L > 6.0 ? static_cast<int>(L / 4.0) : 1;
                 for (int i = 0; i < n; ++i)
                     hangAt(F.f.W >= F.f.D ? F.f.W * (i + 0.5) / n : F.f.W * 0.5,
-                           F.f.W >= F.f.D ? F.f.D * 0.5 : F.f.D * (i + 0.5) / n, false);
+                           F.f.W >= F.f.D ? F.f.D * 0.5 : F.f.D * (i + 0.5) / n, 1);
             }
         }
         // The pictures: on the side walls (never the window wall of a room that has one), two in a long living

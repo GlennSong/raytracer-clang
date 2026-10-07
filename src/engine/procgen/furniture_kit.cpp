@@ -19,6 +19,9 @@ const Vec3 kFabric[8] = {{0.48, 0.50, 0.53}, {0.20, 0.26, 0.40}, {0.45, 0.53, 0.
 const Vec3 kWhite(0.90, 0.90, 0.88), kBlack(0.07, 0.07, 0.08), kSteel(0.62, 0.64, 0.67), kChrome(0.85, 0.86, 0.88);
 const Vec3 kPorcelain(0.95, 0.95, 0.93), kLinen(0.93, 0.92, 0.88);
 
+// A bar's timber: walnut or ebonised, by the wood bits.
+inline Vec3 barWood(uint32_t variant) { return ((variant >> 3) & 1u) ? kWood[1] : kWood[3] * 1.2; }
+
 // A piece under construction: the per-material meshes and the shape-kit words, placed in piece space.
 struct Maker {
     FurniturePiece out;
@@ -1046,6 +1049,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
             // customers' side, the speed rail and a drip mat on the bartender's. Runs butt end to end.
             k.out.size = {1.8, 1.12, 0.75};
             k.out.colliderH = 1.08;
+            const Vec3 wood = barWood(variant);   // (a bar is walnut or ebonised, never birch)
             const Vec3 top = (style & 1u) ? Vec3(0.12, 0.08, 0.06) : wood * 0.8, brass(0.62, 0.48, 0.22);
             k.box(F::Wood, {0, 0.53, 0.30}, {1.8, 1.06, 0.50}, 0.006, wood * 0.75, 1);   // the carcass
             for (int i = 0; i < 3; ++i)                                                  // raised panels, customers' side
@@ -1060,6 +1064,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
             // The BACK BAR: low cupboards and a fridge door, a mirror, two lit glass shelves of bottles.
             k.out.size = {1.8, 2.3, 0.5};
             k.out.colliderH = 0.9;
+            const Vec3 wood = barWood(variant);
             k.box(F::Wood, {0, 0.45, 0.25}, {1.8, 0.9, 0.48}, 0.006, wood * 0.7, 1);
             k.front(F::Hard, -0.88, -0.02, 0.06, 0.86, 0.49, Vec3(0.10, 0.11, 0.12), kChrome, true);   // the bottle fridge
             k.front(F::Wood, 0.02, 0.88, 0.06, 0.86, 0.49, wood * 0.8, kChrome, true);
@@ -1092,15 +1097,17 @@ FurniturePiece build(Piece p, uint32_t variant) {
                 k.rod(F::Metal, {0.16 * std::cos(a0), 0.30, 0.21 + 0.16 * std::sin(a0)},
                       {0.16 * std::cos(a1), 0.30, 0.21 + 0.16 * std::sin(a1)}, 0.009, kChrome, 6);
             }
+            static const Vec3 kLeather[3] = {{0.10, 0.09, 0.09}, {0.32, 0.07, 0.06}, {0.45, 0.28, 0.15}};   // black, oxblood, tan
             k.turned(F::Fabric, {0, 0.72, 0.21}, {{0.0, 0.0}, {0.19, 0.0}, {0.20, 0.04}, {0.17, 0.08}, {0.0, 0.08}},
-                     (style & 1u) ? kBlack * 2.0 : fabric * 0.8, 1.0, 18);
+                     kLeather[(variant >> 3) % 3u], 1.0, 18);
             break;
         }
         case Piece::Booth: {
             // A BOOTH: two high-backed upholstered benches facing across a table, its end against the wall (+z: out).
             k.out.size = {1.9, 1.15, 1.3};
             k.out.colliderH = 0.75;
-            const Vec3 hide = (style & 1u) ? Vec3(0.45, 0.10, 0.10) : fabric * 0.85;
+            const Vec3 wood = barWood(variant);
+            const Vec3 hide = (style & 1u) ? Vec3(0.40, 0.08, 0.08) : Vec3(0.12, 0.10, 0.10);   // oxblood or black hide
             for (double s : {-1.0, 1.0}) {
                 const double x = s * 0.70;
                 k.box(F::Wood, {x, 0.22, 0.65}, {0.50, 0.44, 1.26}, 0.006, wood * 0.7, 1);              // the plinth
@@ -1246,7 +1253,15 @@ FurniturePiece build(Piece p, uint32_t variant) {
             // from"): hung by its TOP at y = size.y (placed so that is the ceiling). An office's recessed 600 x 1200
             // panel -- a white frame round a lit diffuser -- or, with style bit 5, a home's round flush fitting.
             k.out.solid = false;
-            if (variant & 32u) {
+            if (variant & 64u) {
+                // style bit 6: a bar's PENDANT -- a cord from the ceiling, a dark metal dome, a warm amber bulb under it
+                k.out.size = {0.36, 0.90, 0.36};
+                k.rod(F::Metal, {0, 0.30, 0.18}, {0, 0.90, 0.18}, 0.005, kBlack, 6);
+                k.turned(F::Metal, {0, 0.12, 0.18}, {{0.17, 0.0}, {0.16, 0.06}, {0.11, 0.14}, {0.04, 0.18}, {0.0, 0.19}},
+                         (variant & 128u) ? Vec3(0.55, 0.42, 0.22) : kBlack * 1.5, 1.0, 18);
+                k.turned(F::Light, {0, 0.07, 0.18}, {{0.0, 0.0}, {0.045, 0.02}, {0.05, 0.06}, {0.03, 0.09}, {0.0, 0.10}},
+                         Vec3(1.0, 0.62, 0.30), 1.0, 12);
+            } else if (variant & 32u) {
                 k.out.size = {0.42, 0.08, 0.42};
                 k.turned(F::Hard, {0, 0.06, 0.21}, {{0.0, 0.0}, {0.20, 0.0}, {0.21, 0.02}, {0.0, 0.02}}, kWhite, 1.0, 24);
                 k.turned(F::Light, {0, 0.0, 0.21}, {{0.0, 0.0}, {0.18, 0.0}, {0.19, 0.03}, {0.17, 0.06}, {0.0, 0.06}},
