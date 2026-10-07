@@ -2438,8 +2438,13 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
                     // ALREADY AT THE STOP -- the usual case after a change of bus at a
                     // shared stop. This fell through to walking the whole trip, which
                     // between towns there is no walk for: wait here (awaitingRide
-                    // holds them).
+                    // holds them) -- at the kerb, not in the junction.
                     a.indoors = false;
+                    Vec2 kerb, along;
+                    if (stopWaitSpot(bt.route, bt.fromStop, kerb, along)) {
+                        a.pos = freeStandingSpot(a, kerb, along);
+                        a.tickFromPos = a.pos;
+                    }
                     a.activity = s.activity;
                     return true;
                 }
@@ -3414,6 +3419,33 @@ Real CitySim::busStandBackAt(int inLink) const {
         if (isBus(i)) { busLen = vehicleLength(i); break; }
     const Real want = junctionRadius(node) + kCrosswalkFarEdge + kStopLineMargin + 0.5 * busLen;
     return std::min(want, approach * 0.6);
+}
+
+bool CitySim::stopWaitSpot(int route, int stop, Vec2& at, Vec2& along) const {
+    if (!nav_ || route < 0 || route >= buses_.routeCount()) return false;
+    const BusRoute& R = buses_.route(route);
+    if (stop < 0 || stop >= static_cast<int>(R.stops.size())) return false;
+    const BusStop& st = R.stops[static_cast<std::size_t>(stop)];
+    const std::vector<int>& pn = R.pathNodes;
+    if (st.pathIndex < 0 || pn.empty() || static_cast<std::size_t>(st.pathIndex) >= pn.size()) return false;
+    const int prev = pn[(static_cast<std::size_t>(st.pathIndex) + pn.size() - 1) % pn.size()];
+    int in = -1;
+    if (prev >= 0 && prev < nav_->nodeCount())
+        for (int li : nav_->outLinks[static_cast<std::size_t>(prev)])
+            if (nav_->links[static_cast<std::size_t>(li)].to == st.node) { in = li; break; }
+    if (in < 0) return false;
+    const engine::NavLink& L = nav_->links[static_cast<std::size_t>(in)];
+    if (L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp) return false;
+    const Vec2 a = nav_->nodes[static_cast<std::size_t>(L.to)], b = nav_->nodes[static_cast<std::size_t>(L.from)];
+    Vec2 dir = b - a;
+    const Real len = dir.length();
+    if (len < 1e-3) return false;
+    dir = dir * (1.0 / len);
+    const Vec2 right(-dir.y, dir.x);   // the right of the bus's travel (into the node): the left of `dir`
+    const Real back = std::max(Real(1.2), busStandBackAt(in));
+    at = a + dir * back + right * (L.width * 0.5 + 1.5);
+    along = dir;
+    return true;
 }
 
 Real CitySim::busStandBack(const Agent& a) const {
@@ -4941,11 +4973,15 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         if (a.mode == Agent::Mode::Pedestrian) {
             const BusTrip* bt = buses_.tripOf(self);
             if (bt && !bt->aboard) {   // already stopped above
-                // Waiting OUTSIDE, in a spot of their own: everyone bound for
-                // this stop ended on the same sidewalk point, one inside the
-                // next.
+                // Waiting OUTSIDE, at the stop's kerb (stopWaitSpot), in a spot of their own: everyone bound for this
+                // stop ended on the same point, one inside the next -- and where a walk to a junction's stop ends is
+                // the junction.
                 a.indoors = false;
-                if (!a.route.links.empty()) {
+                Vec2 kerb, along;
+                if (stopWaitSpot(bt->route, bt->fromStop, kerb, along)) {
+                    a.pos = freeStandingSpot(a, kerb, along);
+                    a.tickFromPos = a.pos;
+                } else if (!a.route.links.empty()) {
                     const int ll = a.route.links.back();
                     a.pos = freeStandingSpot(a, a.pos, nav_->direction(ll));
                     a.tickFromPos = a.pos;

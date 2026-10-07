@@ -1463,6 +1463,12 @@ private:
     void releaseBays(Agent& a);          // free both the held and the reserved bay
     Real busDistanceToStop(const Agent& a) const;
     Real busStandBack(const Agent& a) const;   // route metres short of its stop node
+    // WHERE A RIDER WAITS for route r at stop s: the kerb beside where the bus's doors stand -- back up the street the
+    // bus arrives by (busStandBackAt), out past the carriageway onto the pavement: the same point the stop's pole and
+    // bench stand at (buildBusStopProps). The stop NODE is usually a junction's middle, and riders who waited where
+    // their walk ended stood in it (Glenn: "a lot of npcs standing around in the middle of the street"). False when
+    // the route does not say how it arrives.
+    bool stopWaitSpot(int route, int stop, engine::Vec2& at, engine::Vec2& along) const;
 public:
     // The same stand-back for a bus arriving at `inLink`'s end node, measured from that node back along the
     // link to the bus's CENTRE -- where the stop's furniture belongs (#36). Walks back through plain nodes
