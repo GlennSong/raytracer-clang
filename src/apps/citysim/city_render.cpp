@@ -226,6 +226,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busCommuteShare = c.busCommuteShare;
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
+        params_.nearTarget = c.nearTarget;
         // RT_MAX_AMBIENT=<n>: the population cap per class for this run (scale tests on a real level without
         // editing it -- the bake never sees it)
         if (const char* m = std::getenv("RT_MAX_AMBIENT")) params_.maxAmbient = std::max(6, std::atoi(m));
@@ -668,6 +669,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // 3,501 -> 1,350; ring x0.46). NOT on by default: metro_planned's ring holds more than 1500, and the smaller
     // ring there lets a junction near (45, -195) gridlock (eastbound, northbound and southbound queues all
     // waiting), which strands the regional bus and its riders (metro_planned_regional_bus_joins_the_towns).
+    // A level whose population needs it sets "nearTarget" (island_8_nature: 1500); RT_NEAR_TARGET overrides.
+    sim_.nearTarget = params_.nearTarget;
     if (const char* nt = std::getenv("RT_NEAR_TARGET")) sim_.nearTarget = std::max(0, std::atoi(nt));
     if (const char* ft = std::getenv("RT_FAR_TARGET")) sim_.farTarget = std::max(0, std::atoi(ft));
     sim_.dormancyEnabled = params_.dormantAgents;

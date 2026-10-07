@@ -5452,6 +5452,7 @@ bool LevelLoader::load(const std::string& path,
         cfg.busCommuteShare = cs.value("busCommuteShare", cfg.busCommuteShare);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.maxAmbient = cs.value("maxAmbient", cfg.maxAmbient);
+        cfg.nearTarget = cs.value("nearTarget", cfg.nearTarget);
         cfg.seed = cs.value("seed", cfg.seed);
         cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
         // ONE CLOCK, ONE AUTHOR (Glenn, 2026-09-16: "use the same tick for

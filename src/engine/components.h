@@ -723,6 +723,9 @@ struct CitySimConfig {
     // metro_v2_density_target_prints). Kept at 400 so no existing level
     // changes; a level that wants its full density raises it.
     int maxAmbient = 400;
+    // About this many agents in the full sim round the player (the K ring's radii adapt; the GPU crowd shows the
+    // rest). 0: the radii as authored. For a level whose population is past what a full ring carries.
+    int nearTarget = 0;
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     // The in-world hour the level OPENS at. Agents are placed straight from
