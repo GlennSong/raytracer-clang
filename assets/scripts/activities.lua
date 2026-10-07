@@ -4,7 +4,7 @@
 -- catalog built into C++ (defaultActivityCatalog -- a test keeps the two describing identically).
 --
 -- activities.<name> = {
---   sites      = { kinds } -- places: cafe restaurant shop supermarket civic park library teaching quad field office;
+--   sites      = { kinds } -- places: cafe restaurant bar club shop supermarket civic park library teaching quad field office;
 --                             spots: seat bed stand loop pitch watch; or street (a corner to walk to)
 --   tags       = { campus | park | sports }   -- a spot site must carry them all
 --   hours      = { lo, hi }    when it is offered (default all day; may wrap midnight)
@@ -26,7 +26,7 @@
 activities = {
   order = { "bench", "across_town", "park_visit", "coffee", "browse", "groceries", "meal", "civic_visit",
             "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game",
-            "chat", "picnic", "sunbathe", "catch", "errand" },
+            "chat", "picnic", "sunbathe", "catch", "errand", "dinner", "drinks", "clubbing", "college_club" },
 
   -- A DAY OFF'S STOPS
   bench            = { sites = { "seat" }, distance = { 30, 500 }, nearest = 4, perform = "spot" },
@@ -38,7 +38,7 @@ activities = {
   groceries        = { sites = { "supermarket" }, distance = { 60, 650 }, per_site = true },
   meal             = { sites = { "restaurant" }, hours = { 11.5, 21.5 }, distance = { 60, 650 }, per_site = true },
   civic_visit      = { sites = { "civic", "library", "teaching" }, distance = { 60, 650 }, per_site = true },
-  walk_round_block = { sites = { "street" }, distance = { 150, 450 }, perform = "wander" },
+  walk_round_block = { sites = { "street" }, distance = { 150, 450 }, perform = "wander", walkers_only = true },
 
   -- LUNCH OUT: walkers in their shift; three in eight brought theirs
   lunch            = { sites = { "cafe", "restaurant" }, distance = { 0, 600 }, nearest = 4, walkers_only = true,
@@ -46,6 +46,16 @@ activities = {
 
   -- THE ERRAND on the way home: a supermarket or a store near HOME, one of the three nearest open
   errand           = { sites = { "supermarket", "shop" }, from = "home", distance = { 0, 700 }, nearest = 3 },
+
+  -- THE NIGHT (Glenn: "we would want restaurants and clubs and such for a night life ... College clubs"): dinner out,
+  -- drinks at a bar, a club late, a college club's meeting on campus. Farther than a day's stops: a night out is worth
+  -- the walk (or the bus).
+  dinner           = { sites = { "restaurant" }, hours = { 17.5, 22.5 }, minutes = { 50, 100 }, distance = { 60, 1200 },
+                       per_site = true },
+  drinks           = { sites = { "bar" }, hours = { 16.5, 1.5 }, distance = { 60, 1200 }, per_site = true },
+  clubbing         = { sites = { "club" }, hours = { 21.5, 2.5 }, distance = { 100, 2500 }, nearest = 3 },
+  college_club     = { sites = { "teaching", "library" }, hours = { 18, 22 }, minutes = { 50, 90 }, distance = { 0, 1e9 },
+                       nearest = 2 },
 
   -- A STUDENT'S BREAK
   campus_bench     = { sites = { "seat" }, tags = { "campus" }, distance = { 0, 600 }, nearest = 6, perform = "spot" },
@@ -81,7 +91,7 @@ activities = {
 }
 
 menus = {
-  order = { "outing", "errand", "lunch", "student_break" },
+  order = { "outing", "errand", "lunch", "student_break", "evening", "student_evening" },
 
   -- A DAY OFF, by the hour: coffee and the park in the morning; the shops and lunch at midday; errands and the park in
   -- the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
@@ -115,5 +125,22 @@ menus = {
       pick = { { "study", 2 }, { "quad_time", 1 }, { "chat", 1.5 }, { "catch", 1 }, { "sunbathe", 0.6 } } },
     { hours = { 0, 24 }, first = { { "campus_bench", 0.75 } },
       pick = { { "study", 2 }, { "quad_time", 1 }, { "chat", 1.2 }, { "sunbathe", 0.5 } } },
+  },
+
+  -- A NIGHT OUT, by the hour: dinner and a first drink early; drinks and the clubs later; after midnight the clubs and
+  -- the last bars -- a walk now and then between
+  evening = {
+    { hours = { 16, 21 }, first = {},
+      pick = { { "dinner", 3 }, { "drinks", 2 }, { "walk_round_block", 0.8 }, { "park_visit", 0.4 }, { "chat", 0.5 } } },
+    { hours = { 21, 23.5 }, first = {},
+      pick = { { "drinks", 3 }, { "clubbing", 1.5 }, { "dinner", 0.8 }, { "walk_round_block", 0.5 } } },
+    { hours = { 23.5, 16 }, first = {}, pick = { { "clubbing", 3 }, { "drinks", 2 } } },
+  },
+
+  -- A STUDENT'S EVENING: a college club's meeting early, then out like anyone
+  student_evening = {
+    { hours = { 16, 22 }, first = { { "college_club", 0.45 } },
+      pick = { { "dinner", 2 }, { "drinks", 2 }, { "chat", 0.8 }, { "quad_time", 0.5 } } },
+    { hours = { 22, 16 }, first = {}, pick = { { "clubbing", 3 }, { "drinks", 2.5 } } },
   },
 }

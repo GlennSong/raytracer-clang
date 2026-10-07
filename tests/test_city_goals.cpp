@@ -27,7 +27,7 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
     int commute = t.findState("CommuteToWork");
     int work = t.findState("AtWork");
     int ret = t.findState("ReturnHome");
-    CHECK(t.stateCount() == 10);
+    CHECK(t.stateCount() == 14);   // the day's ten, and a night out's four (addNightOut)
     CHECK(t.entry() == home);
     CHECK(t.state(home).action == GoalAction::Rest);
     CHECK(t.state(commute).action == GoalAction::GoTo);
@@ -286,7 +286,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     CHECK(homeless == 0);
     CHECK(othersInHall == 0);   // the hall is the students' alone
 
-    int inClass = 0, onBench = 0, inLibrary = 0, backHome = 0, peakOut = 0;
+    int inClass = 0, onBench = 0, inLibrary = 0, backHome = 0, nightOut = 0, peakOut = 0;
     std::vector<uint8_t> sawClass(sim.agents().size(), 0), sawBreak(sim.agents().size(), 0);
     const int teachNode = nav.nearestNode(places[teach].entrance), libNode = nav.nearestNode(places[lib].entrance);
     for (int i = 0; i < 30000 && sim.timeOfDay() < 22.5; ++i) {
@@ -310,14 +310,15 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
         onBench += (sawBreak[k] & 1) ? 1 : 0;
         inLibrary += (sawBreak[k] & 2) ? 1 : 0;
         backHome += a.indoors && a.restNode == hallNode;
+        nightOut += a.activity == Activity::Outing;   // a college club, a bar (eveningPlan): out, not lost
     }
     std::printf("    [students] %d students: %d went to class, %d sat on the quad, %d studied in the library, %d home by "
-                "%.1f h; at most %d walking at once\n",
-                sim.studentCount(), inClass, onBench, inLibrary, backHome, sim.timeOfDay(), peakOut);
+                "%.1f h (%d out for the evening); at most %d walking at once\n",
+                sim.studentCount(), inClass, onBench, inLibrary, backHome, sim.timeOfDay(), nightOut, peakOut);
     CHECK(inClass >= 50);
     CHECK(onBench >= 5);
     CHECK(inLibrary >= 10);
-    CHECK(backHome >= 50);
+    CHECK(backHome + nightOut >= 50);   // home, or on a night out -- nobody stranded on campus
 }
 
 // THE DORM BLOCK (campus gap pass): with two residence halls the students fill both, in proportion to their beds, and
@@ -720,6 +721,9 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     places.add(PlaceType::Cafe, Vec2(-560, 560), nav, 6, 23);
     const PlaceId lib = places.add(PlaceType::Civic, Vec2(60, 40), nav, 7, 23);
     const PlaceId field = places.add(PlaceType::Park, Vec2(250, 50), nav);
+    // the night's places, with the night's hours (wrapping midnight)
+    for (int i = 0; i < 3; ++i) places.add(PlaceType::Bar, Vec2(-300.0 + i * 260.0, -200.0), nav, 16, 2);
+    for (int i = 0; i < 2; ++i) places.add(PlaceType::Club, Vec2(-200.0 + i * 380.0, 150.0), nav, 21, 3);
     places.setCampus(quad, 4); places.setCampus(lib, 2); places.setCampus(field, 5);
     std::vector<CitySim::ActivitySpot> spots;
     auto spot = [&](Vec2 p, SpotKind kd) { CitySim::ActivitySpot sp; sp.pos = p; sp.face = Vec2(0, 1); sp.kind = kd; spots.push_back(sp); };
@@ -742,7 +746,7 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     lawnP.center = Vec2(-330, 300); lawnP.halfL = 25; lawnP.halfW = 14;
     sim.setAreas({pitch, lawnQ, lawnP});
     sim.assignPlaces(places, nav);
-    sim.seedFromSchedule(8.0);
+    sim.seedFromSchedule(13.0);   // the afternoon into the night: the night's activities open from 16:30
 
     // the longest any activity keeps someone at a spot or in a session, in hours, plus slack
     double longest = 0;

@@ -744,7 +744,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // A "job" is a workplace place: shop / office / civic (a park is not a job).
     std::vector<PlaceId> jobs;
     for (PlaceType t : {PlaceType::Shop, PlaceType::Office, PlaceType::Civic,
-                        PlaceType::Cafe, PlaceType::Restaurant, PlaceType::Supermarket})
+                        PlaceType::Cafe, PlaceType::Restaurant, PlaceType::Supermarket, PlaceType::Bar, PlaceType::Club})
         for (PlaceId id : places.ofType(t)) jobs.push_back(id);
     venues_.clear();
     if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
@@ -1374,8 +1374,8 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     a.commuteSeconds = secs;
                 }
                 const PlaceType wt = places[pick].type;
-                if (wt == PlaceType::Shop || wt == PlaceType::Cafe ||
-                    wt == PlaceType::Restaurant || wt == PlaceType::Supermarket) {
+                if (wt == PlaceType::Shop || wt == PlaceType::Cafe || wt == PlaceType::Restaurant ||
+                    wt == PlaceType::Supermarket || wt == PlaceType::Bar || wt == PlaceType::Club) {
                     const Real open = places[pick].openHour;
                     const Real close = places[pick].closeHour;
                     // ONLY when the shop actually authored hours. A place minted
@@ -1847,6 +1847,19 @@ void CitySim::runDormantEvents() {
         ++dormantEventsRun_;
         scheduleDormantEvent(ev.agent);
     }
+}
+
+bool CitySim::eveningPlan(const Agent& a, Real& start, Real& end) const {
+    const Real share = nightOutShare_[std::min(3, static_cast<int>(a.role))];
+    if (share <= 0) return false;
+    const long night = static_cast<long>(std::floor((clockTotalHours_ - 12.0) / 24.0));   // noon to noon
+    uint32_t h = a.brain ^ (static_cast<uint32_t>(night) * 0x9E3779B9u);
+    h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+    if (static_cast<Real>(h & 0x3FF) >= share * 1024.0) return false;
+    const Real u1 = ((h >> 10) & 0xFF) / Real(255), u2 = ((h >> 18) & 0xFF) / Real(255);
+    start = 18.5 + 2.5 * u1;
+    end = std::fmod(start + 2.0 + 3.5 * u2, Real(24));
+    return true;
 }
 
 void CitySim::pinAgent(int i, bool on) {
@@ -2469,6 +2482,12 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
                                       : GoalEvent::DepartHome) != GoalFire::NoRow)
             return;
     }
+    // THE NIGHT OUT: also before the dwell, so a bar-hop ends when the evening does.
+    Real eveStart = 0, eveEnd = 0;
+    const bool outTonight = eveningPlan(a, eveStart, eveEnd);
+    if (tryGoalEvent(a, outTonight && inWindow(clockHours_, eveStart, eveEnd) ? GoalEvent::Evening
+                                                                               : GoalEvent::EveningOver) != GoalFire::NoRow)
+        return;
     if (dwell > 0 && a.goalHours >= dwell)
         if (tryGoalEvent(a, GoalEvent::DwellDone) != GoalFire::NoRow) return;
     if (tryGoalEvent(a, GoalEvent::Idle) != GoalFire::NoRow) return;
@@ -2496,6 +2515,13 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
         Real delta = std::fmod(boundary - clockHours_, Real(24));
         if (delta < 0) delta += 24.0;
         hoursUntil = std::min(hoursUntil, delta);
+    }
+    // ...and its evening: tonight's start or end if it goes out, and noon either way (the next night's plan).
+    {
+        auto ahead = [&](Real h) { Real d = std::fmod(h - clockHours_, Real(24)); if (d < 0) d += 24.0; return d; };
+        if (outTonight) hoursUntil = std::min(hoursUntil, ahead(inWindow(clockHours_, eveStart, eveEnd) ? eveEnd : eveStart));
+        const Real noon = ahead(12.0);
+        if (noon > 1e-6) hoursUntil = std::min(hoursUntil, noon);
     }
     // A stranded agent (work == home) with no dwell waits forever — and that is
     // the cheapest agent in the city, which is exactly right.
@@ -2646,6 +2672,8 @@ std::string CitySim::venueKind(const Venue& v) const {
     switch (v.type) {
         case PlaceType::Cafe: return "cafe";
         case PlaceType::Restaurant: return "restaurant";
+        case PlaceType::Bar: return "bar";
+        case PlaceType::Club: return "club";
         case PlaceType::Shop: return "shop";
         case PlaceType::Supermarket: return "supermarket";
         case PlaceType::Office: return "office";

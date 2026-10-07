@@ -535,6 +535,15 @@ public:
     // The hour this agent must LEAVE to arrive at departWork, at the current
     // clock rate. Wraps midnight: a long commute on a fast clock departs the
     // previous evening.
+    // A NIGHT OUT (Glenn, 2026-10-06: "we would want restaurants and clubs and such for a night life"): whether
+    // tonight -- noon to noon -- is one of this agent's nights out, and its evening if so: out between 18:30 and 21:00,
+    // home two to five and a half hours later (by 02:30 at the latest). Its own bits and the night's number: a
+    // different crowd every night, the same one for the same night. The share is by role (setNightOutShares).
+    bool eveningPlan(const Agent& a, Real& start, Real& end) const;
+    // Of commuters, shopkeepers, strollers and students: the share out on any one night (default 22/15/30/40%).
+    void setNightOutShares(Real commuter, Real shopkeeper, Real stroller, Real student) {
+        nightOutShare_[0] = commuter; nightOutShare_[1] = shopkeeper; nightOutShare_[2] = stroller; nightOutShare_[3] = student;
+    }
     Real departWorkHour(const Agent& a) const {
         const Real travel = a.commuteSeconds * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
         Real h = std::fmod(a.departWork - travel, 24.0);
@@ -1734,6 +1743,7 @@ private:
     std::vector<double> dormantEventAt_;   // per agent: its live event's time (-1 none)
     long dormantEventsRun_ = 0;
     double dormantEventMs_ = 0;
+    Real nightOutShare_[4] = {0.22, 0.15, 0.30, 0.40};   // setNightOutShares
     void scheduleDormantEvent(int i);
     void runDormantEvents();
     std::vector<int> crowdDirty_;  // takeCrowdChanges

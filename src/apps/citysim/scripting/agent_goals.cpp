@@ -143,7 +143,8 @@ bool loadGoalTable(ScriptVM& vm, const std::string& archetype, GoalTable& out,
             }
         }
         lua_pop(L, 1);   // spot
-        if (target == GoalTarget::Activity && spotKinds == 0) spotKinds = citysim::spotKindBit(citysim::SpotKind::Sit);
+        // (a seat by default -- unless it picks from a menu, which names its own sites)
+        if (target == GoalTarget::Activity && spotKinds == 0 && menuName.empty()) spotKinds = citysim::spotKindBit(citysim::SpotKind::Sit);
         lua_pop(L, 1);
         if (!ok || dwell < 0) {
             lua_settop(L, base);

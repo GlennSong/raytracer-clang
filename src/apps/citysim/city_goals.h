@@ -65,6 +65,8 @@ enum class GoalEvent : uint8_t {
     GotFare,      // a free driver was just matched to a waiting hail
     ServiceEnd,   // the clock left the service window: finish up and go home
     ServiceStart, // the clock entered it: back on the road
+    Evening,      // resting, and tonight is a night out for this agent and its evening has begun (CitySim::eveningPlan)
+    EveningOver,  // resting, and its evening is over (or it is not going out tonight)
     Count
 };
 const char* goalEventName(GoalEvent e);

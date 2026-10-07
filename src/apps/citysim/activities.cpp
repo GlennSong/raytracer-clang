@@ -102,6 +102,8 @@ void siteKindMinutes(const std::string& k, double& lo, double& hi) {
     // what each kind of place keeps a visitor (the old arrival switch, in minutes)
     if (k == "cafe") { lo = 15; hi = 30; }
     else if (k == "restaurant") { lo = 30; hi = 60; }
+    else if (k == "bar") { lo = 40; hi = 90; }
+    else if (k == "club") { lo = 60; hi = 150; }
     else if (k == "supermarket") { lo = 12; hi = 24; }
     else if (k == "civic" || k == "teaching") { lo = 18; hi = 36; }
     else if (k == "park" || k == "field") { lo = 6; hi = 15; }
@@ -135,7 +137,9 @@ ActivityCatalog defaultActivityCatalog() {
     { ActivityDef& d = def("groceries", {"supermarket"}); d.distLo = 60; d.perSite = true; }
     { ActivityDef& d = def("meal", {"restaurant"}); d.distLo = 60; d.perSite = true; d.hourLo = 11.5; d.hourHi = 21.5; }
     { ActivityDef& d = def("civic_visit", {"civic", "library", "teaching"}); d.distLo = 60; d.perSite = true; }
-    { ActivityDef& d = def("walk_round_block", {"street"}); d.distLo = 150; d.distHi = 450; d.perform = Perform::Wander; }
+    // (on foot only: a driver's wander rest swapped its pose ~21 m -- agents_never_teleport, once drivers went out at night)
+    { ActivityDef& d = def("walk_round_block", {"street"}); d.distLo = 150; d.distHi = 450; d.perform = Perform::Wander;
+      d.walkersOnly = true; }
     // LUNCH OUT (the old pickLunch): walkers in their shift, three in eight brought theirs, one of the four nearest
     // open cafes or restaurants within 600 m
     { ActivityDef& d = def("lunch", {"cafe", "restaurant"}); d.distHi = 600; d.nearest = 4; d.walkersOnly = true;
@@ -177,6 +181,18 @@ ActivityCatalog defaultActivityCatalog() {
     // THE ERRAND on the way home (the old fixed "shop near home"): a supermarket or a store near HOME, one of the three
     // nearest open
     { ActivityDef& d = def("errand", {"supermarket", "shop"}); d.fromHome = true; d.distHi = 700; d.nearest = 3; }
+
+    // THE NIGHT (Glenn: "we would want restaurants and clubs and such for a night life ... College clubs"): dinner
+    // out, drinks at a bar, a club late, a college club's meeting on campus. Farther than a day's stops: a night out
+    // is worth the walk (or the bus).
+    { ActivityDef& d = def("dinner", {"restaurant"}); d.distLo = 60; d.distHi = 1200; d.perSite = true; d.hourLo = 17.5;
+      d.hourHi = 22.5; d.minutesLo = 50; d.minutesHi = 100; }
+    { ActivityDef& d = def("drinks", {"bar"}); d.distLo = 60; d.distHi = 1200; d.perSite = true; d.hourLo = 16.5;
+      d.hourHi = 1.5; }
+    { ActivityDef& d = def("clubbing", {"club"}); d.distLo = 100; d.distHi = 2500; d.nearest = 3; d.hourLo = 21.5;
+      d.hourHi = 2.5; }
+    { ActivityDef& d = def("college_club", {"teaching", "library"}); d.distHi = 1e9; d.nearest = 2; d.hourLo = 18.0;
+      d.hourHi = 22.0; d.minutesLo = 50; d.minutesHi = 90; }
 
     // A DAY OFF, by the hour: coffee and the park in the morning; the shops and lunch at midday; errands and the park
     // in the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
@@ -224,6 +240,28 @@ ActivityCatalog defaultActivityCatalog() {
     { MenuBand b; b.first = {{"campus_bench", 0.75, 0}};
       b.pick = {{"study", 0, 2.0}, {"quad_time", 0, 1.0}, {"chat", 0, 1.2}, {"sunbathe", 0, 0.5}}; brk.bands.push_back(b); }
     c.menus.push_back(brk);
+    // A NIGHT OUT, by the hour: dinner and a first drink early; drinks and the clubs later; after midnight the clubs
+    // and the last bars -- a walk now and then between
+    Menu evening;
+    evening.name = "evening";
+    { MenuBand b; b.hourLo = 16.0; b.hourHi = 21.0;
+      b.pick = {{"dinner", 0, 3.0}, {"drinks", 0, 2.0}, {"walk_round_block", 0, 0.8}, {"park_visit", 0, 0.4}, {"chat", 0, 0.5}};
+      evening.bands.push_back(b); }
+    { MenuBand b; b.hourLo = 21.0; b.hourHi = 23.5;
+      b.pick = {{"drinks", 0, 3.0}, {"clubbing", 0, 1.5}, {"dinner", 0, 0.8}, {"walk_round_block", 0, 0.5}};
+      evening.bands.push_back(b); }
+    { MenuBand b; b.hourLo = 23.5; b.hourHi = 16.0;
+      b.pick = {{"clubbing", 0, 3.0}, {"drinks", 0, 2.0}}; evening.bands.push_back(b); }
+    c.menus.push_back(evening);
+    // A STUDENT'S EVENING: a college club's meeting early, then out like anyone
+    Menu studentEvening;
+    studentEvening.name = "student_evening";
+    { MenuBand b; b.hourLo = 16.0; b.hourHi = 22.0; b.first = {{"college_club", 0.45, 0}};
+      b.pick = {{"dinner", 0, 2.0}, {"drinks", 0, 2.0}, {"chat", 0, 0.8}, {"quad_time", 0, 0.5}};
+      studentEvening.bands.push_back(b); }
+    { MenuBand b; b.hourLo = 22.0; b.hourHi = 16.0;
+      b.pick = {{"clubbing", 0, 3.0}, {"drinks", 0, 2.5}}; studentEvening.bands.push_back(b); }
+    c.menus.push_back(studentEvening);
     return c;
 }
 

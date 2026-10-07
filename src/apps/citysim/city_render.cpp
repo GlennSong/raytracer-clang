@@ -3434,6 +3434,8 @@ ImU32 placeColor(PlaceType t) {
         case PlaceType::Civic:  return IM_COL32(190, 130, 240, 255);
         case PlaceType::Cafe:        return IM_COL32(200, 140,  90, 255);
         case PlaceType::Restaurant:  return IM_COL32(230,  90,  80, 255);
+        case PlaceType::Bar:         return IM_COL32(170,  80, 200, 255);
+        case PlaceType::Club:        return IM_COL32(240,  60, 200, 255);
         case PlaceType::Supermarket: return IM_COL32(250, 220,  90, 255);
         default:                return IM_COL32(220, 220, 220, 255);
     }

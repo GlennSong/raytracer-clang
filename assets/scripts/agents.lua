@@ -8,7 +8,7 @@
 -- A table is:
 --   entry       = "StateName"          -- where every agent's day starts
 --   states      = { { name=, action=("rest"|"goto"), target=("work"|"home"|
---                     "random"|"shop"|"lunch"|"outing"), activity=("AtHome"|
+--                     "random"|"shop"|"lunch"|"outing"|"activity"), menu=, activity=("AtHome"|
 --                     "Commuting"|"AtWork"|"Returning"|"Shopping"|"Lunch"|
 --                     "Outing"), dwell=<hours> }, ... }
 --   transitions = { { from=, event=, to= }, ... }   -- first matching row wins
@@ -23,6 +23,8 @@
 --   noRoute     a departure found no route
 --   idle        resting, every tick (perpetual loops)
 --   dwellDone   resting, `dwell` hours elapsed in this state
+--   evening     resting, tonight is this agent's night out and its evening has begun
+--   eveningOver resting, its evening is over (or no night out tonight)
 -- `activity` is the label the debug HUD (and tests) read while in the state.
 --
 -- These tables mirror the engine's built-in defaults exactly (pinned by
@@ -44,6 +46,12 @@ agents.schedule = {
         { name = "GoShopping",    action = "goto", target = "shop",  activity = "Shopping" },
         { name = "AtShop",        action = "rest",                   activity = "Shopping", dwell = 0.5 },
         { name = "ReturnHome",    action = "goto", target = "home",  activity = "Returning" },
+        -- A NIGHT OUT (city_goals.cpp addNightOut): from home when the evening begins (nowhere to go: a night in),
+        -- stop to stop off the menu, home when it is over.
+        { name = "GoOut",         action = "goto", target = "activity", menu = "evening", activity = "Outing" },
+        { name = "OutTonight",    action = "rest",                   activity = "Outing", dwell = 0.05 },
+        { name = "NextStop",      action = "goto", target = "activity", menu = "evening", activity = "Outing" },
+        { name = "HomeTonight",   action = "goto", target = "home",  activity = "Returning" },
     },
     transitions = {
         { from = "AtHome",        event = "departWork", to = "CommuteToWork" },
@@ -63,6 +71,15 @@ agents.schedule = {
         { from = "AtShop",        event = "dwellDone",  to = "ReturnHome" },
         { from = "ReturnHome",    event = "arrived",    to = "AtHome" },
         { from = "ReturnHome",    event = "noRoute",    to = "AtWorkPM" },
+        { from = "AtHome",        event = "evening",     to = "GoOut" },
+        { from = "GoOut",         event = "arrived",     to = "OutTonight" },
+        { from = "GoOut",         event = "noRoute",     to = "AtHome" },
+        { from = "OutTonight",    event = "eveningOver", to = "HomeTonight" },
+        { from = "OutTonight",    event = "dwellDone",   to = "NextStop" },
+        { from = "NextStop",      event = "arrived",     to = "OutTonight" },
+        { from = "NextStop",      event = "noRoute",     to = "HomeTonight" },
+        { from = "HomeTonight",   event = "arrived",     to = "AtHome" },
+        { from = "HomeTonight",   event = "noRoute",     to = "AtHome" },
     },
 }
 
@@ -102,6 +119,12 @@ agents.stroller = {
         { name = "Outing",      action = "goto", target = "outing", activity = "Outing" },
         { name = "OutAndAbout", action = "rest",                    activity = "Outing", dwell = 0.05 },
         { name = "ReturnHome",  action = "goto", target = "home",   activity = "Returning" },
+        -- A NIGHT OUT (city_goals.cpp addNightOut): from home when the evening begins (nowhere to go: a night in),
+        -- stop to stop off the menu, home when it is over.
+        { name = "GoOut",         action = "goto", target = "activity", menu = "evening", activity = "Outing" },
+        { name = "OutTonight",    action = "rest",                   activity = "Outing", dwell = 0.05 },
+        { name = "NextStop",      action = "goto", target = "activity", menu = "evening", activity = "Outing" },
+        { name = "HomeTonight",   action = "goto", target = "home",  activity = "Returning" },
     },
     transitions = {
         { from = "AtHome",      event = "departWork", to = "Outing" },
@@ -111,5 +134,14 @@ agents.stroller = {
         { from = "OutAndAbout", event = "dwellDone",  to = "Outing" },
         { from = "ReturnHome",  event = "arrived",    to = "AtHome" },
         { from = "ReturnHome",  event = "noRoute",    to = "OutAndAbout" },
+        { from = "AtHome",        event = "evening",     to = "GoOut" },
+        { from = "GoOut",         event = "arrived",     to = "OutTonight" },
+        { from = "GoOut",         event = "noRoute",     to = "AtHome" },
+        { from = "OutTonight",    event = "eveningOver", to = "HomeTonight" },
+        { from = "OutTonight",    event = "dwellDone",   to = "NextStop" },
+        { from = "NextStop",      event = "arrived",     to = "OutTonight" },
+        { from = "NextStop",      event = "noRoute",     to = "HomeTonight" },
+        { from = "HomeTonight",   event = "arrived",     to = "AtHome" },
+        { from = "HomeTonight",   event = "noRoute",     to = "AtHome" },
     },
 }

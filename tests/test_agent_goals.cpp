@@ -50,6 +50,8 @@ TEST_CASE(agents_lua_rebuilds_the_default_schedule_table) {
     bool ok = loadGoalTable(a.vm, "schedule", t, &err);
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
+    if (t.describe() != defaultScheduleGoals().describe())
+        std::printf("    LUA:\n%s\n    C++:\n%s\n", t.describe().c_str(), defaultScheduleGoals().describe().c_str());
     CHECK(t.describe() == defaultScheduleGoals().describe());
 }
 

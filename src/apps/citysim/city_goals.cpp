@@ -7,7 +7,8 @@ namespace citysim {
 namespace {
 const char* kEventNames[] = {"departWork", "departHome", "arrived",
                              "noRoute",    "idle",       "dwellDone",
-                             "gotFare",    "serviceEnd", "serviceStart"};
+                             "gotFare",    "serviceEnd", "serviceStart",
+                             "evening",    "eveningOver"};
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) ==
                   static_cast<std::size_t>(GoalEvent::Count),
               "goal event names out of sync with GoalEvent");
@@ -139,6 +140,33 @@ std::string GoalTable::describe() const {
     return out;
 }
 
+namespace {
+// A NIGHT OUT (Glenn, 2026-10-06: "we would want restaurants and clubs and such for a night life"), the same three
+// states on every resident's day: from home when its evening begins (GoalEvent::Evening), stop to stop off `menu` --
+// dinner, a bar, a club -- and home when the evening is over. Appended after a table's own states, so a clock jump
+// still seats an agent on the first state wearing a label (ReturnHome before HomeTonight).
+void addNightOut(GoalTable& t, const char* menu) {
+    // the first stop leaves FROM HOME: nowhere to go is simply a night in (no trip home from the doorstep -- that
+    // failed trip re-posed a stranded agent 21 m, agents_never_teleport); a later stop with nowhere to go goes home
+    t.addState("GoOut", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    t.setMenu("GoOut", menu);
+    t.addState("OutTonight", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.05);   // the stop sets its own
+    t.addState("NextStop", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    t.setMenu("NextStop", menu);
+    t.addState("HomeTonight", GoalAction::GoTo, GoalTarget::Home, Activity::Returning);
+    t.addTransition("AtHome", GoalEvent::Evening, "GoOut");
+    t.addTransition("GoOut", GoalEvent::Arrived, "OutTonight");
+    t.addTransition("GoOut", GoalEvent::NoRoute, "AtHome");
+    // the evening ends -> home (checked before the pause, as an outing's window is)
+    t.addTransition("OutTonight", GoalEvent::EveningOver, "HomeTonight");
+    t.addTransition("OutTonight", GoalEvent::DwellDone, "NextStop");
+    t.addTransition("NextStop", GoalEvent::Arrived, "OutTonight");
+    t.addTransition("NextStop", GoalEvent::NoRoute, "HomeTonight");
+    t.addTransition("HomeTonight", GoalEvent::Arrived, "AtHome");
+    t.addTransition("HomeTonight", GoalEvent::NoRoute, "AtHome");
+}
+}  // namespace
+
 GoalTable defaultScheduleGoals() {
     GoalTable t;
     t.addState("AtHome", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
@@ -182,6 +210,7 @@ GoalTable defaultScheduleGoals() {
     t.addTransition("AtShop", GoalEvent::DwellDone, "ReturnHome");
     t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
     t.addTransition("ReturnHome", GoalEvent::NoRoute, "AtWorkPM");
+    addNightOut(t, "evening");
     t.setEntry("AtHome");
     return t;
 }
@@ -203,6 +232,7 @@ GoalTable strollerGoals() {
     t.addTransition("OutAndAbout", GoalEvent::DwellDone, "Outing");
     t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
     t.addTransition("ReturnHome", GoalEvent::NoRoute, "OutAndAbout");
+    addNightOut(t, "evening");
     t.setEntry("AtHome");
     return t;
 }
@@ -231,6 +261,7 @@ GoalTable studentGoals() {
     t.addTransition("OnBreak", GoalEvent::DwellDone, "ToClass");
     t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
     t.addTransition("ReturnHome", GoalEvent::NoRoute, "OnBreak");
+    addNightOut(t, "student_evening");
     t.setEntry("AtHome");
     return t;
 }

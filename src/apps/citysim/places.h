@@ -44,6 +44,10 @@ enum class PlaceType : uint8_t {
     Cafe,         // morning coffee, a stroller's stop, a quick lunch
     Restaurant,   // lunch and dinner
     Supermarket,  // the errand on the way home
+    // THE NIGHT (Glenn, 2026-10-06: "we would want restaurants and clubs and such for a night life"): at 23:00 the
+    // island had two residents out. Hours wrap midnight (Place::openAt).
+    Bar,          // after work and into the night, 16:00-02:00
+    Club,         // late, 21:00-03:00
     Count
 };
 
@@ -57,8 +61,9 @@ bool parsePlaceType(const std::string& tag, PlaceType& out);
 
 // What a generic "shop" lot is, and its hours: a deterministic draw from the
 // site (so a city always has the same cafe on the same corner). About a
-// quarter cafes, a fifth restaurants, one in ten supermarkets, the rest
-// stores (PlaceType::Shop), each with the hours that kind keeps.
+// fifth cafes, a fifth restaurants, one in ten supermarkets, one in twelve
+// bars, three in a hundred clubs, the rest stores (PlaceType::Shop), each with
+// the hours that kind keeps.
 struct RetailKind {
     PlaceType type = PlaceType::Shop;
     Real openHour = 9, closeHour = 20;

@@ -15,6 +15,8 @@ const char* placeTypeName(PlaceType type) {
         case PlaceType::Cafe:        return "cafe";
         case PlaceType::Restaurant:  return "restaurant";
         case PlaceType::Supermarket: return "supermarket";
+        case PlaceType::Bar:         return "bar";
+        case PlaceType::Club:        return "club";
         default:                return "?";
     }
 }
@@ -38,9 +40,11 @@ RetailKind retailKindFor(Vec2 site) {
     h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
     const uint32_t roll = h % 100u;
     RetailKind k;
-    if (roll < 25)      { k.type = PlaceType::Cafe;        k.openHour = 6.5; k.closeHour = 19.0; }
-    else if (roll < 45) { k.type = PlaceType::Restaurant;  k.openHour = 11.0; k.closeHour = 23.0; }
-    else if (roll < 55) { k.type = PlaceType::Supermarket; k.openHour = 7.0; k.closeHour = 22.0; }
+    if (roll < 22)      { k.type = PlaceType::Cafe;        k.openHour = 6.5; k.closeHour = 19.0; }
+    else if (roll < 40) { k.type = PlaceType::Restaurant;  k.openHour = 11.0; k.closeHour = 23.5; }
+    else if (roll < 49) { k.type = PlaceType::Supermarket; k.openHour = 7.0; k.closeHour = 22.0; }
+    else if (roll < 57) { k.type = PlaceType::Bar;         k.openHour = 16.0; k.closeHour = 2.0; }
+    else if (roll < 60) { k.type = PlaceType::Club;        k.openHour = 21.0; k.closeHour = 3.0; }
     else                { k.type = PlaceType::Shop;        k.openHour = 9.0; k.closeHour = 20.0; }
     return k;
 }
