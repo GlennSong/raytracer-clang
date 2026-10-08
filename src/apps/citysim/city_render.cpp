@@ -431,6 +431,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // An unrecognized type tag is warned-and-skipped so one typo can't drop the
     // level. Rebuilt fresh each build() so a reload doesn't accumulate places.
     places_ = PlaceMap{};
+    placeOfAuthored_.assign(authoredPlaces_.size(), kNoPlace);
     for (const engine::AuthoredPlace& ap : authoredPlaces_) {
         PlaceType type;
         if (!parsePlaceType(ap.type, type)) {
@@ -452,6 +453,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), nav_, openH, closeH, ap.capacity,
                                         ap.name, ap.hasEntrance ? &doorHint : nullptr);
+        placeOfAuthored_[static_cast<std::size_t>(&ap - authoredPlaces_.data())] = pid;
         if (synthetic) places_.setAuthoredHours(pid, false);
         if (ap.campus) places_.setCampus(pid, ap.campus);
     }
@@ -3287,6 +3289,50 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
     crowdDrawnSeen_ = static_cast<int>(ctx.renderer.crowdDrawn());
 }
 
+void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, Vec3 cam) {
+    Real nearD = 1e30;
+    Vec3 nearAt, nearN;
+    std::vector<uint16_t> hired;
+    sim_.staffOnShift(onShift_, places_.size(), &hired);
+    const Real clock = sim_.clockHours();
+    int signs = 0, lit = 0, closed = 0, unstaffed = 0, noHire = 0;
+    world.each<engine::OpenSigns, InstanceGroup>([&](Entity, engine::OpenSigns& os, InstanceGroup& g) {
+        bool changed = false;
+        for (std::size_t k = 0; k < os.at.size(); ++k) {
+            const int ai = os.place[k];
+            const PlaceId pid = ai >= 0 && ai < static_cast<int>(placeOfAuthored_.size()) ? placeOfAuthored_[static_cast<std::size_t>(ai)] : kNoPlace;
+            bool on = false;
+            if (pid != kNoPlace && pid < static_cast<PlaceId>(onShift_.size())) {
+                const bool open = places_[pid].openAt(clock), staffed = onShift_[pid] > 0;
+                on = open && staffed;
+                closed += !open;
+                unstaffed += open && !staffed;
+                noHire += open && !staffed && hired[pid] == 0;
+            }
+            ++signs;
+            lit += on;
+            const uint8_t v = on ? 1 : 0;
+            if (os.lit[k] != v) { os.lit[k] = v; changed = true; }
+            if (on) {
+                const Vec3 at(os.at[k].m[0][3], os.at[k].m[1][3], os.at[k].m[2][3]);
+                if ((at - cam).length() < nearD) { nearD = (at - cam).length(); nearAt = at; nearN = Vec3(os.at[k].m[0][2], 0, os.at[k].m[2][2]); }
+            }
+        }
+        if (!changed) return;
+        InstanceGroup* dark = world.get<InstanceGroup>(os.dark);
+        g.transforms.clear();
+        if (dark) dark->transforms.clear();
+        for (std::size_t k = 0; k < os.at.size(); ++k) {
+            if (os.lit[k]) g.transforms.push_back(os.at[k]);
+            else if (dark) dark->transforms.push_back(os.at[k]);
+        }
+    });
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "nearest lit %.1f %.1f %.1f facing %.2f %.2f (%.0f m); %d OPEN signs: %d lit, %d closed for the night, %d open but nobody on shift (%d with nobody hired) (%.2f h)",
+                  nearAt.x, nearAt.y, nearAt.z, nearN.x, nearN.z, nearD < 1e29 ? nearD : -1.0, signs, lit, closed, unstaffed, noHire, clock);
+    settings.setString("opensigns.telemetry", buf);
+}
+
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     feedGpuCrowd(ctx);
     // Stage the sun for the bake's car lamps (see solarElevation_).
@@ -3345,6 +3391,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                           kerbTaken, kerb, stallsTaken, stalls, best.x, bestY, best.y, bestD < 1e29 ? bestD : -1.0);
             ctx.settings.setString("parking.telemetry", buf);
         }
+        // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and
+        // someone who works there is at work; `opensigns?` says how many
+        if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.settings, ctx.view.camera.position);
         // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
         {
             const std::string pr = ctx.settings.getString("pin.request", "");

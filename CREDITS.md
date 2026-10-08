@@ -42,6 +42,8 @@ does not require it. "Measured against" counts too.
 | What | Where | Author / source | Licence |
 |---|---|---|---|
 | Overpass Bold (road signs) | `assets/fonts/Overpass-Bold.ttf` | The Overpass Project Authors (Red Hat), github.com/RedHatOfficial/Overpass | SIL OFL 1.1, text in `assets/fonts/OFL.txt` |
+| Pacifico (bars' neon script signs) | `assets/fonts/Pacifico-Regular.ttf` | The Pacifico Project Authors (Vernon Adams et al.), github.com/googlefonts/Pacifico via github.com/google/fonts | SIL OFL 1.1, text in `assets/fonts/OFL-Pacifico.txt` |
+| Tilt Neon (clubs' neon signs, OPEN signs) | `assets/fonts/TiltNeon.ttf` | The Tilt Project Authors (Andy Clymer), github.com/googlefonts/Tilt-Fonts via github.com/google/fonts | SIL OFL 1.1, text in `assets/fonts/OFL-TiltNeon.txt` |
 | SDL_GameControllerDB (gamepad mappings) | `gamecontrollerdb.txt` | Gabriel Jacobo and contributors, github.com/mdqinc/SDL_GameControllerDB | zlib |
 
 ## Measured against, not shipped

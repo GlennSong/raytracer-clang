@@ -506,6 +506,10 @@ public:
         Real elapsedSeconds = 0;
     };
     Snapshot scheduleSnapshot(const Agent& a, Real clock) const;
+    // WHO IS ON SHIFT (storefronts stage 3, the OPEN signs): per place (by PlaceId), how many of the people who work
+    // there are at work now -- a simulated agent by its own state, a dormant one by its schedule. `out` is resized to
+    // `placeCount`.
+    void staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vector<uint16_t>* hired = nullptr) const;
 
     // Tell the sim how fast its clock runs, BEFORE seeding it.
     //

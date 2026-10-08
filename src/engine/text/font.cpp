@@ -218,4 +218,20 @@ const Font* signFont() {
     return ok ? &font : nullptr;
 }
 
+const Font* neonFont() {
+    static std::once_flag once;
+    static Font font;
+    static bool ok = false;
+    std::call_once(once, [] { ok = font.loadFile(assetPath("assets/fonts/Pacifico-Regular.ttf")); });
+    return ok ? &font : nullptr;
+}
+
+const Font* tubeFont() {
+    static std::once_flag once;
+    static Font font;
+    static bool ok = false;
+    std::call_once(once, [] { ok = font.loadFile(assetPath("assets/fonts/TiltNeon.ttf")); });
+    return ok ? &font : nullptr;
+}
+
 }  // namespace engine

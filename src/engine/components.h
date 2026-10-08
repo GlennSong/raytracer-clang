@@ -847,6 +847,17 @@ struct CitySimConfig {
     std::vector<GarageSpec> garages;
 };
 
+// THE OPEN SIGNS in shop windows (storefronts stage 3), one 200 m cell's: the loader makes two InstanceGroups of the
+// one sign mesh -- this entity's, lit, and `dark`'s, unlit -- and the citysim deals each sign (its world matrix, the
+// place it belongs to as an index into CitySimConfig::places) into one or the other: lit while someone is on shift
+// there and it is open. Runtime-only.
+struct OpenSigns {
+    Entity dark;
+    std::vector<Mat4> at;
+    std::vector<int> place;
+    std::vector<uint8_t> lit;   // as last dealt (0xFF: not yet)
+};
+
 // Build-time street furniture (device: "place the stop lights when we build
 // the city ... the simulation should use it but it shouldn't be responsible
 // for where they are"). The loader plans and SPAWNS every signal pole and

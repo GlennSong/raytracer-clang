@@ -66,6 +66,10 @@ private:
 // The engine's sign/UI face (assets/fonts/Overpass-Bold.ttf), loaded once on
 // first use from the asset root. nullptr if the file is missing.
 const Font* signFont();
+// NEON (storefronts stage 3): a script for bars' signs (Pacifico) and a face drawn as bent tube (Tilt Neon) for
+// clubs' and the OPEN signs in shop windows. Both SIL OFL; nullptr if missing.
+const Font* neonFont();
+const Font* tubeFont();
 
 }  // namespace engine
 

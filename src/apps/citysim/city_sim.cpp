@@ -1755,6 +1755,21 @@ CitySim::Snapshot CitySim::scheduleSnapshot(const Agent& a, Real clock) const {
     return s;
 }
 
+void CitySim::staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vector<uint16_t>* hired) const {
+    out.assign(static_cast<std::size_t>(std::max(0, placeCount)), 0);
+    if (hired) hired->assign(out.size(), 0);
+    for (const Agent& a : agents_) {
+        if (a.workPlace == kNoPlace || a.workPlace >= static_cast<PlaceId>(std::max(0, placeCount))) continue;
+        if (hired && (*hired)[a.workPlace] < 0xFFFF) ++(*hired)[a.workPlace];
+        const bool there = a.tier == Agent::Tier::D ? scheduleSnapshot(a, clockHours_).where == Snapshot::Where::AtWork
+                                                    : a.activity == Agent::Activity::AtWork;
+        if (there) {
+            uint16_t& n = out[static_cast<std::size_t>(a.workPlace)];
+            if (n < 0xFFFF) ++n;
+        }
+    }
+}
+
 void CitySim::indexNightVenues() {
     nightVenues_.clear();
     for (int vi = 0; vi < static_cast<int>(venues_.size()); ++vi) {

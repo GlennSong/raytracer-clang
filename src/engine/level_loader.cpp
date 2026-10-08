@@ -5757,6 +5757,8 @@ bool LevelLoader::load(const std::string& path,
             int lotTreesOnRoad = 0;
             std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
+            struct OpenSpot { Vec3 at; Vec2 n; int place; };
+            std::vector<OpenSpot> openSpots;            // ...and the OPEN signs in their windows
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             // Street-tree kit for parks + unbuilt greens (device: "empty lots had
             // vegetation like trees and grass"): a few shared varieties, one mesh
@@ -6141,6 +6143,9 @@ bool LevelLoader::load(const std::string& path,
                                 engine::ShopSign sign;
                                 sign.text = sp.name;
                                 sign.trade = sf.trade;
+                                // NEON (stage 3): a bar's name in script, a club's in tube letters
+                                sign.style = sf.trade == 14 ? 1 : sf.trade == 15 ? 2 : 0;
+                                sign.neon = engine::neonColour(sf.trade, nameSeed);
                                 sign.n = Vec3(sf.n.x, 0, sf.n.y);
                                 sign.up = Vec3(0, 1, 0);
                                 sign.right = cross(sign.n * -1.0, sign.up);   // reads left to right from the street
@@ -6149,6 +6154,25 @@ bool LevelLoader::load(const std::string& path,
                                 const Vec2 mid = (x0 + x1) * 0.5 + sf.n * (sf.fasciaProud + 0.03);
                                 sign.centre = Vec3(mid.x, u.baseY + 0.5 * (sf.fasciaY0 + sf.fasciaY1), mid.y);
                                 if (sign.width > 1.0) shopSigns.push_back(std::move(sign));
+                            }
+                            // THE OPEN SIGN (stage 3): in the window beside the door, under the fascia, a hand's
+                            // width behind the glass -- lit by the citysim while someone is on shift (not a club's: it
+                            // has its neon and a doorman)
+                            if (sf.trade != 15) {
+                                const Real L = (sf.b - sf.a).length();
+                                const Vec2 d = (sf.b - sf.a) * (1.0 / std::max(L, Real(1e-6)));
+                                const Real td = dot(sf.door - sf.a, d);
+                                // the middle of the wider pane: between the door's frame (~1 m off its centre)
+                                // and the unit's end pier
+                                const bool left = td > L - td;
+                                const Real lo = left ? 0.35 : td + 1.0, hi = left ? td - 1.0 : L - 0.35;
+                                const Real at = 0.5 * (lo + hi);
+                                if (hi - lo > engine::kOpenSignW + 0.3) {
+                                    const Vec2 c = sf.a + d * at - sf.n * 0.3;
+                                    const Real top = sf.fasciaY1 > sf.fasciaY0 + 0.2 ? sf.fasciaY0 : Real(2.6);
+                                    openSpots.push_back({Vec3(c.x, u.baseY + top - 0.45, c.y), sf.n,
+                                                         static_cast<int>(cfg.places.size())});
+                                }
                             }
                             cfg.places.push_back(std::move(sp));
                             ++fronts;
@@ -6318,39 +6342,101 @@ bool LevelLoader::load(const std::string& path,
             // THE SHOP SIGNS (storefronts stage 2): each business's name on its fascia, lettered into atlas pages
             // and merged per 200 m cell, like the street-name blades
             if (const engine::Font* font = engine::signFont(); font && !shopSigns.empty()) {
-                const engine::ShopSignAtlas atlas = engine::buildShopSignAtlas(*font, shopSigns);
-                const engine::ShopSignMeshes sm = engine::buildShopSignMeshes(shopSigns, atlas);
-                std::vector<TextureHandle> pages;
-                for (const engine::TextImage& pg : atlas.pages)
-                    pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+                // two sets: the lettered boards (the page is its own emissive map) and the NEON (stage 3: its own
+                // glow pages, the tubes and their halo, much brighter)
+                std::vector<engine::ShopSign> boardSigns, neonSigns;
+                for (engine::ShopSign& sg : shopSigns)
+                    ((sg.style != 0 && engine::neonFont()) ? neonSigns : boardSigns).push_back(sg);
                 int cellNo = 0;
-                for (const engine::ShopSignMeshes::Cell& c : sm.cells) {
-                    if (c.mesh.vertices.empty()) continue;
-                    InstanceGroup g;
-                    g.mesh = assets.acquireMesh(c.mesh, "city:shopsigns:" + std::to_string(cellNo++));
-                    g.material.albedo = Vec3(1, 1, 1);
-                    g.material.roughness = 0.6f;
-                    g.material.albedoMap = pages[static_cast<std::size_t>(c.page)];
-                    // LIT AT NIGHT (stage 3): the page is its own emissive map, so the lettering glows in its trade's
-                    // colour and the dark board hardly at all; NightGlow ramps it in through dusk
-                    g.material.emissiveMap = pages[static_cast<std::size_t>(c.page)];
-                    g.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
-                    g.transforms.push_back(Mat4());
-                    g.boundsCenter = c.centre;
-                    g.boundsRadius = c.radius + 1.0;
-                    g.drawDistance = 220.0;
-                    g.drawClass = engine::DrawClass::Furniture;
-                    const Entity signs = world.create();
-                    world.add<InstanceGroup>(signs, g);
-                    world.add<engine::NightGlow>(signs, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.1});   // (2.2 washed the colours to white)
-                }
+                auto place = [&](const std::vector<engine::ShopSign>& set, const engine::Font& face, const engine::Font* tube,
+                                 double glow) {
+                    if (set.empty()) return engine::ShopSignAtlas{};
+                    engine::ShopSignAtlas atlas = engine::buildShopSignAtlas(face, set, 2048, tube);
+                    const engine::ShopSignMeshes sm = engine::buildShopSignMeshes(set, atlas);
+                    std::vector<TextureHandle> pages, glows;
+                    for (const engine::TextImage& pg : atlas.pages)
+                        pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+                    for (const engine::TextImage& pg : atlas.glow)
+                        glows.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+                    for (const engine::ShopSignMeshes::Cell& c : sm.cells) {
+                        if (c.mesh.vertices.empty()) continue;
+                        InstanceGroup g;
+                        g.mesh = assets.acquireMesh(c.mesh, "city:shopsigns:" + std::to_string(cellNo++));
+                        g.material.albedo = Vec3(1, 1, 1);
+                        g.material.roughness = 0.6f;
+                        g.material.albedoMap = pages[static_cast<std::size_t>(c.page)];
+                        // LIT AT NIGHT (stage 3): the lettering glows in its trade's colour and the dark board hardly
+                        // at all; NightGlow ramps it in through dusk
+                        g.material.emissiveMap = glows.empty() ? pages[static_cast<std::size_t>(c.page)]
+                                                               : glows[static_cast<std::size_t>(c.page)];
+                        g.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
+                        g.transforms.push_back(Mat4());
+                        g.boundsCenter = c.centre;
+                        g.boundsRadius = c.radius + 1.0;
+                        g.drawDistance = glows.empty() ? 220.0 : 320.0;   // (neon carries down a street at night)
+                        g.drawClass = engine::DrawClass::Furniture;
+                        const Entity signs = world.create();
+                        world.add<InstanceGroup>(signs, g);
+                        world.add<engine::NightGlow>(signs, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
+                    }
+                    return atlas;
+                };
+                const engine::ShopSignAtlas atlas = place(boardSigns, *font, nullptr, 1.1);   // (2.2 washed the colours to white)
+                const engine::ShopSignAtlas neon = neonSigns.empty() ? engine::ShopSignAtlas{}
+                                                                     : place(neonSigns, *engine::neonFont(), engine::tubeFont(), 2.4);
+                LOG_INFO << "[signs] neon: " << neonSigns.size() << " signs on " << neon.pages.size() << " page(s); smallest capitals "
+                         << neon.smallestCapPx << " px";
                 if (std::getenv("RT_SIGN_DEBUG"))
                     for (std::size_t k = 0; k < shopSigns.size(); k += std::max<std::size_t>(1, shopSigns.size() / 12))
                         std::fprintf(stderr, "[sign] \"%s\" centre %.1f %.1f %.1f n %.2f %.2f w %.1f h %.2f\n", shopSigns[k].text.c_str(),
                                      shopSigns[k].centre.x, shopSigns[k].centre.y, shopSigns[k].centre.z, shopSigns[k].n.x, shopSigns[k].n.z,
                                      shopSigns[k].width, shopSigns[k].height);
                 LOG_INFO << "[signs] " << shopSigns.size() << " shop signs on " << atlas.pages.size()
-                         << " atlas page(s), " << sm.cells.size() << " cells; smallest capitals " << atlas.smallestCapPx << " px";
+                         << " atlas page(s), " << cellNo << " cells; smallest capitals " << atlas.smallestCapPx << " px";
+            }
+            // THE OPEN SIGNS (stage 3): one sign mesh, two groups per 200 m cell -- lit and dark -- and the citysim
+            // deals the signs between them by who is on shift (engine::OpenSigns)
+            if (const engine::Font* tube = engine::tubeFont(); tube && !openSpots.empty()) {
+                engine::TextImage day, lit;
+                engine::openSignImages(*tube, day, lit);
+                const TextureHandle dayTex = renderer.uploadTexture(day.w, day.h, 4, day.rgba.data());
+                const TextureHandle litTex = renderer.uploadTexture(lit.w, lit.h, 4, lit.rgba.data());
+                const MeshHandle mesh = assets.acquireMesh(engine::openSignMesh(), "city:opensign");
+                std::map<std::pair<int, int>, std::vector<std::size_t>> cells;
+                for (std::size_t k = 0; k < openSpots.size(); ++k)
+                    cells[{static_cast<int>(std::floor(openSpots[k].at.x / 200.0)), static_cast<int>(std::floor(openSpots[k].at.z / 200.0))}].push_back(k);
+                for (const auto& [key, idx] : cells) {
+                    InstanceGroup g;
+                    g.mesh = mesh;
+                    g.material.albedo = Vec3(1, 1, 1);
+                    g.material.roughness = 0.3f;
+                    g.material.albedoMap = dayTex;
+                    g.material.emissiveMap = litTex;
+                    g.material.flags |= RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_ALPHA_TEST;
+                    g.boundsCenter = Vec3((key.first + 0.5) * 200.0, 0, (key.second + 0.5) * 200.0);
+                    Real lo = 1e30, hi = -1e30;
+                    for (std::size_t k : idx) { lo = std::min(lo, openSpots[k].at.y); hi = std::max(hi, openSpots[k].at.y); }
+                    g.boundsCenter.y = 0.5 * (lo + hi);
+                    g.boundsRadius = 150.0 + 0.5 * (hi - lo);
+                    g.drawDistance = 140.0;
+                    g.drawClass = engine::DrawClass::Furniture;
+                    engine::OpenSigns os;
+                    for (std::size_t k : idx) {
+                        const OpenSpot& sp = openSpots[k];
+                        os.at.push_back(Mat4::translate(sp.at.x, sp.at.y, sp.at.z) * Mat4::rotateY(std::atan2(sp.n.x, sp.n.y)));
+                        os.place.push_back(sp.place);
+                    }
+                    os.lit.assign(idx.size(), 0xFF);
+                    InstanceGroup dark = g;
+                    dark.transforms = os.at;   // dark until the citysim says otherwise
+                    g.material.emission = Vec3(1.0, 1.0, 1.0) * 2.2;   // (a lit sign: bright by day too)
+                    os.dark = world.create();
+                    world.add<InstanceGroup>(os.dark, dark);
+                    const Entity litE = world.create();
+                    world.add<InstanceGroup>(litE, g);
+                    world.add<engine::OpenSigns>(litE, std::move(os));
+                }
+                LOG_INFO << "[signs] " << openSpots.size() << " OPEN signs in " << cells.size() << " cells";
             }
             if (!buildingsMc.indices.empty()) {
                 // Jolt mesh triangles are SINGLE-SIDED, and the grown plans

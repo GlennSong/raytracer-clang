@@ -537,6 +537,10 @@ private:
     std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches, the lawns (CitySimConfig)
     std::vector<std::array<double, 5>> sitSpots_;
     std::vector<engine::CitySimConfig::GarageSpec> garages_;
+    // THE OPEN SIGNS: each authored place's PlaceId (kNoPlace: skipped), and who is on shift where (dealOpenSigns)
+    std::vector<PlaceId> placeOfAuthored_;
+    std::vector<uint16_t> onShift_;
+    void dealOpenSigns(engine::World& world, engine::Settings& settings, engine::Vec3 cam);
     int parkingTick_ = 0;   // (parking? telemetry every 60 frames)   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
