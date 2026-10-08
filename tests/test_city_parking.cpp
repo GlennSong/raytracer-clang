@@ -393,3 +393,45 @@ TEST_CASE(parking_bay_hit_rate_is_reported) {
                 total ? 100.0 * double(parkedInBay) / double(total) : 0.0);
     CHECK(total > 0);
 }
+
+// THE GARAGES (~/.claude/plans/nightlife-and-malls.md stage 4b): a garage's stalls are bays anchored on the street in
+// front of its portal. In a crossroads with no kerbside parking at all, drivers park up a garage: in its bays, the car
+// left on its deck (at the stall, at the deck's height), and they drive out again.
+TEST_CASE(drivers_park_up_a_garage_and_drive_out_again) {
+    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25);
+    RoadGraph g;
+    g.nodes = { { Vec2(0, 0) }, { Vec2(0, 100) }, { Vec2(0, -100) }, { Vec2(100, 0) }, { Vec2(-100, 0) } };
+    for (int arm = 1; arm <= 4; ++arm)
+        g.edges.push_back(RoadEdge{ 0, arm, static_cast<Real>(spec.carriagewayWidth()), RoadClass::Local, 0 });
+    NavGraph nav = buildNavGraph(g);
+    CitySim sim;
+    sim.build(nav, 10, 0, 9);
+    const std::size_t kerb = sim.parkingBays().size();
+    std::vector<CitySim::GarageStallIn> stalls;
+    for (int lvl = 0; lvl < 3; ++lvl)
+        for (int i = 0; i < 10; ++i) stalls.push_back({Vec2(14.0 + i * 2.5, 40.0), Vec2(0, -1), 0.03 + lvl * 3.0});
+    const int added = sim.addGarageBays(Vec2(10, 50), Vec2(-1, 0), stalls);
+    std::printf("    [garage bays] kerbside %zu, garage %d\n", kerb, added);
+    CHECK(kerb == 0);
+    CHECK(added == 30);
+    int parkedUp = 0, wrongHeight = 0, departures = 0;
+    std::vector<int> last(sim.parkingBays().size(), -1);
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.5);
+        const auto& bays = sim.parkingBays();
+        for (const Agent& a : sim.agents()) {
+            if (a.parkedBay < 0 || bays[a.parkedBay].garage < 0 || a.car < 0) continue;
+            ++parkedUp;
+            const SimVehicle& v = sim.vehicles()[static_cast<std::size_t>(a.car)];
+            if (std::fabs(v.parkedY - bays[a.parkedBay].y) > 1e-6 || (v.pos - bays[a.parkedBay].pos).length() > 0.5) ++wrongHeight;
+        }
+        for (std::size_t bi = 0; bi < bays.size(); ++bi) {
+            if (last[bi] >= 0 && bays[bi].occupant == -1) ++departures;
+            last[bi] = bays[bi].occupant;
+        }
+    }
+    std::printf("    [garage bays] parked-up ticks %d, wrong height %d, departures %d\n", parkedUp, wrongHeight, departures);
+    CHECK(parkedUp > 0);
+    CHECK(wrongHeight == 0);
+    CHECK(departures > 0);
+}

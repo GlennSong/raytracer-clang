@@ -412,6 +412,8 @@ struct SimVehicle {
     // marked bay or clear kerb near its owner's destination, rather than onto
     // a heap at the corner.
     bool offStreet = false;
+    // Parked UP A GARAGE (a garage bay): the deck's height, world y; below -1e29 on the ground.
+    engine::Real parkedY = -1e30;
 };
 
 // A body some agent might sense this step (ADR-0063): its plan position, its
@@ -610,8 +612,17 @@ public:
         // stall is drawn to it, so the markings can never lap onto the kerb.
         engine::Real width = 0;
         int occupant = -1;
+        // A GARAGE STALL (addGarageBays): its deck's height (world y; below -1e29 a kerbside bay) and its garage.
+        // `link`/`station` are the street point in front of the garage's portal: the driver routes there, and the
+        // car is put away up on its deck (and fetched back out to the street when it leaves).
+        engine::Real y = -1e30;
+        int garage = -1;
     };
     const std::vector<ParkingBay>& parkingBays() const { return bays_; }
+    // THE GARAGES (CitySimConfig::garages): every stall a bay, anchored on the street link in front of the portal.
+    // After build. Returns the stalls added.
+    struct GarageStallIn { engine::Vec2 at, face; engine::Real y; };
+    int addGarageBays(const engine::Vec2& portal, const engine::Vec2& out, const std::vector<GarageStallIn>& stalls);
     // Effective lane spacing for a link: a parked-up street loses its curb
     // strips from the DRIVABLE width (band-model semantics, sim-side). The
     // render bridge lines its lane arrows up with the same spacing.
@@ -1603,6 +1614,7 @@ private:
     // Adopted fleet catalogue; empty = use the built-in table (see setFleet).
     std::vector<VehicleBody> fleet_;
     std::vector<ParkingBay> bays_;
+    int garageCount_ = 0;   // garages whose stalls are bays (addGarageBays)
     // Each link's reverse twin (-1 if one-way), and a per-link route cost
     // scale kept at 1 except while a bay departure prices its own twin.
     std::vector<int> twinOf_;

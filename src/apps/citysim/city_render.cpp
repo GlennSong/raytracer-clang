@@ -268,6 +268,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         jogLoops_ = c.jogLoops;       // the tracks to run
         activityAreas_ = c.activityAreas;   // the pitches, the lawns
         sitSpots_ = c.sitSpots;             // a fountain's rim
+        garages_ = c.garages;               // the parking garages you can drive into
     });
 
     // Merge every RoadEntity's constrained graph into one combined graph (a level
@@ -581,6 +582,19 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE GARAGES' STALLS become bays (~/.claude/plans/nightlife-and-malls.md stage 4b): a driver bound near one parks
+    // up on its decks
+    if (!garages_.empty()) {
+        int stalls = 0, garages = 0;
+        for (const engine::CitySimConfig::GarageSpec& gs : garages_) {
+            std::vector<CitySim::GarageStallIn> in;
+            for (const auto& st : gs.stalls) in.push_back({Vec2(st[0], st[1]), Vec2(st[2], st[3]), st[4]});
+            const int n = sim_.addGarageBays(Vec2(gs.px, gs.pz), Vec2(gs.ox, gs.oz), in);
+            stalls += n;
+            garages += n > 0 ? 1 : 0;
+        }
+        LOG_INFO << "[citysim] parking garages: " << garages << " of " << garages_.size() << " on a street, " << stalls << " stalls";
+    }
     // THE SEATS out in the city (the furniture library, M5): every sit spot of the outdoor furniture the loader
     // laid -- park benches, plaza benches, café chairs -- for the strollers to use. Interiors are not out yet (they
     // stream in), and nobody walks into one to sit anyway.
@@ -1432,6 +1446,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // RenderSystem actually bites here.
         g.drawClass = engine::DrawClass::GroundPaint;
         for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+            if (b.garage >= 0) continue;   // a garage stall: the garage paints its own
             // Bay paint is PAINT: it rides at the road mesher's own stripe
             // lift (kRoadMarkLift, 2 cm), not a hand-picked 5 cm —
             // which read as a slab hovering over the asphalt.
@@ -1866,7 +1881,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             a.leg < static_cast<int>(a.route.links.size())) {
             const auto& bay = sim_.parkingBays()[static_cast<std::size_t>(a.targetBay)];
             const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-            if (bay.link == li) {
+            if (bay.link == li && bay.garage < 0) {   // (a garage's stall is put away inside: no kerbside pull-in)
                 constexpr Real kPullIn = 14.0;
                 const Real remaining = bay.station - a.distOnLeg;
                 if (remaining < kPullIn + 2.0) {
@@ -2458,7 +2473,8 @@ void CityRenderSystem::syncGroups(World& world) {
             // does — on an elevated deck it would still take the ground below.
             // No level parks on one today; if that changes, carry the bay (or
             // the link) on SimVehicle and switch this to deckYAt.
-            const Real y = groundAt(sv.pos.x, sv.pos.y) +
+            // ...or UP A GARAGE: on its deck (CitySim::addGarageBays)
+            const Real y = (sv.parkedY > -1e29 ? sv.parkedY : groundAt(sv.pos.x, sv.pos.y)) +
                            (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
             const Real yaw = std::atan2(sv.heading.x, sv.heading.y);
             cars[v]->transforms.push_back(

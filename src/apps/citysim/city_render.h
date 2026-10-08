@@ -535,7 +535,8 @@ private:
     std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
     std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches, the lawns (CitySimConfig)
-    std::vector<std::array<double, 5>> sitSpots_;   // seats that are not furniture: a fountain's rim (CitySimConfig)
+    std::vector<std::array<double, 5>> sitSpots_;
+    std::vector<engine::CitySimConfig::GarageSpec> garages_;   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
 public:

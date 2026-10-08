@@ -837,6 +837,10 @@ struct CitySimConfig {
     std::vector<ActivityAreaSpec> activityAreas;
     // PLACES TO SIT that are not furniture (a fountain's rim): x, z, face x, face z, hip (above the ground).
     std::vector<std::array<double, 5>> sitSpots;
+    // THE PARKING GARAGES you can drive into (shape_grammar buildGarage): the portal on the street (x z, the way out)
+    // and every stall -- x, z, face x, face z, the deck's height (world y).
+    struct GarageSpec { double px = 0, pz = 0, ox = 0, oz = 1; std::vector<std::array<double, 5>> stalls; };
+    std::vector<GarageSpec> garages;
 };
 
 // Build-time street furniture (device: "place the stop lights when we build

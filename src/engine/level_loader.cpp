@@ -5979,6 +5979,16 @@ bool LevelLoader::load(const std::string& path,
                         cfg.footpaths.push_back({k.a.x, k.a.y, k.b.x, k.b.y, k.streetEnds ? k.width : -k.width});
                     for (const engine::LotBuilding::SitSpot& sp : lb.sitSpots)
                         cfg.sitSpots.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, sp.hip});
+                    for (const engine::BuildingUnit& u : lb.units) {   // a garage's portal and stalls, for the drivers
+                        Vec2 pat, pout;
+                        if (!u.params.parkingDecks || u.plan.size() < 3 || !engine::garagePortalOf(u.plan, u.params, pat, pout))
+                            continue;
+                        engine::CitySimConfig::GarageSpec gs;
+                        gs.px = pat.x; gs.pz = pat.y; gs.ox = pout.x; gs.oz = pout.y;
+                        for (const engine::ParkingStall& st : engine::garageStallsOf(u.plan, u.params))
+                            gs.stalls.push_back({st.at.x, st.at.y, st.face.x, st.face.y, u.baseY + st.y});
+                        cfg.garages.push_back(std::move(gs));
+                    }
                     for (const engine::LotBuilding::Area& ar : lb.areas)
                         cfg.activityAreas.push_back({ar.kind, ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, ar.halfL, ar.halfW});
                     for (const engine::Poly2& lp : lb.loops) {

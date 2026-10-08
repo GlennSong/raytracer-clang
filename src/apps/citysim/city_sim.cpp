@@ -1977,6 +1977,8 @@ void CitySim::placeFromSchedule(int idx) {
                 vehicles_[a.car].pos = a.pos;
                 vehicles_[a.car].heading = a.heading;
                 vehicles_[a.car].offStreet = offStreet;
+                vehicles_[a.car].parkedY = a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size())
+                                               ? bays_[static_cast<std::size_t>(a.parkedBay)].y : Real(-1e30);
                 parkedGrid_.place(a.car, a.pos);
             }
         } else {
@@ -3371,11 +3373,48 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
 // 3 m of another -- every car was put 2-12 m from its home NODE, and an
 // arrival only looked for a bay on the street it came in on, within 30 m of
 // the corner. The spaces existed; nothing chose them.
+int CitySim::addGarageBays(const Vec2& portal, const Vec2& out, const std::vector<GarageStallIn>& stalls) {
+    if (!nav_ || stalls.empty()) return 0;
+    // the street in front of the portal: the nearest at-grade street link, within 30 m of a point 4 m out
+    const Vec2 front = portal + out * 4.0;
+    int bestL = -1;
+    Real bestD = 30.0, bestT = 0;
+    for (int li = 0; li < nav_->linkCount(); ++li) {
+        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+        if (L.footpath || L.layer != 0 || L.elevAbsolute || L.length < 6.0) continue;
+        if (!(L.access & engine::road_access::kFrontage)) continue;
+        const Vec2 a = nav_->nodes[static_cast<std::size_t>(L.from)], b = nav_->nodes[static_cast<std::size_t>(L.to)];
+        const Vec2 ab = b - a;
+        const Real t = std::clamp(dot(front - a, ab) / std::max(dot(ab, ab), Real(1e-9)), Real(0.15), Real(0.85));
+        const Real d = (a + ab * t - front).length();
+        if (d < bestD) { bestD = d; bestL = li; bestT = t; }
+    }
+    if (bestL < 0) return 0;
+    const int gi = garageCount_++;
+    const Real station = bestT * nav_->links[static_cast<std::size_t>(bestL)].length;
+    for (const GarageStallIn& st : stalls) {
+        ParkingBay b;
+        b.pos = st.at;
+        b.heading = st.face;
+        b.link = bestL;
+        b.station = station;
+        b.width = 2.5;
+        b.occupant = -1;
+        b.y = st.y;
+        b.garage = gi;
+        baysOnLink_[static_cast<std::size_t>(bestL)].push_back(static_cast<int>(bays_.size()));
+        bays_.push_back(b);
+    }
+    return static_cast<int>(stalls.size());
+}
+
 int CitySim::claimBayNear(Vec2 target, int self, Real maxDist) {
     int best = -1;
     Real bestD2 = maxDist * maxDist;
+    const bool cab = self >= 0 && self < static_cast<int>(agents_.size()) && isTaxi(self);
     for (std::size_t i = 0; i < bays_.size(); ++i) {
         if (bays_[i].occupant != -1) continue;
+        if (cab && bays_[i].garage >= 0) continue;   // a cab waits at the kerb, not up a garage
         const Vec2 d = bays_[i].pos - target;
         const Real d2 = d.x * d.x + d.y * d.y;
         if (d2 < bestD2) { bestD2 = d2; best = static_cast<int>(i); }
@@ -3672,7 +3711,10 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
             ? a.parkedBay : -1;
     remountOwnedCar(a);
     if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size()))
+    {
         vehicles_[static_cast<std::size_t>(a.car)].offStreet = false;   // out of the garage
+        vehicles_[static_cast<std::size_t>(a.car)].parkedY = -1e30;    // (and down off its deck)
+    }
     // A bay reserved for a previous plan is not this trip's.
     if (a.targetBay >= 0) {
         if (a.targetBay < static_cast<int>(bays_.size()) &&
@@ -5241,6 +5283,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             v.heading = a.heading;
             v.driver = -1;          // nobody is in it
             v.offStreet = offStreet;
+            v.parkedY = bay >= 0 ? bays_[static_cast<std::size_t>(bay)].y : Real(-1e30);   // up a garage's deck
             // Index it where it stands: from here it is a body in the world
             // that nothing can find through its owner.
             parkedGrid_.place(a.car, v.pos);
