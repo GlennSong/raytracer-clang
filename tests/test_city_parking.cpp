@@ -13,6 +13,7 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/procgen/city/road_spec.h"
 #include "city_test_util.h"
+#include "../src/engine/procgen/city/city_lots.h"
 
 #include <algorithm>
 #include <cmath>
@@ -434,4 +435,27 @@ TEST_CASE(drivers_park_up_a_garage_and_drive_out_again) {
     CHECK(parkedUp > 0);
     CHECK(wrongHeight == 0);
     CHECK(departures > 0);
+}
+
+// A BIG BOX'S OR A MALL'S PARKING LOT is stalls for the drivers (engine::surfaceStallsOf): every stall on the lot, none
+// on another, nose-in off the aisles, and its way in on the street edge. A shallow lot runs its rows along the store
+// (more stalls than rows running in toward it), a deep one in toward it.
+TEST_CASE(a_parking_lot_is_stalls_for_the_drivers) {
+    using engine::Vec2;
+    const engine::Poly2 lot{{0, 0}, {80, 0}, {80, 44}, {0, 44}};   // the street along y = 0, the store beyond y = 44
+    Vec2 portal, out;
+    const std::vector<engine::ParkingStall> st = engine::surfaceStallsOf(lot, Vec2(0, -1), &portal, &out);
+    std::printf("  %zu stalls; portal %.1f %.1f out %.1f %.1f\n", st.size(), portal.x, portal.y, out.x, out.y);
+    CHECK(st.size() >= 60);
+    CHECK(std::fabs(st.front().face.y) > 0.99);   // 44 m deep: rows along the store
+    const std::vector<engine::ParkingStall> deep = engine::surfaceStallsOf(engine::Poly2{{0, 0}, {80, 0}, {80, 70}, {0, 70}}, Vec2(0, -1));
+    std::printf("  70 m deep: %zu stalls, the first facing %.0f %.0f\n", deep.size(), deep.front().face.x, deep.front().face.y);
+    CHECK(deep.size() > st.size());
+    CHECK(std::fabs(portal.y) < 1e-6 && std::fabs(portal.x - 40) < 1e-6);
+    CHECK(out.y < -0.99);
+    for (std::size_t i = 0; i < st.size(); ++i) {
+        CHECK(st[i].at.x > 1.5 && st[i].at.x < 78.5 && st[i].at.y > 8.0 && st[i].at.y < 36.0);   // clear of the lanes
+        CHECK(std::fabs(std::fabs(st[i].face.x) + std::fabs(st[i].face.y) - 1.0) < 1e-6);   // along a row's axis
+        for (std::size_t j = i + 1; j < st.size(); ++j) CHECK((st[i].at - st[j].at).length() > 2.6);
+    }
 }

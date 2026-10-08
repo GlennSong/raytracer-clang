@@ -5757,6 +5757,7 @@ bool LevelLoader::load(const std::string& path,
             int lotTreesOnRoad = 0;
             std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
+            int surfaceLots = 0, surfaceStalls = 0;     // the big boxes' and malls' parking lots, to the drivers
             struct OpenSpot { Vec3 at; Vec2 n; int place; };
             std::vector<OpenSpot> openSpots;            // ...and the OPEN signs in their windows
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
@@ -6020,6 +6021,25 @@ bool LevelLoader::load(const std::string& path,
                         for (const engine::ParkingStall& st : engine::garageStallsOf(u.plan, u.params))
                             gs.stalls.push_back({st.at.x, st.at.y, st.face.x, st.face.y, u.baseY + st.y});
                         cfg.garages.push_back(std::move(gs));
+                    }
+                    // A BIG BOX'S OR A MALL'S PARKING LOT, for the drivers: its stalls as sculptParking striped them,
+                    // entered from the middle of its street edge (a garage at ground level, to the citysim)
+                    for (const engine::OpenSpace& o : lb.open) {
+                        if (o.kind != engine::OpenKind::Parking || lb.units.empty()) continue;
+                        const Vec3 fd3 = lb.units.front().params.faceDir;
+                        Vec2 fd(fd3.x, fd3.z);
+                        // a lot BEHIND the building faces the other way (its street is the back one)
+                        if (dot(centroid(o.poly) - centroid(lb.units.front().plan), fd) < 0) fd = fd * -1.0;
+                        Vec2 pat, pout;
+                        const std::vector<engine::ParkingStall> st = engine::surfaceStallsOf(o.poly, fd, &pat, &pout);
+                        if (st.empty()) continue;
+                        const Real y = lb.paveY != 0 ? lb.paveY : lb.units.front().baseY;
+                        engine::CitySimConfig::GarageSpec gs;
+                        gs.px = pat.x; gs.pz = pat.y; gs.ox = pout.x; gs.oz = pout.y;
+                        for (const engine::ParkingStall& sp : st) gs.stalls.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, y + 0.03});
+                        cfg.garages.push_back(std::move(gs));
+                        ++surfaceLots;
+                        surfaceStalls += static_cast<int>(st.size());
                     }
                     for (const engine::LotBuilding::Area& ar : lb.areas)
                         cfg.activityAreas.push_back({ar.kind, ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, ar.halfL, ar.halfW});
@@ -6333,6 +6353,7 @@ bool LevelLoader::load(const std::string& path,
                      << treesOffPad << " skipped (not placeable on their pad), "
                      << treesNoPad << " planted with no pad to test, "
                      << lotTreesOnRoad << " kept off the drawn road";
+            if (surfaceLots) LOG_INFO << "[citylots] " << surfaceLots << " parking lots, " << surfaceStalls << " stalls for the drivers";
             if (!tradePlaces.empty()) {
                 std::string line;
                 int all = 0;

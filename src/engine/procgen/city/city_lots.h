@@ -548,6 +548,11 @@ void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
                       const Vec3& sideColor, const Vec3& roofColor,
                       Real bottomY = std::numeric_limits<Real>::quiet_NaN());
 
+// THE PARKING LOT'S STALLS (a big box's or a mall's lot, as sculptParking stripes it): each stall's centre and the
+// way a car parked nose-in faces, height left 0 (the lot's plate). `facing`: the store's faceDir (the lot's frame
+// is v = -facing, inward from the street). `portal` / `out`: the lot's way in, the middle of its street edge.
+std::vector<ParkingStall> surfaceStallsOf(const Poly2& lotP, Vec2 facing, Vec2* portal = nullptr, Vec2* out = nullptr);
+
 }  // namespace engine
 
 #endif

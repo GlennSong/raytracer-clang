@@ -1455,6 +1455,122 @@ void sculptForecourt(LotBuilding& b, const Poly2& plaza, const SiteFrame& f, Rea
     appendKit(kit, outParts);
 }
 
+// A PARKING LOT'S PLAN, in its frame (x along the street, y in from it to the store): what sculptParking paints and
+// surfaceStallsOf hands the drivers -- one plan, so a striped stall is a stall a car can take. Two layouts, the one
+// with more stalls wins: rows running IN toward the doors (a deep lot: modules of [row][aisle][row] across it), or
+// rows running ALONG the store (a shallow lot: the modules stacked from the street, a walk to the doors kept clear).
+struct LotPlan {
+    Real ax0 = 0, ax1 = 0, ay0 = 0, ys0 = 0, ys1 = 0, cx = 0;   // the asphalt, the street-side aisle, the fire lane
+    struct Rect { Real x0, y0, x1, y1; };
+    std::vector<Rect> stripes, islands;                       // painted lines; planted islands (a curb round)
+    std::vector<Vec2> trees, poles;                           // in the islands; light poles
+    struct Stall { Vec2 at, face; };
+    std::vector<Stall> stalls;
+    struct Corral { Vec2 at; bool alongX; };                  // a cart corral, in a stall
+    std::vector<Corral> corrals;
+};
+LotPlan lotPlan(Real x0, Real x1, Real y0, Real y1) {
+    constexpr Real row = 5.4, aisle = 7.2, mod = row * 2 + aisle, stall = 2.7, isl = 2.4;
+    auto planIn = [&]() {
+        LotPlan L;
+        L.ax0 = x0 + 1.5; L.ax1 = x1 - 1.5; L.ay0 = y0 + 2.5;
+        L.ys1 = y1 - 8.0;          // the fire lane along the storefront
+        L.ys0 = L.ay0 + 6.5;       // a drive aisle along the street
+        L.cx = (x0 + x1) * 0.5;
+        const int nMod = static_cast<int>((L.ax1 - L.ax0 - 1.0) / mod);
+        if (nMod < 1 || L.ys1 - L.ys0 <= 2 * isl + 3 * stall) return L;
+        const Real fx0 = L.cx - nMod * mod * 0.5;
+        const Real r0 = L.ys0 + isl, r1 = L.ys1 - isl;
+        const int nStall = static_cast<int>((r1 - r0) / stall);
+        const Real s0 = (r0 + r1) * 0.5 - nStall * stall * 0.5;
+        for (int m = 0; m < nMod; ++m) {
+            const Real xm = fx0 + m * mod;
+            for (int side = 0; side < 2; ++side) {
+                const Real ra = side == 0 ? xm : xm + row + aisle, rb = ra + row;
+                for (int k = 0; k <= nStall; ++k) L.stripes.push_back({ra + 0.3, s0 + k * stall - 0.06, rb, s0 + k * stall + 0.06});
+                for (int end = 0; end < 2; ++end) {
+                    const Real b0 = end == 0 ? s0 - isl + 0.2 : s0 + nStall * stall + 0.2;
+                    L.islands.push_back({ra + 0.2, b0, rb - 0.2, b0 + isl - 0.4});
+                    if (end == 0 || m % 2 == side) L.trees.push_back({(ra + rb) * 0.5, b0 + (isl - 0.4) * 0.5});
+                }
+                const Vec2 face(side == 0 ? -1.0 : 1.0, 0.0);   // nose in, off the aisle
+                for (int k = 0; k < nStall; ++k) {
+                    if (side == 1 && k == nStall / 2) {          // the module's cart corral
+                        L.corrals.push_back({{ra + row * 0.5, s0 + (k + 0.5) * stall}, false});
+                        continue;
+                    }
+                    L.stalls.push_back({{ra + row * 0.5 + 0.15, s0 + (k + 0.5) * stall}, face});
+                }
+            }
+        }
+        for (int m = 0; m <= nMod; ++m) {   // light poles on every module seam
+            const int nPole = std::max(1, static_cast<int>((r1 - r0) / 26.0));
+            for (int k = 0; k < nPole; ++k) L.poles.push_back({fx0 + m * mod, r0 + (r1 - r0) * (k + 0.5) / nPole});
+        }
+        return L;
+    };
+    auto planAlong = [&]() {
+        LotPlan L;
+        L.ax0 = x0 + 1.5; L.ax1 = x1 - 1.5; L.ay0 = y0 + 2.5;
+        L.ys1 = y1 - 8.0;
+        L.ys0 = L.ay0 + 6.5;
+        L.cx = (x0 + x1) * 0.5;
+        const Real r0 = L.ax0 + isl, r1 = L.ax1 - isl;
+        if (r1 - r0 < 6 * stall) return L;
+        const int nStall = static_cast<int>((r1 - r0) / stall);
+        const Real s0 = (r0 + r1) * 0.5 - nStall * stall * 0.5;
+        // the rows, from the street-side aisle in: two back to back (the first noses away from the aisle before it,
+        // the second from the aisle after it), then that aisle -- the last pair's aisle is the fire lane
+        struct R { Real y0; int nose; };
+        std::vector<R> rows;
+        for (Real y = L.ys0; y + 2 * row <= L.ys1 + 1e-6; y += 2 * row + aisle) {
+            rows.push_back({y, 1});
+            rows.push_back({y + row, -1});
+        }
+        if (!rows.empty() && L.ys1 - (rows.back().y0 + row) >= aisle + row) rows.push_back({L.ys1 - row, -1});   // one more on the lane
+        int ri = 0;
+        for (const R& r : rows) {
+            const Real ya = r.y0, yb = r.y0 + row;
+            // stripes from the aisle side in, 0.3 short of the back
+            const Real sy0 = r.nose > 0 ? ya : ya + 0.3, sy1 = r.nose > 0 ? yb - 0.3 : yb;   // (0.3 short of the back: the nose end)
+            for (int k = 0; k <= nStall; ++k) {
+                const Real x = s0 + k * stall;
+                if (std::fabs(x - L.cx) < 3.5) continue;
+                L.stripes.push_back({x - 0.06, sy0, x + 0.06, sy1});
+            }
+            for (int end = 0; end < 2; ++end) {
+                const Real b0 = end == 0 ? s0 - isl + 0.2 : s0 + nStall * stall + 0.2;
+                L.islands.push_back({b0, ya + 0.2, b0 + isl - 0.4, yb - 0.2});
+                L.trees.push_back({b0 + (isl - 0.4) * 0.5, (ya + yb) * 0.5});
+            }
+            const Vec2 face(0.0, static_cast<Real>(r.nose));
+            for (int k = 0; k < nStall; ++k) {
+                const Real x = s0 + (k + 0.5) * stall;
+                if (std::fabs(x - L.cx) < 3.5 + stall * 0.5) continue;   // the walk to the doors
+                if (k == nStall / 4 && (ri & 1)) { L.corrals.push_back({{x, (ya + yb) * 0.5}, true}); continue; }
+                L.stalls.push_back({{x, (ya + yb) * 0.5 + (r.nose > 0 ? 0.15 : -0.15)}, face});
+            }
+            ++ri;
+        }
+        // the walk to the doors: a crossing at the centre over every aisle between rows, poles on the back-to-back seams
+        for (std::size_t j = 0; j + 1 < rows.size(); ++j)
+            if (rows[j].nose < 0 && rows[j + 1].nose > 0 && rows[j + 1].y0 - (rows[j].y0 + row) > 3)
+                for (int k = -2; k <= 2; ++k)
+                    L.stripes.push_back({L.cx + k * 0.9 - 0.25, rows[j].y0 + row + 0.5, L.cx + k * 0.9 + 0.25, rows[j + 1].y0 - 0.5});
+        const int nPole = std::max(1, static_cast<int>((r1 - r0) / 26.0));
+        for (std::size_t j = 0; j + 1 < rows.size(); ++j) {
+            if (!(rows[j].nose > 0 && rows[j + 1].nose < 0)) continue;   // a seam: two rows back to back
+            const Real ys = rows[j].y0 + row;
+            for (int k = 0; k < nPole; ++k) L.poles.push_back({r0 + (r1 - r0) * (k + 0.5) / nPole, ys});
+        }
+        if (rows.size() < 2)   // no seam: poles in the islands at the row's ends
+            for (const LotPlan::Rect& is : L.islands) L.poles.push_back({(is.x0 + is.x1) * 0.5, (is.y0 + is.y1) * 0.5 + 1.0});
+        return L;
+    };
+    LotPlan a = planIn(), b = planAlong();
+    return b.stalls.size() > a.stalls.size() ? b : a;
+}
+
 // THE BIG BOX'S PARKING LOT (Glenn, 2026-10-01: "Big box stores like Costco or Bestbuy"): the strip between the
 // street and the store, on the lot's plate. Asphalt; double-loaded aisles running toward the doors, stalls 2.7 m
 // wide and 5.4 deep striped white; planted islands at every row's ends; light poles on the seams between modules
@@ -1481,73 +1597,47 @@ void sculptParking(LotBuilding& b, const Poly2& lotP, const SiteFrame& f, Real y
     auto flat = [&](RenderMesh& m, Real a0, Real b0, Real a1, Real b1, Real dy, const Vec3& col) {
         MeshBuilder::emitQuad(m, at(a0, b0, dy), at(a0, b1, dy), at(a1, b1, dy), at(a1, b0, dy), up, col);
     };
+    const LotPlan L = lotPlan(x0, x1, y0, y1);
     // the asphalt: all but a planted border along the street and the sides
-    const Real ax0 = x0 + 1.5, ax1 = x1 - 1.5, ay0 = y0 + 2.5;
-    flat(asphalt, ax0, ay0, ax1, y1, 0.02, Vec3(0.16, 0.16, 0.18));   // the vertex colour IS the asphalt
+    flat(asphalt, L.ax0, L.ay0, L.ax1, y1, 0.02, Vec3(0.16, 0.16, 0.18));   // the vertex colour IS the asphalt
     // the fire lane along the storefront, its crosswalk to the doors
-    const Real lane = 8.0, ys1 = y1 - lane, ys0 = ay0 + 6.5;   // a drive aisle along the street side too
-    const Real cx = (x0 + x1) * 0.5;
     for (int k = -5; k <= 5; ++k)
-        flat(paint, cx + k * 0.9 - 0.25, ys1 + 0.5, cx + k * 0.9 + 0.25, y1 - 0.3, 0.04, Vec3(0.92, 0.92, 0.90));
-    flat(paint, ax0, ys1 + 0.2, ax1, ys1 + 0.35, 0.04, Vec3(0.92, 0.80, 0.15));   // the fire lane's yellow line
-    // the stall field: modules of [row 5.4][aisle 7.2][row 5.4]
-    const Real row = 5.4, aisle = 7.2, mod = row * 2 + aisle, stall = 2.7, isl = 2.4;
-    const int nMod = static_cast<int>((ax1 - ax0 - 1.0) / mod);
-    if (nMod >= 1 && ys1 - ys0 > 2 * isl + 3 * stall) {
-        const Real fx0 = cx - nMod * mod * 0.5;
-        const Real r0 = ys0 + isl, r1 = ys1 - isl;               // the striped run of every row
-        const int nStall = static_cast<int>((r1 - r0) / stall);
-        const Real s0 = (r0 + r1) * 0.5 - nStall * stall * 0.5;
-        const Vec3 white(0.92, 0.92, 0.90), curb(0.62, 0.61, 0.58), soil(0.24, 0.30, 0.16);
-        for (int m = 0; m < nMod; ++m) {
-            const Real xm = fx0 + m * mod;
-            for (int side = 0; side < 2; ++side) {
-                const Real ra = side == 0 ? xm : xm + row + aisle, rb = ra + row;
-                for (int k = 0; k <= nStall; ++k) {
-                    const Real v = s0 + k * stall;
-                    flat(paint, ra + 0.3, v - 0.06, rb, v + 0.06, 0.04, white);
-                }
-                // the islands at both ends of the row: a curb, planted, a tree on the street end
-                for (int end = 0; end < 2; ++end) {
-                    const Real b0 = end == 0 ? s0 - isl + 0.2 : s0 + nStall * stall + 0.2;
-                    emitBox(kit, Scope{at(ra + 0.2, b0), {u3, up, v3}, Vec3(row - 0.4, 0.15, isl - 0.4)}, PartId::Concrete, curb);
-                    flat(paint, ra + 0.35, b0 + 0.15, rb - 0.35, b0 + isl - 0.55, 0.16, soil);
-                    if (end == 0 || m % 2 == side) {
-                        const Vec2 w = f.toWorld({(ra + rb) * 0.5, b0 + (isl - 0.4) * 0.5});
-                        b.treeSpots.push_back(Vec3(w.x, rng.range(0.6, 0.85), w.y));
-                    }
-                }
-            }
-            // a CART CORRAL in the module's second row, mid-run: two rails and an open end toward the aisle
-            {
-                const Real ra = xm + row + aisle, k = static_cast<Real>(nStall / 2);
-                const Real v0 = s0 + k * stall + 0.4;
-                const Vec3 rail(0.55, 0.57, 0.60);
-                for (Real dv : {Real(0), Real(1.8)})
-                    emitBox(kit, Scope{at(ra + 1.0, v0 + dv, 0.9), {u3, up, v3}, Vec3(4.2, 0.06, 0.06)}, PartId::Metal, rail);
-                emitBox(kit, Scope{at(ra + 1.0, v0, 0), {u3, up, v3}, Vec3(0.06, 0.96, 1.86)}, PartId::Metal, rail);
-                for (Real dx : {Real(1.0), Real(3.1), Real(5.14)})
-                    for (Real dv : {Real(0), Real(1.8)})
-                        emitBox(kit, Scope{at(ra + dx, v0 + dv, 0), {u3, up, v3}, Vec3(0.06, 0.9, 0.06)}, PartId::Metal, rail);
-            }
+        flat(paint, L.cx + k * 0.9 - 0.25, L.ys1 + 0.5, L.cx + k * 0.9 + 0.25, y1 - 0.3, 0.04, Vec3(0.92, 0.92, 0.90));
+    flat(paint, L.ax0, L.ys1 + 0.2, L.ax1, L.ys1 + 0.35, 0.04, Vec3(0.92, 0.80, 0.15));   // the fire lane's yellow line
+    const Vec3 white(0.92, 0.92, 0.90), curb(0.62, 0.61, 0.58), soil(0.24, 0.30, 0.16);
+    for (const LotPlan::Rect& r : L.stripes) flat(paint, r.x0, r.y0, r.x1, r.y1, 0.04, white);
+    for (const LotPlan::Rect& r : L.islands) {   // a curb, planted
+        emitBox(kit, Scope{at(r.x0, r.y0), {u3, up, v3}, Vec3(r.x1 - r.x0, 0.15, r.y1 - r.y0)}, PartId::Concrete, curb);
+        flat(paint, r.x0 + 0.15, r.y0 + 0.15, r.x1 - 0.15, r.y1 - 0.15, 0.16, soil);
+    }
+    for (const Vec2& t : L.trees) {
+        const Vec2 w = f.toWorld(t);
+        b.treeSpots.push_back(Vec3(w.x, rng.range(0.6, 0.85), w.y));
+    }
+    // CART CORRALS: two rails and an open end toward the aisle
+    for (const LotPlan::Corral& c : L.corrals) {
+        const Vec3 rail(0.55, 0.57, 0.60);
+        const Vec3 ax = c.alongX ? v3 : u3, lat = c.alongX ? u3 : v3;   // the rails run along the stall's depth
+        const Vec3 o = at(c.at.x, c.at.y) - ax * 2.1 - lat * 0.9;
+        for (Real dv : {Real(0), Real(1.8)}) {
+            emitBox(kit, Scope{o + lat * dv + up * 0.9, {ax, up, lat}, Vec3(4.2, 0.06, 0.06)}, PartId::Metal, rail);
+            for (Real dx : {Real(0.0), Real(2.1), Real(4.14)})
+                emitBox(kit, Scope{o + lat * dv + ax * dx, {ax, up, lat}, Vec3(0.06, 0.9, 0.06)}, PartId::Metal, rail);
         }
-        // LIGHT POLES on every module seam, a few along each
-        const Vec3 pole(0.38, 0.39, 0.41);
-        for (int m = 0; m <= nMod; ++m) {
-            const Real xs = fx0 + m * mod;
-            const int nPole = std::max(1, static_cast<int>((r1 - r0) / 26.0));
-            for (int k = 0; k < nPole; ++k) {
-                const Real vs = r0 + (r1 - r0) * (k + 0.5) / nPole;
-                emitBox(kit, Scope{at(xs - 0.12, vs - 0.12), {u3, up, v3}, Vec3(0.24, 9.0, 0.24)}, PartId::Metal, pole);
-                emitBox(kit, Scope{at(xs - 1.4, vs - 0.3, 9.0), {u3, up, v3}, Vec3(2.8, 0.25, 0.6)}, PartId::Metal, pole);
-                RenderMesh lamp;   // the lenses, facing down: they glow at night
-                for (Real dx : {Real(-1.25), Real(0.55)})
-                    MeshBuilder::emitQuad(lamp, at(xs + dx, vs - 0.25, 8.99), at(xs + dx + 0.7, vs - 0.25, 8.99),
-                                          at(xs + dx + 0.7, vs + 0.25, 8.99), at(xs + dx, vs - 0.25 + 0.5, 8.99),
-                                          up * -1.0, Vec3(1.0, 0.92, 0.75));
-                MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::LitBand)], lamp);
-            }
-        }
+        emitBox(kit, Scope{o, {ax, up, lat}, Vec3(0.06, 0.96, 1.86)}, PartId::Metal, rail);
+    }
+    // LIGHT POLES (their lamps glow at night)
+    const Vec3 pole(0.38, 0.39, 0.41);
+    for (const Vec2& pp : L.poles) {
+        const Real xs = pp.x, vs = pp.y;
+        emitBox(kit, Scope{at(xs - 0.12, vs - 0.12), {u3, up, v3}, Vec3(0.24, 9.0, 0.24)}, PartId::Metal, pole);
+        emitBox(kit, Scope{at(xs - 1.4, vs - 0.3, 9.0), {u3, up, v3}, Vec3(2.8, 0.25, 0.6)}, PartId::Metal, pole);
+        RenderMesh lamp;   // the lenses, facing down
+        for (Real dx : {Real(-1.25), Real(0.55)})
+            MeshBuilder::emitQuad(lamp, at(xs + dx, vs - 0.25, 8.99), at(xs + dx + 0.7, vs - 0.25, 8.99),
+                                  at(xs + dx + 0.7, vs + 0.25, 8.99), at(xs + dx, vs - 0.25 + 0.5, 8.99),
+                                  up * -1.0, Vec3(1.0, 0.92, 0.75));
+        MeshBuilder::append((*outParts)[static_cast<std::size_t>(PartId::LitBand)], lamp);
     }
     // THE PYLON SIGN by the street, near a corner: the chain's colour, lit both faces
     {
@@ -1890,6 +1980,27 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
     b.color = Vec3(1, 1, 1);   // the surfaces carry the plaza's look
 }
 }  // namespace
+
+std::vector<ParkingStall> surfaceStallsOf(const Poly2& lotP, Vec2 facing, Vec2* portal, Vec2* out) {
+    std::vector<ParkingStall> st;
+    if (lotP.size() < 3 || facing.length() < 1e-6) return st;
+    SiteFrame f;
+    f.v = normalize(facing) * -1.0;
+    f.u = Vec2(f.v.y, -f.v.x);
+    Real x0 = 1e30, x1 = -1e30, y0 = 1e30, y1 = -1e30;
+    for (const Vec2& w : lotP) {
+        const Vec2 q = f.toFrame(w);
+        x0 = std::min(x0, q.x); x1 = std::max(x1, q.x);
+        y0 = std::min(y0, q.y); y1 = std::max(y1, q.y);
+    }
+    const Real W = x1 - x0, P = y1 - y0;
+    if (portal) *portal = f.toWorld({(x0 + x1) * 0.5, y0});
+    if (out) *out = f.v * -1.0;
+    if (W < 20 || P < 18) return st;
+    for (const LotPlan::Stall& k : lotPlan(x0, x1, y0, y1).stalls) st.push_back({f.toWorld(k.at), f.u * k.face.x + f.v * k.face.y, 0});
+    return st;
+}
+
 
 namespace {
 Vertex lerpVertex(const Vertex& a, const Vertex& b, Real t) {
@@ -4691,6 +4802,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // site the store stands at the back -- 55-65 % of the depth, most of the width -- and the strip in front,
             // to the street it faces, is its PARKING LOT (sculptParking dresses it on the lot's plate).
             Poly2 parkingPoly;
+            Poly2 parkingBack;   // a second lot behind the building (the mall's, out to the back street)
             if (planOk && siteRectified && rec.massing == BuildingRecipe::Massing::BigBox) {
                 const SiteFrame& f = siteFrameOf;
                 Real fx0 = 1e30, fx1 = -1e30, fy0 = 1e30, fy1 = -1e30;
@@ -4704,15 +4816,20 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // and back / forward where the site is deep enough -- its outline the wings' union
                 if (bp.bigBox == 6) {
                     const Real a = 20.0, edgeM = 4.0;
-                    const Real cx = (fx0 + fx1) * 0.5, cy = (fy0 + fy1) * 0.5;
-                    const Real Ax = std::min(W * 0.5 - edgeM, Real(120));
-                    const Real room = D * 0.5 - edgeM;
-                    uint8_t arms = 0x3;   // +u, -u
-                    Real Ab = 0, Af = 0;
-                    if (room >= a + 28) { arms |= 0x4; Ab = std::min(room, Real(90)); }          // a wing back
-                    if (room >= a + 28 && rng.unit() < 0.5) { arms |= 0x8; Af = std::min(room, Real(70)); }   // and forward
-                    if (Ax < a + 40) planOk = false;
-                    if (planOk) {
+                    const Real cx = (fx0 + fx1) * 0.5;
+                    // ITS PARKING LOT (Glenn: "the parking round it"): in front, between the street and the court's
+                    // doors, where the block is deep enough for a row module (26 m) -- the wings pushed back behind
+                    // it. Tried in turn, the first that fits the site: a wing back and a 44 m lot; no wing back and the
+                    // lot as deep as the block allows; the wings in the middle with no lot (as before) -- each with
+                    // the long wings as long as they fit (a block's ends are often its streets' curves)
+                    const Real spare = D - 2 * edgeM - 2 * a;
+                    auto layout = [&](Real P, bool back, bool forward, Real Ax) -> bool {
+                        const Real cy = P > 0 ? fy0 + P + 1.0 + a : (fy0 + fy1) * 0.5;
+                        const Real room = P > 0 ? fy1 - edgeM - cy : D * 0.5 - edgeM;
+                        uint8_t arms = 0x3;   // +u, -u
+                        Real Ab = 0, Af = 0;
+                        if (back) { if (room < a + 28) return false; arms |= 0x4; Ab = std::min(room, Real(90)); }
+                        if (forward) { if (P > 0 || room < a + 28) return false; arms |= 0x8; Af = std::min(room, Real(70)); }
                         std::vector<Vec2> q;   // CCW in the frame (x along the front, y back from it)
                         q.push_back({cx + a, cy - a});
                         q.push_back({cx + Ax, cy - a}); q.push_back({cx + Ax, cy + a});
@@ -4723,17 +4840,60 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         Poly2 mp;
                         for (const Vec2& v : q) mp.push_back(f.toWorld(v));
                         ensureCCW(mp);
-                        for (const Vec2& v : mp) if (!pointInPolygon(site, v)) planOk = false;
-                        if (planOk) {
-                            plan = mp;
-                            bp.mallArms = arms;
-                            bp.mallCourt = f.toWorld({cx, cy});
-                            bp.faceDir = Vec3(-f.v.x, 0, -f.v.y);   // the main doors face the street
-                            if (dbg->bigBoxAt.size() < 4) dbg->bigBoxAt.push_back(bp.mallCourt);
+                        for (const Vec2& v : mp) if (!pointInPolygon(site, v)) return false;
+                        Poly2 lotP;
+                        if (P > 0) {   // the lot: the front strip, as wide as the site is there
+                            lotP = {f.toWorld({fx0, fy0}), f.toWorld({fx1, fy0}), f.toWorld({fx1, fy0 + P}), f.toWorld({fx0, fy0 + P})};
+                            ensureCCW(lotP);
                         }
+                        plan = mp;
+                        parkingPoly = lotP;
+                        bp.mallArms = arms;
+                        bp.mallCourt = f.toWorld({cx, cy});
+                        bp.faceDir = Vec3(-f.v.x, 0, -f.v.y);   // the main doors face the street
+                        return true;
+                    };
+                    const bool fwd = rng.unit() < 0.5;
+                    bool fit = false;
+                    for (Real Ax = std::min(W * 0.5 - edgeM, Real(120)); !fit && Ax >= a + 40; Ax -= 10) {
+                        if (spare >= 26 + 28) fit = layout(std::min(spare - 28, Real(44)), true, false, Ax);
+                        if (!fit && spare >= 26) fit = layout(std::min(spare, Real(64)), false, false, Ax);
+                        if (!fit) fit = layout(0, true, fwd, Ax) || layout(0, true, false, Ax) || layout(0, false, false, Ax);
+                    }
+                    planOk = planOk && fit;
+                    if (std::getenv("RT_BIGBOX_DEBUG"))
+                        std::printf("[mall] W %.0f D %.0f spare %.0f -> %s arms %u lot %zu\n", W, D, spare, planOk ? "wings" : "box",
+                                    static_cast<unsigned>(bp.mallArms), parkingPoly.size());
+                    if (planOk && dbg->bigBoxAt.size() < 4) dbg->bigBoxAt.push_back(bp.mallCourt);
+                    // THE LOT BEHIND (Glenn: "the parking round it"): the block often runs on past the site's rectangle
+                    // to a street behind -- with no wing back in the way, the biggest rectangle between the mall's
+                    // back wall and that street, 26 m deep at least, is parking too, entered from the back
+                    if (planOk && !(bp.mallArms & 0x4)) {
+                        const Poly2 host = inset(lot.footprint, 3.6);
+                        const Real yb = f.toFrame(bp.mallCourt).y + a + 1.0;
+                        const Real cxm = f.toFrame(bp.mallCourt).x;
+                        Real bestA = 0;
+                        for (Real off = -60; off <= 60 && host.size() >= 3; off += 10)   // (slid along: a block's corners slant)
+                        for (Real dp = 26; dp <= 90; dp += 2)
+                            for (Real hw = 20; hw <= 130; hw += 5) {
+                                const Real xc = cxm + off;
+                                bool in = true;
+                                for (Real gx : {-1.0, -0.5, 0.0, 0.5, 1.0})
+                                    for (Real gy : {0.0, 0.5, 1.0})
+                                        if (in && !pointInPolygon(host, f.toWorld({xc + gx * hw, yb + gy * dp}))) in = false;
+                                if (!in) break;   // (wider only gets worse)
+                                if (2 * hw * dp > bestA) {
+                                    bestA = 2 * hw * dp;
+                                    parkingBack = {f.toWorld({xc - hw, yb}), f.toWorld({xc + hw, yb}), f.toWorld({xc + hw, yb + dp}),
+                                                   f.toWorld({xc - hw, yb + dp})};
+                                }
+                            }
+                        if (bestA < 26 * 40) parkingBack.clear();
+                        else ensureCCW(parkingBack);
+                        if (std::getenv("RT_BIGBOX_DEBUG")) std::printf("[mall]   lot behind %.0f m2\n", bestA);
                     }
                     // the wings do not fit the site: the box mall instead (the block was big enough for a mall)
-                    if (!planOk) { bp.bigBox = 5; bp.mallArms = 0; planOk = true; }
+                    if (!planOk) { bp.bigBox = 5; bp.mallArms = 0; planOk = true; parkingPoly.clear(); parkingBack.clear(); }
                 }
                 if (bp.bigBox != 6) {
                 const bool mallBox = bp.bigBox == 5;
@@ -5092,6 +5252,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
                 if (courtNotch.size() >= 3) b.open.push_back({courtNotch, OpenKind::Courtyard});
                 if (parkingPoly.size() >= 3) b.open.push_back({parkingPoly, OpenKind::Parking});
+                if (parkingBack.size() >= 3) b.open.push_back({parkingBack, OpenKind::Parking});
                 if (plazaPoly.size() >= 3) {
                     b.open.push_back({plazaPoly, OpenKind::Plaza});
                     if (std::getenv("RT_SITE_DEBUG"))
@@ -5305,6 +5466,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (paved && parkingPoly.size() >= 3)
                 sculptParking(b, parkingPoly, siteFrameOf, b.paveY, bp,
                               mix(pp.seed, static_cast<uint32_t>(li) * 41u + 29u), outParts);
+            if (paved && parkingBack.size() >= 3) {   // (its frame turned round: the back street is its street)
+                SiteFrame back = siteFrameOf;
+                back.u = back.u * -1.0;
+                back.v = back.v * -1.0;
+                sculptParking(b, parkingBack, back, b.paveY, bp, mix(pp.seed, static_cast<uint32_t>(li) * 43u + 31u), outParts);
+            }
             // CAFÉ TERRACES (the furniture library, M2): in front of every café and bakery on the storefront, where
             // the paving reaches far enough (2.8 m), bistro sets along the glass -- a table, a chair either side
             // facing across it -- clear of the shop's door. Sat on like any chair.
