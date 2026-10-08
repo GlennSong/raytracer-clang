@@ -570,6 +570,8 @@ bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, V
 // world space (false: not a drivable garage, keep the prism); its stalls (centre, the way a parked car faces, height
 // above the base); and its portal (the middle of the opening on the street, and the way out).
 struct ParkingStall { Vec2 at, face; Real y = 0; };
+// Offset a CCW plan polygon: d > 0 shrinks (inset), d < 0 grows (outset) -- the grammar's own offsetPlan.
+Poly2 offsetPlanPublic(const Poly2& poly, Real d);
 bool garageColliderOf(const Poly2& plan, const BuildingParams& params, Real baseY, std::vector<Vec3>& vertices,
                       std::vector<uint32_t>& indices);
 std::vector<ParkingStall> garageStallsOf(const Poly2& plan, const BuildingParams& params);

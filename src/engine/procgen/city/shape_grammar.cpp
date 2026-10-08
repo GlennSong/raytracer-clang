@@ -5095,6 +5095,8 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
     }
 }
 
+Poly2 offsetPlanPublic(const Poly2& poly, Real d) { return offsetPlan(poly, d); }
+
 bool garageColliderOf(const Poly2& plan, const BuildingParams& params, Real baseY, std::vector<Vec3>& vertices,
                       std::vector<uint32_t>& indices) {
     const GarageLayout G = garageLayout(plan, params);

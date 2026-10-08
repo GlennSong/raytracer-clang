@@ -76,7 +76,9 @@ GrassSystem::Built buildTile(const GrassField& f, const GrassSystem::Key& key, i
             const double yaw = unit(mix(h ^ 0xA7ull)) * 6.283185307;
             const double s = cards ? (0.8 + 0.5 * unit(mix(h ^ 0x3Dull))) * (0.7 + 0.3 * dens)
                                    : (0.8 + 0.45 * unit(mix(h ^ 0x3Dull))) * (0.75 + 0.25 * dens);   // thinner grass is shorter
-            Mat4 m = Mat4::trs(Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s));
+            const double hs = f.height ? f.height(x, z) : 1.0;   // mown here, wild there
+            if (hs < 0.04) continue;
+            Mat4 m = Mat4::trs(Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s * hs, s));
             m.m[3][0] = static_cast<Real>(rank);   // the rank rides in the bottom row (mesh.vert reads it)
             b.perVariant[cards ? 0 : mix(h ^ 0xC3ull) % nv].push_back(m);
             ySum += y;

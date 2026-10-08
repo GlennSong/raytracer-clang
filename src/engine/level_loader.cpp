@@ -3932,6 +3932,8 @@ bool LevelLoader::load(const std::string& path,
     auto sealedLotPolys = std::make_shared<std::vector<engine::Poly2>>();
     // the city's PARKS (lawns: a "lawn" grass layer mows them, and the meadow keeps off them)
     auto lawnLotPolys = std::make_shared<std::vector<engine::Poly2>>();
+    // the city's BLOCKS: managed ground -- the grass on them is mown, the wild layers (tall grass, flowers) keep off
+    auto managedPolys = std::make_shared<std::vector<engine::Poly2>>();
     if (root.contains("terrain")) {
         TerrainParams terrainParams = readTerrainParams(root["terrain"]);
         terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
@@ -4019,12 +4021,21 @@ bool LevelLoader::load(const std::string& path,
             preLots = growCityLots(lotInputs, preNets, root["citysim"], levelDir, lotGround,
                                    levelGround, freewayROWp, lotGroundWith,
                                    lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
+            for (const engine::Poly2& bk : preLots.plan.blocks) if (bk.size() >= 3) managedPolys->push_back(bk);
             for (const engine::LotBuilding& lb : preLots.lots) {
                 if (std::getenv("RT_CAMPUS_DEBUG") && (lb.recipe == "sports_field" || lb.recipe == "campus_quad"))
                     std::fprintf(stderr, "[campus draw] %s at (%.0f, %.0f) type %s padMesh %zu verts, %zu outdoor pieces\n", lb.recipe.c_str(),
                                  lb.site.x, lb.site.y, lb.type.c_str(), lb.padMesh.vertices.size(), lb.furniture.size());
                 if (lb.type == "park" || lb.type == "green") {
                     if (lb.recipe == "plaza" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
+                    // a PASEO is paved wall to wall: sealed out to the shopfronts (its pad stops 0.3 m short of them,
+                    // and a strip of grass grew along every front)
+                    if (lb.recipe == "paseo" && lb.pad.size() >= 3) {
+                        engine::Poly2 ccw = lb.pad;
+                        engine::ensureCCW(ccw);
+                        const engine::Poly2 wide = engine::offsetPlanPublic(ccw, -1.0);
+                        sealedLotPolys->push_back(wide.size() == lb.pad.size() ? wide : lb.pad);
+                    }
                     // a mown pitch and its track: no wild grass or weeds on them (the island's meadow grew through)
                     if (lb.recipe == "sports_field" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
                     // a park's walks and plazas, and its lawn
@@ -4744,6 +4755,19 @@ bool LevelLoader::load(const std::string& path,
                         lawnPads->bins[PadIndex::key(i, j)].push_back(k);
             }
             const std::shared_ptr<const PadIndex> lawnsRO = lawnPads;
+            auto managedPads = std::make_shared<PadIndex>();
+            for (const engine::Poly2& poly : *managedPolys) {
+                const int k = static_cast<int>(managedPads->polys.size());
+                managedPads->polys.push_back(poly);
+                double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+                for (const engine::Vec2& v : poly) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+                const double kb = managedPads->kBin;
+                for (int j = static_cast<int>(std::floor(z0 / kb)); j <= static_cast<int>(std::floor(z1 / kb)); ++j)
+                    for (int i = static_cast<int>(std::floor(x0 / kb)); i <= static_cast<int>(std::floor(x1 / kb)); ++i)
+                        managedPads->bins[PadIndex::key(i, j)].push_back(k);
+            }
+            const std::shared_ptr<const PadIndex> managedRO = managedPads;
+            if (!managedPolys->empty()) LOG_INFO << "[grass] managed ground: " << managedPolys->size() << " city blocks mown";
             // A LAWN layer (where: "lawn") mows the city's parks and the campus quad short; with one, the other
             // layers keep off the parks (the meadow stood knee-deep on the quad)
             bool haveLawn = false;
@@ -4775,9 +4799,15 @@ bool LevelLoader::load(const std::string& path,
                                : where == "lawn" ? 6 : 0;
                 const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
                 const double shore = gj.value("shoreBand", 6.0);
+                // MOWN in the city's blocks (managed ground): the meadow at a lawn's height; a lawn layer as it is
+                const double mown = gj.value("mownHeight", 0.3);
+                if (kind != 6 && !managedRO->polys.empty())
+                    gf.height = [managedRO, mown](double x, double z) { return managedRO->covers(x, z) ? mown : 1.0; };
                 gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut,
-                              sealedRoads, padsRO, lawnsRO, haveLawn](double x, double z, double y, double slopeCos) {
+                              sealedRoads, padsRO, lawnsRO, haveLawn, managedRO](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
+                    // the wild layers -- tall grass, meadow flowers, clearings -- keep off the city's managed blocks
+                    if ((kind == 1 || kind == 3 || kind == 4) && managedRO->covers(x, z)) return 0.0;
                     if (!sealedRoads->empty() && sealedRoads->near(x, z, 0.4)) return 0.0;   // the city's sealed ground
                     if (padsRO->covers(x, z)) return 0.0;
                     // LAWNS: the lawn layer only on the parks, every other layer off them
