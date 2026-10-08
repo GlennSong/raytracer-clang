@@ -39,6 +39,17 @@ std::string mallName(uint32_t seed) {
     }
 }
 
+std::string skyName(uint32_t seed) {
+    uint32_t h = seed * 40503u + 0x51a7u;
+    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    const char* w = (h % 2u) ? pick(kJapanese, h) : pick(kHawaiian, h);
+    switch ((h >> 8) % 3u) {
+        case 0: return std::string(w) + " Sky Dining";
+        case 1: return std::string("The ") + w + " Terrace";
+        default: return std::string(w) + " Top of the Tower";
+    }
+}
+
 std::string anchorName(uint32_t seed) {
     uint32_t h = seed * 2246822519u + 0x5a1du;
     h ^= h << 13; h ^= h >> 17; h ^= h << 5;

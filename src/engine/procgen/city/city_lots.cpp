@@ -4338,6 +4338,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const bool urban = tag == DistrictTag::Commercial || tag == DistrictTag::Financial || tag == DistrictTag::OldTown;
                 const bool night = urban && nightlifeAt(b.site);
                 rec.params.shopMix = lot.paseo ? 3 : night ? 2 : urban ? 1 : 0;
+                // JAPANESE TOWERS: a downtown tower of 12+ floors may be a department store over its lobby, and one of
+                // 20+ may have restaurant floors at the top (Glenn: "malls like this in the skyscrapers like in Japan")
+                if ((tag == DistrictTag::Financial || tag == DistrictTag::Commercial) && !lot.wholeBlock && !lot.bigBox &&
+                    !lot.campus && !lot.paseo && rec.params.floors >= 12 && !rec.params.parkingDecks) {
+                    const uint32_t ht = mix(pp.seed, static_cast<uint32_t>(li) * 131u + 17u);
+                    if (ht % 4u == 0) rec.params.storeFloors = static_cast<uint8_t>(3 + (ht >> 4) % 3u);
+                    if (rec.params.floors >= 20 && (ht >> 8) % 3u == 0) rec.params.dineFloors = static_cast<uint8_t>(1 + (ht >> 12) % 2u);
+                    if (rec.params.storeFloors || rec.params.dineFloors) ++dbg->towerVenues;
+                }
                 if (night && !lot.paseo && rec.massing == BuildingRecipe::Massing::LotPlan && !lot.wholeBlock && !lot.bigBox &&
                     !lot.campus && cand.landmark < 0) {
                     const uint32_t hn = mix(pp.seed, static_cast<uint32_t>(li) * 29u + 11u);
@@ -5387,7 +5396,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
                  << dbg->lots.size() << " lots (" << dbg->wholeBlocks << " whole-block landmark sites), " << nBuilt << " built ("
                  << dbg->attachedBuilt << " attached of " << dbg->attachedSites << " sites run to a party line, "
-                 << dbg->bigBoxBlocks << " big-box blocks, " << dbg->nightlifeBuildings << " nightlife buildings), "
+                 << dbg->bigBoxBlocks << " big-box blocks, " << dbg->nightlifeBuildings << " nightlife buildings, " << dbg->towerVenues << " towers with stores or sky dining), "
                  << nGreen << " green, " << nCourt << " courts | COVER "
                  << static_cast<int>(builtArea) << " m2 of "
                  << static_cast<int>(blockArea) << " m2 buildable ("

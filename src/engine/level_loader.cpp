@@ -6035,6 +6035,48 @@ bool LevelLoader::load(const std::string& path,
                     // building with fronts is its shops; without, it stays one generic shop (the citysim deals it a
                     // kind: retailKindFor).
                     int fronts = 0;
+                    for (const engine::BuildingUnit& u : lb.units) {   // a Japanese tower's store and restaurant floors
+                        std::vector<engine::MallSign> boards;
+                        if (u.plan.size() < 3 || !engine::towerSignsOf(u.plan, u.params, boards)) continue;
+                        const uint32_t ts = static_cast<uint32_t>(std::lround(u.plan[0].x * 3.0)) * 73856093u ^
+                                            static_cast<uint32_t>(std::lround(u.plan[0].y * 3.0)) * 19349663u;
+                        const Vec2 door = u.doors.empty() ? centroid(u.plan) : u.doors.front().foot + u.doors.front().normal * 1.5;
+                        for (const engine::MallSign& b : boards) {
+                            engine::ShopSign sign;
+                            sign.text = b.sky ? engine::skyName(ts) : engine::anchorName(ts);
+                            sign.trade = b.sky ? 14 : 2;
+                            sign.n = Vec3(b.n.x, 0, b.n.y);
+                            if (b.vertical) {   // reads down the board
+                                sign.right = Vec3(0, -1, 0);
+                                sign.up = cross(sign.n, Vec3(0, 1, 0)) * -1.0;
+                                sign.width = (b.y1 - b.y0);
+                                sign.height = b.width - 0.2;
+                            } else {
+                                sign.up = Vec3(0, 1, 0);
+                                sign.right = cross(sign.n * -1.0, sign.up);
+                                sign.width = b.width - 0.4;
+                                sign.height = (b.y1 - b.y0) - 0.3;
+                            }
+                            sign.centre = Vec3(b.centre.x, u.baseY + 0.5 * (b.y0 + b.y1), b.centre.y);
+                            shopSigns.push_back(std::move(sign));
+                            // and the places they name: the store (a shop), the restaurant floors (a restaurant and a bar
+                            // each), all entered by the tower's own door
+                            const int n = b.sky ? 2 * u.params.dineFloors : 1;
+                            for (int k = 0; k < n; ++k) {
+                                engine::AuthoredPlace sp;
+                                sp.type = !b.sky ? "shop" : (k & 1) ? "bar" : "restaurant";
+                                sp.x = static_cast<float>(centroid(u.plan).x);
+                                sp.z = static_cast<float>(centroid(u.plan).y);
+                                sp.openHour = !b.sky ? 10.0f : (k & 1) ? 17.0f : 11.0f;
+                                sp.closeHour = !b.sky ? 20.0f : (k & 1) ? 1.0f : 23.0f;
+                                sp.hasEntrance = true;
+                                sp.ex = static_cast<float>(door.x);
+                                sp.ez = static_cast<float>(door.y);
+                                sp.name = b.sky ? engine::skyName(ts + 31u * static_cast<uint32_t>(k)) : sign.text;
+                                cfg.places.push_back(std::move(sp));
+                            }
+                        }
+                    }
                     for (const engine::BuildingUnit& u : lb.units) {   // the American mall's: a board over every entrance and anchor
                         std::vector<engine::MallSign> boards;
                         if (u.plan.size() < 3 || !engine::mallSignsOf(u.plan, u.params, boards)) continue;

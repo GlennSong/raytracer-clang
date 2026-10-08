@@ -547,6 +547,10 @@ struct BuildingParams {
     // (world XZ). The plan is the wings' outline; mallLayout2 reads the rest from these.
     uint8_t mallArms = 0;
     Vec2 mallCourt{0, 0};
+    // A TOWER'S SHOPS AND RESTAURANTS (Glenn: "malls like this in the skyscrapers like in Japan. Also in Japan there are
+    // restaurants at the top of skyscrapers"): the first `storeFloors` floors over the ground are a DEPARTMENT STORE
+    // (a department a floor), the top `dineFloors` RESTAURANT FLOORS (restaurants and bars round the core).
+    uint8_t storeFloors = 0, dineFloors = 0;
 };
 
 // THE SHOPFRONTS of a building's ground storey (buildings: shops; the facade's own ShopUnits): each shop's stretch
@@ -572,8 +576,11 @@ std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& p
 // (y0..y1 above the base) and width. False for anything else.
 bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width);
 // The American mall's name boards (bigBox 6): one over every entrance (the mall's name) and every anchor (the store's).
-struct MallSign { Vec2 centre, n; Real y0 = 0, y1 = 0, width = 0; bool anchor = false; };
+struct MallSign { Vec2 centre, n; Real y0 = 0, y1 = 0, width = 0; bool anchor = false, vertical = false, sky = false; };
 bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
+// A Japanese tower's (storeFloors / dineFloors): the store's name down a vertical board, the restaurant floors' across
+// the top. False when it has neither.
+bool towerSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
 // THE PARKING GARAGE you can drive into (parkingDecks; buildGarage): its collider -- every deck, ramp and rail -- in
 // world space (false: not a drivable garage, keep the prism); its stalls (centre, the way a parked car faces, height
 // above the base); and its portal (the middle of the opening on the street, and the way out).

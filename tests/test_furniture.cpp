@@ -1010,6 +1010,49 @@ TEST_CASE(an_american_mall_has_two_levels_of_shops_and_escalators) {
     CHECK(floorBeside);
 }
 
+// A JAPANESE TOWER (Glenn: "malls like this in the skyscrapers like in Japan. Also in Japan there are restaurants at the
+// top of skyscrapers"): its department-store floors are fitted as shops, its top floor as restaurants and bars, and it
+// carries the store's vertical board and the restaurant floor's name.
+TEST_CASE(a_tower_has_a_department_store_and_restaurants_on_top) {
+    BuildingRecipe rec;
+    CHECK(architectRecipeByName("glass_tower", 5u, 0.9, 30.0, 900.0, rec));
+    BuildingParams p = rec.params;
+    p.floors = 20;
+    p.storeFloors = 3;
+    p.dineFloors = 1;
+    p.faceDir = Vec3(0, 0, -1);
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 30}, {0, 30}};
+    auto piecesOn = [&](int k) {
+        std::map<std::string, int> n;
+        const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, k, k + 1);
+        for (const PlacedPiece& pp : in.furniture) ++n[furniturePieceName(static_cast<Piece>(pp.piece))];
+        return n;
+    };
+    // the restaurant floor: the top of the main plate (a setback crown's floors are mostly core)
+    int dineK = -1;
+    for (int k = 20; k >= 1 && dineK < 0; --k) {
+        const auto n = piecesOn(k);
+        if (n.count("bar_counter") || n.count("kitchen_pass")) dineK = k;
+    }
+    std::printf("    [tower] restaurant floor at storey %d\n", dineK);
+    const auto store = piecesOn(1), dine = piecesOn(std::max(dineK, 1)), office = piecesOn(10);
+    if (std::getenv("RT_TOWER_DEBUG"))
+        for (int k = 1; k <= 21; ++k) {
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, k, k + 1);
+            std::printf("      storey %d: %zu pieces, %zu parts\n", k, in.furniture.size(), in.parts.size());
+        }
+    std::vector<MallSign> signs;
+    CHECK(towerSignsOf(plan, p, signs));
+    std::printf("    [tower] storey 1: clothes racks %d, counters %d; storey 20: bar counters %d, bistro tables %d, kitchen "
+                "passes %d; storey 10 desks %d; %zu signs\n", store.count("clothes_rack") ? store.at("clothes_rack") : 0,
+                store.count("shop_counter") ? store.at("shop_counter") : 0, dine.count("bar_counter") ? dine.at("bar_counter") : 0,
+                dine.count("bistro_table") ? dine.at("bistro_table") : 0, dine.count("kitchen_pass") ? dine.at("kitchen_pass") : 0,
+                office.count("desk") ? office.at("desk") : 0, signs.size());
+    CHECK(store.count("clothes_rack") > 0);
+    CHECK(dine.count("bar_counter") > 0 || dine.count("kitchen_pass") > 0);
+    CHECK(signs.size() == 2);
+}
+
 TEST_CASE(a_bar_is_not_painted_like_an_office) {
     const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
     int bars = 0, light = 0;

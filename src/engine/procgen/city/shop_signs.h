@@ -24,6 +24,8 @@ std::string shopName(uint8_t trade, uint32_t seed);
 std::string mallName(uint32_t seed);
 // A department store's name (an anchor): "Whitfield's", "Kaneshiro & Co.".
 std::string anchorName(uint32_t seed);
+// A tower's restaurant floors' name ("Sora Sky Dining", "The Hilo Terrace").
+std::string skyName(uint32_t seed);
 
 struct ShopSign {
     std::string text;

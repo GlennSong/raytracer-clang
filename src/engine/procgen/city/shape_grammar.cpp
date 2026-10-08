@@ -4484,6 +4484,8 @@ static void emitFireEscape(BuildingMesh* vis, RenderMesh* col, const Poly2& plan
     if (vis) appendToPart(*vis, PartId::Metal, steel);
 }
 
+static int dineTopOf(const std::vector<StoreyPlan>& storeys);   // (below: a tower's restaurant floors end there)
+
 std::vector<ShopRoomRect> shopRoomsOf(const Poly2& planIn, const BuildingParams& params, Real baseY) {
     std::vector<ShopRoomRect> out;
     Poly2 plan = planIn;
@@ -4906,6 +4908,23 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           interiorInset(params), ki,
                           il.hasStair ? il.well : Poly2{}, entranceEdge,
                           il.hasStair ? il.stairFoot : Vec2(1e30, 1e30));
+        // A TOWER'S DEPARTMENT STORE (a department a floor: fashion, fashion, electronics, books, the food hall) and its
+        // RESTAURANT FLOORS at the top (restaurants and bars by turns round the core): its floors' rooms are shops
+        {
+            const int top = params.dineFloors > 0 ? dineTopOf(storeys) : nS - 1;
+            const bool fitted = plan.size() == 4;   // (shops are fitted in rectangular rooms: a drum tower stays offices)
+            const bool store = fitted && params.storeFloors > 0 && ki >= 1 && ki <= params.storeFloors;
+            const bool dine = fitted && params.dineFloors > 0 && ki >= 1 && ki <= top && ki > top - params.dineFloors && !store;
+            if (store || dine) {
+                static const uint8_t kDept[5] = {2, 2, 4, 3, 6};
+                int n = 0;
+                for (Room& r : rp.rooms) {
+                    if (r.rect.size() < 3) continue;
+                    r.kind = RoomKind::Shop;
+                    r.style = store ? kDept[(ki - 1) % 5] : ((n++ & 1) ? 14 : 13);
+                }
+            }
+        }
         if (rp.walls.empty()) continue;
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
@@ -5143,6 +5162,53 @@ static void emitMallWingsDress(BuildingMesh& out, const Poly2& plan, Real y, Rea
         }
         appendToPart(out, PartId::GlassClear, sky);
     }
+}
+
+// The highest storey of a tower's MAIN plate (the first floor's tier, before any setback): its restaurant floors end
+// there (a setback crown's floors are mostly core and lifts, and grow no rooms).
+static int dineTopOf(const std::vector<StoreyPlan>& storeys) {
+    if (storeys.size() < 2) return -1;
+    int top = 1;
+    for (std::size_t k = 1; k < storeys.size(); ++k)
+        if (storeys[k].tier == storeys[1].tier) top = static_cast<int>(k);
+    return top;
+}
+
+bool towerSignsOf(const Poly2& planIn, const BuildingParams& params, std::vector<MallSign>& out) {
+    if (!params.storeFloors && !params.dineFloors) return false;
+    Poly2 plan = planIn;
+    if (plan.size() != 4) return false;   // (a round or faceted tower's rooms are not fitted: no store, no restaurants)
+    ensureCCW(plan);
+    const std::size_t e = entranceEdgeFor(plan, params);
+    if (e >= plan.size()) return false;
+    const FaceRect fr = planEdgeRect(plan, e, 0.0, params.groundHeight);
+    if (params.storeFloors) {   // the store's name down a vertical board at the facade's corner
+        MallSign s;
+        const Vec3 c = fr.at(std::min(Real(2.2), fr.width * 0.15), 0) + fr.n * 0.5;
+        s.centre = Vec2(c.x, c.z);
+        s.n = Vec2(fr.n.x, fr.n.z);
+        s.y0 = params.groundHeight + 0.6;
+        s.y1 = params.groundHeight + params.storeFloors * params.floorHeight - 0.6;
+        s.width = 2.2;
+        s.anchor = true;   // (a store: a department store's name)
+        s.vertical = true;
+        out.push_back(s);
+    }
+    if (params.dineFloors) {   // the restaurant floors' name across the top of the facade
+        MallSign s;
+        const Vec3 c = fr.at(fr.width * 0.5, 0) + fr.n * 0.3;
+        s.centre = Vec2(c.x, c.z);
+        s.n = Vec2(fr.n.x, fr.n.z);
+        const int dt = dineTopOf(storeyPlans(plan, params));
+        const Real top = params.groundHeight + std::max(dt, 1) * params.floorHeight;
+        s.y0 = top - params.dineFloors * params.floorHeight + 0.4;
+        s.y1 = s.y0 + 2.2;
+        s.width = std::min(fr.width * 0.7, Real(24));
+        s.anchor = false;
+        s.sky = true;
+        out.push_back(s);
+    }
+    return true;
 }
 
 bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out) {

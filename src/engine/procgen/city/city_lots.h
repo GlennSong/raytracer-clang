@@ -326,7 +326,8 @@ struct LotPlanDebug {
     std::vector<Vec2> mallAt;
     int paseoBlocks = 0;             // open-air malls: a paseo between two rows of shops
     std::vector<Vec2> paseoAt;
-    int nightlifeBuildings = 0;      // low-rise bars/clubs/restaurants round each town's nightlife strip
+    int nightlifeBuildings = 0;
+    int towerVenues = 0;             // towers with a department store over the lobby or restaurant floors on top      // low-rise bars/clubs/restaurants round each town's nightlife strip
     int campusBlocks = 0;            // blocks given to a university campus (its halls round a quad)
     int sportsBlocks = 0;            // the campus's sports field (a block of its own, near it)
     int dormBlocks = 0;              // the campus's dorm block (residence halls round a courtyard, near it)

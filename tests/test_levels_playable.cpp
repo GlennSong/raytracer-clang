@@ -3967,6 +3967,20 @@ TEST_CASE(level_print_shop_interiors) {
         }
         std::printf("    [garage] %d garages, %d drivable\n", garages, drivable);
     }
+    if (std::getenv("RT_SHOP_SPOTS")) {   // the Japanese towers: a store and restaurant floors, their doors
+        int shown = 0;
+        for (const BuildingRecord& r : cb->records) {
+            if (!(r.params.storeFloors && r.params.dineFloors) || r.plan.size() != 4 || shown >= 3) continue;
+            const std::vector<StoreyPlan> st = storeyPlans(r.plan, r.params);
+            int top = 1;
+            for (std::size_t k = 1; k < st.size(); ++k) if (st[k].tier == st[1].tier) top = static_cast<int>(k);
+            const Vec2 c = centroid(r.plan);
+            std::printf("    [tower] store %d floors, dining floor %d (y %.1f), centre %.2f %.2f, base %.2f, face %.2f %.2f, enterable %d\n",
+                        r.params.storeFloors, top, r.baseY + st[static_cast<std::size_t>(top)].y0, c.x, c.y, r.baseY,
+                        r.params.faceDir.x, r.params.faceDir.z, r.enterable ? 1 : 0);
+            ++shown;
+        }
+    }
     if (std::getenv("RT_SHOP_SPOTS"))   // the indoor malls: their street doors and a unit front on the concourse
         for (const BuildingRecord& r : cb->records) {
             if (r.params.bigBox < 5) continue;
