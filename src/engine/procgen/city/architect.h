@@ -201,6 +201,9 @@ BuildingRecipe architectCampus(int role, uint32_t seed);
 BuildingRecipe architectPaseo(int role, uint32_t seed);
 // THE INDOOR MALL: a big-box site's box (bigBox 5) -- a concourse of shop units, an anchor, a food court (mallLayout).
 BuildingRecipe architectMall(uint32_t seed);
+// THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): wings off a skylit court, two 5.5 m
+// storeys round atria, anchors and entrances at the wing ends. The lot pass shapes its plan (mallArms, mallCourt).
+BuildingRecipe architectMallWings(uint32_t seed);
 // The chain's look on `p` (walls, cladding, the band's colour) and p.bigBox = chain.
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed);
 

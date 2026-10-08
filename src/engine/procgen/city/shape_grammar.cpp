@@ -3319,6 +3319,7 @@ RenderMaterial floorFinishFor(const BuildingParams& params) {
     // Five finishes, seed-picked per building (device ask for variety,
     // then for MORE materials): two woods, stone tile, marble, carpet.
     RenderMaterial m = materialFor(PartId::InteriorFloor, params.wallColor);
+    if (params.bigBox == 6) return materialFor(PartId::InteriorFloorMarble, params.wallColor);   // a mall's polished floors
     // Bits 6-8 ONLY (& 7 before % 5): without the mask, %5 consumes every
     // upper bit and the stair/paint picks LEAK into the floor pick (the
     // stair-axis census caught the correlation). 8 values % 5 biases the
@@ -3345,6 +3346,7 @@ RenderMaterial floorFinishFor(const BuildingParams& params) {
 }
 
 PartId floorFinishPartFor(const BuildingParams& params) {
+    if (params.bigBox == 6) return PartId::InteriorFloorMarble;   // (as floorFinishFor)
     // Bits 6-8 ONLY (& 7 before % 5): without the mask, %5 consumes every
     // upper bit and the stair/paint picks LEAK into the floor pick (the
     // stair-axis census caught the correlation). 8 values % 5 biases the
@@ -3666,7 +3668,7 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
                               std::size_t entranceEdge) {
     InteriorLayout il;
     Poly2 plan = planIn;
-    if (plan.size() < 3) return il;
+    if (plan.size() < 3 || params.bigBox >= 6) return il;   // (a mall climbs by its escalators: mallLevel)
     ensureCCW(plan);
     // A building with a CORE climbs by its stairwells: no straight stair, no
     // well (the core's shafts are the holes — coreSlabHoles).
@@ -3834,9 +3836,16 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
 // racks of clothes), and across the back the STOCKROOM behind a wall with two doors. Rooms carry the trade:
 // Shop styles 7-10 the chain's floor (7 + chain - 1), 11 the checkouts, 12 the stockroom.
 static std::vector<ShopFront> mallFronts(const Poly2& plan, const BuildingParams& params);   // (after mallLayout)
+static std::vector<ShopFront> mallLevelFronts(const Poly2& plan, const BuildingParams& params, int k);   // (after mallLevel)
 
 std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& params) {
     std::vector<ShopFront> out;
+    if (params.bigBox == 6) {   // the American mall: both levels' units
+        std::vector<ShopFront> all = mallLevelFronts(planIn, params, 0);
+        const std::vector<ShopFront> up = mallLevelFronts(planIn, params, 1);
+        all.insert(all.end(), up.begin(), up.end());
+        return all;
+    }
     if (params.bigBox == 5) {   // an indoor mall: its units' fronts on the concourse
         Poly2 pl = planIn;
         if (pl.size() < 3) return out;
@@ -3965,6 +3974,172 @@ static MallLayout mallLayout(const Poly2& planIn, const BuildingParams& params, 
     wall(P(xv0, inset), P(xv0, vc0));
     wall(P(xv1, inset), P(xv1, vc0));
     return ml;
+}
+
+// THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md; Glenn: "multiple entrances and exits at
+// the different wings of the mall ... a two story mall with shops on the second floor ... stairs, an elevator shaft,
+// ramps, or escalators"). Its frame: the court's centre, v away from the street, u along it; its wings -- each 40 m
+// wide, `arm` metres from the court's centre to its end -- from mallArms and the plan. Along a wing: a 12 m concourse
+// with shops both sides on both levels; the upper level open over it (an atrium 6 m wide, bridged every ~28 m) and
+// over the court (a 14 m opening the escalators climb through); a wing on the u axis ends in an ANCHOR (a department
+// store, both levels), a wing on the v axis in an ENTRANCE (a vestibule below, the food court above); an I-shaped mall
+// (no v wings) is entered through the court's front.
+struct MallWings {
+    bool ok = false;
+    Vec2 c, u, v;
+    Real arm[4] = {0, 0, 0, 0};   // +u, -u, +v, -v
+    static constexpr Real a = 20.0, cw = 6.0;   // the wings' half width; the concourse's half width
+    Vec2 dir(int k) const { return k == 0 ? u : k == 1 ? u * -1.0 : k == 2 ? v : v * -1.0; }
+    Vec2 lat(int k) const { const Vec2 d = dir(k); return Vec2(-d.y, d.x); }
+    Vec2 P(int k, Real s, Real t) const { return c + dir(k) * s + lat(k) * t; }
+    bool anchor(int k) const { return k < 2; }
+};
+static MallWings mallWingsOf(const Poly2& planIn, const BuildingParams& p) {
+    MallWings M;
+    if (p.bigBox != 6 || !p.mallArms || planIn.size() < 4) return M;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    M.c = p.mallCourt;
+    // v: away from the street, snapped to the plan's own edge directions
+    const Vec2 fd(p.faceDir.x, p.faceDir.z);
+    Real best = -2;
+    for (std::size_t e = 0; e < plan.size(); ++e) {
+        const Vec2 d = normalize(plan[(e + 1) % plan.size()] - plan[e]);
+        for (const Vec2& n : {Vec2(d.y, -d.x), Vec2(-d.y, d.x)})
+            if (dot(n, fd * -1.0) > best) { best = dot(n, fd * -1.0); M.v = n; }
+    }
+    M.u = Vec2(M.v.y, -M.v.x);
+    for (int k = 0; k < 4; ++k) {
+        if (!(p.mallArms & (1u << k))) continue;
+        Real s = MallWings::a;
+        while (s < 400 && pointInPolygon(plan, M.c + M.dir(k) * (s + 0.5))) s += 0.5;
+        M.arm[k] = s;
+    }
+    M.ok = M.arm[0] > MallWings::a + 30 && M.arm[1] > MallWings::a + 30;
+    return M;
+}
+
+struct MallLevel {
+    RoomPlan rp;
+    std::vector<ShopFront> fronts;
+    std::vector<Poly2> holes;                         // (upper level) the atria
+    std::vector<std::pair<Vec2, Vec2>> balustrades;   // (upper level) round the holes, where you could fall
+    struct Escalator { Vec2 foot, dir; bool up; };    // foot on the lower level, rising along dir one storey
+    std::vector<Escalator> escalators;
+    Vec2 liftAt, liftDir;                             // the glass lift's shaft centre and the way its door faces
+};
+static constexpr Real kEscalatorRun = 9.6;   // 5.5 m at ~30 degrees
+static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, int k) {
+    MallLevel L;
+    RoomPlan& rp = L.rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = false;
+    rp.finish = interiorFinishFor(params);
+    const MallWings M = mallWingsOf(planIn, params);
+    if (!M.ok) return L;
+    const Real a = MallWings::a, cw = MallWings::cw, inset = interiorInset(params);
+    const Real y0 = k == 0 ? 0.0 : params.groundHeight;
+    uint32_t h = positionHash(Vec3(M.c.x + 0.41 + k * 7.0, 0.0, M.c.y + 0.17)) ^ static_cast<uint32_t>(params.seed);
+    auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+    auto wall = [&](const Vec2& p0, const Vec2& p1, Real doorAt = -1, bool glass = false) {
+        RoomWall w; w.a = p0; w.b = p1; w.doorAt = doorAt; w.glass = glass;
+        rp.walls.push_back(w);
+    };
+    auto room = [&](uint8_t style, Poly2 rect) {
+        Room r; r.kind = RoomKind::Shop; r.style = style; r.edge = 0; r.rect = std::move(rect);
+        rp.rooms.push_back(r);
+    };
+    for (int wk = 0; wk < 4; ++wk) {
+        const Real A = M.arm[wk];
+        if (A <= 0) continue;
+        // the wing's END: an anchor (u wings, both levels), an entrance vestibule below / the food court above (v wings)
+        Real end = A - inset;
+        if (M.anchor(wk)) {
+            const Real s0 = A - 30.0;
+            room(10, {M.P(wk, A - inset, -a + inset), M.P(wk, A - inset, a - inset), M.P(wk, s0, a - inset), M.P(wk, s0, -a + inset)});
+            wall(M.P(wk, s0, -a + inset), M.P(wk, s0, -cw));
+            wall(M.P(wk, s0, cw), M.P(wk, s0, a - inset));
+            end = s0;
+        } else if (k == 1) {   // the food court, over the entrance
+            const Real s0 = A - 26.0;
+            room(0, {M.P(wk, A - inset, -a + inset), M.P(wk, A - inset, a - inset), M.P(wk, s0, a - inset), M.P(wk, s0, -a + inset)});
+            wall(M.P(wk, s0, -a + inset), M.P(wk, s0, -cw));
+            wall(M.P(wk, s0, cw), M.P(wk, s0, a - inset));
+            end = s0;
+        } else {
+            end = A - 9.0;   // the vestibule: open to the doors
+        }
+        // THE CONCOURSE from the court to the end (lit and furnished below; lit above, over its atrium)
+        room(k == 0 ? 21 : 22, {M.P(wk, a, -cw), M.P(wk, end, -cw), M.P(wk, end, cw), M.P(wk, a, cw)});
+        // THE SHOPS both sides, cut by trade (mall mix), glass fronts on the concourse
+        for (int side : {1, -1}) {
+            const Real bay = 4.0;
+            int left = static_cast<int>((end - a) / bay);
+            Real s = a;
+            while (left >= 2) {
+                const uint8_t trade = pickTrade(next(), left, 3);
+                const int g = tradeBays(trade, left, next());
+                const Real s0 = s, s1 = left - g < 2 ? end : s + g * bay;
+                const Real tf = side * cw, tb = side * (a - inset);
+                Poly2 r = side > 0 ? Poly2{M.P(wk, s1, tf), M.P(wk, s0, tf), M.P(wk, s0, tb), M.P(wk, s1, tb)}
+                                   : Poly2{M.P(wk, s0, tf), M.P(wk, s1, tf), M.P(wk, s1, tb), M.P(wk, s0, tb)};
+                room(trade, r);
+                wall(M.P(wk, s0, tf), M.P(wk, s1, tf), 0.5, true);
+                wall(M.P(wk, s1, tf), M.P(wk, s1, tb));
+                if (s0 <= a + 1e-3) wall(M.P(wk, s0, tf), M.P(wk, s0, tb));   // the first unit's court-side wall
+                ShopFront f;
+                f.n = M.lat(wk) * static_cast<Real>(-side);   // into the concourse
+                f.a = (side > 0 ? M.P(wk, s1, tf) : M.P(wk, s0, tf)) + f.n * 0.06;
+                f.b = (side > 0 ? M.P(wk, s0, tf) : M.P(wk, s1, tf)) + f.n * 0.06;
+                f.door = (f.a + f.b) * 0.5;
+                f.trade = trade;
+                f.fasciaY0 = y0 + 3.4; f.fasciaY1 = y0 + 4.1; f.fasciaProud = 0.02;
+                f.indoor = true;
+                f.entry = M.P(3, a + 1.5, 0);   // the court's front doors (the mall's own way in)
+                L.fronts.push_back(f);
+                s = s1;
+                left = static_cast<int>((end - s + 1e-6) / bay);
+            }
+        }
+        // THE UPPER LEVEL's ATRIUM down the concourse, bridged every ~28 m, a balustrade along both edges
+        if (k == 1) {
+            const Real h0 = a + 2.0, h1 = end - 2.0, ht = cw - 3.0;
+            Real s = h0;
+            while (s < h1 - 4.0) {
+                const Real s1 = std::min(h1, s + 25.0);
+                L.holes.push_back({M.P(wk, s, -ht), M.P(wk, s1, -ht), M.P(wk, s1, ht), M.P(wk, s, ht)});
+                for (Real t : {-ht, ht}) L.balustrades.push_back({M.P(wk, s, t), M.P(wk, s1, t)});
+                L.balustrades.push_back({M.P(wk, s, -ht), M.P(wk, s, ht)});
+                L.balustrades.push_back({M.P(wk, s1, -ht), M.P(wk, s1, ht)});
+                s = s1 + 3.0;   // a bridge
+            }
+        }
+    }
+    // THE COURT: open below; above, a 14 m opening the escalators climb through, the glass lift in its corner
+    const Real ch = 7.0;
+    if (k == 0) room(23, {M.P(3, -a + inset, -a + inset), M.P(3, -a + inset, a - inset), M.P(3, a - inset, a - inset), M.P(3, a - inset, -a + inset)});
+    else {
+        L.holes.push_back({M.c + M.u * -ch + M.v * -ch, M.c + M.u * ch + M.v * -ch, M.c + M.u * ch + M.v * ch, M.c + M.u * -ch + M.v * ch});
+        // the balustrade round it, open where the escalators land (the +u edge, v in [-3, 0])
+        L.balustrades.push_back({M.c + M.u * -ch + M.v * -ch, M.c + M.u * ch + M.v * -ch});
+        L.balustrades.push_back({M.c + M.u * ch + M.v * ch, M.c + M.u * -ch + M.v * ch});
+        L.balustrades.push_back({M.c + M.u * -ch + M.v * ch, M.c + M.u * -ch + M.v * -ch});
+        L.balustrades.push_back({M.c + M.u * ch + M.v * -ch, M.c + M.u * ch + M.v * -3.2});
+        L.balustrades.push_back({M.c + M.u * ch + M.v * 0.2, M.c + M.u * ch + M.v * ch});
+    }
+    // (both levels know them: the lower one walks onto their feet, the upper one off their heads)
+    L.escalators.push_back({M.c + M.u * (ch - kEscalatorRun) + M.v * -2.4, M.u, true});
+    L.escalators.push_back({M.c + M.u * (ch - kEscalatorRun) + M.v * -0.9, M.u, false});
+    L.liftAt = M.c + M.u * -(ch - 1.4) + M.v * (ch - 1.4);
+    L.liftDir = M.u;
+    // an I-shaped mall (no v wings) is entered through the court's front: its doors on the -v face
+    if (!(params.mallArms & 0x8)) for (ShopFront& f : L.fronts) f.entry = M.c + M.v * -(a + 1.5);
+    else for (ShopFront& f : L.fronts) f.entry = M.P(3, M.arm[3] + 1.5, 0);
+    return L;
+}
+
+static std::vector<ShopFront> mallLevelFronts(const Poly2& plan, const BuildingParams& params, int k) {
+    return mallLevel(plan, params, k).fronts;
 }
 
 static std::vector<ShopFront> mallFronts(const Poly2& plan, const BuildingParams& params) {
@@ -4388,6 +4563,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         if (core.valid) holes = coreSlabHoles(core);   // the shafts' own walls dress these rims
         else if (il.hasStair && static_cast<int>(k) <= stairTop)
             holes.push_back(il.well);
+        if (params.bigBox == 6 && k == 1) holes = mallLevel(plan, params, 1).holes;   // the atria
         const Real yTop = baseY + storeys[k].y0 + 0.05;
         // The hole's CUT EDGE: without a skirt the slab is two horizontal
         // faces with an open 0.25 m rim between them — from below, the top
@@ -4717,7 +4893,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
         if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
         // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
-        RoomPlan rp = ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
+        RoomPlan rp = params.bigBox == 6 && ki <= 1 ? mallLevel(plan, params, ki).rp
+                    : ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
                     : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
                     : ki == 0 && !params.campus ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
                                              il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
@@ -4733,11 +4910,14 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
         // A SHOP'S FLOOR AND CEILING in its trade's finish (a checker where it is tiled), just proud of the slab's.
-        if (ki == 0) {
-            const Real fy = baseY + spk.y0 + 0.078;   // (the lobby floor the exterior lays is 7 cm up)
+        // (A mall's upper level too: its slab top is the floor there; its concourse is the slab's own marble, holed.)
+        if (ki == 0 || (params.bigBox == 6 && ki == 1)) {
+            const Real fy = ki == 0 ? baseY + spk.y0 + 0.078   // (the lobby floor the exterior lays is 7 cm up)
+                                    : baseY + spk.y0 + 0.05 + 0.008;
             const Real cy = baseY + spk.y0 + spk.h - 0.25 - 0.006;   // (under the ceiling the exterior closes the storey with)
             for (const Room& r : rp.rooms) {
                 if (r.kind != RoomKind::Shop || r.rect.size() != 4) continue;
+                if (params.bigBox == 6 && ki == 1 && r.style == 22) continue;   // (over the atrium: the slab, holed)
                 const TradeInterior& ti = tradeInterior(r.style);
                 const Vec2 o = r.rect[0], U = r.rect[1] - o, V = r.rect[3] - o;
                 const Real lu = U.length(), lv = V.length();
@@ -4758,7 +4938,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 } else {
                     flat(0, 0, lu, lv, fy, true, ti.floorA);
                 }
-                flat(0, 0, lu, lv, cy, false, ti.ceiling);
+                if (!(params.bigBox == 6 && ki == 0)) flat(0, 0, lu, lv, cy, false, ti.ceiling);   // (a mall's: the holed slab)
             }
         }
         appendToPart(out, PartId::Interior, rm.drywall);
@@ -4805,6 +4985,85 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
 
     appendToPart(out, PartId::Interior, mesh);
     appendToPart(out, floorFinishPartFor(params), floorMesh);
+    // THE AMERICAN MALL'S WAYS UP (bigBox 6): glass balustrades round the upper level's atria, the ESCALATORS through
+    // the court's opening, the glass LIFT in its corner -- drawn and walkable (each escalator a 30-degree ramp in the
+    // collider, its rails solid)
+    if (params.bigBox == 6 && nS >= 2 && kA <= 1 && kB >= 1) {
+        const MallLevel ML = mallLevel(plan, params, 1);
+        const Real yU = baseY + storeys[1].y0 + 0.05, yL = baseY + 0.07;
+        RenderMesh glassM, steel, treads, lit;
+        const Vec3 up(0, 1, 0), steelC(0.62, 0.64, 0.67), dark(0.10, 0.10, 0.11);
+        auto colQuad = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& n) {
+            if (colliderOut) emitQuad(*colliderOut, a, b, c, d, n, icol);
+        };
+        for (const auto& bl : ML.balustrades) {
+            const Vec3 A(bl.first.x, yU, bl.first.y), B(bl.second.x, yU, bl.second.y);
+            const Vec3 d = B - A;
+            if (d.length() < 0.1) continue;
+            const Vec3 n = normalize(cross(d, up));
+            emitQuad(glassM, A, B, B + up * 1.05, A + up * 1.05, n, Vec3(0.75, 0.82, 0.85));
+            emitQuad(glassM, B, A, A + up * 1.05, B + up * 1.05, n * -1.0, Vec3(0.75, 0.82, 0.85));
+            emitBox(out, Scope{A + up * 1.05 - n * 0.04, {normalize(d), up, n}, Vec3(d.length(), 0.06, 0.08)}, PartId::Metal, steelC);
+            colQuad(A, B, B + up * 1.1, A + up * 1.1, n);
+            colQuad(B, A, A + up * 1.1, B + up * 1.1, n * -1.0);
+        }
+        for (const MallLevel::Escalator& e : ML.escalators) {
+            const Vec3 D(e.dir.x, 0, e.dir.y), X(-e.dir.y, 0, e.dir.x);   // along, across
+            const Vec3 f0(e.foot.x, yL, e.foot.y);
+            const Real rise = yU - yL, run = kEscalatorRun, w = 1.0;
+            auto at = [&](Real s, Real t, Real hh) { return f0 + D * s + X * t + up * (hh + std::clamp(s - 1.2, Real(0), run - 2.4) * rise / (run - 2.4)); };
+            // the steps (a landing at each end, the incline between)
+            const int nSteps = 28;
+            for (int i = 0; i < nSteps; ++i) {
+                const Real s0 = i * run / nSteps, s1 = (i + 1) * run / nSteps;
+                const Vec3 a = at(s0, -w * 0.5, 0), b = at(s0, w * 0.5, 0), c = at(s1, w * 0.5, 0), d = at(s1, -w * 0.5, 0);
+                const Real hb = a.y, ht = c.y;
+                emitQuad(treads, Vec3(a.x, ht, a.z), Vec3(b.x, ht, b.z), c, d, up, (i & 1) ? dark * 1.6 : dark * 2.2);
+                if (ht > hb + 1e-3) emitQuad(treads, a, b, Vec3(b.x, ht, b.z), Vec3(a.x, ht, a.z), D * -1.0, steelC * 0.6);
+            }
+            // the walkable ramp
+            colQuad(at(0, -w * 0.5, 0.02), at(0, w * 0.5, 0.02), at(run, w * 0.5, 0.02), at(run, -w * 0.5, 0.02), up);
+            // its sides: a steel truss panel below, glass above with a black rail on top (solid in the collider)
+            for (int side : {-1, 1}) {
+                const Real t = side * (w * 0.5 + 0.12);
+                const Vec3 a = at(0, t, 0), b = at(run, t, 0);
+                const Vec3 n = X * static_cast<Real>(side);
+                emitQuad(steel, at(0, t, -0.9), at(run, t, -0.9), b, a, n, steelC);
+                emitQuad(steel, at(run, t, -0.9), at(0, t, -0.9), a, b, n * -1.0, steelC * 0.8);
+                emitQuad(glassM, a, b, b + up * 0.95, a + up * 0.95, n, Vec3(0.75, 0.82, 0.85));
+                emitQuad(glassM, b, a, a + up * 0.95, b + up * 0.95, n * -1.0, Vec3(0.75, 0.82, 0.85));
+                for (int seg = 0; seg < 6; ++seg) {
+                    const Real s0 = run * seg / 6, s1 = run * (seg + 1) / 6;
+                    const Vec3 p0 = at(s0, t, 0.98), p1 = at(s1, t, 0.98);
+                    emitBox(out, Scope{p0 - X * 0.04, {normalize(p1 - p0), up, X}, Vec3((p1 - p0).length(), 0.07, 0.08)}, PartId::Metal, dark);
+                }
+                emitQuad(lit, at(0.3, t - side * 0.01, 0.05), at(run - 0.3, t - side * 0.01, 0.05), at(run - 0.3, t - side * 0.01, 0.12),
+                         at(0.3, t - side * 0.01, 0.12), n * -1.0, Vec3(0.55, 0.75, 1.0));   // the skirt light
+                colQuad(a, b, b + up * 1.0, a + up * 1.0, n);
+                colQuad(b, a, a + up * 1.0, b + up * 1.0, n * -1.0);
+            }
+        }
+        // THE GLASS LIFT: a glass shaft from the court floor to the upper level, its car inside (a box of light)
+        {
+            const Vec3 c(ML.liftAt.x, yL, ML.liftAt.y), D(ML.liftDir.x, 0, ML.liftDir.y), X(-ML.liftDir.y, 0, ML.liftDir.x);
+            const Real hw = 1.1, H = yU - yL + 3.0;
+            const Vec3 cs[4] = {c - D * hw - X * hw, c + D * hw - X * hw, c + D * hw + X * hw, c - D * hw + X * hw};
+            for (int e = 0; e < 4; ++e) {
+                const Vec3 a = cs[e], b = cs[(e + 1) % 4];
+                const Vec3 n = normalize(cross(b - a, up));
+                emitQuad(glassM, a, b, b + up * H, a + up * H, n, Vec3(0.75, 0.82, 0.85));
+                emitQuad(glassM, b, a, a + up * H, b + up * H, n * -1.0, Vec3(0.75, 0.82, 0.85));
+                emitBox(out, Scope{a - (b - a) * 0.0, {normalize(b - a), up, n}, Vec3(0.1, H, 0.1)}, PartId::Metal, steelC);
+                colQuad(a, b, b + up * H, a + up * H, n);
+            }
+            emitBox(out, Scope{c - D * (hw - 0.15) - X * (hw - 0.15) + up * 1.0, {D, up, X}, Vec3(2 * hw - 0.3, 2.4, 2 * hw - 0.3)},
+                    PartId::LitBand, Vec3(1.0, 0.92, 0.75));
+        }
+        appendToPart(out, PartId::GlassClear, glassM);
+        appendToPart(out, PartId::Metal, steel);
+        appendToPart(out, PartId::Metal, treads);
+        appendToPart(out, PartId::LitBand, lit);
+    }
     appendToPart(out, stairFinishPartFor(params), stairMesh);
     out.height = storeys.back().y0 + storeys.back().h;
     return out;
@@ -4814,8 +5073,100 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
 // round the top of every wall; over the doors a deep canopy on two posts, the glazed entry either side of them,
 // and above it the chain's lit sign with its name in letter blocks. The walls and the door are the ordinary
 // facade's (one aperture, so the interior and its colliders agree); this only dresses them.
+// THE AMERICAN MALL'S OUTSIDE: its ENTRANCES (each v wing's end, or the court's front on an I-shaped mall) -- a
+// glazed portal under a canopy, the mall's name board over it; each ANCHOR's own glazed entry and name board at its
+// wing's end; the band in the mall's colour round the top; SKYLIGHTS -- a glass ridge down every concourse, a glass
+// pyramid over the court. Every entrance is a door (a collider gap, a leaf).
+struct MallFace { Vec2 at, n; bool anchor; };
+static std::vector<MallFace> mallFacesOf(const MallWings& M, uint8_t arms) {
+    std::vector<MallFace> f;
+    for (int k = 0; k < 4; ++k)
+        if (M.arm[k] > 0) f.push_back({M.P(k, M.arm[k], 0), M.dir(k), M.anchor(k)});
+    if (!(arms & 0x8)) f.push_back({M.P(3, MallWings::a, 0), M.v * -1.0, false});
+    return f;
+}
+static void emitMallWingsDress(BuildingMesh& out, const Poly2& plan, Real y, Real H, const BuildingParams& params,
+                               bool full) {
+    const MallWings M = mallWingsOf(plan, params);
+    if (!M.ok) return;
+    const Vec3 brand = params.trimColor, up(0, 1, 0);
+    for (std::size_t i = 0; i < plan.size(); ++i) {   // the band
+        const FaceRect fr = planEdgeRect(plan, i, y, H);
+        if (fr.width < 1.0) continue;
+        emitBox(out, Scope{fr.at(0, H - 1.7), {fr.h, up, fr.n}, Vec3(fr.width, 1.0, 0.08)}, PartId::Trim, brand);
+    }
+    for (const MallFace& mf : mallFacesOf(M, params.mallArms)) {
+        const Vec3 N(mf.n.x, 0, mf.n.y), X(-mf.n.y, 0, mf.n.x);
+        const Vec3 c(mf.at.x, y, mf.at.y);
+        const Real gw = mf.anchor ? 8.0 : 12.0, gh = 4.6, cwid = gw + 2.0;
+        // the glazing: dark glass, mullions, a door's attach in the middle
+        RenderMesh glass;
+        const Vec3 o = N * 0.05;
+        emitQuad(glass, c - X * (gw * 0.5) + o, c + X * (gw * 0.5) + o, c + X * (gw * 0.5) + up * gh + o,
+                 c - X * (gw * 0.5) + up * gh + o, N, glassGrey());
+        appendToPart(out, PartId::Glass, glass);
+        if (full)
+            for (Real t = -gw * 0.5; t <= gw * 0.5 + 1e-6; t += gw / 6)
+                emitBox(out, Scope{c + X * (t - 0.05) + N * 0.02, {X, up, N}, Vec3(0.1, gh, 0.08)}, PartId::Metal, Vec3(0.55, 0.57, 0.60));
+        // the canopy
+        emitBox(out, Scope{c - X * (cwid * 0.5) + up * (gh + 0.3), {X, up, N}, Vec3(cwid, 0.45, 3.5)}, PartId::Trim, brand * 0.85);
+        emitBox(out, Scope{c - X * (cwid * 0.5) + up * (gh + 0.25), {X, up, N}, Vec3(cwid, 0.05, 3.5)}, PartId::Trim, Vec3(0.88, 0.88, 0.86));
+        // the name board over it (its lettering: the loader, mallSignsOf)
+        const Real bw = mf.anchor ? 12.0 : 16.0;
+        emitBox(out, Scope{c - X * (bw * 0.5 + 0.3) + up * (gh + 1.3), {X, up, N}, Vec3(bw + 0.6, 2.6, 0.25)}, PartId::Trim,
+                Vec3(0.10, 0.10, 0.11));
+        out.attaches.push_back({c, N, "shopdoor", 3.2, 2.6});
+    }
+    // SKYLIGHTS: a glass ridge down each concourse, a pyramid over the court
+    if (full) {
+        RenderMesh sky;
+        const Vec3 g = glassGrey() * 1.15;
+        for (int k = 0; k < 4; ++k) {
+            if (M.arm[k] <= 0) continue;
+            const Real s0 = MallWings::a + 1.0, s1 = M.arm[k] - (M.anchor(k) ? 31.0 : 3.0);
+            if (s1 - s0 < 4.0) continue;
+            auto W3 = [&](Real s, Real t, Real hh) { const Vec2 q = M.P(k, s, t); return Vec3(q.x, y + H + hh, q.y); };
+            const Vec3 l0 = W3(s0, -4.0, 0.05), l1 = W3(s1, -4.0, 0.05), r0 = W3(s0, 4.0, 0.05), r1 = W3(s1, 4.0, 0.05);
+            const Vec3 m0 = W3(s0, 0, 1.6), m1 = W3(s1, 0, 1.6);
+            const Vec3 nl = normalize(cross(l1 - l0, m0 - l0)), nr = normalize(cross(m0 - r0, r1 - r0));
+            emitQuad(sky, l0, l1, m1, m0, nl.y > 0 ? nl : nl * -1.0, g);
+            emitQuad(sky, r1, r0, m0, m1, nr.y > 0 ? nr : nr * -1.0, g);
+        }
+        const Real ch = 8.0;
+        const Vec3 apex(M.c.x, y + H + 4.0, M.c.y);
+        const Vec2 cs[4] = {M.c + M.u * -ch + M.v * -ch, M.c + M.u * ch + M.v * -ch, M.c + M.u * ch + M.v * ch, M.c + M.u * -ch + M.v * ch};
+        for (int e = 0; e < 4; ++e) {
+            const Vec3 a3(cs[e].x, y + H + 0.05, cs[e].y), b3(cs[(e + 1) % 4].x, y + H + 0.05, cs[(e + 1) % 4].y);
+            Vec3 n = normalize(cross(b3 - a3, apex - a3));
+            if (n.y < 0) n = n * -1.0;
+            emitQuad(sky, a3, b3, apex, apex, n, g);
+        }
+        appendToPart(out, PartId::GlassClear, sky);
+    }
+}
+
+bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out) {
+    const MallWings M = mallWingsOf(plan, params);
+    if (!M.ok) return false;
+    for (const MallFace& mf : mallFacesOf(M, params.mallArms)) {
+        MallSign s;
+        s.centre = mf.at + mf.n * 0.28;
+        s.n = mf.n;
+        s.y0 = 4.6 + 1.3;
+        s.y1 = s.y0 + 2.6;
+        s.width = mf.anchor ? 12.0 : 16.0;
+        s.anchor = mf.anchor;
+        out.push_back(s);
+    }
+    return !out.empty();
+}
+
 static void emitBigBoxDress(BuildingMesh& out, const Poly2& plan, std::size_t entranceEdge, Real y, Real gh,
                             const BuildingParams& params, bool full) {
+    if (params.bigBox == 6) {   // the American mall dresses its wings (its height: both storeys)
+        emitMallWingsDress(out, plan, y, params.groundHeight + params.floors * params.floorHeight, params, full);
+        return;
+    }
     const Vec3 brand = params.trimColor;
     for (std::size_t i = 0; i < plan.size(); ++i) {   // the band
         const FaceRect fr = planEdgeRect(plan, i, y, gh);
@@ -5460,6 +5811,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         std::vector<Poly2> holes;
         if (gcore.valid) holes = coreSlabHoles(gcore);   // the shafts (M5)
         else if (il.hasStair) holes.push_back(il.well);
+        if (params.bigBox == 6) holes = mallLevel(plan, params, 1).holes;   // the mall's atria, open to the floor above
         const Real cy = y + gh - 0.25;
         const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
         RenderMesh ceil;

@@ -37,7 +37,8 @@ struct TradeInterior {
     Real dadoH;  Vec3 dado;
     Vec3 floorA, floorB;  Real tile;   // tile > 0: a checker of floorA / floorB, `tile` m squares
     Vec3 ceiling;
-    int lights;                        // 0 office panels, 1 round fittings (warm rooms), 2 few and dim (bars, clubs)
+    int lights;                        // 0 office panels, 1 round fittings (warm rooms), 2 few and dim (bars, clubs),
+                                       // 3 none (a mall's lower concourse: lit through the atrium)
 };
 const TradeInterior& tradeInterior(uint8_t id);   // a trade with none of its own: plain shop
 

@@ -6035,6 +6035,25 @@ bool LevelLoader::load(const std::string& path,
                     // building with fronts is its shops; without, it stays one generic shop (the citysim deals it a
                     // kind: retailKindFor).
                     int fronts = 0;
+                    for (const engine::BuildingUnit& u : lb.units) {   // the American mall's: a board over every entrance and anchor
+                        std::vector<engine::MallSign> boards;
+                        if (u.plan.size() < 3 || !engine::mallSignsOf(u.plan, u.params, boards)) continue;
+                        const uint32_t ms = static_cast<uint32_t>(std::lround(u.params.mallCourt.x)) * 73856093u ^
+                                            static_cast<uint32_t>(std::lround(u.params.mallCourt.y)) * 19349663u;
+                        int ai = 0;
+                        for (const engine::MallSign& b : boards) {
+                            engine::ShopSign sign;
+                            sign.text = b.anchor ? engine::anchorName(ms + 977u * static_cast<uint32_t>(++ai)) : engine::mallName(ms);
+                            sign.trade = b.anchor ? 13 : 2;
+                            sign.n = Vec3(b.n.x, 0, b.n.y);
+                            sign.up = Vec3(0, 1, 0);
+                            sign.right = cross(sign.n * -1.0, sign.up);
+                            sign.width = b.width - 0.4;
+                            sign.height = (b.y1 - b.y0) - 0.3;
+                            sign.centre = Vec3(b.centre.x, u.baseY + 0.5 * (b.y0 + b.y1), b.centre.y);
+                            shopSigns.push_back(std::move(sign));
+                        }
+                    }
                     for (const engine::BuildingUnit& u : lb.units) {   // an indoor mall's name over its doors
                         Vec2 mc, mn;
                         Real my0 = 0, my1 = 0, mw = 0;

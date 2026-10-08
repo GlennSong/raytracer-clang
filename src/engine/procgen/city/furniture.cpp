@@ -702,6 +702,10 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         highTables();
                         break;
                     }
+                    case 22:    // THE AMERICAN MALL'S UPPER CONCOURSE: its middle is the atrium -- nothing on it
+                    case 23:    // ...and its COURT's floor: the escalators and the lift stand there
+                        break;
+                    case 21:    // ...its LOWER concourse and court: as the box mall's (lit through the atrium, unlit itself)
                     case 20: {  // AN INDOOR MALL'S CONCOURSE (mallLayout; its rect runs along side 0): down its
                                 // middle, planters and pairs of benches by turns, the benches back to back facing the shops
                         const Real mid = F.f.D * 0.5;
@@ -760,7 +764,8 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                                  room.kind == RoomKind::Shop;
             // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
             const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;
-            if (working) {
+            if (working && shopLights == 3) {   // (no lights of its own: under an atrium)
+            } else if (working) {
                 const Real pitch = shopLights == 2 ? 3.6 : 2.4;
                 const int nx = std::max(1, static_cast<int>(F.f.W / pitch)), nz = std::max(1, static_cast<int>(F.f.D / pitch));
                 for (int i = 0; i < nx; ++i)

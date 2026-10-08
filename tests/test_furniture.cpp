@@ -943,6 +943,73 @@ TEST_CASE(a_parking_garage_can_be_driven_to_the_roof) {
     CHECK(blocked == 0);
 }
 
+// THE AMERICAN MALL (~/.claude/plans/malls-v2-and-managed-ground.md; Glenn: "multiple entrances and exits at the
+// different wings ... a two story mall with shops on the second floor ... escalators"): a cross of wings off a court.
+// Shops on BOTH levels, every one signed and furnished; the upper level open over the concourses and the court; the
+// escalators a walkable climb from floor to floor; a balustrade wherever the upper floor stops at an opening.
+TEST_CASE(an_american_mall_has_two_levels_of_shops_and_escalators) {
+    BuildingRecipe rec = architectMallWings(99u);
+    BuildingParams p = rec.params;
+    p.faceDir = Vec3(0, 0, -1);
+    p.mallArms = 0xF;
+    p.mallCourt = Vec2(0, 0);
+    const Real a = 20, A = 100;
+    // the cross, CCW from above (x right, z up the page is +v: away from the street at -z)
+    const Poly2 plan = {{a, -a}, {A, -a}, {A, a}, {a, a}, {a, 80}, {-a, 80}, {-a, a}, {-A, a}, {-A, -a}, {-a, -a},
+                        {-a, -60}, {a, -60}};
+    const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
+    int upper = 0;
+    for (const ShopFront& f : fronts) { CHECK(f.indoor); CHECK(f.fasciaY1 > f.fasciaY0 + 0.2); if (f.fasciaY0 > 5.0) ++upper; }
+    RenderMesh col;
+    const BuildingMesh in = growInterior(plan, p, 0.0, &col, 0, 2);
+    int furnished = 0;
+    for (const ShopFront& f : fronts) {
+        const Vec2 d = normalize(f.b - f.a);
+        const Real len = (f.b - f.a).length();
+        const Real lvl = f.fasciaY0 > 5.0 ? p.groundHeight : 0.0;
+        for (const PlacedPiece& pp : in.furniture) {
+            if (pp.piece == static_cast<uint8_t>(Piece::CeilingLight)) continue;
+            const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+            const Real along = dot(at - f.a, d), depth = dot(f.a - at, f.n);
+            if (along > 0.2 && along < len - 0.2 && depth > 0 && depth < 14.5 && std::fabs(pp.xform.m[1][3] - lvl) < 1.5) {
+                ++furnished;
+                break;
+            }
+        }
+    }
+    std::vector<Vec3> cv;
+    std::vector<uint32_t> ci;
+    for (const Vertex& v : col.vertices) cv.push_back(v.position);
+    ci = col.indices;
+    // the escalator: from the court floor up the +u axis at v = -2.4, the collider climbs to the upper floor
+    const Real yU = p.groundHeight + 0.05;
+    Real prev = 0.07;
+    int steps = 0;
+    bool reached = false;
+    for (Real x = 7.0 - 9.6 + 0.2; x <= 7.0 + 1.0; x += 0.25) {
+        Real next = -1;
+        for (Real h : surfacesAt(cv, ci, x, -2.4)) if (h >= prev - 0.05 && h <= prev + 0.3) next = std::max(next, h);
+        if (next < 0) { ++steps; continue; }
+        prev = next;
+        if (std::fabs(prev - yU) < 0.1) reached = true;
+    }
+    // the atria: no floor at the upper level over a concourse's middle, nor the court's
+    const bool openCourt = [&] { for (Real h : surfacesAt(cv, ci, 0.0, 3.0)) if (std::fabs(h - yU) < 0.1) return false; return true; }();
+    const bool openWing = [&] { for (Real h : surfacesAt(cv, ci, 40.0, 0.0)) if (std::fabs(h - yU) < 0.1) return false; return true; }();
+    const bool floorBeside = [&] { for (Real h : surfacesAt(cv, ci, 40.0, 4.5)) if (std::fabs(h - yU) < 0.1) return true; return false; }();
+    std::printf("    [mall] %zu shops (%d upstairs), %d furnished; escalator reaches the upper floor %d (gaps %d); court open %d, "
+                "wing atrium open %d, floor beside it %d\n", fronts.size(), upper, furnished, reached ? 1 : 0, steps,
+                openCourt ? 1 : 0, openWing ? 1 : 0, floorBeside ? 1 : 0);
+    CHECK(fronts.size() >= 40);
+    CHECK(upper >= 20);
+    CHECK(furnished >= static_cast<int>(fronts.size()) - 2);
+    CHECK(reached);
+    CHECK(steps == 0);
+    CHECK(openCourt);
+    CHECK(openWing);
+    CHECK(floorBeside);
+}
+
 TEST_CASE(a_bar_is_not_painted_like_an_office) {
     const Poly2 plan = {{0, 0}, {30, 0}, {30, 14}, {0, 14}};
     int bars = 0, light = 0;

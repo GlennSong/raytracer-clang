@@ -542,6 +542,11 @@ struct BuildingParams {
     // street's cafes, grocers, pharmacies), 1 high street, 2 nightlife (bars, clubs, restaurants), 3 a mall's. Set
     // by the lot pass from the district; the trades draw their weights from it.
     uint8_t shopMix = 1;
+    // THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): its WINGS off the centre court --
+    // bits 0..3 = +u, -u, +v, -v of the plan's own frame (u its long axis, v toward the back) -- and the court's centre
+    // (world XZ). The plan is the wings' outline; mallLayout2 reads the rest from these.
+    uint8_t mallArms = 0;
+    Vec2 mallCourt{0, 0};
 };
 
 // THE SHOPFRONTS of a building's ground storey (buildings: shops; the facade's own ShopUnits): each shop's stretch
@@ -566,6 +571,9 @@ std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& p
 // An indoor mall's name board over its doors (emitBigBoxDress): its face's centre (XZ), outward normal, its band
 // (y0..y1 above the base) and width. False for anything else.
 bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width);
+// The American mall's name boards (bigBox 6): one over every entrance (the mall's name) and every anchor (the store's).
+struct MallSign { Vec2 centre, n; Real y0 = 0, y1 = 0, width = 0; bool anchor = false; };
+bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
 // THE PARKING GARAGE you can drive into (parkingDecks; buildGarage): its collider -- every deck, ramp and rail -- in
 // world space (false: not a drivable garage, keep the prism); its stalls (centre, the way a parked car faces, height
 // above the base); and its portal (the middle of the opening on the street, and the way out).

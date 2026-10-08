@@ -39,6 +39,19 @@ std::string mallName(uint32_t seed) {
     }
 }
 
+std::string anchorName(uint32_t seed) {
+    uint32_t h = seed * 2246822519u + 0x5a1du;
+    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    static const char* kSurname[] = {"Hollister", "Whitfield", "Ashby", "Kaneshiro", "Maeda", "Halloran", "Pemberton",
+                                     "Okamoto", "Delacroix", "Brandt", "Kealoha", "Sutherland"};
+    const char* n = kSurname[h % 12u];
+    switch ((h >> 8) % 3u) {
+        case 0: return std::string(n) + "'s";
+        case 1: return std::string(n) + " & Co.";
+        default: return std::string(n);
+    }
+}
+
 std::string shopName(uint8_t trade, uint32_t seed) {
     uint32_t h = seed * 0x9E3779B9u + 0x7F4A7C15u;
     if (!h) h = 1;

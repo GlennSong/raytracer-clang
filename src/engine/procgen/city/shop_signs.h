@@ -22,6 +22,8 @@ namespace engine {
 std::string shopName(uint8_t trade, uint32_t seed);
 // An indoor mall's name ("Kona Galleria", "The Shops at Juniper").
 std::string mallName(uint32_t seed);
+// A department store's name (an anchor): "Whitfield's", "Kaneshiro & Co.".
+std::string anchorName(uint32_t seed);
 
 struct ShopSign {
     std::string text;

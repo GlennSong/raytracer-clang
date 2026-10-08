@@ -3225,6 +3225,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     bool m = shortS >= 70 && longS >= 100 && bbRng.unit() < 0.6;
                     for (const Vec2& c0 : dbg->mallAt) if ((c0 - centroid(foot)).length() < 1500) m = false;
                     if (m) { whole.mall = true; ++dbg->mallBlocks; dbg->mallAt.push_back(centroid(foot)); }
+                    // ...the AMERICAN MALL where the block is big enough for its wings (a court and two 40 m wings)
+                    if (m && shortS >= 70 && longS >= 150) whole.mallWings = true;
                 }
                 whole.frontage = front;
                 whole.district = lots.empty() ? 0 : lots.front().district;
@@ -4309,6 +4311,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // CLUSTER, not one tall building at the exact centre.
             const Real coreness = corenessAt(b.site);
             BuildingRecipe rec =
+                lot.bigBox && lot.mallWings ? architectMallWings(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.bigBox && lot.mall ? architectMall(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.bigBox ? architectBigBox(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.campus ? architectCampus(lot.campus, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
@@ -4688,6 +4691,42 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     fy0 = std::min(fy0, q.y); fy1 = std::max(fy1, q.y);
                 }
                 const Real W = fx1 - fx0, D = fy1 - fy0;
+                // THE AMERICAN MALL (bigBox 6): wings off a court at the site's middle -- along the front both ways,
+                // and back / forward where the site is deep enough -- its outline the wings' union
+                if (bp.bigBox == 6) {
+                    const Real a = 20.0, edgeM = 4.0;
+                    const Real cx = (fx0 + fx1) * 0.5, cy = (fy0 + fy1) * 0.5;
+                    const Real Ax = std::min(W * 0.5 - edgeM, Real(120));
+                    const Real room = D * 0.5 - edgeM;
+                    uint8_t arms = 0x3;   // +u, -u
+                    Real Ab = 0, Af = 0;
+                    if (room >= a + 28) { arms |= 0x4; Ab = std::min(room, Real(90)); }          // a wing back
+                    if (room >= a + 28 && rng.unit() < 0.5) { arms |= 0x8; Af = std::min(room, Real(70)); }   // and forward
+                    if (Ax < a + 40) planOk = false;
+                    if (planOk) {
+                        std::vector<Vec2> q;   // CCW in the frame (x along the front, y back from it)
+                        q.push_back({cx + a, cy - a});
+                        q.push_back({cx + Ax, cy - a}); q.push_back({cx + Ax, cy + a});
+                        if (arms & 0x4) { q.push_back({cx + a, cy + a}); q.push_back({cx + a, cy + Ab}); q.push_back({cx - a, cy + Ab}); }
+                        q.push_back({cx - a, cy + a});
+                        q.push_back({cx - Ax, cy + a}); q.push_back({cx - Ax, cy - a});
+                        if (arms & 0x8) { q.push_back({cx - a, cy - a}); q.push_back({cx - a, cy - Af}); q.push_back({cx + a, cy - Af}); }
+                        Poly2 mp;
+                        for (const Vec2& v : q) mp.push_back(f.toWorld(v));
+                        ensureCCW(mp);
+                        for (const Vec2& v : mp) if (!pointInPolygon(site, v)) planOk = false;
+                        if (planOk) {
+                            plan = mp;
+                            bp.mallArms = arms;
+                            bp.mallCourt = f.toWorld({cx, cy});
+                            bp.faceDir = Vec3(-f.v.x, 0, -f.v.y);   // the main doors face the street
+                            if (dbg->bigBoxAt.size() < 4) dbg->bigBoxAt.push_back(bp.mallCourt);
+                        }
+                    }
+                    // the wings do not fit the site: the box mall instead (the block was big enough for a mall)
+                    if (!planOk) { bp.bigBox = 5; bp.mallArms = 0; planOk = true; }
+                }
+                if (bp.bigBox != 6) {
                 const bool mallBox = bp.bigBox == 5;
                 Real sd = std::clamp(D * rng.range(0.52, 0.62), Real(mallBox ? 36 : 30), Real(80));
                 if (D - sd < 24) sd = D - 24;
@@ -4706,11 +4745,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 } else {
                     planOk = false;   // too shallow for a store and its lot
                 }
+                }   // (bigBox 6 above)
             }
             // A STORE WITH NO LOT IS NOT A STORE: the box fallback filled the whole block with a parking-less box,
             // seated at the block's lowest corner (Glenn: "a massive sunken building"). A block whose site cannot take
             // the store and its parking stays open ground.
-            if (rec.massing == BuildingRecipe::Massing::BigBox && parkingPoly.empty()) continue;
+            if (rec.massing == BuildingRecipe::Massing::BigBox && parkingPoly.empty() && !(bp.bigBox == 6 && planOk)) continue;
             // BOX-MASS recipes (pagoda / cylinder shapes) must reach
             // growBuilding — the plan path can't dispatch a BuildingShape —
             // so a roomy rect-ish lot takes the shrink-fit box fallback
