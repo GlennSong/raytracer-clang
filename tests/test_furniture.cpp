@@ -9,6 +9,7 @@
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/trades.h"
+#include <algorithm>
 #include <map>
 #include <string>
 #include <cmath>
@@ -843,6 +844,103 @@ TEST_CASE(an_indoor_mall_is_a_concourse_of_shops) {
     CHECK(furnished >= static_cast<int>(fronts.size()) - 1);
     CHECK(stocked > 4);
     CHECK(tables > 4);
+}
+
+// THE PARKING GARAGE YOU CAN DRIVE INTO (~/.claude/plans/nightlife-and-malls.md stage 4; Glenn: "make those parking
+// structures actually enterable with ramps for cars to park there"): cast straight down through its collider. Every
+// level is solid deck; every ramp starts flush with its deck and ends flush with the next; over every ramp a storey's
+// headroom; every stall stands on deck; and the portal is open (a car fits through at ground level).
+namespace {
+// the surfaces straight under (x, z), highest first
+std::vector<Real> surfacesAt(const std::vector<Vec3>& v, const std::vector<uint32_t>& idx, Real x, Real z) {
+    std::vector<Real> hits;
+    for (std::size_t i = 0; i + 2 < idx.size(); i += 3) {
+        const Vec3 &a = v[idx[i]], &b = v[idx[i + 1]], &c = v[idx[i + 2]];
+        const Real d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+        if (std::fabs(d) < 1e-9) continue;   // a vertical face
+        const Real l1 = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / d;
+        const Real l2 = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / d;
+        const Real l3 = 1 - l1 - l2;
+        if (l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) continue;
+        hits.push_back(l1 * a.y + l2 * b.y + l3 * c.y);
+    }
+    std::sort(hits.rbegin(), hits.rend());
+    hits.erase(std::unique(hits.begin(), hits.end(), [](Real p, Real q) { return std::fabs(p - q) < 0.02; }), hits.end());
+    return hits;
+}
+}  // namespace
+
+TEST_CASE(a_parking_garage_can_be_driven_to_the_roof) {
+    BuildingRecipe rec;
+    CHECK(architectRecipeByName("parking_garage", 7u, 0.3, 32.0, 1600.0, rec));
+    BuildingParams p = rec.params;
+    p.floors = 3;
+    p.faceDir = Vec3(0, 0, -1);
+    const Poly2 plan = {{0, 0}, {52, 0}, {52, 32}, {0, 32}};   // the street along z = 0
+    const Real baseY = 10.0;
+    std::vector<Vec3> v;
+    std::vector<uint32_t> idx;
+    CHECK(garageColliderOf(plan, p, baseY, v, idx));
+    const std::vector<ParkingStall> stalls = garageStallsOf(plan, p);
+    Vec2 portal, outDir;
+    CHECK(garagePortalOf(plan, p, portal, outDir));
+    std::printf("    [garage] %zu collider tris, %zu stalls, portal at %.1f %.1f facing %.2f %.2f\n", idx.size() / 3,
+                stalls.size(), portal.x, portal.y, outDir.x, outDir.y);
+    CHECK(stalls.size() > 40);
+    CHECK(outDir.y < -0.9);   // out to the street
+    // every stall on a deck at its height
+    int floating = 0;
+    for (const ParkingStall& st : stalls) {
+        bool on = false;
+        for (Real h : surfacesAt(v, idx, st.at.x, st.at.y)) on = on || std::fabs(h - (baseY + st.y)) < 0.06;
+        if (!on) ++floating;
+    }
+    CHECK(floating == 0);
+    // THE DRIVE: through the portal, then up: walk the ramp strip's centre line (along x) at every level and check
+    // the surface climbs continuously from deck to deck with headroom above it
+    const Real gh = p.groundHeight, fh = p.floorHeight;
+    std::vector<Real> levels = {0.03};
+    for (int k = 0; k <= p.floors; ++k) levels.push_back(gh + k * fh);
+    // find the strip: the column of x where, mid-garage, there is a surface between level 0 and 1
+    int ramps = 0, cramped = 0, gaps = 0;
+    for (Real z = 1.0; z < 31.0; z += 0.5) {
+        const std::vector<Real> mid = surfacesAt(v, idx, 26.0, z);
+        bool between = false;
+        for (Real h : mid) between = between || (h > baseY + 0.5 && h < baseY + gh - 0.5);
+        if (!between) continue;
+        // a ramp line at this z: step along x and follow each ramp up
+        // follow the surface along +x from each deck: a car's wheels climb at most 0.35 m between samples
+        for (std::size_t k = 0; k + 1 < levels.size(); ++k) {
+            Real prev = baseY + levels[k];
+            bool started = false;
+            for (Real x = 0.5; x < 51.5; x += 0.5) {
+                Real next = -1;
+                for (Real h : surfacesAt(v, idx, x, z))
+                    if (h >= prev - 0.05 && h <= prev + 0.35) next = std::max(next, h);
+                if (next < 0) { if (started) ++gaps; continue; }
+                if (next > prev + 0.02) started = true;
+                if (next > baseY + levels[k] + 0.2 && next < baseY + levels[k + 1] - 0.2)   // on the ramp: its headroom
+                    for (Real h : surfacesAt(v, idx, x, z))
+                        if (h > next + 0.3 && h - next < 2.2) ++cramped;
+                prev = next;
+            }
+            if (std::fabs(prev - (baseY + levels[k + 1])) < 0.06) ++ramps;
+        }
+        break;
+    }
+    std::printf("    [garage] ramps climbing deck to deck: %d of %zu; steps %d; cramped samples %d\n", ramps,
+                levels.size() - 1, gaps, cramped);
+    CHECK(ramps == static_cast<int>(levels.size()) - 1);
+    CHECK(gaps == 0);
+    CHECK(cramped == 0);
+    // the portal: open at car height (no wall within 1.0 m above the ground there)
+    int blocked = 0;
+    for (std::size_t i = 0; i + 2 < idx.size(); i += 3) {
+        const Vec3 &a = v[idx[i]], &b = v[idx[i + 1]], &c = v[idx[i + 2]];
+        const Vec3 cen = (a + b + c) * (1.0 / 3.0);
+        if ((Vec2(cen.x, cen.z) - portal).length() < 2.5 && cen.y > baseY + 0.2 && cen.y < baseY + 1.0) ++blocked;
+    }
+    CHECK(blocked == 0);
 }
 
 TEST_CASE(a_bar_is_not_painted_like_an_office) {

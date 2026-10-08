@@ -4863,6 +4863,264 @@ static void emitBigBoxDress(BuildingMesh& out, const Poly2& plan, std::size_t en
     }
 }
 
+// THE PARKING GARAGE you can drive into (~/.claude/plans/nightlife-and-malls.md stage 4; Glenn: "make those parking
+// structures actually enterable with ramps for cars to park there"). Its outline is the plan's box (shrunk to fit);
+// its LEVELS the ground, every deck and the roof. Down the BACK runs the ramp strip, 6.5 m (two-way): every ramp rises
+// one level over the same 2 x rampHalf run, each stacked a storey over the last, so the headroom over a ramp is a
+// storey everywhere -- and every deck above the ground has a hole over the strip. In the front the stalls: a row nose
+// to the front wall, the aisle, a row along the strip's rail. The portal is a gap in the ground storey's front wall
+// near the ramps' foot; a stair tower stands at the other front corner. One function draws it and builds its
+// collider (the car drives on whatever collider it is given), so the two cannot drift.
+struct GarageLayout {
+    bool ok = false;
+    Vec2 c, u, v;               // centre; long axis; short axis, pointing to the BACK (away from the street)
+    Real hl = 0, hw = 0;        // half extents along u, v
+    std::vector<Real> levels;   // above the base: 0 (ground), each deck, the roof
+    Real rampHalf = 0, s0 = 0, s1 = 0;   // the ramp strip: x in [-rampHalf, rampHalf], y in [s0, s1]
+    Real portal0 = 0, portal1 = 0;       // the portal's span along the front (x)
+    Real rowB = 0;              // > 0: the second row of stalls (along the rail) is this deep
+    Vec2 at(Real x, Real y) const { return c + u * x + v * y; }
+};
+static GarageLayout garageLayout(const Poly2& planIn, const BuildingParams& p) {
+    GarageLayout G;
+    if (!p.parkingDecks || p.curtainWall || planIn.size() < 3) return G;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const OBB2 ob = orientedBoundingBox(plan);
+    const int la = ob.longAxis();
+    G.c = ob.center; G.u = ob.axis[la]; G.v = ob.axis[1 - la];
+    G.hl = ob.half[la]; G.hw = ob.half[1 - la];
+    if (std::fabs(area(plan)) < 0.85 * 4 * G.hl * G.hw) return G;
+    for (int k = 0; k < 10; ++k) {   // shrunk until its corners stand on the plan
+        bool in = true;
+        for (int sx : {-1, 1}) for (int sy : {-1, 1}) in = in && pointInPolygon(plan, G.at(sx * G.hl, sy * G.hw));
+        if (in) break;
+        G.hl -= 0.4; G.hw -= 0.4;
+    }
+    const Vec2 fd(p.faceDir.x, p.faceDir.z);
+    if (dot(G.v, fd) > 0) G.v = G.v * -1.0;   // v to the back
+    const Real gh = p.groundHeight, fh = p.floorHeight;
+    G.levels.push_back(0);
+    for (int k = 0; k <= p.floors; ++k) G.levels.push_back(gh + k * fh);
+    G.rampHalf = std::max(gh, fh) * 6.5 * 0.5;   // ~1:6.5
+    G.s1 = G.hw - 0.35;
+    G.s0 = G.s1 - 6.5;
+    const Real rowA = 5.0, aisle = 6.0;
+    if (2 * G.hl < 2 * G.rampHalf + 2 * 7.0 || G.s0 - (-G.hw + rowA) < aisle) return G;
+    G.rowB = G.s0 - 0.2 - (-G.hw + rowA) - aisle >= 5.0 ? 5.0 : 0.0;
+    G.portal0 = -G.rampHalf - 6.5;                 // in front of the ramps' foot, at the low end
+    G.portal1 = G.portal0 + 6.5;
+    if (G.portal0 < -G.hl + 0.6) { G.portal0 = -G.hl + 0.6; G.portal1 = G.portal0 + 6.5; }
+    G.ok = true;
+    return G;
+}
+
+// `out` (may be null) gets the drawing, `cv`/`ci` (may be null) the collider; `stalls` (may be null) each stall's
+// centre, the way a car faces parked in it, and its height above the base.
+struct GarageStall { Vec2 at, face; Real y; };
+static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real baseY, bool full, BuildingMesh* out,
+                        std::vector<Vec3>* cv, std::vector<uint32_t>* ci, std::vector<GarageStall>* stalls) {
+    const Vec3 up(0, 1, 0);
+    const Vec3 conc = p.wallColor * 0.92, deckCol(0.46, 0.46, 0.47), paint(0.92, 0.92, 0.88);
+    RenderMesh slabs, under, lines;
+    auto W = [&](Real x, Real y, Real h) { const Vec2 q = G.at(x, y); return Vec3(q.x, baseY + h, q.y); };
+    auto colQuad = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
+        if (!cv || !ci) return;
+        const uint32_t o = static_cast<uint32_t>(cv->size());
+        cv->insert(cv->end(), {a, b, c, d});
+        ci->insert(ci->end(), {o, o + 1, o + 2, o, o + 2, o + 3});
+    };
+    // a flat deck rectangle [x0,x1] x [y0,y1] at height h: its top (walkable/drivable), its underside 0.25 down
+    auto deck = [&](Real x0, Real x1, Real y0, Real y1, Real h, bool ground) {
+        if (x1 - x0 < 0.05 || y1 - y0 < 0.05) return;
+        const Vec3 a = W(x0, y0, h), b = W(x1, y0, h), c = W(x1, y1, h), d = W(x0, y1, h);
+        if (out) {
+            emitQuad(slabs, a, b, c, d, up, deckCol);
+            if (!ground) emitQuad(under, a - up * 0.25, b - up * 0.25, c - up * 0.25, d - up * 0.25, up * -1.0, conc);
+        }
+        colQuad(a, b, c, d);
+    };
+    // a wall from (x0,y0) to (x1,y1), h0..h1, `t` thick (drawn as two faces and a top; collider both faces)
+    auto wallRun = [&](Real x0, Real y0, Real x1, Real y1, Real h0, Real h1, bool draw) {
+        const Vec3 A = W(x0, y0, h0), B = W(x1, y1, h0), C = W(x1, y1, h1), D = W(x0, y0, h1);
+        if (out && draw) {
+            const Vec3 d3 = B - A, n = normalize(cross(d3, up));
+            RenderMesh w;
+            emitQuad(w, A + n * 0.1, B + n * 0.1, C + n * 0.1, D + n * 0.1, n, conc);
+            emitQuad(w, B - n * 0.1, A - n * 0.1, D - n * 0.1, C - n * 0.1, n * -1.0, conc);
+            emitQuad(w, D - n * 0.1, C - n * 0.1, C + n * 0.1, D + n * 0.1, up, conc * 1.05);
+            appendToPart(*out, PartId::Concrete, w);
+        }
+        colQuad(A, B, C, D);
+        colQuad(B, A, D, C);
+    };
+    const int top = static_cast<int>(G.levels.size()) - 1;
+    for (int k = 0; k <= top; ++k) {
+        const Real h = G.levels[k];
+        // THE DECK (the ground's is whole; above, a hole over the ramp strip)
+        if (k == 0) deck(-G.hl, G.hl, -G.hw, G.hw, 0.03, true);
+        else {
+            deck(-G.hl, G.hl, -G.hw, G.s0, h, false);
+            deck(-G.hl, G.hl, G.s1, G.hw, h, false);
+            deck(-G.hl, -G.rampHalf, G.s0, G.s1, h, false);
+            deck(G.rampHalf, G.hl, G.s0, G.s1, h, false);
+            // the hole's rail along the aisle side (the ramp's own rails are below)
+            wallRun(-G.rampHalf, G.s0 - 0.1, G.rampHalf, G.s0 - 0.1, h, h + 1.0, true);
+        }
+        // THE RAMP up to the next level
+        if (k < top) {
+            const Real h1 = G.levels[k + 1];
+            const Vec3 a = W(-G.rampHalf, G.s0, k == 0 ? 0.03 : h), b = W(G.rampHalf, G.s0, h1);
+            const Vec3 c = W(G.rampHalf, G.s1, h1), d = W(-G.rampHalf, G.s1, k == 0 ? 0.03 : h);
+            const Vec3 n = normalize(cross(b - a, d - a)) * -1.0;
+            const Vec3 nn = n.y < 0 ? n * -1.0 : n;
+            if (out) {
+                emitQuad(slabs, a, b, c, d, nn, deckCol * 0.95);
+                emitQuad(under, a - up * 0.25, b - up * 0.25, c - up * 0.25, d - up * 0.25, nn * -1.0, conc);
+                // painted arrows: a chevron every 5 m up the ramp
+                for (Real x = -G.rampHalf + 3.0; x < G.rampHalf - 2.0; x += 5.0) {
+                    const Real t = (x + G.rampHalf) / (2 * G.rampHalf);
+                    const Real hy = (k == 0 ? 0.03 : h) + (h1 - (k == 0 ? 0.03 : h)) * t + 0.02;
+                    const Real ym = (G.s0 + G.s1) * 0.5;
+                    emitQuad(lines, W(x, ym - 1.2, hy), W(x + 0.15, ym - 1.2, hy), W(x + 0.9, ym, hy), W(x + 0.75, ym, hy), up, paint);
+                    emitQuad(lines, W(x + 0.75, ym, hy), W(x + 0.9, ym, hy), W(x + 0.15, ym + 1.2, hy), W(x, ym + 1.2, hy), up, paint);
+                }
+            }
+            colQuad(a, b, c, d);
+            // its side rails, rising with it
+            for (Real yy : {G.s0 + 0.1, G.s1 - 0.1}) {
+                const Vec3 r0 = W(-G.rampHalf, yy, k == 0 ? 0.03 : h), r1 = W(G.rampHalf, yy, h1);
+                const Vec3 n2 = normalize(cross(r1 - r0, up));
+                if (out) {
+                    RenderMesh w;
+                    emitQuad(w, r0 + n2 * 0.08, r1 + n2 * 0.08, r1 + up * 1.0 + n2 * 0.08, r0 + up * 1.0 + n2 * 0.08, n2, conc);
+                    emitQuad(w, r1 - n2 * 0.08, r0 - n2 * 0.08, r0 + up * 1.0 - n2 * 0.08, r1 + up * 1.0 - n2 * 0.08, n2 * -1.0, conc);
+                    appendToPart(*out, PartId::Concrete, w);
+                }
+                colQuad(r0, r1, r1 + up * 1.0, r0 + up * 1.0);
+                colQuad(r1, r0, r0 + up * 1.0, r1 + up * 1.0);
+            }
+        }
+        // THE PERIMETER: a 1.05 m wall round every level (the portal open on the ground); above it the facade's
+        // open storey (spandrel band, columns: emitParkingDeckRect), or on the roof just the parapet
+        const Real hNext = k < top ? G.levels[k + 1] : h + 1.05;
+        const Vec2 cs[4] = {Vec2(-G.hl, -G.hw), Vec2(G.hl, -G.hw), Vec2(G.hl, G.hw), Vec2(-G.hl, G.hw)};
+        for (int e = 0; e < 4; ++e) {
+            const Vec2 A = cs[e], B = cs[(e + 1) % 4];
+            // (drawn both faces: from inside a deck the facade's spandrel is a one-sided quad facing out)
+            if (k == 0 && e == 0) {   // the front: open at the portal
+                wallRun(-G.hl, -G.hw, G.portal0, -G.hw, 0, 1.05, true);
+                wallRun(G.portal1, -G.hw, G.hl, -G.hw, 0, 1.05, true);
+            } else {
+                wallRun(A.x, A.y, B.x, B.y, h, h + 1.05, true);
+            }
+            if (out) {
+                FaceRect fr;
+                const Vec3 a3 = W(A.x, A.y, h), b3 = W(B.x, B.y, h);
+                fr.bl = a3;
+                fr.h = normalize(b3 - a3);
+                fr.v = up;
+                fr.n = normalize(cross(fr.h, up)) * -1.0;
+                if (dot(Vec2(fr.n.x, fr.n.z), G.at(A.x, A.y) - G.c) < 0) fr.n = fr.n * -1.0;   // outward
+                fr.width = (b3 - a3).length();
+                fr.height = k < top ? hNext - h : 1.05;
+                if (k == top) {   // the roof's parapet: the perimeter wall above is all of it
+                } else if (k == 0 && e == 0) {   // the front with the portal: the deck rect either side, a lintel over it
+                    const Real g0 = G.portal0 + G.hl, g1 = G.portal1 + G.hl;
+                    FaceRect l = fr; l.width = g0;
+                    FaceRect r = fr; r.bl = fr.at(g1, 0); r.width = fr.width - g1;
+                    if (l.width > 0.3) emitParkingDeckRect(*out, l, p, p.wallColor);
+                    if (r.width > 0.3) emitParkingDeckRect(*out, r, p, p.wallColor);
+                    RenderMesh w;
+                    const Real ly = std::min(Real(2.6), fr.height - 0.3);
+                    emitQuad(w, fr.at(g0, ly), fr.at(g1, ly), fr.at(g1, fr.height), fr.at(g0, fr.height), fr.n, p.wallColor);
+                    appendToPart(*out, p.wallPart, w);
+                    // the clearance bar and the sign: a blue board with a white P
+                    emitBox(*out, Scope{fr.at(g0, ly - 0.25) + fr.n * 0.1, {fr.h, up, fr.n}, Vec3(g1 - g0, 0.12, 0.06)},
+                            PartId::Trim, Vec3(0.95, 0.80, 0.10));
+                    const Real px = g1 + 0.3;
+                    if (px + 1.3 < fr.width) {
+                        emitBox(*out, Scope{fr.at(px, 1.4) + fr.n * 0.06, {fr.h, up, fr.n}, Vec3(1.2, 1.2, 0.08)},
+                                PartId::LitBand, Vec3(0.10, 0.30, 0.85));
+                        const Vec3 o = fr.n * 0.15;
+                        auto bar = [&](Real x0, Real y0, Real w2, Real h2) {
+                            emitBox(*out, Scope{fr.at(px + x0, 1.4 + y0) + o, {fr.h, up, fr.n}, Vec3(w2, h2, 0.02)}, PartId::Trim, paint);
+                        };
+                        bar(0.35, 0.2, 0.14, 0.8); bar(0.35, 0.86, 0.45, 0.14); bar(0.35, 0.52, 0.45, 0.14); bar(0.68, 0.52, 0.14, 0.48);
+                    }
+                } else {
+                    emitParkingDeckRect(*out, fr, p, p.wallColor);
+                }
+            }
+        }
+        // THE STALLS: row A nose to the front wall (clear of the stair tower), row B along the strip's rail
+        auto row = [&](Real x0, Real x1, Real yWall, Real depth, Real faceSign) {
+            const Real sw = 2.5;
+            const int n = static_cast<int>((x1 - x0) / sw);
+            for (int i = 0; i < n; ++i) {
+                const Real xa = x0 + i * sw;
+                if (k == 0 && xa + sw > G.portal0 - 1.0 && xa < G.portal1 + 1.0) continue;   // the portal's way in
+                if (out && full)
+                    for (Real xl : {xa, xa + sw})
+                        emitQuad(lines, W(xl - 0.05, yWall, h + 0.035), W(xl + 0.05, yWall, h + 0.035),
+                                 W(xl + 0.05, yWall + depth * faceSign * -1.0, h + 0.035),
+                                 W(xl - 0.05, yWall + depth * faceSign * -1.0, h + 0.035), up, paint);
+                if (stalls) stalls->push_back({G.at(xa + sw * 0.5, yWall - faceSign * depth * 0.5), G.v * faceSign, h + (k == 0 ? 0.03 : 0.0)});
+            }
+        };
+        row(-G.hl + 1.0, G.hl - 5.0, -G.hw + 0.25, 5.0, -1.0);   // faces the front wall (-v)
+        if (G.rowB > 0) row(-G.rampHalf, G.rampHalf, G.s0 - 0.25, G.rowB, 1.0);   // faces the rail (+v)
+    }
+    // THE STAIR TOWER at the front corner away from the portal, a storey over the roof
+    {
+        const Real x0 = G.hl - 4.2, x1 = G.hl - 0.2, y0 = -G.hw + 0.2, y1 = -G.hw + 4.2, ht = G.levels.back() + 3.0;
+        const Vec2 q[4] = {Vec2(x0, y0), Vec2(x1, y0), Vec2(x1, y1), Vec2(x0, y1)};
+        for (int e = 0; e < 4; ++e) {
+            const Vec2 A = q[e], B = q[(e + 1) % 4];
+            wallRun(A.x, A.y, B.x, B.y, 0, ht, true);
+        }
+        if (out) {
+            RenderMesh r;
+            emitQuad(r, W(x0, y0, ht), W(x1, y0, ht), W(x1, y1, ht), W(x0, y1, ht), up, conc * 0.9);
+            appendToPart(*out, PartId::Roof, r);
+            // its door at the bottom, onto the street
+            emitBox(*out, Scope{W(x0 + 1.4, y0 - 0.12, 0.0), {normalize(Vec3(G.u.x, 0, G.u.y)), up, Vec3(-G.v.x, 0, -G.v.y)},
+                                Vec3(1.1, 2.2, 0.04)}, PartId::Metal, Vec3(0.25, 0.30, 0.35));
+        }
+    }
+    if (out) {
+        appendToPart(*out, PartId::Concrete, slabs);
+        appendToPart(*out, PartId::Concrete, under);
+        appendToPart(*out, PartId::Trim, lines);
+    }
+}
+
+bool garageColliderOf(const Poly2& plan, const BuildingParams& params, Real baseY, std::vector<Vec3>& vertices,
+                      std::vector<uint32_t>& indices) {
+    const GarageLayout G = garageLayout(plan, params);
+    if (!G.ok) return false;
+    buildGarage(G, params, baseY, false, nullptr, &vertices, &indices, nullptr);
+    return true;
+}
+
+std::vector<ParkingStall> garageStallsOf(const Poly2& plan, const BuildingParams& params) {
+    std::vector<ParkingStall> out;
+    const GarageLayout G = garageLayout(plan, params);
+    if (!G.ok) return out;
+    std::vector<GarageStall> st;
+    buildGarage(G, params, 0.0, false, nullptr, nullptr, nullptr, &st);
+    for (const GarageStall& g : st) out.push_back({g.at, g.face, g.y});
+    return out;
+}
+
+bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, Vec2& out) {
+    const GarageLayout G = garageLayout(plan, params);
+    if (!G.ok) return false;
+    at = G.at((G.portal0 + G.portal1) * 0.5, -G.hw);
+    out = G.v * -1.0;
+    return true;
+}
+
 bool mallSignOf(const Poly2& planIn, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width) {
     if (params.bigBox != 5) return false;
     Poly2 plan = planIn;
@@ -4902,6 +5160,13 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // toward faceDir — the door (and its awning/architrave) lands there.
     // Shared with growInterior (ADR-0080) so both agree on the front door.
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
+    if (params.parkingDecks) {   // A PARKING GARAGE YOU CAN DRIVE INTO: decks, ramps, stalls (buildGarage)
+        const GarageLayout G = garageLayout(plan, params);
+        if (G.ok) {
+            buildGarage(G, params, baseY, full, &out, nullptr, nullptr, nullptr);
+            return out;
+        }
+    }
     std::vector<ShopRoomRect> shopRooms;   // (the shop rooms, once, for their walls' paint)
     bool shopRoomsDone = false;
 

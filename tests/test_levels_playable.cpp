@@ -3954,6 +3954,19 @@ TEST_CASE(level_print_shop_interiors) {
                             r.params.core, r.params.groundHeight);
         }
     }
+    if (std::getenv("RT_SHOP_SPOTS")) {   // the parking garages you can drive into: their portals
+        int garages = 0, drivable = 0;
+        for (const BuildingRecord& r : cb->records) {
+            if (!r.params.parkingDecks) continue;
+            ++garages;
+            Vec2 at, outD;
+            if (!garagePortalOf(r.plan, r.params, at, outD)) continue;
+            if (++drivable <= 4)
+                std::printf("    [garage] portal %.2f %.2f %.2f facing %.3f %.3f, %zu stalls\n", at.x, r.baseY, at.y, outD.x,
+                            outD.y, garageStallsOf(r.plan, r.params).size());
+        }
+        std::printf("    [garage] %d garages, %d drivable\n", garages, drivable);
+    }
     if (std::getenv("RT_SHOP_SPOTS"))   // the indoor malls: their street doors and a unit front on the concourse
         for (const BuildingRecord& r : cb->records) {
             if (r.params.bigBox != 5) continue;

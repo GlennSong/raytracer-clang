@@ -5914,6 +5914,13 @@ bool LevelLoader::load(const std::string& path,
                         if (u.enterable)
                             doorCuts.insert(doorCuts.end(), u.doors.begin(),
                                             u.doors.end());
+                    // A PARKING GARAGE you can drive into: its decks, ramps and rails, not a solid prism
+                    bool garage = false;
+                    for (const engine::BuildingUnit& u : units)
+                        if (u.params.parkingDecks && u.plan.size() >= 3 &&
+                            engine::garageColliderOf(u.plan, u.params, lb.baseY, buildingsMc.vertices, buildingsMc.indices))
+                            garage = true;
+                    if (!garage)
                     engine::appendBuildingPrism(
                         buildingsMc.vertices, buildingsMc.indices, lb.plan,
                         base, top, lb.baseY + 0.05, doorCuts,

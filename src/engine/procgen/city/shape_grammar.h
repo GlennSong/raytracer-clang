@@ -566,6 +566,14 @@ std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& p
 // An indoor mall's name board over its doors (emitBigBoxDress): its face's centre (XZ), outward normal, its band
 // (y0..y1 above the base) and width. False for anything else.
 bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width);
+// THE PARKING GARAGE you can drive into (parkingDecks; buildGarage): its collider -- every deck, ramp and rail -- in
+// world space (false: not a drivable garage, keep the prism); its stalls (centre, the way a parked car faces, height
+// above the base); and its portal (the middle of the opening on the street, and the way out).
+struct ParkingStall { Vec2 at, face; Real y = 0; };
+bool garageColliderOf(const Poly2& plan, const BuildingParams& params, Real baseY, std::vector<Vec3>& vertices,
+                      std::vector<uint32_t>& indices);
+std::vector<ParkingStall> garageStallsOf(const Poly2& plan, const BuildingParams& params);
+bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, Vec2& out);
 
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);

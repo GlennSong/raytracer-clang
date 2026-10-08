@@ -539,6 +539,8 @@ void recipeParkingGarage(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     dress(p, FacadeStyle::Concrete, rng);
     p.parkingDecks = true;
     p.groundBays = 2;              // the entry/exit ramps on the street face
+    p.groundHeight = 3.1;          // decks a garage's height apart (the ramps are ~6.5 x this long)
+    p.floorHeight = 3.0;
     p.awning = false;
     cx.slender = 2.0;
     out.placeType = "office";
