@@ -461,6 +461,9 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     // predecessor. Seed the leftovers so a roundabout or a loop road still parks.
     for (int li = 0; li < graph.linkCount(); ++li)
         if (!seen[li]) layChain(li);
+    // THE GARAGES' STALLS (setGarages), with the kerbside bays: the cars parked at the start can be up them too
+    garageCount_ = 0;
+    for (const GarageIn& gin : pendingGarages_) addGarageBays(gin.portal, gin.out, gin.stalls);
     if (std::getenv("RT_PARK_DEBUG"))
         std::fprintf(stderr,
                      "[park] links=%d chains=%d  short-chain=%d  no-band=%d  "
@@ -710,7 +713,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 5;   // bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 6;   // (6: garage stalls are bays) bump when assignPlaces' rules or this record change
 struct Fnv {
     uint64_t h = 1469598103934665603ull;
     void bytes(const void* p, std::size_t n) {
@@ -3373,6 +3376,15 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
 // 3 m of another -- every car was put 2-12 m from its home NODE, and an
 // arrival only looked for a bay on the street it came in on, within 30 m of
 // the corner. The spaces existed; nothing chose them.
+// How far a bay is from where its driver is going, squared, as the driver weighs it: a GARAGE'S stall counts 120 m
+// nearer than it stands -- the walk out of a garage beats circling the block for the kerb (with every stall at its
+// true distance, 1 of the island's 1436 was ever taken, at 50 m nearer 13: the kerb always had a nearer space).
+Real CitySim::bayReach2(const ParkingBay& b, const Vec2& target) const {
+    const Real d = (b.pos - target).length();
+    const Real e = b.garage >= 0 ? std::max(Real(0), d - 120.0) : d;
+    return e * e;
+}
+
 int CitySim::addGarageBays(const Vec2& portal, const Vec2& out, const std::vector<GarageStallIn>& stalls) {
     if (!nav_ || stalls.empty()) return 0;
     // the street in front of the portal: the nearest at-grade street link, within 30 m of a point 4 m out
@@ -3411,25 +3423,31 @@ int CitySim::addGarageBays(const Vec2& portal, const Vec2& out, const std::vecto
 int CitySim::claimBayNear(Vec2 target, int self, Real maxDist) {
     int best = -1;
     Real bestD2 = maxDist * maxDist;
-    const bool cab = self >= 0 && self < static_cast<int>(agents_.size()) && isTaxi(self);
+    // a cab waits at the kerb, and a bus-sized body does not go up a garage (2.5 m stalls, 2.75 m under the deck)
+    const bool noGarage = self >= 0 && self < static_cast<int>(agents_.size()) && (isTaxi(self) || !fitsAGarage(self));
     for (std::size_t i = 0; i < bays_.size(); ++i) {
         if (bays_[i].occupant != -1) continue;
-        if (cab && bays_[i].garage >= 0) continue;   // a cab waits at the kerb, not up a garage
-        const Vec2 d = bays_[i].pos - target;
-        const Real d2 = d.x * d.x + d.y * d.y;
+        if (noGarage && bays_[i].garage >= 0) continue;
+        const Real d2 = bayReach2(bays_[i], target);
         if (d2 < bestD2) { bestD2 = d2; best = static_cast<int>(i); }
     }
     if (best >= 0) bays_[static_cast<std::size_t>(best)].occupant = self;
     return best;
 }
 
-std::vector<int> CitySim::nearestFreeBays(Vec2 target, Real maxDist, int k) const {
+bool CitySim::fitsAGarage(int self) const {
+    if (self < 0 || self >= static_cast<int>(agents_.size())) return false;
+    const int car = agents_[static_cast<std::size_t>(self)].car;
+    return car >= 0 && car < static_cast<int>(vehicles_.size()) && vehicles_[static_cast<std::size_t>(car)].length < 5.6;
+}
+
+std::vector<int> CitySim::nearestFreeBays(Vec2 target, Real maxDist, int k, bool garages) const {
     std::vector<std::pair<Real, int>> near;
     const Real r2 = maxDist * maxDist;
     for (std::size_t i = 0; i < bays_.size(); ++i) {
         if (bays_[i].occupant != -1) continue;
-        const Vec2 d = bays_[i].pos - target;
-        const Real d2 = d.x * d.x + d.y * d.y;
+        if (!garages && bays_[i].garage >= 0) continue;
+        const Real d2 = bayReach2(bays_[i], target);
         if (d2 < r2) near.push_back({d2, static_cast<int>(i)});
     }
     const std::size_t keep = std::min(near.size(), static_cast<std::size_t>(std::max(k, 0)));
@@ -3736,7 +3754,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     if (a.mode == Agent::Mode::Driver && parksInBays(a) && goal >= 0 &&
         goal < nav_->nodeCount() && goal != origin) {
         for (int cand : nearestFreeBays(nav_->nodes[static_cast<std::size_t>(goal)],
-                                        kParkSearch, 8)) {
+                                        kParkSearch, 8, fitsAGarage(indexOf(a)))) {
             const int bl = bays_[static_cast<std::size_t>(cand)].link;
             const engine::NavLink& BL = nav_->links[static_cast<std::size_t>(bl)];
             engine::Route r;
@@ -5236,6 +5254,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             const Real L = nav_->links[lastLink].length;
             for (int bi : baysOnLink_[lastLink]) {
                 if (bays_[bi].occupant != -1) continue;
+                if (bays_[bi].garage >= 0 && !fitsAGarage(myIdx)) continue;   // (no bus up a garage)
                 if (L - bays_[bi].station > 30.0) continue;   // near the node
                 bay = bi;
                 break;

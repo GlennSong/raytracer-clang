@@ -623,6 +623,10 @@ public:
     // After build. Returns the stalls added.
     struct GarageStallIn { engine::Vec2 at, face; engine::Real y; };
     int addGarageBays(const engine::Vec2& portal, const engine::Vec2& out, const std::vector<GarageStallIn>& stalls);
+    engine::Real bayReach2(const ParkingBay& b, const engine::Vec2& target) const;
+    // ...or BEFORE build: the garages to lay with the kerbside bays, so the cars parked at the start can be up them too
+    struct GarageIn { engine::Vec2 portal, out; std::vector<GarageStallIn> stalls; };
+    void setGarages(std::vector<GarageIn> g) { pendingGarages_ = std::move(g); }
     // Effective lane spacing for a link: a parked-up street loses its curb
     // strips from the DRIVABLE width (band-model semantics, sim-side). The
     // render bridge lines its lane arrows up with the same spacing.
@@ -1508,7 +1512,8 @@ public:
     // like busStandBack; the bus length is the fleet's.
     Real busStandBackAt(int inLink) const;
 private:
-    std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k) const;
+    std::vector<int> nearestFreeBays(engine::Vec2 target, Real maxDist, int k, bool garages = true) const;
+    bool fitsAGarage(int agentIdx) const;   // its car is a car (not a bus, a truck): under 5.6 m
     bool parksInBays(const Agent& a) const;   // a private car that parks (not a bus/cab/wanderer)
     void advance(Agent& a, Real dt, Real gap, Real minGap);
     // advance()'s junction verdict: the speed target after the signal brake and
@@ -1615,6 +1620,7 @@ private:
     std::vector<VehicleBody> fleet_;
     std::vector<ParkingBay> bays_;
     int garageCount_ = 0;   // garages whose stalls are bays (addGarageBays)
+    std::vector<GarageIn> pendingGarages_;   // setGarages: laid by build with the kerbside bays
     // Each link's reverse twin (-1 if one-way), and a per-link route cost
     // scale kept at 1 except while a bay departure prices its own twin.
     std::vector<int> twinOf_;

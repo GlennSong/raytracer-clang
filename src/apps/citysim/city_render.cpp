@@ -579,21 +579,24 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     }
     sim_.setJunctionPad(sidewalk_);
     sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body
+    {   // THE GARAGES' STALLS become bays (~/.claude/plans/nightlife-and-malls.md stage 4b), laid with the kerbside ones
+        std::vector<CitySim::GarageIn> gins;
+        for (const engine::CitySimConfig::GarageSpec& gs : garages_) {
+            CitySim::GarageIn gi;
+            gi.portal = Vec2(gs.px, gs.pz);
+            gi.out = Vec2(gs.ox, gs.oz);
+            for (const auto& st : gs.stalls) gi.stalls.push_back({Vec2(st[0], st[1]), Vec2(st[2], st[3]), st[4]});
+            gins.push_back(std::move(gi));
+        }
+        sim_.setGarages(std::move(gins));
+    }
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
-    // THE GARAGES' STALLS become bays (~/.claude/plans/nightlife-and-malls.md stage 4b): a driver bound near one parks
-    // up on its decks
-    if (!garages_.empty()) {
-        int stalls = 0, garages = 0;
-        for (const engine::CitySimConfig::GarageSpec& gs : garages_) {
-            std::vector<CitySim::GarageStallIn> in;
-            for (const auto& st : gs.stalls) in.push_back({Vec2(st[0], st[1]), Vec2(st[2], st[3]), st[4]});
-            const int n = sim_.addGarageBays(Vec2(gs.px, gs.pz), Vec2(gs.ox, gs.oz), in);
-            stalls += n;
-            garages += n > 0 ? 1 : 0;
-        }
-        LOG_INFO << "[citysim] parking garages: " << garages << " of " << garages_.size() << " on a street, " << stalls << " stalls";
+    {
+        int stalls = 0;
+        for (const CitySim::ParkingBay& b : sim_.parkingBays()) stalls += b.garage >= 0;
+        if (!garages_.empty()) LOG_INFO << "[citysim] parking garages: " << garages_.size() << ", " << stalls << " stalls as bays";
     }
     // THE SEATS out in the city (the furniture library, M5): every sit spot of the outdoor furniture the loader
     // laid -- park benches, plaza benches, café chairs -- for the strollers to use. Interiors are not out yet (they
@@ -3319,6 +3322,26 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // deck height at the projected point — the numbers that separate "the
     // terrain is wrong" from "the road is wrong" from "the pad is wrong".
     {
+        // `parking?`: the kerbside bays and the garages' stalls, how many are taken, and the nearest taken garage
+        // stall to the camera (where to go and look)
+        if (++parkingTick_ % 60 == 0) {
+            int kerb = 0, kerbTaken = 0, stalls = 0, stallsTaken = 0;
+            Real bestD = 1e30;
+            Vec2 best;
+            Real bestY = 0;
+            const Vec2 cam(ctx.view.camera.position.x, ctx.view.camera.position.z);
+            for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+                const bool taken = b.occupant >= 0;
+                if (b.garage < 0) { ++kerb; kerbTaken += taken; continue; }
+                ++stalls;
+                stallsTaken += taken;
+                if (taken && (b.pos - cam).length() < bestD) { bestD = (b.pos - cam).length(); best = b.pos; bestY = b.y; }
+            }
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), "kerb %d/%d taken, garage stalls %d/%d taken; nearest taken stall %.1f %.1f %.1f (%.0f m)",
+                          kerbTaken, kerb, stallsTaken, stalls, best.x, bestY, best.y, bestD < 1e29 ? bestD : -1.0);
+            ctx.settings.setString("parking.telemetry", buf);
+        }
         // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
         {
             const std::string pr = ctx.settings.getString("pin.request", "");
