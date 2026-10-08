@@ -4026,6 +4026,10 @@ bool LevelLoader::load(const std::string& path,
                 if (std::getenv("RT_CAMPUS_DEBUG") && (lb.recipe == "sports_field" || lb.recipe == "campus_quad"))
                     std::fprintf(stderr, "[campus draw] %s at (%.0f, %.0f) type %s padMesh %zu verts, %zu outdoor pieces\n", lb.recipe.c_str(),
                                  lb.site.x, lb.site.y, lb.type.c_str(), lb.padMesh.vertices.size(), lb.furniture.size());
+                if (lb.type == "depot") {   // a bus depot's yard is paved: no meadow through it
+                    for (const engine::Poly2& sp : lb.sealed) if (sp.size() >= 3) sealedLotPolys->push_back(sp);
+                    continue;
+                }
                 if (lb.type == "park" || lb.type == "green") {
                     if (lb.recipe == "plaza" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
                     // a PASEO is paved wall to wall: sealed out to the shopfronts (its pad stops 0.3 m short of them,
@@ -4094,7 +4098,7 @@ bool LevelLoader::load(const std::string& path,
                 else
 #endif
                 for (const engine::LotBuilding& lb : preLots.lots) {
-                    if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
+                    if (lb.type == "park" || lb.type == "green" || (lb.plan.size() < 3 && lb.type != "depot")) continue;
                     pads.push_back(engine::lotPadFlatten(lb));
                 }
 #ifdef RT_ROADS_LANES
@@ -5476,6 +5480,10 @@ bool LevelLoader::load(const std::string& path,
         cfg.busStops = cs.value("busStops", cfg.busStops);
         cfg.buses = cs.value("buses", cfg.buses);
         cfg.busMaxWalk = cs.value("busMaxWalk", cfg.busMaxWalk);
+        if (cs.contains("busService") && cs["busService"].is_array() && cs["busService"].size() == 2) {
+            cfg.busServiceStart = cs["busService"][0].get<float>();
+            cfg.busServiceEnd = cs["busService"][1].get<float>();
+        }
         cfg.physicalCars = cs.value("physicalCars", cfg.physicalCars);
         cfg.pedDemoteRadius = cs.value("pedDemoteRadius", cfg.pedDemoteRadius);
         cfg.localHz = cs.value("localHz", cfg.localHz);
@@ -5757,6 +5765,7 @@ bool LevelLoader::load(const std::string& path,
             int lotTreesOnRoad = 0;
             std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
+            int depotYards = 0, depotBays = 0;          // the bus depots' bays, to the buses
             int surfaceLots = 0, surfaceStalls = 0;     // the big boxes' and malls' parking lots, to the drivers
             struct OpenSpot { Vec3 at; Vec2 n; int place; };
             std::vector<OpenSpot> openSpots;            // ...and the OPEN signs in their windows
@@ -5893,6 +5902,13 @@ bool LevelLoader::load(const std::string& path,
                 };
                 for (const auto& fs : lb.fenceSegs)
                     wall(fs.first, fs.second, 0.95, 0.14);
+                for (const engine::LotBuilding::Area& ar : lb.areas) {   // a bus depot's shed: its four walls
+                    if (ar.kind != "bus_shed") continue;
+                    const engine::Vec2 au = ar.axis, av(-ar.axis.y, ar.axis.x);
+                    const engine::Vec2 q[4] = {ar.center - au * ar.halfL - av * ar.halfW, ar.center + au * ar.halfL - av * ar.halfW,
+                                               ar.center + au * ar.halfL + av * ar.halfW, ar.center - au * ar.halfL + av * ar.halfW};
+                    for (int k = 0; k < 4; ++k) wall(q[k], q[(k + 1) % 4], 7.5, 0.3);
+                }
                 for (const Vec3& ts : lb.treeSpots) {
                     const engine::Vec2 t2(ts.x, ts.z);
                     wall(t2 + engine::Vec2(-0.16, 0), t2 + engine::Vec2(0.16, 0),
@@ -5980,7 +5996,25 @@ bool LevelLoader::load(const std::string& path,
                 }
                 // Tag it as a place the agents can route to. An unbuilt GREEN is
                 // scenery, not a schedule destination — no place tag.
-                if (lb.type != "green") {
+                // A BUS DEPOT (sculptBusDepot): no place for the schedules, its bays a garage only buses use, anchored
+                // on the street in front of its gate
+                if (lb.type == "depot") {
+                    engine::CitySimConfig::GarageSpec gs;
+                    gs.buses = true;
+                    for (const engine::LotBuilding::Area& ar : lb.areas) {
+                        if (ar.kind == "bus_gate") { gs.px = ar.center.x; gs.pz = ar.center.y; gs.ox = ar.axis.x; gs.oz = ar.axis.y; }
+                        if (ar.kind != "bus_bay") continue;
+                        const Real gy0 = dressingGround ? dressingGround(ar.center.x, ar.center.y) : lb.groundY;
+                        gs.stalls.push_back({ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, gy0 + 0.05});
+                    }
+                    if (!gs.stalls.empty()) {
+                        ++depotYards;
+                        depotBays += static_cast<int>(gs.stalls.size());
+                        LOG_INFO << "[citylots] bus depot at " << lb.site.x << " " << lb.site.y << ": " << gs.stalls.size() << " bays";
+                        cfg.garages.push_back(std::move(gs));
+                    }
+                }
+                if (lb.type != "green" && lb.type != "depot") {
                     engine::AuthoredPlace p;
                     p.type = lb.type;
                     p.x = static_cast<float>(lb.site.x);
@@ -6252,7 +6286,7 @@ bool LevelLoader::load(const std::string& path,
                         plantTreeAt(s.x, s.z, s.y, th >> 8);
                     }
                 }
-                if (lb.type == "park" || lb.type == "green") {
+                if (lb.type == "park" || lb.type == "green" || lb.type == "depot") {
                     // The lot's GROUND is the terrain (device: "remove the
                     // green pads ... make sure they adhere to the ground").
                     // Sculpted parks still carry a padMesh — but it holds only
@@ -6298,7 +6332,8 @@ bool LevelLoader::load(const std::string& path,
                     const double padArea = lb.pad.empty()
                         ? static_cast<double>(lb.width * lb.depth)
                         : engine::area(lb.pad);
-                    const int nTrees = lb.type == "park"
+                    const int nTrees = lb.type == "depot" ? 0
+                        : lb.type == "park"
                         ? std::max(3, std::min(14, static_cast<int>(padArea / 60.0)))
                         : std::max(1, std::min(4, static_cast<int>(padArea / 140.0)));
                     for (int ti = 0; lb.treeSpots.empty() && ti < nTrees; ++ti) {
@@ -6353,6 +6388,7 @@ bool LevelLoader::load(const std::string& path,
                      << treesOffPad << " skipped (not placeable on their pad), "
                      << treesNoPad << " planted with no pad to test, "
                      << lotTreesOnRoad << " kept off the drawn road";
+            if (depotYards) LOG_INFO << "[citylots] " << depotYards << " bus depots, " << depotBays << " bus bays";
             if (surfaceLots) LOG_INFO << "[citylots] " << surfaceLots << " parking lots, " << surfaceStalls << " stalls for the drivers";
             if (!tradePlaces.empty()) {
                 std::string line;

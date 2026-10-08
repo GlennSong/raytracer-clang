@@ -1598,6 +1598,8 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
     const auto& nav = city.nav();
     c.bays = static_cast<int>(sim.parkingBays().size());
     std::vector<Vec2> parkedAt;
+    std::vector<Real> parkedY;       // a garage stall's deck (else 0: the street)
+    std::vector<char> inGarage;
     for (std::size_t ai = 0; ai < sim.agents().size(); ++ai) {
         const auto& a = sim.agents()[ai];
         if (a.archetype != citysim::Agent::Mode::Driver) continue;
@@ -1612,12 +1614,20 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
         // A driver resting IN its car is drawn at its own pose; one that got
         // out left the car where it parked.
         parkedAt.push_back(a.vehicle >= 0 ? a.pos : v.pos);
+        const bool g = a.parkedBay >= 0 && sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].garage >= 0;
+        inGarage.push_back(g ? 1 : 0);
+        parkedY.push_back(g ? sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].y : 0.0);
     }
     for (std::size_t i = 0; i < parkedAt.size(); ++i) {
         for (std::size_t j = 0; j < parkedAt.size(); ++j) {
             if (i == j) continue;
             const Vec2 d = parkedAt[i] - parkedAt[j];
-            if (d.x * d.x + d.y * d.y < 3.0 * 3.0) { ++c.stacked; break; }
+            // A GARAGE'S STALLS are 2.5 m apart and its decks stand over each other: two cars there are a heap
+            // only if they are nearer than a stall's width on the same deck (the 3 m plan test counted
+            // neighbouring stalls, and the cars on the decks above, as heaps)
+            const bool both = inGarage[i] && inGarage[j];
+            const Real dy = parkedY[i] - parkedY[j];
+            if (both ? (d.x * d.x + d.y * d.y + dy * dy < 2.0 * 2.0) : (d.x * d.x + d.y * d.y < 3.0 * 3.0)) { ++c.stacked; break; }
         }
         for (int n = 0; n < nav.nodeCount(); ++n) {
             if (!nav.isJunction(n)) continue;

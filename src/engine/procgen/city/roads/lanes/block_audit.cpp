@@ -299,7 +299,7 @@ std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, con
 std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lots, const std::vector<Poly2>& blocks, double sidewalk) {
     std::vector<TerrainFlatten> out; const double falloff = lanesPadFalloff(sidewalk); const BlockInset inside = blocksInset(blocks, falloff);
     for (const LotBuilding& lb : lots) {
-        if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
+        if (lb.type == "park" || lb.type == "green" || (lb.plan.size() < 3 && lb.type != "depot")) continue;   // (a bus depot's yard is paved)
         // THE PAD HOLDS ITS WHOLE PARCEL; only the BLOCK EDGE gives up the feather. Shrinking the pad
         // by its feather on every side (it was) left a 4 m strip at every party line that neither
         // neighbour's pad owned — the outer 2 m of every plate and plaza stood on a ramp, and a

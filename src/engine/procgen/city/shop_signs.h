@@ -60,6 +60,17 @@ constexpr Real kOpenSignW = 0.62, kOpenSignH = 0.27;
 void openSignImages(const Font& tube, TextImage& albedo, TextImage& glow);
 RenderMesh openSignMesh();
 
+// THE BUS'S DESTINATION SIGN (Glenn, 2026-10-08: "Buses should probably show what line they are and whether they are
+// in service on an electric sign on front of the bus"): an amber LED dot-matrix board, kBusSignDotsW x kBusSignDotsH
+// dots. One atlas row per label: "12|CLOCKWISE" is the line number big at the left and the words after it; a label
+// without a '|' ("NOT IN SERVICE") is the words alone, centred. Albedo: the dark board, its unlit dots; glow: the lit
+// dots (the emissive map).
+constexpr int kBusSignDotsW = 160, kBusSignDotsH = 16, kBusSignDotPx = 4;
+constexpr Real kBusSignW = 2.0, kBusSignH = 0.2;
+void busSignImages(const Font& font, const std::vector<std::string>& labels, TextImage& albedo, TextImage& glow);
+// The board (kBusSignW x kBusSignH, centred, facing +Z) showing atlas row `row` of `rows`.
+RenderMesh busSignMesh(int row, int rows);
+
 struct ShopSignMeshes {
     struct Cell {
         int page = 0;

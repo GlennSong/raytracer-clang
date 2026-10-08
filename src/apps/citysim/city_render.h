@@ -76,6 +76,7 @@ struct CityRenderParams {
     int busStops = 8;
     int buses = 0;
     Real busMaxWalk = 120.0;
+    Real busServiceStart = 5.5, busServiceEnd = 23.5;   // CitySimConfig: with a depot, the buses' day
     // Cars handed to real physics near the player (CitySimConfig::physicalCars).
     // 0 = none, the shipping default; the physics soaks opt in.
     int physicalCars = 0;
@@ -641,6 +642,17 @@ private:
     std::vector<engine::Mat4> blockBake_;    // cached block-outline transforms
     std::vector<engine::Mat4> lotBake_;      // cached lot-outline transforms
     engine::AssetManager* assets_ = nullptr; // for bakes made after build() (bakePlanOutlines)
+    // THE BUSES' DESTINATION SIGNS (engine::busSignImages): one group per label (each route's, then NOT IN SERVICE),
+    // made on the first frame the renderer is at hand (the atlas is a texture); filled per step in syncCarLamps
+    std::vector<engine::Entity> busSignGroups_;
+    std::vector<int> busSignRow_;   // per route: its label's row
+    int busSignOff_ = -1;           // the NOT IN SERVICE row
+    int busSignsDrawn_ = 0;         // signs pushed this step (depots?)
+    engine::Vec3 busSignAt_{0, 0, 0};   // ...the last one's world position
+    bool busSignsTried_ = false;
+    engine::Mat4 busSignLocal_;     // the board on the bus, in its body's frame
+    void makeBusSigns(engine::FrameContext& ctx);
+    int busSignRowFor(int agent) const;
     bool planBaked_ = false;                 // the plan outlines bake on first show
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)

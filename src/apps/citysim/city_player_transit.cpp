@@ -201,6 +201,7 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
             const bool isBus = sim.isBus(ai);
             const bool isTaxi = sim.isTaxi(ai);
             if (!((isBus && wantBus) || (isTaxi && wantTaxi))) continue;
+            if (isBus && !sim.busInService(ai)) continue;   // NOT IN SERVICE: its doors stay shut
             // You board at a STOP, not by touching a moving bus.
             if (agents[i].speed > 2.0) continue;
             const Real dx = agents[i].pos.x - pt->position.x;
@@ -526,6 +527,7 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                             const std::size_t i = static_cast<std::size_t>(ni);
                             const int ai = ni;
                             if (!(sim0.isBus(ai) || sim0.isTaxi(ai)) || ag[i].speed > 2.0) continue;
+                            if (sim0.isBus(ai) && !sim0.busInService(ai)) continue;   // (NOT IN SERVICE)
                             const Real dx = ag[i].pos.x - pt->position.x, dz = ag[i].pos.y - pt->position.z;
                             const Real d = std::sqrt(dx * dx + dz * dz);
                             if (d < bestD) {
@@ -695,6 +697,7 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
         const int ai = ni;
         const bool isBus = sim.isBus(ai), isTaxi = sim.isTaxi(ai);
         if (!isBus && !isTaxi) continue;
+        if (isBus && !sim.busInService(ai)) continue;   // (NOT IN SERVICE)
         if (agents[i].speed > 2.0) continue;
         const Vec2 d = agents[i].pos - me;
         const Real dd = std::sqrt(d.x * d.x + d.y * d.y);
@@ -750,7 +753,7 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
         const engine::Vec3 c = routeColour(line);
         auto lift = [](Real v) { return static_cast<float>(v + (1.0 - v) * 0.4); };
         ImGui::TextColored(ImVec4(lift(c.x), lift(c.y), lift(c.z), 1.0f),
-                           "route %d (%s)%s", line, routeColourName(line), back ? " the other way" : "");
+                           "line %d (%s)%s", line + 1, routeColourName(line), back ? " the other way" : "");   // (numbered from 1, as the bus's sign)
     };
     if (hud_.mode == Hud::Mode::Riding) {
         if (hud_.ridingRoute >= 0) {

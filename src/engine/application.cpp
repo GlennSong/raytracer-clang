@@ -920,6 +920,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     if (cmd.name == "speeders?") return "ok " + settingsStore.getString("speeders.telemetry", "none");
     if (cmd.name == "parking?") return "ok " + settingsStore.getString("parking.telemetry", "none");
     if (cmd.name == "opensigns?") return "ok " + settingsStore.getString("opensigns.telemetry", "none");
+    if (cmd.name == "depots?") return "ok " + settingsStore.getString("depots.telemetry", "none") + "; stalled heading in:" + settingsStore.getString("depots.stalled", "");
     // `pin <agent>` / `unpin <agent>`: FOLLOW an agent -- it stays in the full sim however far it goes
     if (cmd.name == "pin" || cmd.name == "unpin") {
         if (cmd.args.empty()) return "err usage: pin|unpin <agent id>";
@@ -1354,7 +1355,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|opensigns?|activities?|who?|pin)";
+           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|opensigns?|depots?|activities?|who?|pin)";
 }
 
 }  // namespace engine

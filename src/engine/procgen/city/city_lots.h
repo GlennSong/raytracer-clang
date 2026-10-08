@@ -334,6 +334,8 @@ struct LotPlanDebug {
     std::vector<Vec2> campusAt;      // where (the block's centre)
     std::vector<std::string> campusWhat;   // what each campusAt is ("campus", "sports field", "dorms")
     std::vector<Vec2> bigBoxAt;
+    int depotBlocks = 0;             // blocks given to a bus depot (its yard, bays and shed)
+    std::vector<Vec2> depotAt;
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors

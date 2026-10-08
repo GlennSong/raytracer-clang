@@ -204,6 +204,8 @@ BuildingRecipe architectMall(uint32_t seed);
 // THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): wings off a skylit court, two 5.5 m
 // storeys round atria, anchors and entrances at the wing ends. The lot pass shapes its plan (mallArms, mallCourt).
 BuildingRecipe architectMallWings(uint32_t seed);
+// A BUS DEPOT's yard (Massing::Park, place type "depot"): sculpted by the lot pass (sculptBusDepot).
+BuildingRecipe architectBusDepot();
 // The chain's look on `p` (walls, cladding, the band's colour) and p.bigBox = chain.
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed);
 

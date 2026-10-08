@@ -182,6 +182,8 @@ GoalTable busGoals() {
     // A yard it cannot reach must not strand the bus mid-road for the night.
     t.addTransition("ToDepot", GoalEvent::NoRoute, "OffDuty");
     t.addTransition("OffDuty", GoalEvent::ServiceStart, "Drive");
+    // ...and one still on its way in when the morning service starts turns back to its route
+    t.addTransition("ToDepot", GoalEvent::ServiceStart, "Drive");
     t.setEntry("Drive");
     return t;
 }

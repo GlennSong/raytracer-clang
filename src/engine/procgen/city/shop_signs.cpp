@@ -341,6 +341,67 @@ RenderMesh openSignMesh() {
     return m;
 }
 
+void busSignImages(const Font& font, const std::vector<std::string>& labels, TextImage& albedo, TextImage& glow) {
+    constexpr int DW = kBusSignDotsW, DH = kBusSignDotsH, P = kBusSignDotPx;
+    const int rows = std::max<int>(1, static_cast<int>(labels.size()));
+    const uint8_t plate[4] = {9, 9, 10, 255}, black[4] = {0, 0, 0, 255}, white[4] = {255, 255, 255, 255};
+    albedo.resize(DW * P, DH * P * rows, plate);
+    glow.resize(DW * P, DH * P * rows, black);
+    for (int r = 0; r < static_cast<int>(labels.size()); ++r) {
+        // the label at the board's own resolution, one pixel a dot: a lit dot is a pixel the letters cover
+        TextImage m;
+        m.resize(DW, DH, black);
+        const std::string& L = labels[static_cast<std::size_t>(r)];
+        const std::size_t bar = L.find('|');
+        auto fit = [&](const std::string& t, float cap, float x, float room, bool centre) {
+            const float em = cap / std::max(0.01f, font.capHeight(1.0f));
+            const float w = font.measure(t, em);
+            const float xs = w > room ? std::max(0.55f, room / w) : 1.0f;
+            const float x0 = centre ? x + 0.5f * (room - w * xs) : x;
+            font.draw(m, t, x0, 0.5f * (DH + cap), em, white, xs);
+            return x0 + w * xs;
+        };
+        if (bar == std::string::npos) {
+            fit(L, 10.0f, 2.0f, DW - 4.0f, true);
+        } else {
+            const float x1 = fit(L.substr(0, bar), 13.0f, 3.0f, 40.0f, false);
+            fit(L.substr(bar + 1), 9.0f, x1 + 7.0f, DW - (x1 + 7.0f) - 3.0f, true);
+        }
+        for (int dy = 0; dy < DH; ++dy)
+            for (int dx = 0; dx < DW; ++dx) {
+                const bool on = m.rgba[(static_cast<std::size_t>(dy) * DW + dx) * 4] > 110;
+                // the dot: a disc in its P x P cell
+                for (int py = 0; py < P; ++py)
+                    for (int px = 0; px < P; ++px) {
+                        const float ex = px + 0.5f - P * 0.5f, ey = py + 0.5f - P * 0.5f;
+                        if (ex * ex + ey * ey > (P * 0.5f) * (P * 0.5f) * 0.85f) continue;
+                        const std::size_t k = ((static_cast<std::size_t>(r) * DH * P + dy * P + py) * (DW * P) + dx * P + px) * 4;
+                        if (on) {
+                            albedo.rgba[k] = 255; albedo.rgba[k + 1] = 176; albedo.rgba[k + 2] = 46;
+                            glow.rgba[k] = 255; glow.rgba[k + 1] = 150; glow.rgba[k + 2] = 24;
+                        } else {
+                            albedo.rgba[k] = 30; albedo.rgba[k + 1] = 26; albedo.rgba[k + 2] = 18;
+                        }
+                    }
+            }
+    }
+}
+
+RenderMesh busSignMesh(int row, int rows) {
+    RenderMesh m;
+    const Real hw = kBusSignW * 0.5, hh = kBusSignH * 0.5;
+    const Vec3 n(0, 0, 1);
+    const float v0 = static_cast<float>(row) / std::max(1, rows), v1 = static_cast<float>(row + 1) / std::max(1, rows);
+    auto vtx = [&](Real x, Real y, float u, float v) {
+        Vertex vx(Vec3(x, y, 0), n, u, v);
+        vx.tangent = Vec3(1, 0, 0);
+        m.vertices.push_back(vx);
+    };
+    vtx(-hw, hh, 0, v0); vtx(hw, hh, 1, v0); vtx(hw, -hh, 1, v1); vtx(-hw, -hh, 0, v1);
+    for (uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(k);
+    return m;
+}
+
 ShopSignMeshes buildShopSignMeshes(const std::vector<ShopSign>& signs, const ShopSignAtlas& atlas, Real cellSize) {
     ShopSignMeshes out;
     std::map<std::tuple<int, int, int>, std::size_t> cellOf;

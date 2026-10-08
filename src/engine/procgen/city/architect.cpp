@@ -1935,6 +1935,14 @@ BuildingRecipe architectMallWings(uint32_t seed) {
     return out;
 }
 
+BuildingRecipe architectBusDepot() {
+    BuildingRecipe out;
+    out.massing = BuildingRecipe::Massing::Park;
+    out.placeType = "depot";
+    out.name = "bus_depot";
+    return out;
+}
+
 BuildingRecipe architectCampus(int role, uint32_t seed) {
     Hash rng(seed * 2654435761u ^ 0x5eed0c47u);
     BuildingRecipe out;

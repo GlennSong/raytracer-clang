@@ -621,15 +621,26 @@ public:
         // car is put away up on its deck (and fetched back out to the street when it leaves).
         engine::Real y = -1e30;
         int garage = -1;
+        // A BUS DEPOT's bay (GarageIn::buses): only a bus going off duty takes one, and nothing else does.
+        bool busOnly = false;
     };
     const std::vector<ParkingBay>& parkingBays() const { return bays_; }
     // THE GARAGES (CitySimConfig::garages): every stall a bay, anchored on the street link in front of the portal.
     // After build. Returns the stalls added.
     struct GarageStallIn { engine::Vec2 at, face; engine::Real y; };
-    int addGarageBays(const engine::Vec2& portal, const engine::Vec2& out, const std::vector<GarageStallIn>& stalls);
+    int addGarageBays(const engine::Vec2& portal, const engine::Vec2& out, const std::vector<GarageStallIn>& stalls,
+                      bool buses = false);
+    // THE BUS DEPOTS (garages of bus bays): each route's, the nearest to its stops (-1: none -- the old yard, the
+    // route's outermost stop). After setBuses.
+    int depotCount() const { return static_cast<int>(depotGarages_.size()); }
+    int depotOfRoute(int r) const {
+        return r >= 0 && r < static_cast<int>(routeDepot_.size()) ? routeDepot_[static_cast<std::size_t>(r)] : -1;
+    }
+    // buses parked in a depot bay / depot bays in all
+    void depotUse(int& parked, int& bays) const;
     engine::Real bayReach2(const ParkingBay& b, const engine::Vec2& target) const;
     // ...or BEFORE build: the garages to lay with the kerbside bays, so the cars parked at the start can be up them too
-    struct GarageIn { engine::Vec2 portal, out; std::vector<GarageStallIn> stalls; };
+    struct GarageIn { engine::Vec2 portal, out; std::vector<GarageStallIn> stalls; bool buses = false; };
     void setGarages(std::vector<GarageIn> g) { pendingGarages_ = std::move(g); }
     // Effective lane spacing for a link: a parked-up street loses its curb
     // strips from the DRIVABLE width (band-model semantics, sim-side). The
@@ -1179,6 +1190,7 @@ public:
     void setBusService(Real startHour, Real endHour) {
         busServiceStart_ = startHour;
         busServiceEnd_ = endHour;
+        busWake_ = true;   // (the sleeping buses re-time their wake: CitySim::step)
     }
     bool busesInService() const {
         if (busServiceEnd_ <= busServiceStart_) return true;   // 24 hour service
@@ -1319,6 +1331,12 @@ public:
     static Real pullOutWeight(const Agent& a, Real pullS);
     // A bus's route and the index of the stop it is heading for; -1 if the
     // agent is not a bus.
+    // A bus taking passengers: not deadheading to its depot, not off duty there (its sign reads NOT IN SERVICE)
+    bool busInService(int i) const {
+        if (!isBus(i)) return false;
+        const Agent::Activity act = agents_[static_cast<std::size_t>(i)].activity;
+        return act != Agent::Activity::Returning && act != Agent::Activity::AtHome;
+    }
     int busRouteOf(int i) const {
         return isBus(i) ? busRoute_[static_cast<std::size_t>(i)] : -1;
     }
@@ -1624,6 +1642,10 @@ private:
     std::vector<VehicleBody> fleet_;
     std::vector<ParkingBay> bays_;
     int garageCount_ = 0;   // garages whose stalls are bays (addGarageBays)
+    std::vector<int> depotGarages_;   // ...those that are bus depots (their garage indices)
+    std::vector<int> routeDepot_;     // per bus route: its depot (an index into depotGarages_), -1 none
+    std::vector<int> busDepotPick_;   // per agent: the depot a bus's NEXT trip parks in (set by the Depot goal)
+    void assignDepots();
     std::vector<GarageIn> pendingGarages_;   // setGarages: laid by build with the kerbside bays
     // Each link's reverse twin (-1 if one-way), and a per-link route cost
     // scale kept at 1 except while a bay departure prices its own twin.
@@ -1709,6 +1731,7 @@ private:
     PopulationCacheReport popCache_;
     Real busServiceStart_ = 0, busServiceEnd_ = 0;   // 0/0 = around the clock
     bool busServiceWas_ = true;                      // edge detect for the events
+    bool busWake_ = false;                           // setBusService: wake the sleeping buses next step
     long busSkippedLegs_ = 0;
     mutable BusGate busGate_;
     long busStopsServed_ = 0;

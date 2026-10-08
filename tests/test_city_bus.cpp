@@ -492,3 +492,70 @@ TEST_CASE(bus_trip_is_chosen_by_door_to_door_time) {
     net.setFleet({1, 1});
     CHECK(!net.planTrip(from, to, 250.0).valid());
 }
+
+// THE BUS DEPOT (Glenn, 2026-10-08: "There should probably be a dedicated bus depot they return to at end of day").
+// With a depot and a service day, every bus goes in when the day ends -- setting its riders down at its next stop --
+// parks in one of the depot's bays, and nothing else ever parks there; when the service starts again they leave.
+TEST_CASE(buses_go_back_to_their_depot_after_hours) {
+    NavGraph nav = citytest::cityNav(900.0, 120.0, 4);
+    CitySim sim;
+    sim.build(nav, 24, 60, 17);
+    // the depot: 12 bays off a street link near the middle, its gate on that street
+    int gateLink = -1;
+    for (int li = 0; li < nav.linkCount() && gateLink < 0; ++li) {
+        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
+        if (!L.footpath && L.layer == 0 && L.length > 60 && (L.access & road_access::kFrontage) &&
+            (nav.nodes[static_cast<std::size_t>(L.from)] - Vec2(0, 0)).length() < 300)
+            gateLink = li;
+    }
+    CHECK(gateLink >= 0);
+    if (gateLink < 0) return;
+    const NavLink& G = nav.links[static_cast<std::size_t>(gateLink)];
+    const Vec2 a = nav.nodes[static_cast<std::size_t>(G.from)], b = nav.nodes[static_cast<std::size_t>(G.to)];
+    const Vec2 d = normalize(b - a), right(d.y, -d.x), mid = (a + b) * 0.5;
+    const Vec2 gate = mid + right * 9.0;
+    std::vector<CitySim::GarageStallIn> stalls;
+    for (int i = 0; i < 12; ++i) stalls.push_back({gate + right * 20.0 + d * ((i - 5.5) * 4.2), right, 0.05});
+    const int added = sim.addGarageBays(gate, right * -1.0, stalls, /*buses=*/true);
+    sim.setBuses(2, 12, 8, 260.0);
+    sim.setBusService(6.0, 6.1);   // a six-minute day (the clock starts at 6)
+    std::printf("    [depot] %d bays, %d depot(s); routes' depots %d %d\n", added, sim.depotCount(), sim.depotOfRoute(0), sim.depotOfRoute(1));
+    CHECK(added == 12);
+    CHECK(sim.depotCount() == 1);
+    for (int r = 0; r < sim.buses().routeCount(); ++r) CHECK(sim.depotOfRoute(r) == 0);
+    auto inBays = [&](int& buses, int& others) {
+        buses = others = 0;
+        for (const CitySim::ParkingBay& bay : sim.parkingBays()) {
+            if (!bay.busOnly || bay.occupant < 0) continue;
+            if (sim.isBus(bay.occupant)) { if (!sim.agents()[static_cast<std::size_t>(bay.occupant)].moving) ++buses; }
+            else ++others;
+        }
+    };
+    int parked = 0, intruders = 0, worstIntruders = 0, riders = 0, riderTicks = 0;
+    for (int i = 0; i < 9000; ++i) {   // 15 minutes: the day ends at 6.1 h
+        sim.step(0.1, 0.1 / 60.0);   // (the day's last 0.1 h in a minute)
+        inBays(parked, intruders);
+        worstIntruders = std::max(worstIntruders, intruders);
+        if (!sim.busesInService()) {
+            for (int k = 0; k < static_cast<int>(sim.agents().size()); ++k)
+                if (sim.isBus(k) && sim.agents()[static_cast<std::size_t>(k)].activity == Agent::Activity::AtHome) riders += sim.rides().load(k);
+            ++riderTicks;
+        }
+    }
+    std::printf("    [depot] after hours (%.2f h): %d of 8 buses parked in depot bays, %d intruders at worst, %d riders aboard parked buses\n",
+                sim.clockHours(), parked, worstIntruders, riders);
+    CHECK(!sim.busesInService());
+    CHECK(parked == 8);
+    CHECK(worstIntruders == 0);
+    CHECK(riders == 0);
+    // ...and the morning: they leave
+    sim.setBusService(5.0, 23.0);
+    for (int i = 0; i < 3000; ++i) sim.step(0.1, 0.1 / 3600.0);
+    inBays(parked, intruders);
+    int moving = 0;
+    for (int k = 0; k < static_cast<int>(sim.agents().size()); ++k)
+        if (sim.isBus(k) && sim.agents()[static_cast<std::size_t>(k)].moving) ++moving;
+    std::printf("    [depot] in service again: %d still in the depot, %d buses moving\n", parked, moving);
+    CHECK(parked == 0);
+    CHECK(moving >= 6);
+}

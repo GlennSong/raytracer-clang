@@ -1059,6 +1059,258 @@ static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, 
     return true;
 }
 
+// THE BUS DEPOT (Glenn, 2026-10-08: "buses shouldn't park there. There should probably be a dedicated bus depot they
+// return to at end of day"): the yard, the biggest rectangle square to the gate that the block holds, fenced, its
+// gate on the street. Inside, from the gate in: a drive aisle, then rows of bus bays (4.2 x 14 m, nose in) each with
+// the aisle it is driven in from, and at the back the MAINTENANCE SHED -- a steel shed, a roll-up door for every
+// 9 m, a lit clerestory under its eaves -- whose apron is the last aisle. Lamp poles stand at the rows' ends.
+// Ground-relative, like a park (the block was picked near-flat). The bays, the gate and the shed are recorded as
+// areas ("bus_bay", "bus_gate", "bus_shed") for the host: the citysim parks its buses in the bays.
+// False when the block cannot hold a row of four bays.
+static bool sculptBusDepot(LotBuilding& g, const Poly2& poly, Vec2 frontage, uint32_t seed, std::vector<RenderMesh>* outParts) {
+    if (!outParts || poly.size() < 3 || frontage.length() < 1e-6 ||
+        outParts->size() < kLotPartSlots) return false;
+    const Vec2 fo = normalize(frontage);              // out through the gate, to the street
+    const Vec2 v = fo * -1.0, u(v.y, -v.x);           // v in from the gate, u along the street
+    const Vec2 c = centroid(poly);
+    const Poly2 inner = inset(poly, 1.2);
+    if (inner.size() < 3) return false;
+    auto W2 = [&](Real x, Real y) { return c + u * x + v * y; };
+    // THE YARD: the largest rectangle square to the gate inside the block -- the block rasterised on a 1 m grid in the
+    // frame (a cell is in when its centre is 0.5 m inside the inset outline), then the largest all-in rectangle by the
+    // histogram method, row by row
+    Real x0 = 1e30, x1 = -1e30, y0 = 1e30, y1 = -1e30;
+    for (const Vec2& w : inner) {
+        const Real a = dot(w - c, u), b = dot(w - c, v);
+        x0 = std::min(x0, a); x1 = std::max(x1, a); y0 = std::min(y0, b); y1 = std::max(y1, b);
+    }
+    auto insideCount = [&](Real a0, Real b0, Real a1, Real b1) {
+        int n = 0;
+        for (int i = 0; i <= 8; ++i)
+            for (int j = 0; j <= 8; ++j)
+                if (pointInPolygon(inner, W2(a0 + (a1 - a0) * i / 8, b0 + (b1 - b0) * j / 8))) ++n;
+        return n;
+    };
+    {
+        Poly2 cellIn = inset(poly, 1.9);
+        if (cellIn.size() < 3) cellIn = inner;   // (an inset can fail on a ragged outline; the yard is checked on `inner` below)
+        const int nx = static_cast<int>(x1 - x0), ny = static_cast<int>(y1 - y0);
+        if (cellIn.size() < 3 || nx < 30 || ny < 30) {
+            if (std::getenv("RT_DEPOT_DEBUG"))
+                std::printf("[depot] at %.0f %.0f: block %d x %d in the gate's frame, inset %zu verts\n", c.x, c.y, nx, ny, cellIn.size());
+            return false;
+        }
+        std::vector<int> h(static_cast<std::size_t>(nx), 0);
+        Real best = 0;
+        Real bx0 = 0, bx1 = 0, by0 = 0, by1 = 0;
+        for (int j = 0; j < ny; ++j) {
+            for (int i = 0; i < nx; ++i)
+                h[static_cast<std::size_t>(i)] = pointInPolygon(cellIn, W2(x0 + i + 0.5, y0 + j + 0.5)) ? h[static_cast<std::size_t>(i)] + 1 : 0;
+            std::vector<int> st;   // the largest rectangle under this row's histogram
+            for (int i = 0; i <= nx; ++i) {
+                const int hi = i < nx ? h[static_cast<std::size_t>(i)] : 0;
+                while (!st.empty() && h[static_cast<std::size_t>(st.back())] >= hi) {
+                    const int top = h[static_cast<std::size_t>(st.back())];
+                    st.pop_back();
+                    const int left = st.empty() ? 0 : st.back() + 1;
+                    const Real ar = static_cast<Real>(top) * (i - left);
+                    if (ar > best && i - left >= 30 && top >= 30) {
+                        best = ar;
+                        bx0 = x0 + left; bx1 = x0 + i; by0 = y0 + j + 1 - top; by1 = y0 + j + 1;
+                    }
+                    if (i == nx && st.empty()) break;
+                }
+                if (i < nx) st.push_back(i);
+            }
+        }
+        if (best <= 0) { x1 = x0; y1 = y0; }
+        else { x0 = bx0; x1 = bx1; y0 = by0; y1 = by1; }
+    }
+    const Real W = x1 - x0, D = y1 - y0, cx = (x0 + x1) * 0.5;
+    const bool dbgOn = std::getenv("RT_DEPOT_DEBUG") != nullptr;
+    if (insideCount(x0, y0, x1, y1) < 81 || W < 30 || D < 36) {
+        if (dbgOn) std::printf("[depot] at %.0f %.0f: no yard (%.0f x %.0f)\n", c.x, c.y, W, D);
+        return false;
+    }
+    // A BAY is a LANE two buses long (they park nose to tail, as a real yard packs them) where the yard is deep enough,
+    // else one bus long
+    constexpr Real bayW = 4.2, aisle = 15.0, shedD = 24.0, shedW = 22.0;
+    const Real bayL = D >= aisle + 26.0 + 1.0 ? 26.0 : 14.0;
+    const int perBay = bayL > 20 ? 2 : 1;
+    // THE SHED: across the back where the yard is deep enough for a row of bays and the shed's own apron, else at
+    // one end, its doors on the drive aisle (most blocks are 45-65 m deep and longer than that)
+    const bool backShed = D >= aisle + bayL + aisle + shedD;
+    const bool endShed = !backShed && W >= 6.0 + 4 * bayW + shedW + 4.0 && D >= aisle + 16.0;
+    const bool shed = backShed || endShed;
+    std::vector<Real> rows;   // each row's near edge (its aisle in front of it)
+    for (Real y = y0 + aisle; y + bayL + (backShed ? aisle + shedD : 1.0) <= y1 + 1e-6; y += bayL + aisle) rows.push_back(y);
+    if (!rows.empty()) {   // the rows against the back (or the shed's apron): the spare depth goes to the gate's aisle
+        const Real spare = (y1 - (backShed ? aisle + shedD : 1.0)) - (rows.back() + bayL);
+        for (Real& r : rows) r += std::max(Real(0), spare);
+    }
+    const Real bx0 = x0 + 3.0, bx1 = endShed ? x1 - 1.0 - shedW - 3.0 : x1 - 3.0;
+    const int nBay = static_cast<int>((bx1 - bx0) / bayW);
+    if (rows.empty() || nBay < 4) {
+        if (dbgOn) std::printf("[depot] at %.0f %.0f: yard %.0f x %.0f holds no row\n", c.x, c.y, W, D);
+        return false;
+    }
+    const Real sx0 = (bx0 + bx1) * 0.5 - nBay * bayW * 0.5;
+    // the shed's rectangle (doors on its y = sya face, toward the gate)
+    const Real sxa = backShed ? cx - std::min(W - 8.0, Real(96)) * 0.5 : x1 - 1.0 - shedW;
+    const Real sxb = backShed ? cx + std::min(W - 8.0, Real(96)) * 0.5 : x1 - 1.0;
+    const Real sya = backShed ? y1 - 1.0 - shedD : y0 + aisle, syb = y1 - 1.0;
+
+    const Vec3 up(0, 1, 0), u3(u.x, 0, u.y), v3(v.x, 0, v.y);
+    auto P = [&](Real x, Real y, Real h) { const Vec2 w = W2(x, y); return Vec3(w.x, h, w.y); };
+    RenderMesh m;   // the yard's surface and paint (ground-relative, vertex colours)
+    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) {
+        MeshBuilder::emitQuad(m, P(a0, b0, h), P(a0, b1, h), P(a1, b1, h), P(a1, b0, h), up, col);
+    };
+    const Vec3 asphalt(0.07, 0.07, 0.075), white(0.90, 0.90, 0.87), yellow(0.90, 0.76, 0.16);   // (linear: the drawn lot reads dark)
+    quad(x0, y0, x1, y1, 0.05, asphalt);
+    // the drive out of the gate to the block's edge (the pavement beyond)
+    Real yOut = y0;
+    while (yOut > y0 - 12 && pointInPolygon(poly, W2(cx, yOut - 0.25))) yOut -= 0.25;
+    if (yOut < y0) quad(cx - 8, yOut, cx + 8, y0, 0.05, asphalt);
+    g.sealed.push_back({W2(x0, y0), W2(x1, y0), W2(x1, y1), W2(x0, y1)});
+    if (yOut < y0) g.sealed.push_back({W2(cx - 8, yOut), W2(cx + 8, yOut), W2(cx + 8, y0), W2(cx - 8, y0)});
+    for (Poly2& s : g.sealed) ensureCCW(s);
+    // THE BAYS: white dividers, a yellow line across their noses, each bay an area for the host
+    for (Real ry : rows) {
+        for (int k = 0; k <= nBay; ++k) {
+            const Real x = sx0 + k * bayW;
+            quad(x - 0.06, ry, x + 0.06, ry + bayL, 0.07, white);
+        }
+        quad(sx0, ry + bayL - 0.15, sx0 + nBay * bayW, ry + bayL, 0.07, yellow);
+        for (int k = 0; k < nBay; ++k)
+            for (int q = 0; q < perBay; ++q) {   // the far slot first: the first bus in drives to the end of the lane
+                LotBuilding::Area ar;
+                ar.kind = "bus_bay";
+                ar.center = W2(sx0 + (k + 0.5) * bayW, ry + bayL - (q + 0.5) * (bayL / perBay));
+                ar.axis = v;   // nose in, away from its aisle
+                ar.halfL = bayL / perBay * 0.5;
+                ar.halfW = bayW * 0.5;
+                g.areas.push_back(ar);
+            }
+    }
+    {   // the gate: where a bus leaves the street (the host anchors the bays on the street in front of it)
+        LotBuilding::Area ar;
+        ar.kind = "bus_gate";
+        ar.center = W2(cx, yOut);
+        ar.axis = fo;
+        ar.halfL = 8;
+        ar.halfW = 1;
+        g.areas.push_back(ar);
+    }
+    BuildingMesh kit;
+    // THE FENCE round the yard, the gate left open: posts every 3 m, three rails
+    {
+        const Vec3 steel(0.42, 0.44, 0.45);
+        auto fence = [&](Vec2 a, Vec2 b) {   // frame points
+            const Vec2 d = b - a;
+            const Real L = d.length();
+            if (L < 0.5) return;
+            const Vec2 t = d * (1.0 / L);
+            const Vec3 ax(u.x * t.x + v.x * t.y, 0, u.y * t.x + v.y * t.y), lat(-ax.z, 0, ax.x);
+            const Vec3 o = P(a.x, a.y, 0);
+            for (Real h : {Real(0.15), Real(1.1), Real(2.05)})
+                emitBox(kit, Scope{o + up * h - lat * 0.02, {ax, up, lat}, Vec3(L, 0.05, 0.04)}, PartId::Metal, steel);
+            const int nPost = std::max(1, static_cast<int>(L / 3.0));
+            for (int k = 0; k <= nPost; ++k)
+                emitBox(kit, Scope{o + ax * (L * k / nPost - 0.04) - lat * 0.04, {ax, up, lat}, Vec3(0.08, 2.2, 0.08)},
+                        PartId::Metal, steel);
+            g.fenceSegs.push_back({W2(a.x, a.y), W2(b.x, b.y)});
+        };
+        fence({x0, y0}, {cx - 8, y0});
+        fence({cx + 8, y0}, {x1, y0});
+        fence({x1, y0}, {x1, y1});
+        fence({x1, y1}, {x0, y1});
+        fence({x0, y1}, {x0, y0});
+        for (Real gx : {cx - 8.0, cx + 8.0})   // the gate's posts
+            emitBox(kit, Scope{P(gx - 0.15, y0 - 0.15, 0), {u3, up, v3}, Vec3(0.3, 2.6, 0.3)}, PartId::Metal, Vec3(0.30, 0.32, 0.34));
+    }
+    // LAMP POLES at the rows' ends (their lamps glow at night)
+    RenderMesh lamps;
+    const Vec3 lampCol(1.0, 0.92, 0.75), poleCol(0.38, 0.39, 0.41);
+    auto lampPole = [&](Real xs, Real ys) {
+        emitBox(kit, Scope{P(xs - 0.12, ys - 0.12, 0), {u3, up, v3}, Vec3(0.24, 10.0, 0.24)}, PartId::Metal, poleCol);
+        emitBox(kit, Scope{P(xs - 0.3, ys - 1.4, 10.0), {u3, up, v3}, Vec3(0.6, 0.25, 2.8)}, PartId::Metal, poleCol);
+        for (Real dy : {Real(-1.25), Real(0.55)})
+            MeshBuilder::emitQuad(lamps, P(xs - 0.25, ys + dy, 9.99), P(xs + 0.25, ys + dy, 9.99), P(xs + 0.25, ys + dy + 0.7, 9.99),
+                                  P(xs - 0.25, ys + dy + 0.7, 9.99), up * -1.0, lampCol);
+    };
+    for (Real ry : rows) {
+        if (sx0 - 1.5 > x0 + 0.5) lampPole(sx0 - 1.5, ry + bayL * 0.5);
+        if (sx0 + nBay * bayW + 1.5 < (endShed ? sxa - 0.5 : x1 - 0.5)) lampPole(sx0 + nBay * bayW + 1.5, ry + bayL * 0.5);
+    }
+    // THE MAINTENANCE SHED at the back (or, on a shallow yard, the dispatcher's cabin in a back corner)
+    const Vec3 clad(0.66, 0.68, 0.66), trim(0.26, 0.38, 0.52), doorCol(0.52, 0.54, 0.56), roofCol(0.46, 0.47, 0.48);
+    if (shed) {
+        const Real sw = sxb - sxa, sd = syb - sya;
+        constexpr Real eave = 7.5, ridge = 9.3, t = 0.25;
+        emitBox(kit, Scope{P(sxa, sya, 0), {u3, up, v3}, Vec3(sw, eave, t)}, PartId::Metal, clad);              // front
+        emitBox(kit, Scope{P(sxa, syb - t, 0), {u3, up, v3}, Vec3(sw, eave, t)}, PartId::Metal, clad);          // back
+        emitBox(kit, Scope{P(sxa, sya, 0), {u3, up, v3}, Vec3(t, eave, sd)}, PartId::Metal, clad);           // ends
+        emitBox(kit, Scope{P(sxa + sw - t, sya, 0), {u3, up, v3}, Vec3(t, eave, sd)}, PartId::Metal, clad);
+        emitBox(kit, Scope{P(sxa - 0.1, sya - 0.1, eave - 0.6), {u3, up, v3}, Vec3(sw + 0.2, 0.6, 0.12)}, PartId::Trim, trim);   // fascia
+        // the roof: two slopes to a ridge along the shed, the gables closed
+        RenderMesh roof, gable, lit;
+        const Real ym = (sya + syb) * 0.5;
+        const Real o = 0.4;   // the eaves' overhang
+        MeshBuilder::emitQuad(roof, P(sxa - o, sya - o, eave), P(sxa + sw + o, sya - o, eave), P(sxa + sw + o, ym, ridge),
+                              P(sxa - o, ym, ridge), normalize(Vec3(0, 1, 0) - v3 * ((ridge - eave) / (ym - sya))), roofCol);
+        MeshBuilder::emitQuad(roof, P(sxa - o, ym, ridge), P(sxa + sw + o, ym, ridge), P(sxa + sw + o, syb + o, eave),
+                              P(sxa - o, syb + o, eave), normalize(Vec3(0, 1, 0) + v3 * ((ridge - eave) / (syb - ym))), roofCol);
+        for (Real gx : {sxa, sxa + sw}) {
+            const Vec3 n = gx == sxa ? u3 * -1.0 : u3;
+            MeshBuilder::emitTri(gable, P(gx, sya, eave), P(gx, syb, eave), P(gx, ym, ridge), n, clad);
+            MeshBuilder::emitTri(gable, P(gx, syb, eave), P(gx, sya, eave), P(gx, ym, ridge), n * -1.0, clad);
+        }
+        // the roll-up doors, one for every 9 m of the front, and the lit clerestory over them
+        const int nDoor = std::max(2, static_cast<int>(sw / 9.0));
+        for (int k = 0; k < nDoor; ++k) {
+            const Real dc = sxa + sw * (k + 0.5) / nDoor;
+            emitBox(kit, Scope{P(dc - 2.6, sya - 0.12, 0), {u3, up, v3}, Vec3(5.2, 5.4, 0.12)}, PartId::Metal, doorCol);
+            for (int s = 1; s < 9; ++s)   // its slats
+                emitBox(kit, Scope{P(dc - 2.6, sya - 0.16, s * 0.6), {u3, up, v3}, Vec3(5.2, 0.04, 0.04)}, PartId::Metal,
+                        doorCol * 0.8);
+            emitBox(kit, Scope{P(dc - 2.8, sya - 0.18, 5.4), {u3, up, v3}, Vec3(5.6, 0.3, 0.2)}, PartId::Trim, trim);   // the head
+            emitBox(kit, Scope{P(dc - 2.8, sya - 0.18, 0), {u3, up, v3}, Vec3(0.2, 5.4, 0.2)}, PartId::Trim, trim);
+            emitBox(kit, Scope{P(dc + 2.6, sya - 0.18, 0), {u3, up, v3}, Vec3(0.2, 5.4, 0.2)}, PartId::Trim, trim);
+        }
+        MeshBuilder::emitQuad(lit, P(sxa + 0.5, sya - 0.02, 6.0), P(sxa + sw - 0.5, sya - 0.02, 6.0), P(sxa + sw - 0.5, sya - 0.02, 6.7),
+                              P(sxa + 0.5, sya - 0.02, 6.7), v3 * -1.0, Vec3(1.0, 0.95, 0.82));
+        MeshBuilder::append((*outParts)[drapedSlot(PartId::Roof)], roof);
+        MeshBuilder::append((*outParts)[drapedSlot(PartId::Metal)], gable);
+        MeshBuilder::append((*outParts)[drapedSlot(PartId::LitBand)], lit);
+        quad(sxa - 1, sya - 3, sxa + sw + 1, syb, 0.06, Vec3(0.20, 0.20, 0.19));   // the concrete apron and floor
+        LotBuilding::Area ar;
+        ar.kind = "bus_shed";
+        ar.center = W2((sxa + sxb) * 0.5, ym);
+        ar.axis = u;
+        ar.halfL = sw * 0.5;
+        ar.halfW = sd * 0.5;
+        g.areas.push_back(ar);
+    } else {
+        const Real ax = x1 - 9.0, ay = y1 - 4.5;
+        emitBox(kit, Scope{P(ax, ay, 0), {u3, up, v3}, Vec3(7.0, 3.0, 3.5)}, PartId::Metal, clad);
+        emitBox(kit, Scope{P(ax - 0.2, ay - 0.2, 3.0), {u3, up, v3}, Vec3(7.4, 0.2, 3.9)}, PartId::Trim, trim);
+        RenderMesh lit;
+        MeshBuilder::emitQuad(lit, P(ax + 1.0, ay - 0.02, 1.2), P(ax + 4.0, ay - 0.02, 1.2), P(ax + 4.0, ay - 0.02, 2.2),
+                              P(ax + 1.0, ay - 0.02, 2.2), v3 * -1.0, Vec3(1.0, 0.95, 0.82));
+        MeshBuilder::append((*outParts)[drapedSlot(PartId::LitBand)], lit);
+    }
+    MeshBuilder::append((*outParts)[drapedSlot(PartId::LitBand)], lamps);
+    appendKit(kit, outParts, /*draped=*/true);
+    (void)seed;
+    if (std::getenv("RT_DEPOT_DEBUG"))
+        std::printf("[depot] yard %.0f x %.0f at %.0f %.0f: %zu rows of %d bays x %d buses, shed %s\n", W, D, c.x, c.y, rows.size(), nBay, perBay,
+                    backShed ? "back" : endShed ? "end" : "none");
+    g.padMesh = std::move(m);
+    g.color = Vec3(1, 1, 1);
+    return true;
+}
+
 // A paved pad that FITS beneath a freeway deck: an asphalt lot with painted
 // stalls for a PARKING lot, or a concrete yard with equipment cabinets + a post
 // fence for a UTILITY lot. Draped on the terrain with a curb skirt so it never
@@ -3347,6 +3599,67 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 bigBoxCentres.push_back(centroid(foot));
             }
         }
+        // THE BUS DEPOT (Glenn, 2026-10-08: "There should probably be a dedicated bus depot they return to at end of
+        // day"): out at the edge of town, an industrial or commercial block -- 48 m and more across, near-flat -- may be
+        // the buses' yard: rows of bus bays, a maintenance shed at the back, a fence round it (sculptBusDepot). One in
+        // 1.8 km, so each town has its own; the citysim sends each route's buses to the nearest when service ends.
+        if ((bf.tag == DistrictTag::Industrial || bf.tag == DistrictTag::Commercial) && dbg->depotBlocks < 8 &&
+            !(lots.size() == 1 && (lots.front().wholeBlock || lots.front().bigBox))) {
+            const OBB2 fb = orientedBoundingBox(foot);
+            const Real shortS = 2 * std::min(fb.half[0], fb.half[1]), longS = 2 * std::max(fb.half[0], fb.half[1]);
+            const Real blockA = std::fabs(area(foot));
+            const Vec2 fc = centroid(foot);
+            Hash dRng(mix(bf.pp.seed, 0xB05D3B07u));
+            const char* why = nullptr;
+            if (shortS < 48 || longS < 60 || longS > 150 || shortS > 110) why = "size";
+            else if (blockA < 0.65 * shortS * longS) why = "shape";
+            else if (corenessAt(fc) > (bf.tag == DistrictTag::Industrial ? 0.45 : 0.25)) why = "central";
+            else if (padOnCarriageway(foot)) why = "road";
+            for (const Vec2& c : dbg->depotAt) if (!why && (c - fc).length() < 1800) why = "near another";
+            for (std::size_t i = 0; i < foot.size() && !why && nearFreeway; ++i) if (nearFreeway(foot[i])) why = "freeway";
+            for (const Vec2& v : foot) if (!why && !pointInPolygon(footBeforePush, v + (fc - v) * Real(0.02))) why = "pushed";
+            if (!why && p.ground) {   // near-flat: the yard is laid on the ground, not graded
+                Real lo = 1e30, hi = -1e30;
+                for (const Vec2& v : foot) { const Real g = p.ground(v.x, v.y); lo = std::min(lo, g); hi = std::max(hi, g); }
+                const Real g = p.ground(fc.x, fc.y); lo = std::min(lo, g); hi = std::max(hi, g);
+                if (hi - lo > 1.6) why = "slope";
+            }
+            if (!why && bf.tag == DistrictTag::Commercial && dRng.unit() < 0.5) why = "roll";
+            // its GATE on the long side with the most street along it
+            Vec2 front(0, 0);
+            if (!why) {
+                const Vec2 nrm = fb.axis[1 - fb.longAxis()];
+                const Real sgn = signedArea(foot) >= 0 ? Real(1) : Real(-1);
+                Real run[2] = {0, 0};
+                for (std::size_t i = 0; i < foot.size(); ++i) {
+                    const Vec2 a = foot[i], c = foot[(i + 1) % foot.size()];
+                    if (bf.pp.isFrontage && !bf.pp.isFrontage(a, c)) continue;
+                    const Vec2 d = c - a;
+                    const Real len = d.length();
+                    if (len < 1e-6) continue;
+                    const Real al = dot(Vec2(d.y, -d.x) * (sgn / len), nrm);
+                    if (al > 0.8) run[0] += len; else if (al < -0.8) run[1] += len;
+                }
+                if (std::max(run[0], run[1]) < 30) why = "frontage";
+                front = run[0] >= run[1] ? nrm : nrm * -1.0;
+            }
+            if (std::getenv("RT_DEPOT_DEBUG"))
+                std::printf("[depot?] %s at %.0f %.0f: %.0f x %.0f core %.2f -> %s\n", districtName(bf.tag), fc.x, fc.y, longS,
+                            shortS, corenessAt(fc), why ? why : "yes");
+            if (!why) {
+                Lot yard;
+                yard.footprint = foot;
+                yard.area = blockA;
+                yard.wholeBlock = true;
+                yard.depot = true;
+                yard.frontage = front;
+                yard.district = lots.empty() ? 0 : lots.front().district;
+                lots.clear();
+                lots.push_back(std::move(yard));
+                ++dbg->depotBlocks;
+                dbg->depotAt.push_back(fc);
+            }
+        }
         // THE UNIVERSITY CAMPUS (Glenn: "a university campus over blocks (library, classrooms, offices, dorms, quads,
         // sports fields)"): one a city, on a big, near-rectangular residential or commercial block between downtown
         // and the edge. Its halls stand in a strip along each long side -- teaching halls, the library, a residence
@@ -3985,7 +4298,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         const std::vector<int> placed =
             planLandmarks(lmc, p.center, p.innerRadius);
         for (std::size_t ci = 0; ci < cands.size(); ++ci)
-            cands[ci].landmark = cands[ci].lot.bigBox || cands[ci].lot.campus ? -1 : placed[ci];   // a big-box block keeps its store, a campus its halls
+            cands[ci].landmark = cands[ci].lot.bigBox || cands[ci].lot.campus || cands[ci].lot.depot ? -1 : placed[ci];   // a big-box block keeps its store, a campus its halls
     }
 
     // ---- PASS C: grow every lot (landmarks use their PLACED recipes) --------
@@ -4425,6 +4738,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 lot.bigBox && lot.mallWings ? architectMallWings(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.bigBox && lot.mall ? architectMall(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.bigBox ? architectBigBox(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
+                lot.depot ? architectBusDepot() :
                 lot.campus ? architectCampus(lot.campus, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.paseo ? architectPaseo(lot.paseo, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 cand.landmark >= 0
@@ -4501,6 +4815,27 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     sculptPaseo(b, b.pad, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts,
                                 p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0),
                                 [&](const Vec2& q) { return !clearOfRoads(q); }, passages);
+                } else if (rec.name == "bus_depot") {
+                    // THE BUS DEPOT's yard; a block that cannot hold a row of bays is a park after all
+                    if (sculptBusDepot(b, b.pad, lot.frontage, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts)) {
+                        // the yard is PAVED and levelled: flattened to its mean ground (which keeps the forest's trees
+                        // and the meadow off it); the drape lays the yard on that
+                        b.pavedLot = b.sealed.front();
+                        if (p.ground) {
+                            Real sum = 0;
+                            for (const Vec2& q : b.pavedLot) sum += p.ground(q.x, q.y);
+                            const Vec2 qc = centroid(b.pavedLot);
+                            sum += p.ground(qc.x, qc.y);
+                            b.groundY = sum / static_cast<Real>(b.pavedLot.size() + 1);
+                        }
+                        b.paveY = b.groundY;
+                    } else {
+                        b.type = "park";
+                        b.recipe = "park";
+                        --dbg->depotBlocks;
+                        sculptPark(b, b.pad, b.height, meshGround, mix(pp.seed, static_cast<uint32_t>(li) * 13u + 5u), outParts,
+                                   nullptr, p.groundMeshCell > 0.5 ? p.groundMeshCell : Real(3.0));
+                    }
                 } else if (rec.name == "campus_quad" || rec.name == "dorm_courtyard") {
                     // the halls round it are grown before it (the quad is the block's last lot): their quad doors
                     std::vector<std::pair<Vec2, Vec2>> hallDoors;

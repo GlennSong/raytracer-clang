@@ -1,6 +1,8 @@
 #include "city_render.h"
 #include "../../engine/interaction.h"           // Interactables: the outdoor seats (M5)
 #include "../../engine/procgen/furniture_library.h"
+#include "../../engine/procgen/city/shop_signs.h"    // busSignImages: the buses' destination signs
+#include "../../engine/text/font.h"
 
 #include "bus_stop_props.h"
 
@@ -254,6 +256,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busRoutes = c.busRoutes;
         params_.busStops = c.busStops;
         params_.buses = c.buses;
+        params_.busServiceStart = c.busServiceStart;
+        params_.busServiceEnd = c.busServiceEnd;
         params_.busMaxWalk = c.busMaxWalk;
         params_.physicalCars = c.physicalCars;
         params_.wander = c.wander;
@@ -591,6 +595,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             gi.portal = Vec2(gs.px, gs.pz);
             gi.out = Vec2(gs.ox, gs.oz);
             for (const auto& st : gs.stalls) gi.stalls.push_back({Vec2(st[0], st[1]), Vec2(st[2], st[3]), st[4]});
+            gi.buses = gs.buses;
             gins.push_back(std::move(gi));
         }
         sim_.setGarages(std::move(gins));
@@ -706,6 +711,18 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
     LOG_INFO << "[citysim] startup: setBuses " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE BUSES' DAY: with a depot to go back to, they run from busServiceStart to busServiceEnd and spend the night in
+    // its bays (Glenn: "a dedicated bus depot they return to at end of day"); without one, round the clock as before.
+    if (sim_.depotCount() > 0 && sim_.buses().routeCount() > 0) {
+        sim_.setBusService(params_.busServiceStart, params_.busServiceEnd);
+        int served = 0;
+        for (int r = 0; r < sim_.buses().routeCount(); ++r) served += sim_.depotOfRoute(r) >= 0 ? 1 : 0;
+        int parked = 0, bays = 0;
+        sim_.depotUse(parked, bays);
+        LOG_INFO << "[citysim] bus depots: " << sim_.depotCount() << " (" << bays << " bays), " << served << " of "
+                 << sim_.buses().routeCount() << " routes have one; service " << params_.busServiceStart << "-"
+                 << params_.busServiceEnd << " h";
+    }
     // The stops themselves, as something you can SEE: a pole, a route-coloured
     // sign and a bench (Glenn: "We should have stops with benches and signs for
     // bus stops so that we know where the route is"). The ground sampler goes
@@ -2175,6 +2192,9 @@ void CityRenderSystem::syncCarLamps(World& world) {
     if (head) head->transforms.clear();
     if (brake) brake->transforms.clear();
     if (turn) turn->transforms.clear();
+    for (Entity e : busSignGroups_)
+        if (InstanceGroup* sg = world.get<InstanceGroup>(e)) sg->transforms.clear();
+    busSignsDrawn_ = 0;
 
     const std::vector<Agent>& agents = sim_.agents();
 
@@ -2205,6 +2225,16 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // whose tail lights sit 2.3 m behind centre -- inside the saloon.
         const int v = drawSlotFor(static_cast<int>(ai));
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
+        // THE DESTINATION SIGN: the bus's line, or NOT IN SERVICE on its way in (same pose as the body)
+        if (v == busVariant_ && !busSignGroups_.empty()) {
+            const int row = busSignRowFor(static_cast<int>(ai));
+            if (InstanceGroup* sg = row >= 0 ? world.get<InstanceGroup>(busSignGroups_[static_cast<std::size_t>(row)]) : nullptr) {
+                const auto po = physPose_.find(static_cast<int>(ai));
+                sg->transforms.push_back((po != physPose_.end() ? po->second : agentPose(a)) * busSignLocal_);
+                ++busSignsDrawn_;
+                busSignAt_ = sg->transforms.back().transformPoint(Vec3(0, 0, 0));
+            }
+        }
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
 
@@ -2269,6 +2299,73 @@ void CityRenderSystem::syncCarLamps(World& world) {
     refreshBounds(head);
     refreshBounds(brake);
     refreshBounds(turn);
+    for (Entity e : busSignGroups_) refreshBounds(world.get<InstanceGroup>(e));
+}
+
+// The row a bus's sign shows: its line, or NOT IN SERVICE while it deadheads to the depot or stands off duty.
+int CityRenderSystem::busSignRowFor(int ai) const {
+    if (!sim_.busInService(ai)) return busSignOff_;
+    const int r = sim_.busRouteOf(ai);
+    return r >= 0 && r < static_cast<int>(busSignRow_.size()) ? busSignRow_[static_cast<std::size_t>(r)] : busSignOff_;
+}
+
+// THE DESTINATION SIGNS (Glenn, 2026-10-08: "Buses should probably show what line they are and whether they are in
+// service on an electric sign on front of the bus"). A label per route: its line's number (as the stop flags and the
+// HUD give it) and which way round the loop it runs -- CLOCKWISE / ANTICLOCKWISE as a map shows it (a loop has no
+// terminus to name), REGIONAL for the line between the towns, CIRCULAR for a loop run one way only -- and NOT IN
+// SERVICE. Amber LED dots on a black board across the top of the windscreen, lit (emissive) day and night.
+void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
+    busSignsTried_ = true;
+    const engine::Font* font = engine::signFont();
+    const citysim::BusNetwork& net = sim_.buses();
+    if (!font || !assets_ || busVariant_ < 0 || net.routeCount() <= 0) return;
+    std::vector<std::string> labels;
+    std::map<std::string, int> rowOf;
+    auto row = [&](const std::string& l) {
+        auto it = rowOf.find(l);
+        if (it != rowOf.end()) return it->second;
+        labels.push_back(l);
+        return rowOf[l] = static_cast<int>(labels.size()) - 1;
+    };
+    busSignRow_.assign(static_cast<std::size_t>(net.routeCount()), -1);
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const citysim::BusRoute& br = net.route(r);
+        Real a2 = 0;   // the loop's turn, from its stops (x east, z down the map)
+        for (std::size_t k = 0; k < br.stops.size(); ++k) {
+            const Vec2 p = br.stops[k].pos, q = br.stops[(k + 1) % br.stops.size()].pos;
+            a2 += p.x * q.y - q.x * p.y;
+        }
+        const std::string way = br.regional ? "REGIONAL" : br.twin < 0 ? "CIRCULAR" : a2 > 0 ? "CLOCKWISE" : "ANTICLOCKWISE";
+        busSignRow_[static_cast<std::size_t>(r)] = row(std::to_string(net.lineOf(r) + 1) + "|" + way);
+    }
+    busSignOff_ = row("NOT IN SERVICE");
+    engine::TextImage day, lit;
+    engine::busSignImages(*font, labels, day, lit);
+    const engine::TextureHandle dayTex = ctx.renderer.uploadTexture(day.w, day.h, 4, day.rgba.data());
+    const engine::TextureHandle litTex = ctx.renderer.uploadTexture(lit.w, lit.h, 4, lit.rgba.data());
+    for (int k = 0; k < static_cast<int>(labels.size()); ++k) {
+        InstanceGroup g;
+        g.mesh = assets_->acquireMesh(engine::busSignMesh(k, static_cast<int>(labels.size())), "city:bussign" + std::to_string(k));
+        g.material.albedo = Vec3(1, 1, 1);
+        g.material.roughness = 0.35f;
+        g.material.albedoMap = dayTex;
+        g.material.emissiveMap = litTex;
+        g.material.emission = Vec3(1, 1, 1) * 2.4;
+        g.material.flags |= engine::RenderMaterial::FLAG_TWO_SIDED;   // (the quad's winding faces in; seen from the saloon too)
+        g.renderLayer = engine::LayerSim;
+        g.drawClass = engine::DrawClass::Furniture;
+        const Entity e = ctx.world.create();
+        ctx.world.add<InstanceGroup>(e, g);
+        busSignGroups_.push_back(e);
+    }
+    // ON THE BUS: across the top of the windscreen, just proud of the glass (the face is at 0.4916 of the length there,
+    // vehicle_forms.lua's bus roofline), its middle at 0.90 of the height; the body is drawn centred
+    const std::vector<Vec3> he = carGroupHalfExtents();
+    const Vec3 h = busVariant_ < static_cast<int>(he.size()) ? he[static_cast<std::size_t>(busVariant_)] : Vec3(1.275, 1.6, 5.7);
+    busSignLocal_ = Mat4::translate(0, h.y * 2 * 0.90 - h.y, h.z * 2 * 0.4916 + 0.04);
+    std::string all;
+    for (const std::string& l : labels) all += (all.empty() ? "" : ", ") + l;
+    LOG_INFO << "[citysim] bus destination signs: " << labels.size() << " labels (" << all << ")";
 }
 
 // Bake the CITY-PLAN outlines (ADR-0066), on first show (syncGroups).
@@ -2470,6 +2567,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // arrived in -- and could make an ordinary car a parked bus).
             int v = sim_.ambientSlotFor(static_cast<int>(vi));
             if (v >= drawVariantCount()) v %= drawVariantCount();
+            if (sv.type == VehicleType::Bus && busVariant_ >= 0 && busVariant_ < drawVariantCount()) v = busVariant_;   // a bus parked in its depot
             if (!cars[v]) continue;
             // The ground sample is the per-frame cost the old one-shot bake
             // existed to avoid — but only a few dozen cars survive the cull, and
@@ -3341,6 +3439,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // The sim's own hour, for `daynight?` on the control channel: with a
     // staged cycle it must read the same as the sky's (one clock).
     ctx.settings.setDouble("citysim.hour", built_ ? sim_.clockHours() : -1.0);
+    if (built_ && !busSignsTried_ && busVariant_ >= 0 && sim_.buses().routeCount() > 0) makeBusSigns(ctx);
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
     // Semicolon flips the city-plan layer (blocks + lots) — and switches the
@@ -3394,6 +3493,66 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and
         // someone who works there is at work; `opensigns?` says how many
         if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.settings, ctx.view.camera.position);
+        // THE BUS DEPOTS: `depots?` -- in service or not, buses on the road / heading in / parked in a depot bay, and the
+        // depot nearest the camera
+        if (built_ && parkingTick_ % 30 == 0 && sim_.depotCount() > 0) {
+            int driving = 0, toDepot = 0, offDuty = 0, inBay = 0, buses = 0;
+            const auto& ag = sim_.agents();
+            for (std::size_t i = 0; i < ag.size(); ++i) {
+                if (!sim_.isBus(static_cast<int>(i))) continue;
+                ++buses;
+                if (ag[i].activity == Agent::Activity::Returning) ++toDepot;
+                else if (ag[i].activity == Agent::Activity::AtHome) ++offDuty;
+                else ++driving;
+            }
+            std::string stalled;   // buses heading in but standing still: who, where, which tier
+            for (std::size_t i = 0; i < ag.size(); ++i)
+                if (sim_.isBus(static_cast<int>(i)) && ag[i].activity == Agent::Activity::Returning && ag[i].speed < 0.2 && stalled.size() < 600) {
+                    char b2[96];
+                    std::snprintf(b2, sizeof(b2), " %zu@%.0f,%.0f%s%s", i, ag[i].pos.x, ag[i].pos.y, ag[i].far() ? "(far)" : "", ag[i].moving ? "" : "(rest)");
+                    stalled += b2;
+                }
+            {
+                char b3[160];
+                std::snprintf(b3, sizeof(b3), " [signs: %zu groups, %d drawn, last at %.1f %.1f %.1f]", busSignGroups_.size(), busSignsDrawn_,
+                              busSignAt_.x, busSignAt_.y, busSignAt_.z);
+                stalled += b3;
+            }
+            ctx.settings.setString("depots.stalled", stalled);
+            const Vec3 cam = ctx.view.camera.position;
+            Real bestD = 1e30;
+            Vec2 best(0, 0);
+            int bays = 0;
+            for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+                if (!b.busOnly) continue;
+                ++bays;
+                if (b.occupant >= 0 && b.occupant < static_cast<int>(ag.size()) && !ag[static_cast<std::size_t>(b.occupant)].moving) ++inBay;
+                const Real d = (b.pos - Vec2(cam.x, cam.z)).length();
+                if (d < bestD) { bestD = d; best = b.pos; }
+            }
+            // the nearest bus on the road: where it is, which way it faces, what its sign says
+            int nb = -1;
+            Real nbD = 1e30;
+            for (std::size_t i = 0; i < ag.size(); ++i) {
+                if (!sim_.isBus(static_cast<int>(i)) || ag[i].mode != Agent::Mode::Driver) continue;
+                const Real d = (ag[i].pos - Vec2(cam.x, cam.z)).length();
+                if (d < nbD) { nbD = d; nb = static_cast<int>(i); }
+            }
+            std::string sign = "-";
+            if (nb >= 0 && !busSignGroups_.empty()) {
+                const int row = busSignRowFor(nb);
+                sign = row == busSignOff_ ? "NOT IN SERVICE" : "line " + std::to_string(sim_.buses().lineOf(sim_.busRouteOf(nb)) + 1);
+            }
+            char buf[400];
+            std::snprintf(buf, sizeof(buf), "%s; %d buses: %d on route, %d heading in, %d off duty, %d parked in %d depot bays; nearest depot bay %.0f %.0f (%.0f m); nearest bus %d at %.1f %.1f %.1f heading %.2f %.2f speed %.1f sign %s",
+                          sim_.busesInService() ? "in service" : "out of service", buses, driving, toDepot, offDuty, inBay, bays,
+                          best.x, best.y, bestD, nb, nb >= 0 ? ag[static_cast<std::size_t>(nb)].pos.x : 0.0,
+                          nb >= 0 ? groundAt(ag[static_cast<std::size_t>(nb)].pos.x, ag[static_cast<std::size_t>(nb)].pos.y) : 0.0,
+                          nb >= 0 ? ag[static_cast<std::size_t>(nb)].pos.y : 0.0,
+                          nb >= 0 ? ag[static_cast<std::size_t>(nb)].heading.x : 0.0, nb >= 0 ? ag[static_cast<std::size_t>(nb)].heading.y : 0.0,
+                          nb >= 0 ? ag[static_cast<std::size_t>(nb)].speed : 0.0, sign.c_str());
+            ctx.settings.setString("depots.telemetry", buf);
+        }
         // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
         {
             const std::string pr = ctx.settings.getString("pin.request", "");

@@ -771,6 +771,9 @@ struct CitySimConfig {
     int busStops = 8;
     int buses = 0;
     float busMaxWalk = 120.0f;
+    // THE SERVICE DAY (hours): outside it the buses go back to their depot. Used only where the city has a depot
+    // (a bus depot lot); end <= start is around the clock.
+    float busServiceStart = 5.5f, busServiceEnd = 23.5f;
     // PHYSICAL TRAFFIC (R5): how many of the moving cars nearest the player are
     // handed to real Jolt vehicles that chase the sim's plan. 0 = none: every
     // car is drawn on the sim's own motion, which keeps its wheels on the road
@@ -843,7 +846,8 @@ struct CitySimConfig {
     std::vector<std::array<double, 5>> sitSpots;
     // THE PARKING GARAGES you can drive into (shape_grammar buildGarage): the portal on the street (x z, the way out)
     // and every stall -- x, z, face x, face z, the deck's height (world y).
-    struct GarageSpec { double px = 0, pz = 0, ox = 0, oz = 1; std::vector<std::array<double, 5>> stalls; };
+    // buses: a BUS DEPOT's bays (sculptBusDepot) -- only buses park there, and buses park nowhere else
+    struct GarageSpec { double px = 0, pz = 0, ox = 0, oz = 1; std::vector<std::array<double, 5>> stalls; bool buses = false; };
     std::vector<GarageSpec> garages;
 };
 
