@@ -576,6 +576,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_INFO << "[citysim] footpaths joined in " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tf0).count() << " s";
         LOG_INFO << "[citysim] footpaths: " << fr.links << " walk links over " << fr.nodes << " nodes, " << fr.tees
                  << " tees, " << fr.streetJoins << " ends joined to the streets, " << fr.unjoined << " ends with no street in reach";
+        // a paseo's shops: their doors are on its walks, not the street round the block (every shopper stood at the
+        // end of the paseo, by the restaurant there)
+        LOG_INFO << "[citysim] places entered from a walk: " << places_.snapToWalks(nav_);
     }
     sim_.setJunctionPad(sidewalk_);
     sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body

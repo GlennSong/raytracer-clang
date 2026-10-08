@@ -2121,6 +2121,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           const RoadGraph* roads, Real roadClearance,
                                           std::vector<RenderMesh>* outFlatParts,
                                           std::vector<TerrainFlatten>* outGrade) {
+    std::vector<Poly2> paseoGrades;   // the open-air malls' footprints, graded flat after PASS A
     // Mutable copy: after PASS A the ground sampler is wrapped with the block
     // grades (see the grading step below), so PASS B/C grow on terraced ground.
     LotParams p = pIn;
@@ -3392,6 +3393,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (std::getenv("RT_PASEO_DEBUG"))
                 std::printf("[paseo?] %.0f x %.0f core %.2f -> %s\n", 2 * L, 2 * W, core, ok ? "YES" : why);
             if (ok) {
+                // its footprint (the rows and the walk), graded to ONE level after the parcelling: on a sloping block
+                // the walk draped the slope while every building stood flat at its own height, and the paving rose
+                // over one end of each shop (Glenn: "the ground is raised up so some buildings are sunken")
+                Poly2 whole;
+                for (const Lot& l : mall) for (const Vec2& q : l.footprint) whole.push_back(q);
+                paseoGrades.push_back(convexHull(whole));
                 lots = std::move(mall);
                 ++dbg->paseoBlocks;
                 dbg->paseoAt.push_back(centroid(foot));
@@ -3805,6 +3812,34 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         }
     }
 
+    // ---- THE PASEOS, graded flat (one level for the walk and every shop on it), on top of the block grades ----
+    if (p.ground && !paseoGrades.empty()) {
+        auto flats = std::make_shared<std::vector<TerrainFlatten>>();
+        for (const Poly2& pg : paseoGrades) {
+            if (pg.size() < 3) continue;
+            // the level: the mean of the ground over it (a grid of samples inside)
+            const OBB2 ob = orientedBoundingBox(pg);
+            Real sum = 0;
+            int n = 0;
+            for (int i = 0; i <= 6; ++i)
+                for (int j = 0; j <= 4; ++j) {
+                    const Vec2 q = ob.center + ob.axis[0] * (ob.half[0] * (i / 3.0 - 1.0) * 0.9) +
+                                   ob.axis[1] * (ob.half[1] * (j / 2.0 - 1.0) * 0.9);
+                    if (!pointInPolygon(pg, q)) continue;
+                    sum += p.ground(q.x, q.y);
+                    ++n;
+                }
+            if (n == 0) continue;
+            std::vector<Vec3> poly;
+            for (const Vec2& v : pg) poly.push_back(Vec3(v.x, 0, v.y));
+            flats->push_back(makeFlattenPad(poly, sum / n, 5.0));
+        }
+        if (!flats->empty()) {
+            if (outGrade) outGrade->insert(outGrade->end(), flats->begin(), flats->end());
+            auto base = p.ground;
+            p.ground = [base, flats](Real x, Real z) { return applyFlatten(*flats, x, z, base(x, z)); };
+        }
+    }
     // ---- PASS B: the LANDMARK planner (architect, per hub cluster) ----------
     // Civic anchors are PLACED, never rolled: quotas filled by the best-
     // scoring eligible lot — biggest, and for the courthouse most central.

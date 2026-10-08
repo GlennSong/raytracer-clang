@@ -1970,6 +1970,7 @@ BuildingRecipe architectPaseo(int role, uint32_t seed) {
     p.awning = true;
     if (rng.unit() < 0.5) { p.window.head = OpeningStyle::Head::Round; p.window.hood = OpeningStyle::Hood::Arch; }
     p.curtainWall = false;
+    p.retailStreetOnly = false;   // shopfronts on the street behind it as well as on the paseo
     p.shopMix = 3;
     out.placeType = "shop";
     out.name = "paseo_shops";

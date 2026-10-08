@@ -3689,6 +3689,10 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
     };
     std::sort(order.begin(), order.end(),
               [&](std::size_t a, std::size_t b) { return elen(a) > elen(b); });
+    // A PASEO's shops (the mall mix on the ground) front the walk AND the street behind: their stair takes an END wall,
+    // shortest first -- on the long street wall it blanked every shopfront there
+    if (params.shopMix == 3 && params.groundRetail && !params.bigBox)
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return elen(a) < elen(b); });
     for (std::size_t e : order) {
         const Vec2 a = plan[e], b = plan[(e + 1) % plan.size()];
         const Real len = elen(e);

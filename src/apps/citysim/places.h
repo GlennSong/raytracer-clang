@@ -84,6 +84,7 @@ struct Place {
     Vec2 entrance;         // door on the pedestrian network (sidewalk point)
     int entranceLink = -1; // NavGraph link the entrance sits on (-1 = unsnapped)
     Real entranceT = 0;    // parameter along that link, [0,1]
+    Vec2 door;             // the real door it was snapped from (the site when none was given)
     // Light metadata (surface-level ⟨A6⟩). Hours are in-world 0..24; the default
     // window [0,24) is "always open". `capacity` 0 means unlimited.
     Real openHour = 0;
@@ -118,6 +119,10 @@ public:
     PlaceId add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
                 Real openHour = 0, Real closeHour = 24, int capacity = 0,
                 std::string name = {}, const Vec2* entranceHint = nullptr);
+    // THE WALKS, once they join the network (NavGraph::appendFootpaths): a place whose door stands beside a walk --
+    // a paseo's shop, its door on the walk, not the street -- but far from the street point it was snapped to, takes
+    // its entrance on the walk. Returns how many moved.
+    int snapToWalks(const engine::NavGraph& graph, Real reach = 4.0, Real farFromStreet = 6.0);
 
     int size() const { return static_cast<int>(places_.size()); }
     bool empty() const { return places_.empty(); }
