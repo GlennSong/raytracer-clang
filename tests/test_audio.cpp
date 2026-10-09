@@ -659,6 +659,24 @@ TEST_CASE(a_pavement_step_is_a_low_thud) {
     }
 }
 
+TEST_CASE(steps_off_the_pavement_are_low_too) {
+    // Glenn, 2026-10-09: "the mountain terrain still has that spindly walking noise (too high pitched)". Rock was
+    // centred at 5.8 kHz, grass 9.4, sand 8.2, snow 9.9. The CC0 Kenney footsteps on grass and snow (measured, not
+    // shipped) centre at 240-500 Hz; by this test's one-pole split they put 3-11% over 1.25 kHz (ours were ~90%).
+    // Gate: every natural ground under 15%.
+    const uint32_t rate = 48000;
+    for (sfx::Ground g : {sfx::Ground::Grass, sfx::Ground::Dirt, sfx::Ground::Sand, sfx::Ground::Rock, sfx::Ground::Snow}) {
+        for (uint32_t seed : {1u, 2u, 3u, 4u}) {
+            const auto f = sfx::footstep(g, rate, seed);
+            double hi = 0, total = 0, yh = 0;
+            const double ah = 1 - std::exp(-6.283185307 * 1250.0 / rate);
+            for (float x : f) { yh += ah * (x - yh); hi += (x - yh) * (x - yh); total += double(x) * x; }
+            std::printf("    [ground] %-5s seed %u  over 1.25 kHz %.1f%%\n", sfx::groundName(g), seed, 100 * hi / total);
+            CHECK(hi / total < 0.15);
+        }
+    }
+}
+
 TEST_CASE(a_drop_lands_heavier_and_lower_than_a_hop) {
     // #63's gate: "a 1 m hop and a 5 m drop sound different; landing on grass vs rock differs".
     const uint32_t rate = 48000;

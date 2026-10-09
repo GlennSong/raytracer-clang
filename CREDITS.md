@@ -53,6 +53,7 @@ Outside material used to tune the procedural output by measurement. None of it i
 | What | Used for | Author / source | Licence |
 |---|---|---|---|
 | "Impact Sounds" 1.0: footstep_concrete_000-004 | the spectrum and length of a shoe on pavement (`src/engine/audio/sfx_ground.cpp`, test `a_pavement_step_is_a_low_thud`), 2026-10-02 | Kenney, kenney.nl/assets/impact-sounds | CC0 1.0 |
+| "Impact Sounds" 1.0: footstep_grass_000-004, footstep_snow_000-004 | the spectrum and length of steps on grass and snow, the measure for every natural ground's step (`src/engine/audio/sfx_ground.cpp`, test `steps_off_the_pavement_are_low_too`), 2026-10-09; measured, not shipped | Kenney, kenney.nl/assets/impact-sounds | CC0 1.0 |
 | Four landscape reference photos (Alaska, Colorado aspens, Maroon Bells, Lauterbrunnen) | the realism colour palette (ADR-0102) | supplied by Glenn | his own reference; not distributed |
 
 ## Methods named in the code

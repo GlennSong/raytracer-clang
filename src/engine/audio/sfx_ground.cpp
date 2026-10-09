@@ -63,6 +63,8 @@ struct Recipe {
     // dull: a steep extra low-pass (Hz, three poles) on the click and texture -- a one-pole band leaks too much top
     // for a soft sole; the toe also gets its own share of the thump
     double dull = 0;
+    // grainDull: the same three-pole low-pass on the grains (Hz; 0 = none) -- grit under a boot, not glass beads
+    double grainDull = 0;
 };
 
 Recipe recipeFor(Ground g) {
@@ -86,11 +88,18 @@ Recipe recipeFor(Ground g) {
             r.toeDelay = 0.082; r.toeLevel = 0.8;
             r.thumpLevel = 0.45; r.thumpHz = 170; r.thumpDecay = 0.008;
             r.texLevel = 0.03; r.texLo = 500; r.texHi = 1600; r.texAttack = 0.003; r.texDecay = 0.012; break;
-        case Ground::Rock:      // a hard knock on stone, a little loose grit scattering
-            r.length = 0.24; r.clickLevel = 0.9; r.clickLo = 1500; r.clickHi = 8000; r.clickDecay = 0.0025;
-            r.ringLevel = 0.5; r.ringHz = 2300; r.ringHz2 = 3700; r.ringDecay = 0.004; r.toeDelay = 0.095; r.toeLevel = 0.5;
-            r.thumpLevel = 0.35; r.thumpHz = 120; r.thumpDecay = 0.02;
-            r.grainLevel = 0.22; r.grainRate = 300; r.grainSpan = 0.06; r.grainLo = 2500; r.grainHi = 9000; break;
+        // OFF THE PAVEMENT, TOO (Glenn, 2026-10-09: "the mountain terrain still has that spindly walking noise (too high
+        // pitched)"). The natural grounds were still the first by-ear recipes: rock centred at 5.8 kHz, grass 9.4, sand
+        // 8.2, snow 9.9 -- hiss and ticks. Measured against the same CC0 Kenney set (footstep_grass_000-004: centroid
+        // 245-425 Hz, 1-6% over 1.25 kHz, 16-39 ms; footstep_snow_000-004: 240-500 Hz, 1-5%, 100-140 ms): a step on
+        // anything is a low thud first, and the ground's character is in the low mids -- how long it lasts, how much
+        // it crunches -- not up in the treble. No rock or dirt recording in the set: rock is the concrete slap a little
+        // brighter with grit, dirt a darker, longer thud.
+        case Ground::Rock:      // a firm knock on stone, a little grit under the sole
+            r.length = 0.20; r.clickLevel = 0.9; r.clickLo = 300; r.clickHi = 2000; r.clickDecay = 0.005; r.dull = 2200;
+            r.toeDelay = 0.09; r.toeLevel = 0.75;
+            r.thumpLevel = 0.35; r.thumpHz = 150; r.thumpDecay = 0.02;
+            r.grainLevel = 0.20; r.grainRate = 220; r.grainSpan = 0.20; r.grainLo = 500; r.grainHi = 1700; r.grainDull = 1500; break;
         case Ground::Wood:      // a hollow knock
             r.length = 0.26; r.clickLevel = 0.6; r.clickLo = 800; r.clickHi = 5000; r.clickDecay = 0.003;
             r.ringLevel = 0.8; r.ringHz = 420; r.ringHz2 = 1050; r.ringDecay = 0.022; r.toeDelay = 0.1; r.toeLevel = 0.6;
@@ -99,26 +108,25 @@ Recipe recipeFor(Ground g) {
             r.length = 0.45; r.clickLevel = 0.8; r.clickLo = 2000; r.clickHi = 10000; r.clickDecay = 0.002;
             r.ringLevel = 0.6; r.ringHz = 1250; r.ringHz2 = 2890; r.ringDecay = 0.12; r.toeDelay = 0.1; r.toeLevel = 0.5;
             r.thumpLevel = 0.2; r.thumpHz = 240; r.thumpDecay = 0.1; break;
-        case Ground::Grass:     // a soft press and the swish of blades
-            r.length = 0.30; r.clickLevel = 0.10; r.clickLo = 400; r.clickHi = 2500; r.clickDecay = 0.006;
-            r.thumpLevel = 0.30; r.thumpHz = 70; r.thumpDecay = 0.045;
-            r.texLevel = 0.55; r.texLo = 1500; r.texHi = 6500; r.texAttack = 0.012; r.texDecay = 0.09;
-            r.grainLevel = 0.35; r.grainRate = 260; r.grainSpan = 0.16; r.grainLo = 2000; r.grainHi = 7000; break;
+        case Ground::Grass:     // a soft press, the blades brushed under the sole
+            r.length = 0.20; r.clickLevel = 0.30; r.clickLo = 150; r.clickHi = 900; r.clickDecay = 0.008; r.dull = 1300;
+            r.thumpLevel = 0.40; r.thumpHz = 95; r.thumpDecay = 0.03;
+            r.texLevel = 0.45; r.texLo = 350; r.texHi = 1800; r.texAttack = 0.010; r.texDecay = 0.045;
+            r.grainLevel = 0.10; r.grainRate = 200; r.grainSpan = 0.10; r.grainLo = 500; r.grainHi = 1800; r.grainDull = 1500; break;
         case Ground::Dirt:      // a dull thud and a crumble
-            r.length = 0.22; r.clickLevel = 0.25; r.clickLo = 250; r.clickHi = 1800; r.clickDecay = 0.006;
-            r.thumpLevel = 0.80; r.thumpHz = 75; r.thumpDecay = 0.05;
-            r.texLevel = 0.35; r.texLo = 300; r.texHi = 1800; r.texAttack = 0.004; r.texDecay = 0.06;
-            r.grainLevel = 0.20; r.grainRate = 180; r.grainSpan = 0.08; r.grainLo = 400; r.grainHi = 2500; break;
-        case Ground::Sand:      // a soft shush
-            r.length = 0.32; r.clickLevel = 0.05; r.clickLo = 300; r.clickHi = 2000; r.clickDecay = 0.008;
-            r.thumpLevel = 0.25; r.thumpHz = 60; r.thumpDecay = 0.05;
-            r.texLevel = 0.75; r.texLo = 1200; r.texHi = 4500; r.texAttack = 0.03; r.texDecay = 0.11;
-            r.grainLevel = 0.10; r.grainRate = 400; r.grainSpan = 0.18; r.grainLo = 1500; r.grainHi = 5000; break;
-        case Ground::Snow:      // the compressed crunch
-            r.length = 0.36; r.clickLevel = 0.05; r.clickLo = 500; r.clickHi = 3000; r.clickDecay = 0.008;
-            r.thumpLevel = 0.35; r.thumpHz = 65; r.thumpDecay = 0.06;
-            r.texLevel = 0.30; r.texLo = 800; r.texHi = 5000; r.texAttack = 0.02; r.texDecay = 0.12;
-            r.grainLevel = 0.95; r.grainRate = 1400; r.grainSpan = 0.24; r.grainLo = 900; r.grainHi = 6000; break;
+            r.length = 0.22; r.clickLevel = 0.30; r.clickLo = 100; r.clickHi = 700; r.clickDecay = 0.007; r.dull = 800;
+            r.thumpLevel = 0.80; r.thumpHz = 80; r.thumpDecay = 0.035;
+            r.texLevel = 0.30; r.texLo = 200; r.texHi = 1000; r.texAttack = 0.004; r.texDecay = 0.05;
+            r.grainLevel = 0.18; r.grainRate = 160; r.grainSpan = 0.09; r.grainLo = 300; r.grainHi = 1300; r.grainDull = 1200; break;
+        case Ground::Sand:      // a soft, sliding shush
+            r.length = 0.40; r.clickLevel = 0.10; r.clickLo = 100; r.clickHi = 600; r.clickDecay = 0.010; r.dull = 900;
+            r.thumpLevel = 0.30; r.thumpHz = 70; r.thumpDecay = 0.04;
+            r.texLevel = 0.75; r.texLo = 200; r.texHi = 1200; r.texAttack = 0.02; r.texDecay = 0.16; break;
+        case Ground::Snow:      // the compressed crunch, squeaking down through the pack
+            r.length = 0.30; r.clickLevel = 0.10; r.clickLo = 150; r.clickHi = 800; r.clickDecay = 0.008; r.dull = 1000;
+            r.thumpLevel = 0.40; r.thumpHz = 75; r.thumpDecay = 0.05;
+            r.texLevel = 0.15; r.texLo = 300; r.texHi = 1500; r.texAttack = 0.02; r.texDecay = 0.10;
+            r.grainLevel = 0.85; r.grainRate = 900; r.grainSpan = 0.13; r.grainLo = 250; r.grainHi = 1000; r.grainDull = 850; break;
         case Ground::Water:     // wading: the foot pushed through the water, a slosh and a few drops
             r.length = 0.34; r.clickLevel = 0.10; r.clickLo = 400; r.clickHi = 2500; r.clickDecay = 0.006;
             r.thumpLevel = 0.30; r.thumpHz = 90; r.thumpDecay = 0.05;
@@ -148,6 +156,9 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
     BandPass tex(r.texLo * pj, r.texHi * pj, rate);
     const double dullHz = r.dull > 0 ? r.dull * pj : rate;
     LowPass dc1(dullHz, rate), dc2(dullHz, rate), dc3(dullHz, rate), dt1(dullHz, rate), dt2(dullHz, rate), dt3(dullHz, rate);
+    const double grainDullHz = r.grainDull > 0 ? r.grainDull * pj : rate;
+    LowPass dg1(grainDullHz, rate), dg2(grainDullHz, rate), dg3(grainDullHz, rate);
+    LowPass ds1(dullHz, rate), ds2(dullHz, rate), ds3(dullHz, rate);   // the scrape, as dull as the click
     const double thumpHz = r.thumpHz * pj * thumpDrop;
     const double ringHz = r.ringHz * pj, ringHz2 = r.ringHz2 * pj;
     const double toeAt = r.toeDelay * toeDelayScale * jit(rng);
@@ -194,8 +205,12 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
         const double att = std::min(1.0, t / std::max(1e-4, r.texAttack));
         const double tn = r.dull > 0 ? dt3(dt2(dt1(tex(uni(rng))))) * 1.5 : tex(uni(rng));
         v += texBoost * r.texLevel * 3.0 * tn * att * std::exp(-t / (r.texDecay * scale));
-        v += r.grainLevel * 4.0 * grainBand(uni(rng)) * grainEnv[i];
-        if (scrape > 0) v += scrape * 2.5 * scrapeBand(uni(rng)) * std::min(1.0, t / 0.004) * std::exp(-t / 0.035);
+        const double gn = r.grainDull > 0 ? dg3(dg2(dg1(grainBand(uni(rng))))) * 2.0 : grainBand(uni(rng));
+        v += r.grainLevel * 4.0 * gn * grainEnv[i];
+        if (scrape > 0) {
+            const double sn = r.dull > 0 ? ds3(ds2(ds1(scrapeBand(uni(rng))))) * 2.2 : scrapeBand(uni(rng));
+            v += scrape * 2.5 * sn * std::min(1.0, t / 0.004) * std::exp(-t / 0.035);
+        }
         // fade the last 8 ms so no clip ends on a step
         const double tail = std::min(1.0, (static_cast<double>(count - i)) / (rate * 0.008));
         out[i] = static_cast<float>(std::tanh(1.4 * v) * tail);
@@ -285,15 +300,16 @@ std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate, uin
 }
 
 std::vector<float> grassRustle(uint32_t sampleRate, uint32_t seed) {
-    // Stems brushing the legs: bright band noise whose loudness flickers fast (each stem) under a slower
-    // sway (the stride), all periodic over the buffer.
+    // Stems brushing the legs: band noise whose loudness flickers fast (each stem) under a slower sway (the
+    // stride), all periodic over the buffer. A swish in the low mids (2026-10-09: it was 1.8-7.5 kHz, a hiss
+    // centred at 4 kHz under every step through a meadow -- the "spindly" sound off the pavement).
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 2.0);
     std::mt19937 rng(seed * 747796405u + 2891336453u);
     std::uniform_real_distribution<double> uni(-1.0, 1.0);
     std::vector<double> white(count);
     for (double& w : white) w = uni(rng);
-    const std::vector<double> band = circBand(white, rate, 1800.0, 7500.0);
+    const std::vector<double> band = circBand(circBand(white, rate, 450.0, 2800.0), rate, 450.0, 2800.0);
     std::vector<double> flickWhite(count);
     for (double& w : flickWhite) w = std::fabs(uni(rng));
     const std::vector<double> flicker = circBox(flickWhite, static_cast<int>(rate / 40.0));   // ~25 ms stems
