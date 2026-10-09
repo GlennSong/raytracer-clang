@@ -147,3 +147,40 @@ TEST_CASE(city_shape_grows_over_the_plain_not_up_the_range) {
     CHECK(line.size() > 3);
     CHECK(s.depthAt(line.back()) < 45.0);
 }
+
+TEST_CASE(a_shaped_city_meets_its_boulevard_in_junctions_not_stars) {
+    // Glenn, 2026-10-09: "some streets look like a mess... like there are many roads that merged together". A city
+    // laid by its land's depth (world.land.shape, the island's cities) lays its grid, its boulevard and rings, its
+    // spokes and its wedge streets separately; they used to MISS each other by a few metres -- a grid street short of
+    // the boulevard, a wedge street starting 20 m along it -- and collapseShortLinks chained those near-misses into
+    // stars (17 streets at one junction on island 8). Now the grid ends on the boulevard, the streets beyond start
+    // where it arrives, and a merge can't move a junction further than the link it removes is long.
+    // Measured when pinned: worst junction 6 streets, 1 pair leaving one under 15 degrees apart; before, 9 and 36.
+    Brief b = testBrief();
+    b.world = {{"base", {{"heightScale", 0.0}, {"mountainHeight", 0.0}}},
+               {"seaLevel", -50.0},
+               {"land", {{"shape", true}, {"area", 2.4e6}}}};
+    CityPlan plan = generatePlan(b);
+    CHECK(!plan.limits.empty());
+    if (plan.limits.empty()) return;
+    const RoadGraph& g = plan.streets;
+    std::vector<std::vector<Vec2>> out(g.nodes.size());   // per node: unit directions of its edges
+    for (const RoadEdge& e : g.edges) {
+        const Vec2 pa = g.nodes[static_cast<std::size_t>(e.a)].pos, pb = g.nodes[static_cast<std::size_t>(e.b)].pos;
+        const Vec2 d = pb - pa;
+        if (d.length() < 1e-9) continue;
+        out[static_cast<std::size_t>(e.a)].push_back(d * (1 / d.length()));
+        out[static_cast<std::size_t>(e.b)].push_back(d * (-1 / d.length()));
+    }
+    std::size_t worst = 0;
+    int tight = 0;
+    for (const auto& dirs : out) {
+        worst = std::max(worst, dirs.size());
+        for (std::size_t i = 0; i < dirs.size(); ++i)
+            for (std::size_t j = i + 1; j < dirs.size(); ++j)
+                if (dot(dirs[i], dirs[j]) > std::cos(15.0 * 3.14159265358979 / 180.0)) ++tight;
+    }
+    std::printf("    [shaped] %zu junction nodes, worst %zu streets at one, %d pairs under 15 degrees\n", g.nodes.size(), worst, tight);
+    CHECK(worst <= 6);
+    CHECK(tight <= 2);
+}
