@@ -190,6 +190,7 @@ struct GrassField {
     // it's mostly still city"): how tall the grass stands at (x, z), 0..1 of its authored height -- mown in the
     // city's blocks, wild outside. Empty: full height everywhere. A pure function too (worker threads).
     std::function<double(double x, double z)> height;
+    double bladeHeight = 0.5;   // the authored clump height (m), before `height` mows it: what a leg wades through
     std::vector<MeshHandle> clumps;                   // the clump variants
     RenderMaterial material;
     double spacing = 0.3;       // grid step inside nearRadius (m); 1.6x beyond

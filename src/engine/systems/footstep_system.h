@@ -19,8 +19,8 @@ struct TerrainLodConfig;
 // The player's feet, heard (#62 footsteps by surface, #63 jump and landing, #64 grass swish). Each fixed
 // step it asks physics whether the player stands, how fast it moves and on WHAT (the ground body's
 // surface tag; terrain asks the ground-cover map at the foot), feeds FootstepTracker, and plays the
-// procedural clip (sfx::footstep / jumpPush / landing) the tracker calls for at the feet. Walking
-// through grass holds a rustle loop whose loudness follows the grass field's density and the pace.
+// procedural clip (sfx::footstep / jumpPush / landing) the tracker calls for at the feet. A stride
+// through TALL grass adds a swish, as loud as the grass there is thick and knee-high; a mown lawn is silent.
 // Silent while the player is in a vehicle. All clips are synthesized at start (no sound files).
 class FootstepSystem : public System {
 public:
@@ -44,14 +44,13 @@ private:
     std::array<std::array<AudioClipHandle, kStepVariants>, kGrounds> steps_{};
     std::array<AudioClipHandle, kGrounds> jumps_{};
     std::array<std::array<AudioClipHandle, kLandLevels>, kGrounds> lands_{};
-    AudioClipHandle rustle_{};
+    std::array<AudioClipHandle, kStepVariants> swishes_{};
     // water (#43): a plunge, a stroke; wading uses sfx::Ground::Water steps
     std::array<AudioClipHandle, 3> splashes_{};   // stroke, wade in, plunge
     bool wasSwimming_ = false;
     double strokeTimer_ = 0.0;
     double fallBeforeWater_ = 0.0;
-    AudioVoiceHandle rustleVoice_{};
-    double rustleLevel_ = 0.0;
+    double swishLevel_ = 0.0;         // 0..1: how much tall grass the legs are wading through here
     FootstepTracker tracker_;
     std::mt19937 rng_{0x5eed};
     int lastVariant_ = -1;
@@ -59,7 +58,7 @@ private:
     bool haveLastFeet_ = false;
     uint8_t lastSurface_ = 0;         // the ground last stood on (a push-off happens as the feet leave it)
     sfx::Ground lastGround_ = sfx::Ground::Concrete;
-    // the ground under the standing foot, re-read ~10x a second for the rustle (#85)
+    // the ground under the standing foot, re-read ~10x a second for the swish (#85)
     double hereTimer_ = 0.0;
     sfx::Ground groundHere_ = sfx::Ground::Concrete;
     double slopeHere_ = 1.0;

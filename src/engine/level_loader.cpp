@@ -4876,6 +4876,7 @@ bool LevelLoader::load(const std::string& path,
                 GrassClumpParams cp;
                 cp.blades = gj.value("blades", cp.blades);
                 cp.height = gj.value("height", cp.height);
+                gf.bladeHeight = cp.height;
                 cp.width = gj.value("width", cp.width);
                 cp.radius = gj.value("clumpRadius", cp.radius);
                 cp.lean = gj.value("lean", cp.lean);

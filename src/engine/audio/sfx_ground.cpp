@@ -299,28 +299,51 @@ std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate, uin
                   1.0 - 0.45 * heavy, 1.2 + 0.8 * heavy, 1.0 + 0.3 * heavy, 0.25);
 }
 
-std::vector<float> grassRustle(uint32_t sampleRate, uint32_t seed) {
-    // Stems brushing the legs: band noise whose loudness flickers fast (each stem) under a slower sway (the
-    // stride), all periodic over the buffer. A swish in the low mids (2026-10-09: it was 1.8-7.5 kHz, a hiss
-    // centred at 4 kHz under every step through a meadow -- the "spindly" sound off the pavement).
+std::vector<float> grassSwish(uint32_t sampleRate, uint32_t seed) {
+    // One leg pushing through stems: a soft brush that swells as the shin meets the grass and dies away behind
+    // it, with the stems ticking off the leg one by one on top. A one-shot per stride, silent between strides
+    // (2026-10-09: it was a 2 s LOOP whose "flicker" averaged out to a steady noise -- once pulled down to the
+    // low mids, a constant roar under every walk across a lawn).
     const double rate = static_cast<double>(sampleRate);
-    const auto count = static_cast<size_t>(rate * 2.0);
+    const double len = 0.42;
+    const auto count = static_cast<size_t>(rate * len);
     std::mt19937 rng(seed * 747796405u + 2891336453u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
-    std::vector<double> white(count);
-    for (double& w : white) w = uni(rng);
-    const std::vector<double> band = circBand(circBand(white, rate, 450.0, 2800.0), rate, 450.0, 2800.0);
-    std::vector<double> flickWhite(count);
-    for (double& w : flickWhite) w = std::fabs(uni(rng));
-    const std::vector<double> flicker = circBox(flickWhite, static_cast<int>(rate / 40.0));   // ~25 ms stems
-    const std::vector<double> sway = circEnvelope(count, rng, 2, 5, 3);
-    std::vector<float> out(count);
+    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
+    // the brush: noise through a 600 Hz - 3.2 kHz band, two poles each side
+    const double hp = std::exp(-TWO_PI * 600.0 / rate), lp = std::exp(-TWO_PI * 3200.0 / rate);
+    double h1 = 0, h1x = 0, h2 = 0, h2x = 0, l1 = 0, l2 = 0;
+    const double rise = 0.11, peak = 0.13;
+    std::vector<double> out(count, 0.0);
     for (size_t i = 0; i < count; ++i) {
-        const double env = std::max(0.0, 0.55 + 0.35 * sway[i] / 2.0) * (0.3 + 1.7 * flicker[i]);
-        out[i] = static_cast<float>(std::tanh(0.5 * band[i] * env));
+        const double t = static_cast<double>(i) / rate;
+        const double x = uni(rng);
+        h1 = hp * (h1 + x - h1x); h1x = x;
+        h2 = hp * (h2 + h1 - h2x); h2x = h1;
+        l1 = (1 - lp) * h2 + lp * l1;
+        l2 = (1 - lp) * l1 + lp * l2;
+        const double env = t < rise ? std::pow(std::sin(0.5 * TWO_PI * 0.5 * t / rise), 2.0)
+                                    : std::exp(-(t - rise) / peak) * std::max(0.0, 1.0 - (t - rise) / (len - rise));
+        out[i] = 0.55 * l2 * env;
     }
-    normalizeTo(out, 0.7f);
-    return out;
+    // the stems: short ticks, densest at the swell's peak, each a few cycles of a damped 900-2600 Hz ring
+    const int ticks = 26;
+    for (int k = 0; k < ticks; ++k) {
+        const double at = std::clamp(rise + 0.09 * (u01(rng) + u01(rng) + u01(rng) - 1.5), 0.0, len - 0.03);
+        const double f = 900.0 + 1700.0 * u01(rng), a = (0.25 + 0.75 * u01(rng)) * (u01(rng) < 0.5 ? -1 : 1);
+        const auto i0 = static_cast<size_t>(at * rate);
+        const auto n = static_cast<size_t>(0.012 * rate);
+        for (size_t j = 0; j < n && i0 + j < count; ++j) {
+            const double tj = static_cast<double>(j) / rate;
+            out[i0 + j] += a * std::sin(TWO_PI * f * tj) * std::exp(-tj / 0.0025);
+        }
+    }
+    std::vector<float> f(count);
+    for (size_t i = 0; i < count; ++i) f[i] = static_cast<float>(std::tanh(out[i]));
+    // fade the last 20 ms so the tail never clicks off
+    const size_t fade = static_cast<size_t>(0.02 * rate);
+    for (size_t i = 0; i < fade && i < count; ++i) f[count - 1 - i] *= static_cast<float>(i) / fade;
+    normalizeTo(f, 0.7f);
+    return f;
 }
 
 std::vector<float> surf(uint32_t sampleRate, uint32_t seed) {

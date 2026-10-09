@@ -54,9 +54,11 @@ std::vector<float> jumpPush(Ground ground, uint32_t sampleRate = 48000, uint32_t
 // surface's texture, longer as it grows. The caller also scales volume by impact speed.
 std::vector<float> landing(Ground ground, double heavy, uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// One stride through tall grass (~0.4 s, a one-shot played with each step): the shin brushing the stems.
+std::vector<float> grassSwish(uint32_t sampleRate = 48000, uint32_t seed = 1);
+
 // Ambience LOOPS, seamless by construction (circular filtering, integer-cycle envelopes), for a
 // looping voice whose volume the caller drives:
-std::vector<float> grassRustle(uint32_t sampleRate = 48000, uint32_t seed = 1);   // walking through tall grass, ~2 s
 // Water lapping at a lake's edge: small irregular wavelets arriving every 1.5-3 s, ~12 s loop (lakes are still;
 // this is the quiet sound of their shore, not surf).
 std::vector<float> lap(uint32_t sampleRate = 48000, uint32_t seed = 1);

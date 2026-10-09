@@ -38,17 +38,15 @@ void FootstepSystem::onStart(FrameContext& ctx) {
         for (int l = 0; l < kLandLevels; ++l)
             lands_[g][l] = makeClip(ctx.audio, sfx::landing(ground, landHeavy[l], rate, 31u + 5u * l + 97u * g), rate);
     }
-    rustle_ = makeClip(ctx.audio, sfx::grassRustle(rate, 3), rate);
+    for (int v = 0; v < kStepVariants; ++v) swishes_[v] = makeClip(ctx.audio, sfx::grassSwish(rate, 3u + 29u * v), rate);
     const double splashStrength[3] = {0.12, 0.35, 1.0};
     for (int k = 0; k < 3; ++k) splashes_[k] = makeClip(ctx.audio, sfx::splash(splashStrength[k], rate, 5u + k), rate);
-    LOG_INFO << "[footsteps] " << kGrounds * (kStepVariants + 1 + kLandLevels) + 1 << " clips synthesized in "
+    LOG_INFO << "[footsteps] " << kGrounds * (kStepVariants + 1 + kLandLevels) + kStepVariants << " clips synthesized in "
              << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() << " ms";
 }
 
-void FootstepSystem::onStop(FrameContext& ctx) {
-    if (rustleVoice_.valid()) ctx.audio.stop(rustleVoice_);
-    rustleVoice_ = AudioVoiceHandle{};
-    rustleLevel_ = 0;
+void FootstepSystem::onStop(FrameContext&) {
+    swishLevel_ = 0;
 }
 
 double FootstepSystem::groundHeight(const TerrainLodConfig& cfg, double x, double z) {
@@ -83,19 +81,7 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
             if (!found && cc.characterId != INVALID_CHARACTER) { player = e; found = true; }
         });
     const Real dt = ctx.clock.fixedStep();
-    auto fadeRustle = [&](double target) {
-        const double k = 1.0 - std::exp(-dt / 0.15);
-        rustleLevel_ += (target - rustleLevel_) * k;
-        if (rustleLevel_ > 0.01 && !rustleVoice_.valid()) {
-            AudioPlayParams pp; pp.loop = true; pp.volume = 0.0f; pp.bus = AudioBus::Sfx;
-            rustleVoice_ = ctx.audio.play(rustle_, pp);
-        }
-        if (rustleVoice_.valid()) {
-            ctx.audio.setVoiceVolume(rustleVoice_, static_cast<float>(0.45 * rustleLevel_));
-            if (rustleLevel_ < 0.003) { ctx.audio.stop(rustleVoice_); rustleVoice_ = AudioVoiceHandle{}; }
-        }
-    };
-    if (!found || ctx.world.has<InVehicle>(player)) { fadeRustle(0.0); tracker_ = FootstepTracker{}; haveLastFeet_ = false; return; }
+    if (!found || ctx.world.has<InVehicle>(player)) { swishLevel_ = 0; tracker_ = FootstepTracker{}; haveLastFeet_ = false; return; }
     const Transform& t = *ctx.world.get<Transform>(player);
     const CharacterController& cc = *ctx.world.get<CharacterController>(player);
     PhysicsWorld& pw = physics_.physicsWorld();
@@ -130,7 +116,7 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
             AudioPlayParams pp; pp.bus = AudioBus::Sfx; pp.volume = 0.4f; pp.pitch = static_cast<float>(pitch(rng_));
             ctx.audio.playAt(splashes_[0], t.position, 18.0, pp);
         }
-        fadeRustle(0.0);
+        swishLevel_ = 0;
         tracker_ = FootstepTracker{};
         tracker_.grounded = false;   // leaving the water is a touch-down, not a jump
         return;
@@ -139,25 +125,28 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     fallBeforeWater_ = std::max(0.0, -v.y);
     const FootstepEvent ev = tracker_.update(onGround, horiz, v.y, dt, cc.halfHeight < 0.3);
 
-    // #64: tall grass brushing the legs, while walking through it -- only where the ground under the foot
-    // IS grass (or earth), and asking the grass field with the real slope: it thins grass on steep ground,
-    // and asked as if flat it called a rock face a meadow (#85)
-    double grassTarget = 0.0;
+    // #64: tall grass brushing the legs -- only where the ground under the foot IS grass (or earth), asking each
+    // grass field with the real slope (it thins grass on steep ground; asked as if flat it called a rock face a
+    // meadow, #85), and only grass that reaches the shin: the city's mown lawns (a 0.55 m meadow cut to 0.3 of
+    // that) and park lawns stay silent (2026-10-09, Glenn: "a constant low roar" walking on the city's grass)
     if (onGround && horiz > 0.3) {
         if ((hereTimer_ -= dt) <= 0) {
             hereTimer_ = 0.1;
             groundHere_ = groundAt(ctx.world, pw.bodySurface(pw.characterGroundBody(cc.characterId)), feet.x, feet.y, feet.z, &slopeHere_);
+            swishLevel_ = 0.0;
+            if (groundHere_ == sfx::Ground::Grass || groundHere_ == sfx::Ground::Dirt)
+                ctx.world.each<GrassField>([&](Entity, GrassField& g) {
+                    if (!g.density || !g.ground) return;
+                    const double tall = g.bladeHeight * (g.height ? g.height(feet.x, feet.z) : 1.0);
+                    const double reach = std::clamp((tall - 0.25) / 0.35, 0.0, 1.0);   // ankle-high: nothing; 0.6 m: all
+                    if (reach <= 0) return;
+                    const double d = std::clamp(g.density(feet.x, feet.z, g.ground(feet.x, feet.z), slopeHere_), 0.0, 1.0);
+                    swishLevel_ = std::max(swishLevel_, d * reach);
+                });
         }
-        if (groundHere_ == sfx::Ground::Grass || groundHere_ == sfx::Ground::Dirt)
-            ctx.world.each<GrassField>([&](Entity, GrassField& g) {
-                if (grassTarget > 0 || !g.density || !g.ground) return;
-                const double gy = g.ground(feet.x, feet.z);
-                grassTarget = std::clamp(g.density(feet.x, feet.z, gy, slopeHere_), 0.0, 1.0) * std::clamp(horiz / 2.5, 0.0, 1.2);
-            });
     } else {
         hereTimer_ = 0;
     }
-    fadeRustle(grassTarget);
 
     // what the foot is on: this tick's ground body; a push-off, the one it just left
     const PhysicsBodyId under = pw.characterGroundBody(cc.characterId);
@@ -212,12 +201,19 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
         default: return;
     }
     ctx.audio.playAt(clip, feet, 20.0, pp);
+    if (ev.kind == FootstepEvent::Kind::Step && swishLevel_ > 0.02) {
+        AudioPlayParams sp;
+        sp.bus = AudioBus::Sfx;
+        sp.pitch = static_cast<float>(std::uniform_real_distribution<double>(0.92, 1.08)(rng_));
+        sp.volume = static_cast<float>(0.4 * swishLevel_ * std::clamp(horiz / 2.5, 0.3, 1.2));
+        ctx.audio.playAt(swishes_[std::max(0, lastVariant_) % kStepVariants], feet + Vec3(0, 0.4, 0), 20.0, sp);
+    }
     static const bool log = std::getenv("RT_FOOTSTEP_LOG") != nullptr;   // RT_FOOTSTEP_LOG=1: every sound, and what it stood on
     if (log)
         LOG_INFO << "[footsteps] " << (ev.kind == FootstepEvent::Kind::Step ? "step" : ev.kind == FootstepEvent::Kind::Jump ? "jump" : "land")
                  << " on " << sfx::groundName(ground) << " (tag " << int(surface) << ") at (" << feet.x << ", " << feet.y << ", " << feet.z
                  << ") vol " << pp.volume << (ev.kind == FootstepEvent::Kind::Land ? " heavy " + std::to_string(ev.heavy) : std::string())
-                 << " grass " << rustleLevel_;
+                 << " grass " << swishLevel_;
 }
 
 }  // namespace engine

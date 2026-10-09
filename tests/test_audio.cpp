@@ -677,6 +677,31 @@ TEST_CASE(steps_off_the_pavement_are_low_too) {
     }
 }
 
+TEST_CASE(a_stride_through_grass_swishes_and_then_stops) {
+    // Glenn, 2026-10-09: walking on the city's grass was "a constant low roar" -- a 2 s rustle LOOP whose
+    // flicker averaged out to steady noise, played at full on mown lawns. Now one swish per stride: it swells,
+    // dies, and is silent well before the next step (a brisk walk is ~0.5 s a step); no low rumble in it.
+    const uint32_t rate = 48000;
+    for (uint32_t seed : {1u, 2u, 3u}) {
+        const auto f = sfx::grassSwish(rate, seed);
+        CHECK(!f.empty() && f.size() < rate / 2);
+        const size_t win = rate / 50;   // 20 ms windows
+        double loud = 0, tail = 0;
+        for (size_t i = 0; i + win <= f.size(); i += win) {
+            double e = 0;
+            for (size_t k = i; k < i + win; ++k) e += double(f[k]) * f[k];
+            loud = std::max(loud, e);
+            if (i + 2 * win > f.size()) tail = e;
+        }
+        double lo = 0, total = 0, yl = 0;
+        const double al = 1 - std::exp(-6.283185307 * 300.0 / rate);
+        for (float x : f) { yl += al * (x - yl); lo += yl * yl; total += double(x) * x; }
+        std::printf("    [swish] seed %u  peak/tail %.0fx  under 300 Hz %.1f%%\n", seed, loud / std::max(tail, 1e-12), 100 * lo / total);
+        CHECK(loud > 100 * tail);      // it ends
+        CHECK(lo / total < 0.10);      // a brush, not a rumble
+    }
+}
+
 TEST_CASE(a_drop_lands_heavier_and_lower_than_a_hop) {
     // #63's gate: "a 1 m hop and a 5 m drop sound different; landing on grass vs rock differs".
     const uint32_t rate = 48000;
@@ -698,7 +723,7 @@ TEST_CASE(ambience_loops_are_seamless_and_audible) {
         return std::fabs(f.front() - f.back()) <= maxStep * 1.5f + 1e-4f;
     };
     struct L { const char* name; std::vector<float> f; };
-    for (const L& l : {L{"grass_rustle", sfx::grassRustle(rate, 1)}, L{"surf", sfx::surf(rate, 1)}, L{"river", sfx::river(rate, 1)}}) {
+    for (const L& l : {L{"surf", sfx::surf(rate, 1)}, L{"river", sfx::river(rate, 1)}}) {
         CHECK(!l.f.empty());
         double energy = 0;
         for (float x : l.f) { CHECK(std::fabs(x) <= 1.0f); energy += std::fabs(x); }
