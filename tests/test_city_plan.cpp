@@ -155,7 +155,10 @@ TEST_CASE(a_shaped_city_meets_its_boulevard_in_junctions_not_stars) {
     // the boulevard, a wedge street starting 20 m along it -- and collapseShortLinks chained those near-misses into
     // stars (17 streets at one junction on island 8). Now the grid ends on the boulevard, the streets beyond start
     // where it arrives, and a merge can't move a junction further than the link it removes is long.
-    // Measured when pinned: worst junction 6 streets, 1 pair leaving one under 15 degrees apart; before, 9 and 36.
+    // Then the triangles (Glenn: "can you look at the small triangles?"): grid streets meeting the boulevard at a
+    // glance or as a corner just inside it, stubs left by the cuts, junctions 30-45 m apart on a contour (which the
+    // merge then kinked together), a contour loop too thin to hold a block.
+    // Measured: worst junction 4 streets, no pair leaving one under 15 degrees apart; before all this, 9 and 36.
     Brief b = testBrief();
     b.world = {{"base", {{"heightScale", 0.0}, {"mountainHeight", 0.0}}},
                {"seaLevel", -50.0},
@@ -181,6 +184,6 @@ TEST_CASE(a_shaped_city_meets_its_boulevard_in_junctions_not_stars) {
                 if (dot(dirs[i], dirs[j]) > std::cos(15.0 * 3.14159265358979 / 180.0)) ++tight;
     }
     std::printf("    [shaped] %zu junction nodes, worst %zu streets at one, %d pairs under 15 degrees\n", g.nodes.size(), worst, tight);
-    CHECK(worst <= 6);
-    CHECK(tight <= 2);
+    CHECK(worst <= 5);
+    CHECK(tight == 0);
 }

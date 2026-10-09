@@ -1199,6 +1199,17 @@ CityPlan generatePlan(const Brief& B) {
             for (const std::vector<Vec2>& c : shape.contour(level, 15.0, 250.0, smoothM)) {
                 Polyline pl; pl.klass = k; pl.width = w; pl.pts = c;
                 pl.closed = c.size() > 2 && (c.front() - c.back()).length() < 30.0;
+                // a LOOP too thin to hold a block (twice its area over its length, its mean width, under 80 m): a
+                // sliver of deep ground, and its two sides one street on top of the other -- not a boulevard
+                if (pl.closed) {
+                    Real area = 0, perim = 0;
+                    for (std::size_t i = 0; i < c.size(); ++i) {
+                        const Vec2 a2 = c[i], b2 = c[(i + 1) % c.size()];
+                        area += cross(a2, b2);
+                        perim += (b2 - a2).length();
+                    }
+                    if (std::fabs(area) / std::max(Real(1), perim) < 80.0) continue;
+                }
                 roads.push_back(pl);
                 lines.push_back(c);
                 if (pl.closed) lines.back().push_back(c.front());   // crossings test the closing segment too
@@ -1213,19 +1224,28 @@ CityPlan generatePlan(const Brief& B) {
             ringLines.push_back(contourRoads(levels.back(), RoadClass::Collector, B.collectorWidth));
         }
         // THE GRID MEETS THE RIM. A grid street running alongside the boulevard (inside its corridor, within ~37
-        // degrees of its line) is cut out there; every grid street that comes to the boulevard ENDS ON IT -- cut
-        // back to where it crosses, or carried on to it when it stopped short. Those ends are where the streets
-        // beyond start (below), so the grid carries on across the boulevard instead of missing it by 20 m.
+        // degrees of its line) is cut out there. A grid street that comes to the boulevard ENDS ON IT -- cut back
+        // to where it crosses, or carried on to it when it stopped short -- if it meets it squarely enough (40
+        // degrees or more). Any other end, a glancing meeting or a dead end, goes back to the street's last crossing
+        // with another grid street: a grid street meeting a curve at 25 degrees made a skewed junction with a sliver
+        // of block beside it, and a cut-off stub poked into the gap. The ends on the boulevard are where the streets
+        // beyond start (below), so the grid carries on across it instead of missing it by 20 m.
         const std::vector<std::vector<Vec2>>& rim = ringLines.front();
+        // JUNCTIONS ON A CONTOUR are one point or this far apart: collapseShortLinks merges junctions closer than
+        // (about) this along a road, and two of them 38 m apart on the boulevard came out as a street kinked into
+        // the other's node
+        const Real junctionGap = B.arterialWidth + 4 * B.sidewalk + 3.0;
         struct Arrival { Vec2 at; RoadClass klass; };
         std::vector<Arrival> gridEnds;
         std::vector<std::vector<Vec2>> gridLines;   // as laid, for the streets beyond to keep clear of
         {
-            const Real reachBack = 60.0, reachOn = 30.0;
+            const Real reachBack = 60.0, reachOn = 30.0, squarely = 0.64;   // sin 40 degrees
+            // alongside the boulevard: split there
+            struct Piece { std::vector<Vec2> pts; const Polyline* from; bool rim0 = false, rim1 = false; };
+            std::vector<Piece> pieces;
             for (const Polyline& g : grid) {
-                // alongside the boulevard: split there
                 const Real besideRim = B.arterialWidth / 2 + g.width / 2 + 2 * B.sidewalk;
-                std::vector<std::vector<Vec2>> pieces(1);
+                pieces.push_back({{}, &g});
                 for (std::size_t i = 0; i < g.pts.size(); ++i) {
                     const Vec2 dir = g.pts[std::min(i + 1, g.pts.size() - 1)] - g.pts[i > 0 && i + 1 == g.pts.size() ? i - 1 : i];
                     bool beside = false;
@@ -1237,34 +1257,107 @@ CityPlan generatePlan(const Brief& B) {
                         if (distToPolylineDir(g.pts[i], r, &rd, &past) < besideRim && !past && dir.length() > 1e-9 &&
                             std::fabs(cross(dir * (1 / dir.length()), rd)) < 0.6) { beside = true; break; }
                     }
-                    if (beside) { if (!pieces.back().empty()) pieces.emplace_back(); }
-                    else pieces.back().push_back(g.pts[i]);
+                    if (beside) { if (!pieces.back().pts.empty()) pieces.push_back({{}, &g}); }
+                    else pieces.back().pts.push_back(g.pts[i]);
                 }
-                for (std::vector<Vec2>& pts : pieces) {
-                    if (pts.size() < 2) continue;
-                    // each end: the nearest crossing of the boulevard within 60 m back along the street or 30 m on
-                    const Vec2 d0 = (pts[0] - pts[1]) * (1 / std::max(Real(1e-9), (pts[0] - pts[1]).length()));
-                    const Vec2 d1 = (pts.back() - pts[pts.size() - 2]) * (1 / std::max(Real(1e-9), (pts.back() - pts[pts.size() - 2]).length()));
-                    std::vector<Vec2> ext{pts[0] + d0 * reachOn};
-                    ext.insert(ext.end(), pts.begin(), pts.end());
-                    ext.push_back(pts.back() + d1 * reachOn);
-                    const Real total = roads::lanes::stations(ext).back();
-                    const auto xs = crossingsWith(ext, rim);
-                    Real s0 = reachOn, s1 = total - reachOn;
-                    bool hit0 = false, hit1 = false;
-                    for (const auto& [st, q] : xs)
-                        if (st <= reachOn + reachBack && st < total / 2 && (!hit0 || std::fabs(st - reachOn) < std::fabs(s0 - reachOn))) { s0 = st; hit0 = true; }
-                    for (const auto& [st, q] : xs)
-                        if (st >= total - reachOn - reachBack && st > total / 2 && (!hit1 || std::fabs(st - (total - reachOn)) < std::fabs(s1 - (total - reachOn)))) { s1 = st; hit1 = true; }
-                    if (s1 - s0 < 20.0) continue;
-                    Polyline cut = g;
-                    cut.pts = cutPolyline(ext, s0, s1);
-                    if (cut.pts.size() < 2) continue;
-                    if (hit0) gridEnds.push_back({cut.pts.front(), g.klass});
-                    if (hit1) gridEnds.push_back({cut.pts.back(), g.klass});
-                    gridLines.push_back(cut.pts);
-                    roads.push_back(cut);
+            }
+            // each end onto the boulevard: the nearest crossing within 60 m back along the street or 30 m on, met squarely
+            for (Piece& pc : pieces) {
+                std::vector<Vec2>& pts = pc.pts;
+                if (pts.size() < 2) continue;
+                const Vec2 d0 = (pts[0] - pts[1]) * (1 / std::max(Real(1e-9), (pts[0] - pts[1]).length()));
+                const Vec2 d1 = (pts.back() - pts[pts.size() - 2]) * (1 / std::max(Real(1e-9), (pts.back() - pts[pts.size() - 2]).length()));
+                std::vector<Vec2> ext{pts[0] + d0 * reachOn};
+                ext.insert(ext.end(), pts.begin(), pts.end());
+                ext.push_back(pts.back() + d1 * reachOn);
+                const Real total = roads::lanes::stations(ext).back();
+                auto square = [&](const Vec2& at, const Vec2& d) {
+                    Real best = 1e30;
+                    Vec2 rd(1, 0);
+                    for (const std::vector<Vec2>& r : rim) {
+                        Vec2 dd(1, 0);
+                        const Real dist = distToPolylineDir(at, r, &dd, nullptr);
+                        if (dist < best) { best = dist; rd = dd; }
+                    }
+                    return std::fabs(cross(d, rd)) >= squarely;
+                };
+                Real s0 = reachOn, s1 = total - reachOn;
+                for (const auto& [st, q] : crossingsWith(ext, rim))
+                    if (st <= reachOn + reachBack && st < total / 2 && (!pc.rim0 || std::fabs(st - reachOn) < std::fabs(s0 - reachOn))) { s0 = st; pc.rim0 = true; }
+                for (const auto& [st, q] : crossingsWith(ext, rim))
+                    if (st >= total - reachOn - reachBack && st > total / 2 && (!pc.rim1 || std::fabs(st - (total - reachOn)) < std::fabs(s1 - (total - reachOn)))) { s1 = st; pc.rim1 = true; }
+                std::vector<Vec2> cut = s1 - s0 >= 20.0 ? cutPolyline(ext, s0, s1) : std::vector<Vec2>{};
+                if (cut.size() >= 2) {
+                    pc.rim0 = pc.rim0 && square(cut.front(), d0);
+                    pc.rim1 = pc.rim1 && square(cut.back(), d1);
                 }
+                pts = cut;
+            }
+            // two grid streets meeting the boulevard closer than junctionGap -- or crossing each other within 1.6 of
+            // it of both their ends: a grid corner just inside the boulevard, a triangle of block between the three
+            // -- the less important one (a local before an avenue, then the less square) stops at its last crossing
+            {
+                struct End { std::size_t piece; bool last; Vec2 at; bool arterial; Real sq; };
+                std::vector<End> ends;
+                for (std::size_t i = 0; i < pieces.size(); ++i) {
+                    const Piece& pc = pieces[i];
+                    if (pc.pts.size() < 2) continue;
+                    for (bool last : {false, true}) {
+                        if (!(last ? pc.rim1 : pc.rim0)) continue;
+                        const Vec2 at = last ? pc.pts.back() : pc.pts.front();
+                        const Vec2 nb = last ? pc.pts[pc.pts.size() - 2] : pc.pts[1];
+                        Vec2 rd(1, 0), d = at - nb;
+                        Real best = 1e30;
+                        for (const std::vector<Vec2>& r : rim) { Vec2 dd(1, 0); const Real dist = distToPolylineDir(at, r, &dd, nullptr); if (dist < best) { best = dist; rd = dd; } }
+                        ends.push_back({i, last, at, pc.from->klass == RoadClass::Arterial, std::fabs(cross(d * (1 / std::max(Real(1e-9), d.length())), rd))});
+                    }
+                }
+                std::vector<char> gone(ends.size(), 0);
+                for (std::size_t a = 0; a < ends.size(); ++a)
+                    for (std::size_t b = a + 1; b < ends.size(); ++b) {
+                        if (gone[a] || gone[b] || ends[a].piece == ends[b].piece) continue;
+                        bool close = (ends[a].at - ends[b].at).length() < junctionGap;
+                        if (!close && (ends[a].at - ends[b].at).length() < 4 * junctionGap)
+                            for (const auto& [st, q] : crossingsWith(pieces[ends[a].piece].pts, {pieces[ends[b].piece].pts}))
+                                if ((q - ends[a].at).length() < 1.6 * junctionGap && (q - ends[b].at).length() < 1.6 * junctionGap) { close = true; break; }
+                        if (!close) continue;
+                        const bool loseA = ends[a].arterial != ends[b].arterial ? !ends[a].arterial : ends[a].sq < ends[b].sq;
+                        const End& l = ends[loseA ? a : b];
+                        gone[loseA ? a : b] = 1;
+                        (l.last ? pieces[l.piece].rim1 : pieces[l.piece].rim0) = false;
+                    }
+            }
+            // the other ends back to their last grid crossing -- against the pieces still standing, again until
+            // nothing moves (a piece cut back can leave another's crossing dangling)
+            for (int pass = 0; pass < 4; ++pass) {
+                bool moved = false;
+                std::vector<std::vector<Vec2>> standing;
+                std::vector<std::size_t> standingOf;
+                for (std::size_t i = 0; i < pieces.size(); ++i) if (pieces[i].pts.size() >= 2) { standing.push_back(pieces[i].pts); standingOf.push_back(i); }
+                for (std::size_t pi = 0; pi < pieces.size(); ++pi) {
+                    Piece& pc = pieces[pi];
+                    if (pc.pts.size() < 2 || (pc.rim0 && pc.rim1)) continue;
+                    std::vector<std::vector<Vec2>> others;
+                    for (std::size_t k = 0; k < standing.size(); ++k) if (standingOf[k] != pi) others.push_back(standing[k]);
+                    const Real total = roads::lanes::stations(pc.pts).back();
+                    Real lo = pc.rim0 ? 0 : 1e30, hi = pc.rim1 ? total : -1e30;
+                    for (const auto& [st, q] : crossingsWith(pc.pts, others)) {
+                        if (!pc.rim0) lo = std::min(lo, st);
+                        if (!pc.rim1) hi = std::max(hi, st);
+                    }
+                    if (lo > 0.5 || hi < total - 0.5) moved = true;
+                    pc.pts = hi - lo >= 20.0 ? cutPolyline(pc.pts, lo, hi) : std::vector<Vec2>{};
+                }
+                if (!moved) break;
+            }
+            for (const Piece& pc : pieces) {
+                if (pc.pts.size() < 2) continue;
+                if (pc.rim0) gridEnds.push_back({pc.pts.front(), pc.from->klass});
+                if (pc.rim1) gridEnds.push_back({pc.pts.back(), pc.from->klass});
+                Polyline cut = *pc.from;
+                cut.pts = pc.pts;
+                gridLines.push_back(cut.pts);
+                roads.push_back(cut);
             }
         }
         // A street going OUT from a contour: down the depth from `from` (on that contour), ending where it meets
@@ -1294,7 +1387,9 @@ CityPlan generatePlan(const Brief& B) {
             const int k = std::max(1, static_cast<int>(std::lround(st.back() / spokeSpacing)));
             for (int i = 0; i < k; ++i) {
                 RoadClass art = RoadClass::Arterial;
-                const Vec2 p = snapTo(roads::lanes::pointAt(r, st, st.back() * (i + 0.5) / k), gridEnds, 0.2 * spokeSpacing, &art);
+                const Vec2 at = roads::lanes::pointAt(r, st, st.back() * (i + 0.5) / k);
+                Vec2 p = snapTo(at, gridEnds, 0.2 * spokeSpacing, &art);   // carrying on an avenue,
+                if ((p - at).length() < 1e-9) p = snapTo(at, gridEnds, junctionGap, nullptr);   // or any street close by
                 Polyline sp; sp.klass = RoadClass::Arterial; sp.width = B.arterialWidth;
                 // to the last ring, crossing the ones between
                 sp.pts = descendDepth(shape, p, levels.back() - 8.0);
@@ -1318,7 +1413,7 @@ CityPlan generatePlan(const Brief& B) {
                 const std::vector<double> st = roads::lanes::stations(inner);
                 const Real stagger = (bi % 2) * 0.5 * B.wedgeStreetSpacing;
                 for (Real s0 = stagger + 0.5 * B.wedgeStreetSpacing; s0 < st.back(); s0 += B.wedgeStreetSpacing) {
-                    const Vec2 p = snapTo(roads::lanes::pointAt(inner, st, s0), arrivals, 0.42 * B.wedgeStreetSpacing, nullptr);
+                    const Vec2 p = snapTo(roads::lanes::pointAt(inner, st, s0), arrivals, std::max(0.42 * B.wedgeStreetSpacing, junctionGap), nullptr);
                     std::vector<Vec2> line = outward(p, bi);
                     if (line.size() < 2 || roads::lanes::stations(line).back() < 30.0) continue;
                     bool clash = false;
@@ -1327,12 +1422,17 @@ CityPlan generatePlan(const Brief& B) {
                             for (const Vec2& q : line) {
                                 // where it starts it meets what it carries on from: only further out is crowding
                                 if ((q - p).length() < keep) continue;
-                                if (distToPolyline(q, o, false) < keep) { clash = true; break; }
+                                // a spoke crosses every ring: a wedge street starting or ending beside that
+                                // crossing is the junction-gap problem again, so spokes are kept further off
+                                if (distToPolyline(q, o, false) < (set == &spokeLines ? std::max(keep, junctionGap) : keep)) { clash = true; break; }
                             }
                             if (clash) break;
                         }
                         if (clash) break;
                     }
+                    // ending on the next contour beside another's end (the lines converge toward an inlet): one
+                    // junction or none
+                    for (const Arrival& e : ends) if ((e.at - line.back()).length() < junctionGap) { clash = true; break; }
                     if (clash) continue;
                     Polyline ls; ls.klass = RoadClass::Local; ls.width = B.localWidth; ls.pts = line;
                     placed.push_back(line);
