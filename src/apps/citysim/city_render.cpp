@@ -3391,7 +3391,16 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
     Real nearD = 1e30;
     Vec3 nearAt, nearN;
     std::vector<uint16_t> hired;
-    sim_.staffOnShift(onShift_, places_.size(), &hired);
+    if (signedPlace_.size() != places_.size()) {   // once: which places have a sign (the rest need nobody counted)
+        signedPlace_.assign(places_.size(), 0);
+        world.each<engine::OpenSigns>([&](Entity, engine::OpenSigns& os) {
+            for (int ai : os.place) {
+                const PlaceId pid = ai >= 0 && ai < static_cast<int>(placeOfAuthored_.size()) ? placeOfAuthored_[static_cast<std::size_t>(ai)] : kNoPlace;
+                if (pid != kNoPlace && pid < static_cast<PlaceId>(signedPlace_.size())) signedPlace_[pid] = 1;
+            }
+        });
+    }
+    sim_.staffOnShift(onShift_, places_.size(), &hired, &signedPlace_);
     const Real clock = sim_.clockHours();
     int signs = 0, lit = 0, closed = 0, unstaffed = 0, noHire = 0;
     world.each<engine::OpenSigns, InstanceGroup>([&](Entity, engine::OpenSigns& os, InstanceGroup& g) {
