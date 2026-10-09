@@ -529,7 +529,8 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         }
                 };
                 auto counterAtBack = [&]() {
-                    if (F.place(1.8, 1.6, {2, 1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0, true);
+                    // 0.85 m off the wall: someone serves from behind it (its "till" spot, furniture_library.lua)
+                    if (F.place(1.8, 1.6, {2, 1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.85, true);
                 };
                 // BIG-BOX floors (Glenn, 2026-10-01): RUNS of a piece along x, `runN` bays to a run, a cross aisle
                 // between runs, `aisleZ` between rows -- long aisles you can walk down, not one solid field.

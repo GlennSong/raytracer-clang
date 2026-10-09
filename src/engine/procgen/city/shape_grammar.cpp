@@ -4965,7 +4965,22 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         appendToPart(out, rp.finish.part, rm.accent);   // brick, concrete or timber
         // FURNITURE (buildings M4b): every named room gets the kit's pieces, placed for instanced drawing.
         // the ceiling's underside: the next storey's floor slab is 0.25 m deep
+        const std::size_t firstPiece = out.furniture.size();
         emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25);
+        // which SHOP UNIT each new piece furnishes (the room it stands in): whose people sit and serve there
+        {
+            std::vector<int16_t> unitOf(rp.rooms.size(), -1);
+            for (std::size_t ri = 0; ri < rp.rooms.size(); ++ri)
+                if (rp.rooms[ri].kind == RoomKind::Shop && rp.rooms[ri].rect.size() >= 3 && out.units.size() < 30000) {
+                    unitOf[ri] = static_cast<int16_t>(out.units.size());
+                    out.units.push_back({rp.rooms[ri].rect, baseY + spk.y0});
+                }
+            for (std::size_t i = firstPiece; i < out.furniture.size(); ++i) {
+                const Vec2 at(out.furniture[i].xform.m[0][3], out.furniture[i].xform.m[2][3]);
+                for (std::size_t ri = 0; ri < rp.rooms.size(); ++ri)
+                    if (unitOf[ri] >= 0 && pointInPolygon(rp.rooms[ri].rect, at)) { out.furniture[i].unit = unitOf[ri]; break; }
+            }
+        }
     }
 
     // --- the core (M5): shaft walls with doors, the dog-leg flights and

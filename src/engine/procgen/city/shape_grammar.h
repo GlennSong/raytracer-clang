@@ -202,11 +202,20 @@ struct PlacedPiece {
     uint8_t piece = 0;
     uint32_t variant = 0;
     Mat4 xform;   // piece space -> world
+    int16_t unit = -1;   // the shop unit it furnishes (BuildingMesh::units), -1: the building's own rooms
+};
+
+// A SHOP UNIT's room as furnished (growInterior): the citysim finds the place whose site is inside it, so that shop's
+// own staff and customers are the people drawn on its pieces, not the building's.
+struct FurnishedUnit {
+    std::vector<Vec2> rect;   // world XZ
+    Real y0 = 0;              // its floor
 };
 
 struct BuildingMesh {
     std::vector<RenderMesh> parts;     // one per non-empty PartId, materialIndex set
     std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
+    std::vector<FurnishedUnit> units;     // the shop rooms among them (PlacedPiece::unit)
     std::vector<AttachPoint> attaches;
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;

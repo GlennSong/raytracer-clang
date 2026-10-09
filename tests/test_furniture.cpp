@@ -1157,3 +1157,51 @@ TEST_CASE(every_trade_is_furnished_as_its_trade) {
     CHECK(empty == 0);
     CHECK(noCounter == 0);
 }
+
+// SHOP STAFF (Glenn, 2026-10-09: "Ulu Coffee has the open sign lit up but nobody is there manning the restaurant" /
+// "Sora Sushi in the indoor mall is closed but two people are sitting in there"): a shop unit's people go on ITS
+// pieces only -- its staff behind the counter (the counter's staff side, -z), its customers on its chairs, never one
+// behind the counter -- and a closed unit next door with nobody in stays empty.
+TEST_CASE(shop_staff_stand_behind_their_own_counter_and_nobody_sits_in_a_closed_shop) {
+    UseShippedFurniture shipped;
+    const FurnitureLibrary& lib = FurnitureLibrary::global();
+    Interactables set;
+    auto add = [&](Piece pc, Real x, Real z, int unit) {
+        const Mat4 xf = Mat4::translate(x, 0, z);
+        set.pieces.push_back({static_cast<uint8_t>(pc), interactXform(lib.find(pc), xf, 0), 0, static_cast<int16_t>(unit)});
+    };
+    add(Piece::ShopCounter, 0, 0, 0);    // the cafe: a counter, two chairs
+    add(Piece::BistroChair, 0, 3, 0);
+    add(Piece::BistroChair, 1.2, 3, 0);
+    add(Piece::BarStool, 10, 3, 1);      // the sushi bar next door: two stools
+    add(Piece::BarStool, 10.6, 3, 1);
+    CHECK(set.pieces.size() == 5);
+    std::vector<uint8_t> cafe{0, 1, 0}, sushi{0, 0, 1};   // [unit + 1]
+    OccupantPlan open;
+    open.people = 3; open.staff = 2; open.units = &cafe; open.seed = 3;
+    const std::vector<Occupant> occ = planOccupants(set, lib, open);
+    int behind = 0, seated = 0, elsewhere = 0;
+    for (const Occupant& o : occ) {
+        const InteractPiece& ip = set.pieces[o.piece];
+        if (ip.unit != 0) ++elsewhere;
+        if (o.pose == Occupant::Pose::Stand && static_cast<Piece>(ip.piece) == Piece::ShopCounter && o.at.m[2][3] < 0) ++behind;
+        if (o.pose == Occupant::Pose::Sit && static_cast<Piece>(ip.piece) == Piece::BistroChair) ++seated;
+    }
+    std::printf("    [cafe] %zu placed: %d behind the counter, %d at the tables, %d in another unit\n", occ.size(), behind, seated, elsewhere);
+    CHECK(occ.size() == 3);
+    CHECK(behind == 2);
+    CHECK(seated == 1);
+    CHECK(elsewhere == 0);
+    // more staff than places behind the counter: the rest are out the back, not on the customers' chairs
+    OccupantPlan crew = open;
+    crew.people = 5; crew.staff = 5;
+    CHECK(planOccupants(set, lib, crew).size() == 2);
+    // customers only: on the chairs, never behind the counter
+    OccupantPlan custom = open;
+    custom.people = 4; custom.staff = 0;
+    for (const Occupant& o : planOccupants(set, lib, custom)) CHECK(o.pose == Occupant::Pose::Sit);
+    // the closed sushi bar with nobody in it: nobody drawn there
+    OccupantPlan shut;
+    shut.people = 0; shut.units = &sushi;
+    CHECK(planOccupants(set, lib, shut).empty());
+}

@@ -30,6 +30,10 @@ struct OccupantPlan {
     bool night = false;    // asleep: the beds first
     bool lecturer = false; // someone at the lectern when anyone is in (a class is on)
     uint32_t seed = 0;     // the building's own (its record index): the same seats each time
+    // only these pieces: `units[piece.unit + 1]` non-zero (InteractPiece::unit, -1 the building's own); null: all
+    const std::vector<uint8_t>* units = nullptr;
+    int staff = 0;         // of `people`, how many WORK there: they go to the staff places (a counter, the bar, the
+                           // pass) first, and nobody else does; staff with no place left are out the back
 };
 
 // `count` people on the free spots of `set` (spots already taken -- the player -- are left alone). Beds take the

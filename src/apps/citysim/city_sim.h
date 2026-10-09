@@ -511,7 +511,8 @@ public:
     // `placeCount`. `only` (by PlaceId, non-zero = wanted) limits the count to those places: a dormant worker's
     // schedule costs a snapshot, and the island's few hundred thousand of them took ~180 ms a call.
     void staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vector<uint16_t>* hired = nullptr,
-                      const std::vector<uint8_t>* only = nullptr) const;
+                      const std::vector<uint8_t>* only = nullptr, PlaceId watch = kNoPlace,
+                      std::vector<int>* watchers = nullptr) const;   // + who works at `watch` (opensigns? telemetry)
 
     // Tell the sim how fast its clock runs, BEFORE seeding it.
     //

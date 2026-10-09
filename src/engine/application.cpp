@@ -928,6 +928,14 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok staged (`pin?` for the count)";
     }
     if (cmd.name == "pin?") return "ok " + settingsStore.getString("pin.status", "none followed");
+    // `findplace <name...>`: where a named place is (a shop by its sign), its type, hours and who is in; `findplace?` reads it
+    if (cmd.name == "findplace") {
+        std::string q;
+        for (const std::string& w : cmd.args) q += (q.empty() ? "" : " ") + w;
+        settingsStore.setString("findplace.request", q);
+        return "ok";
+    }
+    if (cmd.name == "findplace?") return "ok " + settingsStore.getString("findplace.result", "none");
     // `who? <agent>`: stage a question about any agent; `who?` alone: the answer (refreshed every step)
     if (cmd.name == "who?") {
         if (!cmd.args.empty()) {
@@ -1355,7 +1363,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|opensigns?|depots?|activities?|who?|pin)";
+           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|opensigns?|findplace|findplace?|depots?|activities?|who?|pin)";
 }
 
 }  // namespace engine

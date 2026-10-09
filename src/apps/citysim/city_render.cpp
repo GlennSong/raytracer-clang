@@ -2952,45 +2952,96 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
     indoorDrawn_ = 0;
     const engine::CityBuildings* cb = nullptr;
     world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& c) { cb = &c; });
-    struct Inside { engine::Interactables* set; int building; PlaceId place; Vec2 door; int people = 0; };
+    // A SLOT: one place's people on its own pieces -- each shop unit's (its staff behind the counter, its customers at
+    // its tables), and the building's own (the flats, the offices) on the rest
+    struct Slot { PlaceId place; std::vector<uint8_t> units; Vec2 door; int people = 0, staff = 0; };
+    struct Inside { engine::Interactables* set; int building; std::vector<Slot> slots; };
     std::vector<Inside> inside;
     world.each<engine::Interactables>([&](Entity, engine::Interactables& set) {
         if (set.building < 0 || !cb || set.building >= static_cast<int>(cb->records.size())) return;
         auto it = buildingPlace_.find(set.building);
-        if (it == buildingPlace_.end()) {   // the place whose site is inside this building's plan
+        if (it == buildingPlace_.end()) {
+            // the places whose sites are inside this building's plan; each shop unit takes the one inside its room
+            // (two storeys of a mall over the same rooms: the lower unit the lower id, as they were exported)
             const engine::BuildingRecord& r = cb->records[static_cast<std::size_t>(set.building)];
-            PlaceId found = kNoPlace;
-            for (const Place& p : places_.places())
-                if (r.plan.size() >= 3 && engine::pointInPolygon(r.plan, p.site)) { found = p.id; break; }
-            it = buildingPlace_.emplace(set.building, found).first;
-            if (std::getenv("RT_CAMPUS_DEBUG"))
-            {
-                std::fprintf(stderr, "[indoors] building %d (%s, campus %d, %d floors, %zu plan pts, %zu pieces) -> place %d:", set.building,
-                             r.recipe.c_str(), r.params.campus, r.params.floors, r.plan.size(), set.pieces.size(), found == kNoPlace ? -1 : static_cast<int>(found));
-                std::map<int, int> hist;
-                for (const engine::InteractPiece& ip : set.pieces) ++hist[ip.piece];
-                for (const auto& kv : hist) std::fprintf(stderr, " %s x%d", engine::furniturePieceName(static_cast<engine::Piece>(kv.first)), kv.second);
-                double x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
-                for (const Vec2& q : r.plan) { x0 = std::min(x0, q.x); x1 = std::max(x1, q.x); z0 = std::min(z0, q.y); z1 = std::max(z1, q.y); }
-                std::fprintf(stderr, " | plan bbox %.1f x %.1f |", x1 - x0, z1 - z0);
-                for (const Vec2& q : r.plan) std::fprintf(stderr, " (%.2f, %.2f)", q.x, q.y);
-                std::fprintf(stderr, "\n");
+            std::vector<PlaceId> cand;
+            if (r.plan.size() >= 3)
+                for (const Place& p : places_.places())
+                    if (engine::pointInPolygon(r.plan, p.site)) cand.push_back(p.id);
+            BuildingPeople bp;
+            bp.unit.assign(set.units.size(), kNoPlace);
+            std::vector<std::size_t> order(set.units.size());
+            for (std::size_t u = 0; u < order.size(); ++u) order[u] = u;
+            std::stable_sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) { return set.units[x].y0 < set.units[y].y0; });
+            std::vector<uint8_t> claimed(cand.size(), 0);
+            for (std::size_t u : order)
+                for (std::size_t c = 0; c < cand.size(); ++c)
+                    if (!claimed[c] && set.units[u].rect.size() >= 3 && engine::pointInPolygon(set.units[u].rect, places_[cand[c]].site)) {
+                        bp.unit[u] = cand[c];
+                        claimed[c] = 1;
+                        break;
+                    }
+            for (std::size_t c = 0; c < cand.size() && bp.whole == kNoPlace; ++c)
+                if (!claimed[c]) bp.whole = cand[c];
+            it = buildingPlace_.emplace(set.building, std::move(bp)).first;
+            if (std::getenv("RT_CAMPUS_DEBUG")) {
+                int matched = 0;
+                for (PlaceId q : it->second.unit) matched += q != kNoPlace;
+                std::fprintf(stderr, "[indoors] building %d (%s, campus %d, %d floors, %zu pieces): place %d, %zu shop units (%d with a place), %zu places inside\n",
+                             set.building, r.recipe.c_str(), r.params.campus, r.params.floors, set.pieces.size(),
+                             it->second.whole == kNoPlace ? -1 : static_cast<int>(it->second.whole), set.units.size(), matched, cand.size());
+                for (std::size_t u = 0; u < set.units.size(); ++u) {
+                    const auto& rr = set.units[u].rect;
+                    Vec2 c(0, 0);
+                    for (const Vec2& q : rr) c = c + q * (1.0 / rr.size());
+                    const PlaceId q = it->second.unit[u];
+                    int pieces = 0;
+                    for (const engine::InteractPiece& ip : set.pieces) pieces += ip.unit == static_cast<int>(u);
+                    std::fprintf(stderr, "[indoors unit] building %d unit %zu at %.1f %.1f y %.1f (%.1f x %.1f), %d pieces: place %d %s\n", set.building, u, c.x, c.y,
+                                 set.units[u].y0, rr.size() > 2 ? (rr[1] - rr[0]).length() : 0.0, rr.size() > 3 ? (rr[3] - rr[0]).length() : 0.0, pieces,
+                                 q == kNoPlace ? -1 : static_cast<int>(q), q == kNoPlace ? "" : places_[q].name.c_str());
+                }
+                for (PlaceId q : cand) {
+                    bool got = false;
+                    for (PlaceId x : it->second.unit) got = got || x == q;
+                    if (!got) std::fprintf(stderr, "[indoors unit] building %d place %u \"%s\" (%s) site %.1f %.1f has no unit\n", set.building,
+                                           static_cast<unsigned>(q), places_[q].name.c_str(), placeTypeName(places_[q].type), places_[q].site.x, places_[q].site.y);
+                }
             }
         }
-        if (it->second == kNoPlace) return;
-        const Place& p = places_[it->second];
+        const BuildingPeople& bp = it->second;
         // the door an indoor agent rests at (CitySim::assignPlaces' doorOf)
-        inside.push_back({&set, set.building, it->second, p.entrance + (p.site - p.entrance) * 0.4});
+        auto restAt = [&](PlaceId q) { const Place& p = places_[q]; return p.entrance + (p.site - p.entrance) * 0.4; };
+        Inside in{&set, set.building, {}};
+        Slot whole{bp.whole, std::vector<uint8_t>(set.units.size() + 1, 0), Vec2(0, 0)};
+        whole.units[0] = 1;   // the building's own pieces, and any shop unit that found no place
+        for (std::size_t u = 0; u < bp.unit.size(); ++u) {
+            if (bp.unit[u] == kNoPlace) { whole.units[u + 1] = 1; continue; }
+            Slot s{bp.unit[u], std::vector<uint8_t>(set.units.size() + 1, 0), restAt(bp.unit[u])};
+            s.units[u + 1] = 1;
+            in.slots.push_back(std::move(s));
+        }
+        if (bp.whole != kNoPlace) { whole.door = restAt(bp.whole); in.slots.push_back(std::move(whole)); }
+        if (!in.slots.empty()) inside.push_back(std::move(in));
     });
-    // who is in: indoors, at rest, at that door
+    // who is in: indoors, at rest, at that place's door -- and of them, who works there and is at work
     // (the near list: interiors stream in round the player, and whoever rests inside one is near -- this was every
     // indoor agent in the city against every streamed building, once a second)
     if (!inside.empty())
         for (int ni : sim_.nearAgents()) {
             const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
             if (!a.indoors || a.moving) continue;
-            for (Inside& in : inside)
-                if ((a.pos - in.door).lengthSquared() < 0.25) { ++in.people; break; }
+            bool done = false;
+            for (Inside& in : inside) {
+                for (Slot& s : in.slots)
+                    if ((a.pos - s.door).lengthSquared() < 0.25) {
+                        ++s.people;
+                        s.staff += a.workPlace == s.place && a.activity == Agent::Activity::AtWork;
+                        done = true;
+                        break;
+                    }
+                if (done) break;
+            }
         }
     const engine::FurnitureLibrary& lib = engine::FurnitureLibrary::global();
     const Real h = sim_.clockHours();
@@ -3000,39 +3051,38 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
         held.resize(set.pieces.size(), 0);
         for (std::size_t i = 0; i < set.pieces.size(); ++i) set.pieces[i].taken &= ~held[i];   // ours back first
         std::fill(held.begin(), held.end(), 0u);
-        engine::OccupantPlan plan;
-        plan.people = in.people;
-        plan.night = (h >= 22.5 || h < 6.5) && places_[in.place].type == PlaceType::Home;   // asleep at home, not at work
-        plan.lecturer = cb->records[static_cast<std::size_t>(in.building)].params.campus == 1 && in.people > 0 && !plan.night;
-        plan.seed = static_cast<uint32_t>(in.building);
-        const std::vector<engine::Occupant> occ = engine::planOccupants(set, lib, plan);
-        for (const engine::Occupant& o : occ) {
-            set.pieces[o.piece].taken |= o.spots;
-            held[o.piece] |= o.spots;
-            (o.pose == engine::Occupant::Pose::Sit ? sit : body)->transforms.push_back(o.at);
-            ++indoorDrawn_;
-        }
-        if (std::getenv("RT_CAMPUS_DEBUG")) {
-            const Place& p = places_[in.place];
-            int lie = 0, stand = 0, lecterns = 0;
-            for (const engine::InteractPiece& ip : set.pieces) lecterns += ip.piece == static_cast<uint8_t>(engine::Piece::Lectern);
-            for (const engine::Occupant& o : occ) { lie += o.pose == engine::Occupant::Pose::Lie; stand += o.pose == engine::Occupant::Pose::Stand; }
-            std::fprintf(stderr, "[indoors] %.2f h building %d (%s campus %d at %.0f %.0f): %d inside, %zu placed (%d lying, %d standing) on %zu pieces, %d lecterns\n",
-                         h, in.building, placeTypeName(p.type), p.campus, p.site.x, p.site.y, in.people, occ.size(), lie, stand, set.pieces.size(), lecterns);
-            // a place to stand and look at the first of each pose: in front of the body, eye height, looking back
-            bool done[3] = {false, false, false};
+        for (Slot& s : in.slots) {
+            engine::OccupantPlan plan;
+            plan.people = s.people;
+            plan.staff = s.staff;
+            plan.units = &s.units;
+            plan.night = (h >= 22.5 || h < 6.5) && places_[s.place].type == PlaceType::Home;   // asleep at home, not at work
+            plan.lecturer = cb->records[static_cast<std::size_t>(in.building)].params.campus == 1 && s.people > 0 && !plan.night;
+            plan.seed = static_cast<uint32_t>(in.building);
+            const std::vector<engine::Occupant> occ = engine::planOccupants(set, lib, plan);
             for (const engine::Occupant& o : occ) {
-                const int k = static_cast<int>(o.pose);
-                if (done[k]) continue;
-                done[k] = true;
-                const Vec3 at(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
-                Vec3 f = engine::pieceDir(o.at, o.pose == engine::Occupant::Pose::Lie ? Vec3(1, 0, 0) : Vec3(0, 0, 1));
-                f.y = 0;
-                f = normalize(f);
-                const Vec3 eye = at + f * 2.2;
-                const double yaw = std::atan2(-f.x, f.z) * 57.29577951308232;   // camera? convention: atan2(fwd.x, -fwd.z)
-                std::fprintf(stderr, "[indoors view] building %d pose %d at %.2f %.2f %.2f look from %.2f %.2f %.2f yaw %.1f\n",
-                             in.building, k, at.x, at.y, at.z, eye.x, eye.y, eye.z, yaw);
+                set.pieces[o.piece].taken |= o.spots;
+                held[o.piece] |= o.spots;
+                (o.pose == engine::Occupant::Pose::Sit ? sit : body)->transforms.push_back(o.at);
+                ++indoorDrawn_;
+            }
+            if (std::getenv("RT_CAMPUS_DEBUG") && s.people > 0) {
+                const Place& p = places_[s.place];
+                int lie = 0, stand = 0;
+                for (const engine::Occupant& o : occ) { lie += o.pose == engine::Occupant::Pose::Lie; stand += o.pose == engine::Occupant::Pose::Stand; }
+                std::fprintf(stderr, "[indoors] %.2f h building %d place %u (%s \"%s\" at %.0f %.0f): %d inside (%d staff), %zu placed (%d lying, %d standing)\n",
+                             h, in.building, static_cast<unsigned>(s.place), placeTypeName(p.type), p.name.c_str(), p.site.x, p.site.y,
+                             s.people, s.staff, occ.size(), lie, stand);
+                for (const engine::Occupant& o : occ)   // where to stand and look at them: 3 m in front, looking back
+                    if (o.pose == engine::Occupant::Pose::Stand) {
+                        const Vec3 at(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
+                        const Vec3 f = normalize(Vec3(o.at.m[0][2], 0, o.at.m[2][2]));
+                        const Vec3 eye = at + f * 3.0 + Vec3(0, 0.75, 0);
+                        std::fprintf(stderr, "[indoors view] place %u staff at %.2f %.2f %.2f camera %.2f %.2f %.2f -12 %.1f\n",
+                                     static_cast<unsigned>(s.place), at.x, at.y, at.z, eye.x, eye.y, eye.z,
+                                     std::atan2(-f.x, f.z) * 57.29577951308232);
+                        break;
+                    }
             }
         }
     }
@@ -3400,7 +3450,9 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
             }
         });
     }
-    sim_.staffOnShift(onShift_, places_.size(), &hired, &signedPlace_);
+    std::vector<int> staff;
+    sim_.staffOnShift(onShift_, places_.size(), &hired, &signedPlace_, signWatch_, &staff);
+    PlaceId nearPid = kNoPlace;
     const Real clock = sim_.clockHours();
     int signs = 0, lit = 0, closed = 0, unstaffed = 0, noHire = 0;
     world.each<engine::OpenSigns, InstanceGroup>([&](Entity, engine::OpenSigns& os, InstanceGroup& g) {
@@ -3422,7 +3474,7 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
             if (os.lit[k] != v) { os.lit[k] = v; changed = true; }
             if (on) {
                 const Vec3 at(os.at[k].m[0][3], os.at[k].m[1][3], os.at[k].m[2][3]);
-                if ((at - cam).length() < nearD) { nearD = (at - cam).length(); nearAt = at; nearN = Vec3(os.at[k].m[0][2], 0, os.at[k].m[2][2]); }
+                if ((at - cam).length() < nearD) { nearD = (at - cam).length(); nearAt = at; nearN = Vec3(os.at[k].m[0][2], 0, os.at[k].m[2][2]); nearPid = pid; }
             }
         }
         if (!changed) return;
@@ -3434,10 +3486,34 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
             else if (dark) dark->transforms.push_back(os.at[k]);
         }
     });
+    // the nearest lit sign's place and its staff (as of the last deal): where each one is and whether the sim has them
+    // at work -- the answer to "the sign is lit but nobody's in there"
+    std::string who;
+    if (signWatch_ != kNoPlace && signWatch_ < places_.size()) {
+        const Place& wp = places_[signWatch_];
+        int drawnFor = 0;   // stepIndoors' buildings that draw THIS place's people
+        for (const auto& kv : buildingPlace_) {
+            drawnFor += kv.second.whole == signWatch_;
+            for (PlaceId q : kv.second.unit) drawnFor += q == signWatch_;
+        }
+        char h[256];
+        std::snprintf(h, sizeof(h), " | place %u %s \"%s\" door %.1f %.1f, %d streamed buildings draw its people; staff:",
+                      static_cast<unsigned>(signWatch_), placeTypeName(wp.type), wp.name.c_str(), wp.door.x, wp.door.y, drawnFor);
+        who = h;
+        const Vec2 restAt = wp.entrance + (wp.site - wp.entrance) * 0.4;
+        for (int ai : staff) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
+            char b[160];
+            std::snprintf(b, sizeof(b), " %d[tier %d act %d%s%s at %.0f %.0f, %.1f m from rest]", ai, static_cast<int>(a.tier),
+                          static_cast<int>(a.activity), a.indoors ? " in" : "", a.moving ? " moving" : "", a.pos.x, a.pos.y, (a.pos - restAt).length());
+            if (who.size() < 1500) who += b;
+        }
+    }
+    signWatch_ = nearPid;
     char buf[256];
     std::snprintf(buf, sizeof(buf), "nearest lit %.1f %.1f %.1f facing %.2f %.2f (%.0f m); %d OPEN signs: %d lit, %d closed for the night, %d open but nobody on shift (%d with nobody hired) (%.2f h)",
                   nearAt.x, nearAt.y, nearAt.z, nearN.x, nearN.z, nearD < 1e29 ? nearD : -1.0, signs, lit, closed, unstaffed, noHire, clock);
-    settings.setString("opensigns.telemetry", buf);
+    settings.setString("opensigns.telemetry", buf + who);
 }
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
@@ -3563,6 +3639,32 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
             ctx.settings.setString("depots.telemetry", buf);
         }
         // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
+        // `findplace <name>`: the places whose name contains it -- where, what, open now, and who is in at its door
+        {
+            const std::string fq = ctx.settings.getString("findplace.request", "");
+            if (!fq.empty()) {
+                ctx.settings.setString("findplace.request", "");
+                std::string res;
+                const Real h = sim_.clockHours();
+                for (const Place& p : places_.places()) {
+                    if (p.name.find(fq) == std::string::npos || res.size() > 1200) continue;
+                    const Vec2 rest = p.entrance + (p.site - p.entrance) * 0.4;
+                    int in = 0, staff = 0;
+                    for (int ni : sim_.nearAgents()) {
+                        const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
+                        if (!a.indoors || a.moving || (a.pos - rest).lengthSquared() >= 0.25) continue;
+                        ++in;
+                        staff += a.workPlace == p.id && a.activity == Agent::Activity::AtWork;
+                    }
+                    char b[256];
+                    std::snprintf(b, sizeof(b), "%s%u %s \"%s\" site %.1f %.1f door %.1f %.1f %s (%.1f-%.1f h), %d in (%d staff; near only)",
+                                  res.empty() ? "" : "; ", static_cast<unsigned>(p.id), placeTypeName(p.type), p.name.c_str(), p.site.x, p.site.y,
+                                  p.door.x, p.door.y, p.openAt(h) ? "open" : "closed", p.openHour, p.closeHour, in, staff);
+                    res += b;
+                }
+                ctx.settings.setString("findplace.result", res.empty() ? "no place named like that" : res);
+            }
+        }
         {
             const std::string pr = ctx.settings.getString("pin.request", "");
             if (!pr.empty()) {

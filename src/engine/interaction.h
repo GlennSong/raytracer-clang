@@ -16,6 +16,7 @@
 // within reach and, on it, the primary verb (tap) and the secondary verb (hold) still free.
 
 #include "../rt_math.h"
+#include "procgen/city/polygon.h"   // Vec2 (a shop unit's room)
 #include "procgen/furniture_library.h"
 #include "world.h"
 #include <cstdint>
@@ -28,11 +29,18 @@ struct InteractPiece {
     uint8_t piece = 0;   // Piece
     Mat4 xform;          // piece space -> world
     uint32_t taken = 0;  // spots in use (bit i = the library entry's spot i)
+    int16_t unit = -1;   // the shop unit it furnishes (Interactables::units), -1: the building's own
+};
+
+struct InteractUnit {
+    std::vector<Vec2> rect;   // world XZ
+    Real y0 = 0;
 };
 
 struct Interactables {
     std::vector<InteractPiece> pieces;
     int building = -1;   // a streamed interior's CityBuildings record index; -1 = the outdoor cells
+    std::vector<InteractUnit> units;   // its shop units (a shop's people go on its own pieces)
     Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // world bounds of the pieces' origins (the cheap first test)
     void refreshBounds();
 };

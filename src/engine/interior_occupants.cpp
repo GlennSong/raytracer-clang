@@ -78,9 +78,28 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
         return (v.spots & (set.pieces[pi].taken | held[pi])) == 0;
     };
 
+    auto inUnit = [&](uint32_t pi) {
+        const int k = set.pieces[pi].unit + 1;
+        return !plan.units || (k >= 0 && k < static_cast<int>(plan.units->size()) && (*plan.units)[static_cast<std::size_t>(k)]);
+    };
+    // THE STAFF, behind their counters
+    int staffPlaced = 0;
+    if (plan.staff > 0)
+        for (uint32_t pi = 0; pi < set.pieces.size() && staffPlaced < plan.staff; ++pi) {
+            if (!inUnit(pi)) continue;
+            const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[pi].piece));
+            if (!a || !hasTag(*a, "staff")) continue;
+            for (int vi = 0; vi < static_cast<int>(a->verbs.size()) && staffPlaced < plan.staff; ++vi)
+                if (a->verbs[static_cast<std::size_t>(vi)].verb == Verb::Stand && freeNow(pi, a->verbs[static_cast<std::size_t>(vi)])) {
+                    take(pi, vi, Occupant::Pose::Stand);
+                    ++staffPlaced;
+                }
+        }
+    const int people = plan.people - std::min(plan.people, plan.staff) + staffPlaced;   // staff out the back aren't drawn
     // THE LECTURER, while anyone is in.
     if (plan.lecturer) {
-        for (uint32_t pi = 0; pi < set.pieces.size() && static_cast<int>(out.size()) < plan.people; ++pi) {
+        for (uint32_t pi = 0; pi < set.pieces.size() && static_cast<int>(out.size()) < people; ++pi) {
+            if (!inUnit(pi)) continue;
             const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[pi].piece));
             if (!a || !hasTag(*a, "lecture")) continue;
             for (int vi = 0; vi < static_cast<int>(a->verbs.size()); ++vi)
@@ -88,15 +107,17 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
                     take(pi, vi, Occupant::Pose::Stand);
                     break;
                 }
-            if (!out.empty()) break;
+            if (static_cast<int>(out.size()) > staffPlaced) break;
         }
     }
 
     // Every use a body could make of the set, by kind.
     std::vector<Use> beds, seats;
     for (uint32_t pi = 0; pi < set.pieces.size(); ++pi) {
+        if (!inUnit(pi)) continue;
         const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[pi].piece));
         if (!a || a->family == "fixture") continue;   // nobody is drawn sitting on the toilet
+        if (hasTag(*a, "staff")) continue;            // nor a customer behind the counter
         uint32_t pieceDraw = mix(plan.seed * 0x9E3779B9u + pi * 0x85EBCA6Bu);
         // a class on: the lecture hall's rows fill before the classrooms' chairs
         pieceDraw = plan.lecturer && hasTag(*a, "lecture") ? pieceDraw >> 1 : (pieceDraw >> 1) | 0x80000000u;
@@ -114,7 +135,7 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
 
     if (plan.night)
         for (const Use& u : beds) {
-            if (static_cast<int>(out.size()) >= plan.people) break;
+            if (static_cast<int>(out.size()) >= people) break;
             const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[u.piece].piece));
             if (freeNow(u.piece, a->verbs[static_cast<std::size_t>(u.verb)])) take(u.piece, u.verb, Occupant::Pose::Lie);
         }
@@ -122,7 +143,7 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
     // the front reads as a pattern, not a class.
     for (int pass = 0; pass < 2; ++pass)
         for (const Use& u : seats) {
-            if (static_cast<int>(out.size()) >= plan.people) break;
+            if (static_cast<int>(out.size()) >= people) break;
             if (pass == 0 && mix(u.order ^ (plan.seed + 0x51u)) % 5u == 0u) continue;
             const FurnitureAsset* a = lib.find(static_cast<Piece>(set.pieces[u.piece].piece));
             const FurnVerb& v = a->verbs[static_cast<std::size_t>(u.verb)];

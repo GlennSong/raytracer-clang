@@ -355,7 +355,8 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         Interactables set;
         for (const PlacedPiece& pp : bm.furniture)
             if (lib.interactive(static_cast<Piece>(pp.piece)))
-                set.pieces.push_back({pp.piece, interactXform(lib.find(static_cast<Piece>(pp.piece)), pp.xform, pp.variant), 0});
+                set.pieces.push_back({pp.piece, interactXform(lib.find(static_cast<Piece>(pp.piece)), pp.xform, pp.variant), 0, pp.unit});
+        for (const FurnishedUnit& u : bm.units) set.units.push_back({u.rect, u.y0});
         if (!set.pieces.empty()) {
             set.building = static_cast<int>(key);   // whose people sit here (the citysim's indoor occupants)
             set.refreshBounds();

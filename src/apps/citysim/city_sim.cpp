@@ -1757,11 +1757,13 @@ CitySim::Snapshot CitySim::scheduleSnapshot(const Agent& a, Real clock) const {
 }
 
 void CitySim::staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vector<uint16_t>* hired,
-                           const std::vector<uint8_t>* only) const {
+                           const std::vector<uint8_t>* only, PlaceId watch, std::vector<int>* watchers) const {
     out.assign(static_cast<std::size_t>(std::max(0, placeCount)), 0);
     if (hired) hired->assign(out.size(), 0);
+    if (watchers) watchers->clear();
     for (const Agent& a : agents_) {
         if (a.workPlace == kNoPlace || a.workPlace >= static_cast<PlaceId>(std::max(0, placeCount))) continue;
+        if (watchers && a.workPlace == watch) watchers->push_back(static_cast<int>(&a - agents_.data()));
         if (only && (a.workPlace >= static_cast<PlaceId>(only->size()) || !(*only)[a.workPlace])) continue;
         if (hired && (*hired)[a.workPlace] < 0xFFFF) ++(*hired)[a.workPlace];
         const bool there = a.tier == Agent::Tier::D ? scheduleSnapshot(a, clockHours_).where == Snapshot::Where::AtWork

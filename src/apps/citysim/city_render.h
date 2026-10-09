@@ -532,7 +532,10 @@ private:
     engine::Entity indoorSitGroup_, indoorBodyGroup_;
     void stepIndoors(engine::World& world, Real dt);
     Real indoorAcc_ = 1.0;
-    std::unordered_map<int, PlaceId> buildingPlace_;        // record index -> its place (kNoPlace: none)
+    // record index -> whose people are drawn inside: the building's own place (kNoPlace: none) and each furnished shop
+    // unit's (Interactables::units; kNoPlace: no place found -- its pieces go with the building's)
+    struct BuildingPeople { PlaceId whole = kNoPlace; std::vector<PlaceId> unit; };
+    std::unordered_map<int, BuildingPeople> buildingPlace_;
     std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
     std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches, the lawns (CitySimConfig)
@@ -541,6 +544,7 @@ private:
     // THE OPEN SIGNS: each authored place's PlaceId (kNoPlace: skipped), and who is on shift where (dealOpenSigns)
     std::vector<PlaceId> placeOfAuthored_;
     std::vector<uint16_t> onShift_;
+    PlaceId signWatch_ = kNoPlace;       // the nearest lit sign's place: opensigns? lists its staff
     std::vector<uint8_t> signedPlace_;   // places with an OPEN sign (by PlaceId): the only ones staffOnShift counts
     void dealOpenSigns(engine::World& world, engine::Settings& settings, engine::Vec3 cam);
     int parkingTick_ = 0;   // (parking? telemetry every 60 frames)   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)

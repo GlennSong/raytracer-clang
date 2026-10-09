@@ -200,6 +200,39 @@ furniture_library = {
   aisle_step = { family = "fixture", tags = { "lecture", "stair" } },
   -- the sports field's stand: three tiers of four seats, each its own place to sit (built in a loop, below)
   bleacher = { family = "seating", tags = { "outdoor", "sports" }, spots = {}, verbs = {} },
+  -- STAFF PLACES (the people who work there, behind what they serve across; Glenn, 2026-10-09: "Ulu Coffee has the
+  -- open sign lit up but nobody is there manning the restaurant"). Family "counter", tag "staff": the occupants plan
+  -- puts a place's staff here first and never its customers. Each faces +z, the customer; staff stand at -z.
+  shop_counter = {   -- (furniture.cpp sets it 0.85 m off the back wall: the server's aisle)
+    family = "counter", tags = { "shop", "staff" },
+    spots = { { id = "till", at = { 0.40, 0, -0.42 } }, { id = "side", at = { -0.45, 0, -0.42 } } },
+    verbs = {
+      { verb = "stand", label = "stand behind the counter", spots = { "till" }, eye = { 0.40, 1.62, -0.42 }, look = { 0, -0.2, 1 }, exit = { 0.40, 0, -0.42 } },
+      { verb = "stand", label = "stand behind the counter", spots = { "side" }, eye = { -0.45, 1.62, -0.42 }, look = { 0, -0.2, 1 }, exit = { -0.45, 0, -0.42 } },
+    },
+  },
+  bar_counter = {    -- (the bartender's 0.95 m aisle between it and the back bar)
+    family = "counter", tags = { "bar", "staff" },
+    spots = { { id = "l", at = { -0.45, 0, -0.45 } }, { id = "r", at = { 0.45, 0, -0.45 } } },
+    verbs = {
+      { verb = "stand", label = "stand behind the bar", spots = { "l" }, eye = { -0.45, 1.62, -0.45 }, look = { 0, -0.2, 1 }, exit = { -0.45, 0, -0.45 } },
+      { verb = "stand", label = "stand behind the bar", spots = { "r" }, eye = { 0.45, 1.62, -0.45 }, look = { 0, -0.2, 1 }, exit = { 0.45, 0, -0.45 } },
+    },
+  },
+  kitchen_pass = {   -- (the cooks' 1.1 m aisle between it and the line)
+    family = "counter", tags = { "restaurant", "staff" },
+    spots = { { id = "l", at = { -0.6, 0, -0.55 } }, { id = "r", at = { 0.6, 0, -0.55 } } },
+    verbs = {
+      { verb = "stand", label = "stand at the pass", spots = { "l" }, eye = { -0.6, 1.62, -0.55 }, look = { 0, -0.2, 1 }, exit = { -0.6, 0, -0.55 } },
+      { verb = "stand", label = "stand at the pass", spots = { "r" }, eye = { 0.6, 1.62, -0.55 }, look = { 0, -0.2, 1 }, exit = { 0.6, 0, -0.55 } },
+    },
+  },
+  checkout = {       -- the cashier beside the register, facing across the belt (-x)
+    family = "counter", tags = { "shop", "staff" },
+    spots = { { id = "cashier", at = { 0.80, 0, 2.30 } } },
+    verbs = { { verb = "stand", label = "work the till", spots = { "cashier" }, eye = { 0.80, 1.62, 2.30 },
+                look = { -1, -0.2, 0 }, exit = { 0.80, 0, 2.30 } } },
+  },
   -- the lecturer's place: behind it, between it and the board, facing the hall
   lectern = {
     family = "fixture", tags = { "lecture" },
