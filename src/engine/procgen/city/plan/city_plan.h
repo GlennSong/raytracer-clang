@@ -140,6 +140,15 @@ struct PlanScore {
     // built. Pairs that share a junction are not counted — that is what a junction is.
     int corridorOverlaps = 0;
     Real worstOverlap = 0;             // deepest intrusion (m)
+    // STREETS THAT MERGE INTO A MESS (2026-10-09, Glenn: "many roads that merged together"). The corridor test
+    // above counts only roads sharing a line; these catch the rest -- a street ending inside another's roadway
+    // without joining it, a junction that collected half a dozen streets, two streets leaving one a few degrees
+    // apart. Streets only, measured on the graph that is handed to the builder.
+    int worstJunction = 0;             // most streets at one junction
+    int crowdedJunctions = 0;          // junctions of 5 or more streets
+    int tightTurns = 0;                // pairs of streets leaving a junction under 15 degrees apart
+    Real pavedOverlapM = 0;            // roadway inside another road's roadway, away from where the two meet (m)
+    std::vector<Vec2> messAt;          // the worst places (most overlap, then the most crowded junctions), up to 5
     int commutesSampled = 0;
     Real freewayCommuteShare = 0;      // of sampled outskirts->downtown commutes routed on the freeway
     Real streetKm = 0, freewayKm = 0;

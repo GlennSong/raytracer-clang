@@ -130,9 +130,10 @@ int main(int argc, char** argv) {
             std::ofstream(outDir + "/" + bj["name"].get<std::string>() + ".brief.json") << bj.dump(2) << "\n";
             const Brief b = briefFromJson(bj);
             CityPlan plan = generatePlan(b);
+            PlanScore sc;
             {
                 // what its town-limit sign says: people, from its planned buildings (a rough 6 a building)
-                const PlanScore sc = evaluatePlan(plan);
+                sc = evaluatePlan(plan);
                 const int pop = sc.predictedBuildings * 6;
                 const int unit = pop > 10000 ? 1000 : pop > 1000 ? 100 : 10;
                 w.sites[k].population = (pop + unit / 2) / unit * unit;
@@ -185,6 +186,11 @@ int main(int argc, char** argv) {
                         w.sites[k].name.c_str(), b.name.c_str(), w.sites[k].kind.c_str(), b.center.x, b.center.y, b.size, plan.blocks.size(), km[0], km[1], km[2], km[3],
                         !plan.ringArc.empty() ? ", ring a C on the coast" : !plan.ring.empty() ? ", closed ring" : "",
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+            // and how cleanly its streets meet (PlanScore: merged streets), with where to look when they don't
+            std::printf("%-18s   streets meet: %4.0f m paved into another, worst junction %d streets (%d of 5+), %d pairs under 15 deg%s",
+                        "", sc.pavedOverlapM, sc.worstJunction, sc.crowdedJunctions, sc.tightTurns, sc.messAt.empty() ? "" : "; look at");
+            for (const engine::Vec2& at : sc.messAt) std::printf(" (%.0f, %.0f)", at.x, at.y);
+            std::printf("\n");
         }
         if (!cityLimits.empty()) {
             engine::routeFreewayRoundCities(w, cityLimits);
@@ -492,10 +498,12 @@ int main(int argc, char** argv) {
         { std::ofstream o(stem + ".json"); o << planToJson(plan, s).dump(1) << "\n"; }
         { std::ofstream o(stem + ".svg"); o << planToSvg(plan, s); }
         std::printf("%-20s blocks %4d (lots %4d, landmark %3d, park %3d, freeway %3d)  buildings ~%5d  "
-                    "rectilinear %3.0f%% (core+mid %3.0f%%, grid %3.0f%%)  freeway commutes %3.0f%%  streets %.1f km  pieces %d  overlaps %d\n",
+                    "rectilinear %3.0f%% (core+mid %3.0f%%, grid %3.0f%%)  freeway commutes %3.0f%%  streets %.1f km  pieces %d  overlaps %d  "
+                    "paved into another %.0f m  worst junction %d  under 15 deg %d\n",
                     b.name.c_str(), s.blocks, s.lotBlocks, s.landmarkBlocks, s.parkBlocks, s.rowBlocks, s.predictedBuildings,
                     100 * s.rectilinearShare, 100 * s.coreRectilinearShare, 100 * s.gridRectilinearShare,
-                    100 * s.freewayCommuteShare, s.streetKm, s.streetComponents, s.corridorOverlaps);
+                    100 * s.freewayCommuteShare, s.streetKm, s.streetComponents, s.corridorOverlaps,
+                    s.pavedOverlapM, s.worstJunction, s.tightTurns);
         if (inkscape) {
             const std::string cmd = "inkscape '" + stem + ".svg' --export-type=png --export-filename='" + stem +
                                     ".png' --export-width=1800 >/dev/null 2>&1";

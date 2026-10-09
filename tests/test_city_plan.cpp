@@ -165,25 +165,25 @@ TEST_CASE(a_shaped_city_meets_its_boulevard_in_junctions_not_stars) {
                {"land", {{"shape", true}, {"area", 2.4e6}}}};
     CityPlan plan = generatePlan(b);
     CHECK(!plan.limits.empty());
-    if (plan.limits.empty()) return;
-    const RoadGraph& g = plan.streets;
-    std::vector<std::vector<Vec2>> out(g.nodes.size());   // per node: unit directions of its edges
-    for (const RoadEdge& e : g.edges) {
-        const Vec2 pa = g.nodes[static_cast<std::size_t>(e.a)].pos, pb = g.nodes[static_cast<std::size_t>(e.b)].pos;
-        const Vec2 d = pb - pa;
-        if (d.length() < 1e-9) continue;
-        out[static_cast<std::size_t>(e.a)].push_back(d * (1 / d.length()));
-        out[static_cast<std::size_t>(e.b)].push_back(d * (-1 / d.length()));
-    }
-    std::size_t worst = 0;
-    int tight = 0;
-    for (const auto& dirs : out) {
-        worst = std::max(worst, dirs.size());
-        for (std::size_t i = 0; i < dirs.size(); ++i)
-            for (std::size_t j = i + 1; j < dirs.size(); ++j)
-                if (dot(dirs[i], dirs[j]) > std::cos(15.0 * 3.14159265358979 / 180.0)) ++tight;
-    }
-    std::printf("    [shaped] %zu junction nodes, worst %zu streets at one, %d pairs under 15 degrees\n", g.nodes.size(), worst, tight);
-    CHECK(worst <= 5);
-    CHECK(tight == 0);
+    const PlanScore s = evaluatePlan(plan);
+    std::printf("    [shaped] %.0f m paved into another, worst junction %d streets, %d pairs under 15 degrees\n",
+                static_cast<double>(s.pavedOverlapM), s.worstJunction, s.tightTurns);
+    CHECK(s.worstJunction <= 5);
+    CHECK(s.tightTurns == 0);
+    CHECK(s.pavedOverlapM < 60);
+}
+
+TEST_CASE(the_plan_score_measures_streets_merging) {
+    // The score's merged-street numbers (PlanScore: worstJunction / crowdedJunctions / tightTurns / pavedOverlapM),
+    // on the round test city -- which lays its grid, ring and spokes the older way and was never shaped. Pinned as
+    // measured (799 m, worst junction 4, none under 15 degrees), so a change that merges its streets shows up here,
+    // not first in a walk-through. The 799 m is real and older than this measure: where the round layout's ring
+    // meets its grid and spokes -- owed, like metro_planned's 1.9 km and metro_rivers' 3.1 km.
+    CityPlan plan = generatePlan(testBrief());
+    const PlanScore s = evaluatePlan(plan);
+    std::printf("    [round] %.0f m paved into another, worst junction %d streets (%d of 5+), %d pairs under 15 degrees\n",
+                static_cast<double>(s.pavedOverlapM), s.worstJunction, s.crowdedJunctions, s.tightTurns);
+    CHECK(s.worstJunction <= 5);
+    CHECK(s.tightTurns == 0);
+    CHECK(s.pavedOverlapM < 900);
 }

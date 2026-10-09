@@ -2674,6 +2674,101 @@ PlanScore evaluatePlan(CityPlan& plan) {
                 }
             }
     }
+    // MERGED STREETS (see PlanScore). Junctions: how many streets meet, and the narrowest angle between two
+    // leaving it. Overlap: every 2 m along each road (chain), the nearest OTHER road; inside its roadway (the two
+    // half widths, no sidewalks) counts, unless within twice that of a node the two share -- that is their
+    // junction, or a crossing (the graph is planar). A street that stops a few metres short of another, or runs
+    // into its side without a node, is counted: the builder paves the two into one blob.
+    {
+        const RoadGraph& g = plan.streets;
+        std::vector<std::vector<Vec2>> leaving(g.nodes.size());
+        for (const RoadEdge& e : g.edges) {
+            const Vec2 d = g.nodes[static_cast<std::size_t>(e.b)].pos - g.nodes[static_cast<std::size_t>(e.a)].pos;
+            if (d.length() < 1e-9) continue;
+            leaving[static_cast<std::size_t>(e.a)].push_back(d * (1 / d.length()));
+            leaving[static_cast<std::size_t>(e.b)].push_back(d * (-1 / d.length()));
+        }
+        const Real tightCos = std::cos(15.0 * kPi / 180.0);
+        std::vector<std::pair<int, Vec2>> crowded;
+        for (std::size_t n = 0; n < leaving.size(); ++n) {
+            const auto& L = leaving[n];
+            s.worstJunction = std::max(s.worstJunction, static_cast<int>(L.size()));
+            if (L.size() >= 5) { ++s.crowdedJunctions; crowded.push_back({static_cast<int>(L.size()), g.nodes[n].pos}); }
+            for (std::size_t i = 0; i < L.size(); ++i)
+                for (std::size_t j = i + 1; j < L.size(); ++j)
+                    if (dot(L[i], L[j]) > tightCos) ++s.tightTurns;
+        }
+        const std::vector<PlanChain> chains = chainsOf(g);
+        // segments on a 40 m hash
+        constexpr Real kCell = 40;
+        std::unordered_map<long long, std::vector<std::pair<int, int>>> cells;   // -> (chain, segment)
+        auto key = [](long long i, long long j) { return (i << 32) ^ (j & 0xffffffffLL); };
+        Real maxHalf = 0;
+        for (const PlanChain& c : chains) maxHalf = std::max(maxHalf, c.width / 2);
+        for (int ci = 0; ci < static_cast<int>(chains.size()); ++ci) {
+            const auto& P = chains[static_cast<std::size_t>(ci)].pts;
+            for (int k = 0; k + 1 < static_cast<int>(P.size()); ++k) {
+                const Vec2 a = P[static_cast<std::size_t>(k)], b = P[static_cast<std::size_t>(k) + 1];
+                const long long x0 = static_cast<long long>(std::floor(std::min(a.x, b.x) / kCell)), x1 = static_cast<long long>(std::floor(std::max(a.x, b.x) / kCell));
+                const long long y0 = static_cast<long long>(std::floor(std::min(a.y, b.y) / kCell)), y1 = static_cast<long long>(std::floor(std::max(a.y, b.y) / kCell));
+                for (long long x = x0; x <= x1; ++x)
+                    for (long long y = y0; y <= y1; ++y) cells[key(x, y)].push_back({ci, k});
+            }
+        }
+        std::vector<std::set<int>> nodesOf(chains.size());
+        for (std::size_t ci = 0; ci < chains.size(); ++ci) nodesOf[ci].insert(chains[ci].nodes.begin(), chains[ci].nodes.end());
+        struct Spot { Real m; Vec2 at; };
+        std::vector<Spot> spots;   // overlap, clustered 100 m
+        constexpr Real kStep = 2;
+        const int reach = static_cast<int>(std::ceil(2 * maxHalf / kCell)) + 1;
+        for (int ci = 0; ci < static_cast<int>(chains.size()); ++ci) {
+            const PlanChain& A = chains[static_cast<std::size_t>(ci)];
+            for (std::size_t k = 0; k + 1 < A.pts.size(); ++k) {
+                const Vec2 a = A.pts[k], b = A.pts[k + 1];
+                const Real L = (b - a).length();
+                const int steps = std::max(1, static_cast<int>(L / kStep));
+                for (int t = 0; t < steps; ++t) {
+                    const Vec2 q = a + (b - a) * ((t + 0.5) / steps);
+                    const long long cx = static_cast<long long>(std::floor(q.x / kCell)), cy = static_cast<long long>(std::floor(q.y / kCell));
+                    bool hit = false;
+                    for (long long x = cx - reach; x <= cx + reach && !hit; ++x)
+                        for (long long y = cy - reach; y <= cy + reach && !hit; ++y) {
+                            const auto it = cells.find(key(x, y));
+                            if (it == cells.end()) continue;
+                            for (const auto& [cj, sk] : it->second) {
+                                if (cj == ci) continue;
+                                const PlanChain& B = chains[static_cast<std::size_t>(cj)];
+                                const Real lim = (A.width + B.width) / 2;
+                                if (pointSegDistance(q, B.pts[static_cast<std::size_t>(sk)], B.pts[static_cast<std::size_t>(sk) + 1]) >= lim) continue;
+                                bool atJunction = false;
+                                for (int n : A.nodes)
+                                    if (nodesOf[static_cast<std::size_t>(cj)].count(n) && (g.nodes[static_cast<std::size_t>(n)].pos - q).length() < 2 * lim) { atJunction = true; break; }
+                                if (atJunction) continue;
+                                hit = true;
+                                break;
+                            }
+                        }
+                    if (!hit) continue;
+                    const Real m = L / steps;
+                    s.pavedOverlapM += m;
+                    bool merged = false;
+                    for (Spot& sp : spots) if ((sp.at - q).length() < 100) { sp.m += m; merged = true; break; }
+                    if (!merged) spots.push_back({m, q});
+                }
+            }
+        }
+        std::sort(spots.begin(), spots.end(), [](const Spot& x, const Spot& y) { return x.m > y.m; });
+        std::sort(crowded.begin(), crowded.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+        for (const Spot& sp : spots) if (s.messAt.size() < 3 && sp.m >= 20) s.messAt.push_back(sp.at);
+        for (const auto& c : crowded) if (s.messAt.size() < 5) s.messAt.push_back(c.second);
+        if (s.pavedOverlapM >= 100 || s.worstJunction >= 6 || s.tightTurns > 0) {
+            std::string n = std::to_string(static_cast<int>(std::round(s.pavedOverlapM))) + " m of street paved into another, worst junction " +
+                            std::to_string(s.worstJunction) + " streets (" + std::to_string(s.crowdedJunctions) + " of 5+), " +
+                            std::to_string(s.tightTurns) + " under 15 deg; look at";
+            for (const Vec2& at : s.messAt) n += " (" + std::to_string(static_cast<int>(std::round(at.x))) + ", " + std::to_string(static_cast<int>(std::round(at.y))) + ")";
+            s.notes.push_back(n);
+        }
+    }
     if (s.corridorOverlaps)
         s.notes.push_back(std::to_string(s.corridorOverlaps) + " road pairs overlap (worst " +
                           std::to_string(static_cast<int>(std::round(s.worstOverlap))) + " m into each other)");
@@ -2768,7 +2863,9 @@ nlohmann::json planToJson(const CityPlan& plan, const PlanScore& s) {
                   {"meanLotsPerLotBlock", s.meanLotsPerLotBlock}, {"streetComponents", s.streetComponents},
                   {"commutesSampled", s.commutesSampled}, {"freewayCommuteShare", s.freewayCommuteShare},
                   {"streetKm", s.streetKm}, {"freewayKm", s.freewayKm},
-                  {"corridorOverlaps", s.corridorOverlaps}, {"worstOverlap", s.worstOverlap}, {"notes", s.notes}};
+                  {"corridorOverlaps", s.corridorOverlaps}, {"worstOverlap", s.worstOverlap},
+                  {"worstJunction", s.worstJunction}, {"crowdedJunctions", s.crowdedJunctions}, {"tightTurns", s.tightTurns},
+                  {"pavedOverlapM", std::round(s.pavedOverlapM)}, {"notes", s.notes}};
     return j;
 }
 
@@ -2828,6 +2925,8 @@ std::string planToSvg(const CityPlan& plan, const PlanScore& s) {
     std::snprintf(buf, sizeof buf, "core grid %.0f%% rectangles; roads that share a line: %d",
                   100 * static_cast<double>(s.gridRectilinearShare), s.corridorOverlaps); text(buf);
     std::snprintf(buf, sizeof buf, "street network: %d piece%s", s.streetComponents, s.streetComponents == 1 ? "" : "s"); text(buf);
+    std::snprintf(buf, sizeof buf, "streets meet: %.0f m paved into another, worst junction %d, %d under 15 deg",
+                  static_cast<double>(s.pavedOverlapM), s.worstJunction, s.tightTurns); text(buf);
     for (const std::string& n : s.notes) text("! " + n);
     ++line;
     struct Key { const char* fill; const char* label; };
