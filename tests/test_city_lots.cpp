@@ -1350,3 +1350,68 @@ TEST_CASE(buildings_face_an_at_grade_street_not_a_bridge) {
     CHECK(units > 0);
     CHECK(towardBridge == 0);
 }
+
+// THE OPEN-LOT PROGRAM (2026-10-09, the city's next ten #1): a lot that does not build is given a use -- a car
+// park, a playground, a community garden or a pocket park -- not left a bare green. A grid of street blocks with the
+// occupancy roll at zero (every lot "unbuilt"): out on the residential edge the lots become playgrounds, gardens and
+// pocket parks; downtown, car parks too. Each use is furnished, its fenced or paved ground sealed, and no tree is
+// planted on the playground's rubber or a garden's beds.
+TEST_CASE(lots_that_do_not_build_get_a_use) {
+    RoadGraph roads;
+    std::vector<Poly2> blocks;
+    // a 3 x 3 grid of 90 m blocks, streets 12 m wide between them
+    for (int i = 0; i <= 3; ++i) {
+        const Real x = i * 102.0 - 6.0;
+        roads.addEdge(roads.addNode({x, -60}), roads.addNode({x, 366}), 12, RoadClass::Local);
+        roads.addEdge(roads.addNode({-60, x}), roads.addNode({366, x}), 12, RoadClass::Local);
+    }
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            const Real x0 = i * 102.0 + 6.0, z0 = j * 102.0 + 6.0;
+            blocks.push_back({{x0, z0}, {x0 + 84, z0}, {x0 + 84, z0 + 84}, {x0, z0 + 84}});
+        }
+    auto grow = [&](Vec2 centre, LotPlanDebug& dbg) {
+        LotParams lp;
+        lp.seed = 29;
+        lp.buildChance = 0.0;
+        lp.center = centre;
+        lp.hubs = {{centre, 0}};   // radial rings from one centre hub: no industrial wedge
+        std::vector<RenderMesh> parts(kLotPartSlots);
+        return growLotBuildings(blocks, lp, &dbg, &parts, &roads, 0.0);
+    };
+    LotPlanDebug edge;
+    const std::vector<LotBuilding> res = grow(Vec2(5000, 5000), edge);   // downtown far away: all residential
+    int greens = 0, uses = 0, treesOnPlay = 0, unfurnished = 0;
+    for (const LotBuilding& lb : res) {
+        if (lb.type == "green") { ++greens; continue; }
+        if (lb.recipe != "playground" && lb.recipe != "community_garden" && lb.recipe != "pocket_park") continue;
+        ++uses;
+        if (lb.recipe != "pocket_park" && (lb.sealed.empty() || lb.furniture.empty() || lb.fenceSegs.empty())) ++unfurnished;
+        if (lb.recipe == "pocket_park") continue;
+        for (const Vec3& t : lb.treeSpots)
+            if (pointInPolygon(lb.sealed.front(), Vec2(t.x, t.z))) ++treesOnPlay;
+    }
+    std::printf("    [open lots] residential: %d playgrounds, %d gardens, %d pocket parks, %d left green\n", edge.openPlaygrounds,
+                edge.openGardens, edge.openParks, greens);
+    CHECK(edge.openPlaygrounds > 0);
+    CHECK(edge.openGardens > 0);
+    CHECK(edge.openParks > 0);
+    CHECK(uses > greens * 2);   // most unbuilt lots have a use; a few stay vacant
+    CHECK(unfurnished == 0);
+    CHECK(treesOnPlay == 0);
+
+    LotPlanDebug town;
+    const std::vector<LotBuilding> dt = grow(Vec2(150, 150), town);   // downtown in the middle block
+    int bays = 0, gates = 0;
+    for (const LotBuilding& lb : dt) {
+        if (lb.recipe != "car_park") continue;
+        CHECK(lb.type == "depot");   // the host's paved-yard path
+        CHECK(lb.pavedLot.size() >= 3);
+        for (const LotBuilding::Area& ar : lb.areas) { bays += ar.kind == "car_bay"; gates += ar.kind == "car_gate"; }
+    }
+    std::printf("    [open lots] downtown: %d car parks (%d stalls), %d pocket parks, %d gardens\n", town.openCarParks, bays,
+                town.openParks, town.openGardens);
+    CHECK(town.openCarParks > 0);
+    CHECK(gates == town.openCarParks);
+    CHECK(bays >= 6 * town.openCarParks);
+}

@@ -185,6 +185,7 @@ struct LotParams {
     Real maxAspect = 3.5;     // ...or whose long/short exceeds this (no knife blades)
     Real minLotArea = 90.0;   // skip tiny leftover lots
     Real buildChance = 0.92;  // per-lot occupancy (rest become plazas/gaps)
+    bool openLots = true;     // a lot that does not build gets a use (car park, playground, garden, pocket park)
     // SIDEWALK RISE (site plans, ADR-0086): how far the adjoining sidewalk's
     // top stands above the ground the lot samples 2 m out from its frontage —
     // the road carve step plus the kerb (kRoadConformStep + RoadLook::curb on
@@ -350,6 +351,8 @@ struct LotPlanDebug {
     int pEscaped = 0, pTiny = 0, pThin = 0, pPlaced = 0;
     int pClips = 0, pLeftOverlapping = 0, pSameEdge = 0, pAtInsert = 0, pConcave = 0, pClipFailed = 0;
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
+    // THE OPEN-LOT PROGRAM: what the lots that did not build became instead of a bare green
+    int openCarParks = 0, openPlaygrounds = 0, openGardens = 0, openParks = 0;
 };
 
 // The SKYLINE CENSUS (skyscrapers v2, M0): what the lot pass actually BUILT, as

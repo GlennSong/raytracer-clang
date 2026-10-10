@@ -9169,3 +9169,19 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
 **Verified.** `population_read_from_the_cache_is_the_population_decided`: 500 agents, 0 fields differ, identical statistics, identical positions after 30 simulated seconds; a changed shop's hours misses; VERIFY finds 0 differences. On island_8_nature: VERIFY reports 0 of 28,000 records differ.
 
 **Consequences.** A save game (persistent people who can change job or home in play) layers over this baseline. It needs stable agent identity across regeneration, which a hash-keyed cache does not give. What remains of the ~53 s: forest rock placement (~7 s), blocks from road holes (~7 s), physics mesh shapes (~6 s), the rest of the city sim start (~7 s), drawn roads (~4 s); each is deterministic and cacheable the same way.
+
+## ADR-0144 — Open lots: a lot that does not build gets a use
+
+**Context.** Glenn gave free rein on the city's next ten things; the first was the empty blocks. On island_8_nature 2,223 of 13,156 lots were bare grass: lots that lost the occupancy roll, were too thin or oddly shaped for a building, or sat inside a block. From the air they read as holes in the city.
+
+**Decision.** `emitGreen` (city_lots.cpp) offers every unbuilt lot the OPEN-LOT PROGRAM before it falls back to grass. The program tries uses in an order set by district (downtown and commercial lean to car parks, residential to playgrounds and gardens, industrial to car parks), and about 15% stay vacant on purpose:
+- **Car park** (`sculptCarPark`): a cross aisle along the street with the gate in it, aisles running in, 2.5 x 5 m stalls (single-loaded on a narrow lot, at least 6), hedges, lamp poles, a pay machine and a P sign. Type `depot` with recipe `car_park`, so the host's paved-yard path flattens and seals it. Its stalls are `car_bay` areas and its gate a `car_gate` area, which the loader turns into a garage for the citysim's drivers, as it does a depot's bus bays.
+- **Playground** (`sculptPlayground`): a rubber surface, swings, a slide tower, a climbing frame, a seesaw and a sandpit packed in rows, a railing with a gate, benches with sit spots, and trees outside the fence.
+- **Community garden** (`sculptCommunityGarden`): raised beds with crops (rows, bean canes, flowers, squash), gravel paths, a shed, a water butt, compost bins, a picket fence and a bench.
+- **Pocket park**: `sculptPark`, which is also what triangular wedge lots get.
+
+Each sculptor works on the largest rectangle that fits the lot square to its street edge (`largestFrameRect`). A lot's frontage points at the nearest street point, which is diagonal on a corner lot, so the frame takes the outward normal of the lot edge that faces it best. Hillside (relief) and road-locked lots stay natural green; interior lots get no car park.
+
+The forest scatter now also stays off the lots' sealed ground (`loadForest(..., sealedLots)`). It had only avoided flattened pads, so island trees grew through the playgrounds and park paths.
+
+**Consequences.** On island_8_nature: 17 car parks (22 surface lots with 437 stalls for the drivers, counting the big boxes), 180 playgrounds, 293 community gardens and 1,356 pocket parks. 377 lots stay green. Lots tag `2026-10-09.2`. Test: `lots_that_do_not_build_get_a_use`. The skyline census reports `car_park` open space too.

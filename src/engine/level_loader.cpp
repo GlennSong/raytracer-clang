@@ -1874,7 +1874,8 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // graded ground and the water, exactly as the scatter is.
 static void loadForest(const json& fj, const TerrainParams& terrain, const Noise& terrainNoise, World& world,
                        Renderer& renderer, AssetManager& assets, double placeDilate,
-                       std::function<double(double, double)> drawnGround) {
+                       std::function<double(double, double)> drawnGround,
+                       const std::vector<engine::Poly2>* sealedLots = nullptr) {
     RT_PROFILE_ZONE_NAMED("loadForest");
     const auto t0 = std::chrono::steady_clock::now();
     const ForestParams fp = forestFromJson(fj);
@@ -1955,8 +1956,40 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     const engine::DrawnRoad drawnRoad = engine::gatherDrawnRoad(world);
     const double margin = fj.value("clearMargin", 4.0);
     const TrailNetwork* trails = terrain.cover ? terrain.cover->params().trails.get() : nullptr;
+    // ...and off the city lots' SEALED ground (a park's walks, a playground, a garden, a yard): the grass already
+    // stays off it, the forest's trees grew through the playgrounds (the open lots, 2026-10-09)
+    std::unordered_map<long long, std::vector<int>> sealedBins;
+    constexpr double kSealBin = 32.0;
+    auto sealKey = [](int i, int j) { return (static_cast<long long>(i) << 32) ^ static_cast<unsigned>(j); };
+    if (sealedLots)
+        for (std::size_t k = 0; k < sealedLots->size(); ++k) {
+            const engine::Poly2& poly = (*sealedLots)[k];
+            double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+            for (const engine::Vec2& v : poly) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+            for (int j = static_cast<int>(std::floor((z0 - 2) / kSealBin)); j <= static_cast<int>(std::floor((z1 + 2) / kSealBin)); ++j)
+                for (int i = static_cast<int>(std::floor((x0 - 2) / kSealBin)); i <= static_cast<int>(std::floor((x1 + 2) / kSealBin)); ++i)
+                    sealedBins[sealKey(i, j)].push_back(static_cast<int>(k));
+        }
+    auto onSealedLot = [&](double x, double z) {
+        if (sealedBins.empty()) return false;
+        auto it = sealedBins.find(sealKey(static_cast<int>(std::floor(x / kSealBin)), static_cast<int>(std::floor(z / kSealBin))));
+        if (it == sealedBins.end()) return false;
+        for (int k : it->second) {
+            const engine::Poly2& poly = (*sealedLots)[static_cast<std::size_t>(k)];
+            if (engine::pointInPolygon(poly, engine::Vec2(x, z))) return true;
+            for (std::size_t i = 0; i < poly.size(); ++i) {   // and a crown's width (1.5 m) off its edge
+                const engine::Vec2 a = poly[i], b = poly[(i + 1) % poly.size()], ab = b - a;
+                const double l2 = ab.x * ab.x + ab.y * ab.y;
+                double s = l2 > 1e-12 ? ((x - a.x) * ab.x + (z - a.y) * ab.y) / l2 : 0;
+                s = std::max(0.0, std::min(1.0, s));
+                if (std::hypot(x - (a.x + ab.x * s), z - (a.y + ab.y * s)) < 1.5) return true;
+            }
+        }
+        return false;
+    };
     auto exclude = [&](double x, double z) {
         if (terrain.hydro && terrain.hydro->isWet(x, z, 2.0)) return true;
+        if (onSealedLot(x, z)) return true;
         if (trails && trails->distance(x, z, 3.0) < 2.5) return true;   // the trails stay open (ADR-0134)
         for (const RoadDeckField* d : decks) { double y = 0; if (d->heightAt(x, z, margin, &y)) return true; }
         if (drawnRoad.near(x, z, margin)) return true;
@@ -2661,7 +2694,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             // double-planted and, worse, used the pad plane's groundY, which
             // parks never set: every one of these trees spawned metres UNDER
             // the terrain (device: "trees are below the terrain").
-            if (!lb.treeSpots.empty()) continue;
+            if (!lb.treeSpots.empty() || lb.recipe == "playground" || lb.recipe == "community_garden") continue;   // (their beds and swings are no place for a tree)
             const double a = engine::area(lb.pad);
             int want = std::min(6, static_cast<int>(a * density));
             if (want < 1) continue;
@@ -4711,7 +4744,7 @@ bool LevelLoader::load(const std::string& path,
             // FORESTS (ADR-0129): real trees near, impostors far, placed by the ground's maps
             // (it lives in the terrain block: the ground cover lays litter under it)
             if (root.contains("terrain") && root["terrain"].contains("forest") && root["terrain"]["forest"].is_object())
-                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn);
+                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn, sealedLotPolys.get());
             // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
             // the camera, from clump meshes and the ground and density rules set up here.
             // GRASS LAYERS (ADR-0130): "grass" is the meadow; "grassLayers" adds more fields, each with a
@@ -5999,16 +6032,22 @@ bool LevelLoader::load(const std::string& path,
                 // scenery, not a schedule destination — no place tag.
                 // A BUS DEPOT (sculptBusDepot): no place for the schedules, its bays a garage only buses use, anchored
                 // on the street in front of its gate
+                // ...and an OPEN LOT's CAR PARK (recipe "car_park", sculptCarPark): the same yard, its stalls a garage for cars
                 if (lb.type == "depot") {
                     engine::CitySimConfig::GarageSpec gs;
-                    gs.buses = true;
+                    const bool carPark = lb.recipe == "car_park";
+                    gs.buses = !carPark;
                     for (const engine::LotBuilding::Area& ar : lb.areas) {
-                        if (ar.kind == "bus_gate") { gs.px = ar.center.x; gs.pz = ar.center.y; gs.ox = ar.axis.x; gs.oz = ar.axis.y; }
-                        if (ar.kind != "bus_bay") continue;
+                        if (ar.kind == (carPark ? "car_gate" : "bus_gate")) { gs.px = ar.center.x; gs.pz = ar.center.y; gs.ox = ar.axis.x; gs.oz = ar.axis.y; }
+                        if (ar.kind != (carPark ? "car_bay" : "bus_bay")) continue;
                         const Real gy0 = dressingGround ? dressingGround(ar.center.x, ar.center.y) : lb.groundY;
                         gs.stalls.push_back({ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, gy0 + 0.05});
                     }
-                    if (!gs.stalls.empty()) {
+                    if (!gs.stalls.empty() && carPark) {
+                        ++surfaceLots;
+                        surfaceStalls += static_cast<int>(gs.stalls.size());
+                        cfg.garages.push_back(std::move(gs));
+                    } else if (!gs.stalls.empty()) {
                         ++depotYards;
                         depotBays += static_cast<int>(gs.stalls.size());
                         LOG_INFO << "[citylots] bus depot at " << lb.site.x << " " << lb.site.y << ": " << gs.stalls.size() << " bays";
@@ -6333,7 +6372,7 @@ bool LevelLoader::load(const std::string& path,
                     const double padArea = lb.pad.empty()
                         ? static_cast<double>(lb.width * lb.depth)
                         : engine::area(lb.pad);
-                    const int nTrees = lb.type == "depot" ? 0
+                    const int nTrees = lb.type == "depot" || lb.recipe == "playground" || lb.recipe == "community_garden" ? 0
                         : lb.type == "park"
                         ? std::max(3, std::min(14, static_cast<int>(padArea / 60.0)))
                         : std::max(1, std::min(4, static_cast<int>(padArea / 140.0)));
