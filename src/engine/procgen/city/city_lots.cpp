@@ -4142,8 +4142,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // day"): out at the edge of town, an industrial or commercial block -- 48 m and more across, near-flat -- may be
         // the buses' yard: rows of bus bays, a maintenance shed at the back, a fence round it (sculptBusDepot). One in
         // 1.8 km, so each town has its own; the citysim sends each route's buses to the nearest when service ends.
-        if ((bf.tag == DistrictTag::Industrial || bf.tag == DistrictTag::Commercial) && dbg->depotBlocks < 8 &&
-            !(lots.size() == 1 && (lots.front().wholeBlock || lots.front().bigBox))) {
+        // A TOWN WITH NO DEPOT YET (the city's next ten #6: four of the island's towns' routes had none): a block 3 km
+        // from any depot may hold one in a residential district too, and is not rolled away
+        bool depotAlone = true;
+        {
+            const Vec2 fc0 = centroid(foot);
+            for (const Vec2& c : dbg->depotAt) if ((c - fc0).length() < 3000.0) depotAlone = false;
+        }
+        if ((bf.tag == DistrictTag::Industrial || bf.tag == DistrictTag::Commercial || (depotAlone && bf.tag == DistrictTag::Residential)) &&
+            dbg->depotBlocks < 10 && !(lots.size() == 1 && (lots.front().wholeBlock || lots.front().bigBox))) {
             const OBB2 fb = orientedBoundingBox(foot);
             const Real shortS = 2 * std::min(fb.half[0], fb.half[1]), longS = 2 * std::max(fb.half[0], fb.half[1]);
             const Real blockA = std::fabs(area(foot));
@@ -4163,7 +4170,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const Real g = p.ground(fc.x, fc.y); lo = std::min(lo, g); hi = std::max(hi, g);
                 if (hi - lo > 1.6) why = "slope";
             }
-            if (!why && bf.tag == DistrictTag::Commercial && dRng.unit() < 0.5) why = "roll";
+            if (!why && bf.tag == DistrictTag::Commercial && !depotAlone && dRng.unit() < 0.5) why = "roll";
             // its GATE on the long side with the most street along it
             Vec2 front(0, 0);
             if (!why) {
