@@ -1206,6 +1206,21 @@ public:
         if (busServiceEnd_ <= busServiceStart_) return true;   // 24 hour service
         return clockHours_ >= busServiceStart_ && clockHours_ < busServiceEnd_;
     }
+    // ONE BUS'S SERVICE DAY (the city's next ten #6: "a bus queue forms at the depot gate -- they arrive in bunches at
+    // 23:30; real depots stagger pull-ins"): each bus finishes up to 75 minutes before the city's last bus, in 15-minute
+    // steps by its own number, and pulls out in the morning half that late -- so the yard fills and empties over an
+    // hour, not in one minute. busesInService() stays the city's hours (whether a rider can still wait for one).
+    Real busStagger(int i) const {
+        uint32_t h = static_cast<uint32_t>(i) * 2654435761u;
+        h ^= h >> 15;
+        return static_cast<Real>(h % 6u) * 0.25;
+    }
+    Real busOwnStart(int i) const { return busServiceStart_ + busStagger(i) * 0.5; }
+    Real busOwnEnd(int i) const { return busServiceEnd_ - busStagger(i); }
+    bool busOwnInService(int i) const {
+        if (busServiceEnd_ <= busServiceStart_) return true;
+        return clockHours_ >= busOwnStart(i) && clockHours_ < busOwnEnd(i);
+    }
     const BusNetwork& buses() const { return buses_; }
     bool isBus(int i) const;
     // Is this pedestrian ON THE STREET to be drawn (and given a body)? A

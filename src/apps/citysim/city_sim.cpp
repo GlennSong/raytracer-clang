@@ -2770,8 +2770,8 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
     // (37 of the island's 40 drove on all night). Each bus hears the service STATE whenever it thinks: its table moves
     // only from Drive on ServiceEnd and from OffDuty on ServiceStart, so the event repeats harmlessly.
     if (isBus(self) && (busesInService() != busServiceWas_ || busServiceEnd_ > busServiceStart_))
-        tryGoalEvent(a, busesInService() ? GoalEvent::ServiceStart
-                                         : GoalEvent::ServiceEnd);
+        tryGoalEvent(a, busOwnInService(self) ? GoalEvent::ServiceStart
+                                           : GoalEvent::ServiceEnd);
 
     // A FREE CAB LOOKS FOR WORK. Costed on straight-line distance to the
     // pickup: cheap, and the real route is computed anyway the moment the trip
@@ -2896,7 +2896,7 @@ void CitySim::goalThink(Agent& a, Real dtHours) {
         if (noon > 1e-6) hoursUntil = std::min(hoursUntil, noon);
         // a bus off duty in its depot wakes for the morning's service (and one in service for the evening's end)
         if (isBus(indexOf(a)) && busServiceEnd_ > busServiceStart_)
-            hoursUntil = std::min(hoursUntil, ahead(busesInService() ? busServiceEnd_ : busServiceStart_));
+            hoursUntil = std::min(hoursUntil, ahead(busOwnInService(indexOf(a)) ? busOwnEnd(indexOf(a)) : busOwnStart(indexOf(a))));
     }
     // A stranded agent (work == home) with no dwell waits forever — and that is
     // the cheapest agent in the city, which is exactly right.
@@ -5309,7 +5309,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
                     }
                     // OUT OF SERVICE (the service day is over): everyone still aboard gets off here, nobody gets on,
                     // and the bus goes on to its depot (the Arrived row below becomes ServiceEnd)
-                    const bool lastStop = busServiceEnd_ > busServiceStart_ && !busesInService();
+                    const bool lastStop = busServiceEnd_ > busServiceStart_ && !busOwnInService(self);
                     if (lastStop)
                         for (const auto& [p, d] : rides_.rides())
                             if (d == self) { alightRide(p, setDown); buses_.forget(p); ++people; }
@@ -5373,7 +5373,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
     const GoalTable& t = tableFor(a);
     int next = t.onEvent(a.goal, GoalEvent::Arrived);
     // A BUS AT A STOP AFTER HOURS goes in to its depot rather than on to the next stop (its riders were set down above)
-    if (isBus(indexOf(a)) && busServiceEnd_ > busServiceStart_ && !busesInService() && a.goal >= 0 &&
+    if (isBus(indexOf(a)) && busServiceEnd_ > busServiceStart_ && !busOwnInService(indexOf(a)) && a.goal >= 0 &&
         a.goal < t.stateCount() && t.state(a.goal).target == GoalTarget::Stop) {
         const int off = t.onEvent(a.goal, GoalEvent::ServiceEnd);
         if (off >= 0) next = off;

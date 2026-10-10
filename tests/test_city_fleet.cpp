@@ -223,3 +223,22 @@ TEST_CASE(a_driver_whose_car_is_taken_gets_out_and_walks_on) {
     CHECK(!remounted);
     CHECK(walked > 20.0);
 }
+
+// THE DEPOT'S PULL-INS ARE STAGGERED (the city's next ten #6): the buses of a 5:30-23:30 service finish over the last
+// 75 minutes, a quarter of an hour apart, and pull out over the first 40 -- not all at once (the island's 40 buses
+// queued at the depot gates at 23:30).
+TEST_CASE(buses_finish_their_service_day_over_an_hour_not_at_once) {
+    CitySim sim;
+    sim.setBusService(5.5, 23.5);
+    std::set<int> ends, starts;
+    for (int i = 0; i < 40; ++i) {
+        const Real e = sim.busOwnEnd(i), s = sim.busOwnStart(i);
+        CHECK(e <= 23.5 + 1e-9 && e >= 22.25 - 1e-9);
+        CHECK(s >= 5.5 - 1e-9 && s <= 6.15);
+        ends.insert(static_cast<int>(std::lround(e * 4)));
+        starts.insert(static_cast<int>(std::lround(s * 8)));
+    }
+    std::printf("    [depot] %zu different finishing times, %zu pull-out times among 40 buses\n", ends.size(), starts.size());
+    CHECK(ends.size() >= 5);
+    CHECK(starts.size() >= 5);
+}
