@@ -182,3 +182,44 @@ TEST_CASE(fleet_assignment_is_deterministic) {
             same = false;
     CHECK(same);
 }
+
+// THE DRIVER GETS OUT (the city's next ten #6; Glenn: "When you steal a car, its driver just vanishes. They should
+// get out and stand there."): ejectDriver puts the driver on the pavement beside the car, on foot, still a live agent
+// -- not released -- who never gets the stolen car back and walks on when its brain next decides.
+TEST_CASE(a_driver_whose_car_is_taken_gets_out_and_walks_on) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 30, 40, 5);
+    int target = -1;
+    for (int i = 0; i < 6000 && target < 0; ++i) {
+        sim.step(0.1, 0.5);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            if (a.mode == Agent::Mode::Driver && a.moving && a.vehicle >= 0 && a.car == a.vehicle) { target = static_cast<int>(k); break; }
+        }
+    }
+    CHECK(target >= 0);
+    if (target < 0) return;
+    const int car = sim.agents()[static_cast<std::size_t>(target)].vehicle;
+    const Vec2 was = sim.agents()[static_cast<std::size_t>(target)].pos;
+    CHECK(sim.ejectDriver(target));
+    const Agent& a = sim.agents()[static_cast<std::size_t>(target)];
+    CHECK(a.mode == Agent::Mode::Pedestrian && a.vehicle < 0 && !a.released);
+    const Real stood = (a.pos - was).length();
+    CHECK(stood < 12.0);   // beside the car, on the pavement
+    CHECK(sim.vehicles()[static_cast<std::size_t>(car)].offStreet);
+    CHECK(!sim.ejectDriver(target));        // not a driver any more
+    Real walked = 0;
+    Vec2 last = a.pos;
+    bool remounted = false;
+    for (int i = 0; i < 20000; ++i) {
+        sim.step(0.1, 0.5);
+        const Agent& b = sim.agents()[static_cast<std::size_t>(target)];
+        if (b.vehicle == car || b.mode == Agent::Mode::Driver) remounted = true;
+        walked += (b.pos - last).length();
+        last = b.pos;
+    }
+    std::printf("    [ejected] stood %.1f m from the car's line, then walked %.0f m on foot\n", stood, walked);
+    CHECK(!remounted);
+    CHECK(walked > 20.0);
+}

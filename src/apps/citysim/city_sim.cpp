@@ -2329,6 +2329,41 @@ Vec2 CitySim::idlePose(int node, Agent::Mode mode, uint32_t brain) const {
 //
 // Called from BOTH trip starters. A wander trip builds its own route and would
 // otherwise leave a dismounted driver walking the rest of the level.
+bool CitySim::ejectDriver(int agentIndex) {
+    if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
+    Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+    if (a.mode != Agent::Mode::Driver || a.vehicle < 0) return false;
+    // where they stand: the pavement beside the link the car is on (a walker's own side of it), level with the car
+    Vec2 standAt = a.pos;
+    if (nav_ && a.route.valid() && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
+        const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+        const engine::NavLink& L = nav_->links[static_cast<std::size_t>(li)];
+        const Vec2 A = nav_->nodes[static_cast<std::size_t>(L.from)], B = nav_->nodes[static_cast<std::size_t>(L.to)];
+        const Real l2 = (B - A).lengthSquared();
+        const Real tt = l2 > 1e-9 ? std::clamp(dot(a.pos - A, B - A) / l2, Real(0), Real(1)) : Real(0);
+        standAt = nav_->sidewalkPoint(li, tt, 0.8);
+    }
+    if (a.vehicle < static_cast<int>(vehicles_.size())) {
+        SimVehicle& v = vehicles_[static_cast<std::size_t>(a.vehicle)];
+        v.driver = -1;
+        v.offStreet = true;   // the player's now: the sim's copy is never drawn or found again
+        v.pos = standAt;
+    }
+    a.vehicle = -1;
+    a.car = -1;               // ...and never remounted: they walk from here
+    a.mode = Agent::Mode::Pedestrian;
+    a.released = false;
+    a.tethered = false;
+    a.moving = false;
+    a.speed = 0;
+    a.crashTimer = 0;
+    a.crashCount = 0;
+    a.pos = standAt;
+    a.route = engine::Route{};
+    a.leg = 0;
+    return true;
+}
+
 void CitySim::remountOwnedCar(Agent& a) {
     if (a.archetype != Agent::Mode::Driver || a.vehicle >= 0) return;
     if (a.car < 0 || a.car >= static_cast<int>(vehicles_.size())) return;

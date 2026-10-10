@@ -929,6 +929,13 @@ public:
         a.crashCount = 0;   // state would never decay and poison a future resume
     }
 
+    // THE DRIVER GETS OUT (the city's next ten #6; Glenn: "When you steal a car, its driver just vanishes. They
+    // should get out and stand there."): the player took this agent's car with them in it. The car is no longer
+    // theirs -- its sim copy is put away (offStreet, never drawn, never remounted) -- and they are a pedestrian on
+    // the pavement beside where the car was, standing, their trip dropped: the goal brain's next idle sends them on,
+    // on foot. Returns false when out of range or the agent is not driving a car.
+    bool ejectDriver(int agentIndex);
+
     // Tether a planner ghost to its physical car (ADR-0062): the ghost holds
     // whenever it is more than `maxLead` metres from `anchor` (the car's real
     // position, re-fed each step). Determinism holds for an identical call
