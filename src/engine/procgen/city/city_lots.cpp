@@ -6445,6 +6445,146 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                 }
             }
+            // SHOPFRONTS BY TRADE (the city's next ten #4): what stands on the pavement in front of the glass says what
+            // the shop is -- a grocer's fruit and vegetable stands either side of the door, a boutique's or a bookshop's
+            // A-frame board (and the bookshop's cart of books), a restaurant's planters and menu stand at its door, a
+            // bar's high tables and stools along its window, a club's rope line with brass posts. On the paving, clear of
+            // the door, the terrace and the road; absolute at the paving's height like the terraces.
+            if (paved && planOk && b.pavedLot.size() >= 3 && outParts) {
+                BuildingMesh kit;
+                const Vec3 up(0, 1, 0);
+                auto onPaving = [&](const Vec2& q) { return pointInPolygon(b.pavedLot, q) && clearOfRoads(q); };
+                auto boxAt = [&](const Vec2& c, const Vec2& d, const Vec2& n, Real w, Real dep, Real y0, Real h, PartId part, const Vec3& col) {
+                    const Vec3 u3(d.x, 0, d.y), n3(n.x, 0, n.y);
+                    const Vec3 o = Vec3(c.x, b.paveY + y0, c.y) - u3 * (w * 0.5) - n3 * (dep * 0.5);
+                    emitBox(kit, Scope{o, {u3, up, n3}, Vec3(w, h, dep)}, part, col);
+                };
+                auto softAt = [&](const Vec2& c, const Vec2& d, const Vec2& n, Real w, Real dep, Real y0, Real h, const Vec3& col) {
+                    const Vec3 u3(d.x, 0, d.y), n3(n.x, 0, n.y);
+                    const Vec3 o = Vec3(c.x, b.paveY + y0, c.y) - u3 * (w * 0.5) - n3 * (dep * 0.5);
+                    emitSoftBox(kit, Scope{o, {u3, up, n3}, Vec3(w, h, dep)}, PartId::Foliage, col, 0u);
+                };
+                // an A-frame board: two leaning panels, its face toward the passers-by along the street
+                auto aFrame = [&](const Vec2& c, const Vec2& d, const Vec3& face) {
+                    for (Real s : {Real(-1), Real(1)}) {
+                        const Vec3 base(c.x + d.x * s * 0.22, b.paveY, c.y + d.y * s * 0.22), top(c.x, b.paveY + 0.95, c.y);
+                        Vec3 ax = normalize(top - base);
+                        const Vec3 side(-d.y, 0, d.x);
+                        const Vec3 nn = normalize(cross(side, ax));
+                        emitBox(kit, Scope{base - side * 0.3, {side, ax, nn}, Vec3(0.6, (top - base).length(), 0.03)}, PartId::Wood, Vec3(0.20, 0.14, 0.09));
+                        emitBox(kit, Scope{base - side * 0.25 + ax * 0.1 - nn * 0.005, {side, ax, nn}, Vec3(0.5, (top - base).length() - 0.2, 0.01)},
+                                PartId::Trim, face);
+                    }
+                };
+                for (const ShopFront& sf : shopFrontsOf(plan, bp)) {
+                    if (sf.indoor) continue;
+                    const Vec2 d0 = sf.b - sf.a;
+                    const Real L = d0.length();
+                    if (L < 3.0) continue;
+                    const Vec2 d = d0 * (1.0 / L);
+                    const Real dx = dot(sf.door - sf.a, d);   // the door, along the front
+                    Real room = 0;
+                    for (Real tt = 0.3; tt <= 6.0; tt += 0.25) { if (!onPaving((sf.a + sf.b) * 0.5 + sf.n * tt)) break; room = tt; }
+                    if (room < 1.6) continue;
+                    const uint32_t hh = posHash(sf.door);
+                    auto at = [&](Real x, Real out) { return sf.a + d * x + sf.n * out; };
+                    auto clear = [&](const Vec2& q, Real r) { return onPaving(q + d * r) && onPaving(q - d * r) && onPaving(q + sf.n * r) && onPaving(q - sf.n * r); };
+                    if (std::getenv("RT_FRONT_DEBUG"))
+                        std::printf("[front] trade %d door %.1f %.1f n %.2f %.2f room %.1f\n", sf.trade, sf.door.x, sf.door.y, sf.n.x, sf.n.y, room);
+                    switch (sf.trade) {
+                        case 1: {   // GROCERY: tiered produce stands, two each side of the door
+                            const Vec3 produce[6] = {{0.75, 0.12, 0.08}, {0.95, 0.60, 0.10}, {0.40, 0.65, 0.15}, {0.85, 0.80, 0.20}, {0.55, 0.15, 0.35}, {0.25, 0.45, 0.12}};
+                            int k = 0;
+                            for (Real side : {Real(-1), Real(1)})
+                                for (int s = 0; s < 2; ++s) {
+                                    const Real x = dx + side * (1.6 + s * 1.5);
+                                    if (x < 0.8 || x > L - 0.8) continue;
+                                    const Vec2 c = at(x, 0.65);
+                                    if (!clear(c, 0.6)) continue;
+                                    boxAt(c, d, sf.n, 1.3, 0.9, 0, 0.55, PartId::Wood, Vec3(0.45, 0.33, 0.20));        // the stand
+                                    for (int tier = 0; tier < 2; ++tier) {
+                                        const Vec2 tc = c + sf.n * (tier == 0 ? 0.18 : -0.18);
+                                        boxAt(tc, d, sf.n, 1.2, 0.4, 0.55 + tier * 0.22, 0.12, PartId::Wood, Vec3(0.55, 0.42, 0.26));   // a crate
+                                        softAt(tc, d, sf.n, 1.1, 0.34, 0.66 + tier * 0.22, 0.10, produce[(hh + k++) % 6]);
+                                    }
+                                }
+                            break;
+                        }
+                        case 2: case 3: case 4: {   // BOUTIQUE / BOOKSHOP / ELECTRONICS: a board by the door
+                            const Real x = dx + ((hh & 1) ? 1.5 : -1.5);
+                            const Vec2 c = at(std::clamp(x, Real(0.6), L - 0.6), std::min(room - 0.5, Real(1.4)));
+                            if (clear(c, 0.4)) aFrame(c, d, sf.trade == 2 ? Vec3(0.92, 0.88, 0.84) : Vec3(0.06, 0.08, 0.07));
+                            if (sf.trade == 3) {   // ...and a cart of books on the other side
+                                const Vec2 cc = at(std::clamp(dx + ((hh & 1) ? -1.7 : 1.7), Real(0.8), L - 0.8), 0.55);
+                                if (clear(cc, 0.5)) {
+                                    boxAt(cc, d, sf.n, 1.2, 0.5, 0.0, 0.75, PartId::Wood, Vec3(0.35, 0.22, 0.12));
+                                    for (int r = 0; r < 8; ++r)
+                                        boxAt(cc + d * (-0.52 + r * 0.15), d, sf.n, 0.12, 0.38, 0.75, 0.18 + (r % 3) * 0.03, PartId::Trim,
+                                              Vec3(0.2 + 0.1 * (r % 4), 0.15 + 0.08 * ((r + 1) % 3), 0.25 + 0.1 * ((r + 2) % 3)));
+                                }
+                            }
+                            break;
+                        }
+                        case 13: {   // RESTAURANT: planters flanking the door, a menu stand
+                            for (Real side : {Real(-1), Real(1)}) {
+                                const Vec2 c = at(std::clamp(dx + side * 1.1, Real(0.5), L - 0.5), 0.45);
+                                if (!clear(c, 0.35)) continue;
+                                boxAt(c, d, sf.n, 0.6, 0.6, 0, 0.55, PartId::Concrete, Vec3(0.30, 0.30, 0.31));
+                                softAt(c, d, sf.n, 0.5, 0.5, 0.55, 0.65, Vec3(0.18, 0.34, 0.16));
+                            }
+                            const Vec2 m = at(std::clamp(dx + 1.9, Real(0.5), L - 0.5), std::min(room - 0.4, Real(1.0)));
+                            if (clear(m, 0.3)) {
+                                boxAt(m, d, sf.n, 0.05, 0.05, 0, 1.2, PartId::Metal, Vec3(0.12, 0.12, 0.12));
+                                boxAt(m + sf.n * 0.02, d, sf.n, 0.42, 0.04, 1.0, 0.55, PartId::Trim, Vec3(0.08, 0.08, 0.08));
+                            }
+                            break;
+                        }
+                        case 14: {   // BAR: high tables and stools along the window, a chalk board
+                            for (Real x = 1.2; x + 1.0 <= L; x += 2.6) {
+                                if (std::fabs(x - dx) < 1.6) continue;
+                                const Vec2 T = at(x, 0.7);
+                                if (!clear(T, 0.6)) continue;
+                                b.furniture.push_back(outdoorPiece(Piece::HighTable, posHash(T), T - sf.n * 0.3, sf.n, b.paveY, false));
+                                b.furniture.push_back(outdoorPiece(Piece::BarStool, posHash(T) ^ 1u, T - d * 0.6, d, b.paveY, false));
+                                b.furniture.push_back(outdoorPiece(Piece::BarStool, posHash(T) ^ 2u, T + d * 0.6, d * -1.0, b.paveY, false));
+                            }
+                            const Vec2 c = at(std::clamp(dx + 1.2, Real(0.6), L - 0.6), std::min(room - 0.5, Real(1.6)));
+                            if (clear(c, 0.4)) aFrame(c, d, Vec3(0.05, 0.06, 0.05));
+                            break;
+                        }
+                        case 15: {   // CLUB: a rope line from the door along the front, brass posts every 1.4 m
+                            const Real dir = (hh & 1) ? 1.0 : -1.0;
+                            std::vector<Vec2> posts;
+                            for (int k = 0; k < 6; ++k) {
+                                const Vec2 q = at(dx + dir * (0.9 + k * 1.4), 1.0);
+                                const Real along = dot(q - sf.a, d);
+                                if (along < 0.4 || along > L - 0.4 || !clear(q, 0.25)) break;
+                                posts.push_back(q);
+                            }
+                            for (std::size_t k = 0; k < posts.size(); ++k) {
+                                boxAt(posts[k], d, sf.n, 0.3, 0.3, 0, 0.04, PartId::Metal, Vec3(0.75, 0.58, 0.22));
+                                boxAt(posts[k], d, sf.n, 0.06, 0.06, 0.04, 0.95, PartId::Metal, Vec3(0.80, 0.62, 0.25));
+                                if (k + 1 < posts.size()) {   // the velvet rope, sagging a little
+                                    const Vec2 mid = (posts[k] + posts[k + 1]) * 0.5;
+                                    boxAt(mid, d, sf.n, 1.35, 0.05, 0.80, 0.05, PartId::Trim, Vec3(0.45, 0.04, 0.08));
+                                }
+                            }
+                            if (posts.size() >= 2) {   // the queue's line, for the host: where the night's crowd waits to get in
+                                LotBuilding::Area ar;
+                                ar.kind = "club_queue";
+                                ar.center = (posts.front() + posts.back()) * 0.5 - sf.n * 0.5;
+                                ar.axis = d * dir;
+                                ar.halfL = (posts.back() - posts.front()).length() * 0.5;
+                                ar.halfW = 0.4;
+                                b.areas.push_back(ar);
+                            }
+                            break;
+                        }
+                        default: break;
+                    }
+                }
+                appendKit(kit, outParts);
+            }
             // A yarded house earns its LANDSCAPING: front walk to the street,
             // a hedge along the front lot line, back-yard tree spots.
             if (yardApplied)

@@ -9216,3 +9216,18 @@ The kerb is found ON THE DECK: a nav link's width is its travel lanes, and a str
 Two kinds of place keep their posted hours: one nobody was hired at (a lab town, a population capped below its jobs) and one whose staff the schedule never has at work (a commute longer than the shift on the game clock). Shutting those for good would be the sim's arithmetic, not a shop.
 
 **Consequences.** island_8_nature: 2,585 shops, cafes, restaurants, bars and clubs gated; 1,315 staffed at 10:00 and 742 at 22:00. On the game clock staff reach work late in the morning, so half the shops open late; that is the sim's commute model, and the OPEN signs already showed it. The host logs `[citysim] staffed places`. Test: `a_shop_is_open_to_customers_only_while_someone_works_there`.
+
+## ADR-0148 — Shopfronts dressed by trade
+
+**Context.** The city's next ten, #4: the shops were named and signed and fitted out inside, but the pavement in front of a grocer looked like the pavement in front of a bar.
+
+**Decision.** After the café terraces, the lot pass dresses every street-side shop front that has at least 1.6 m of paving in front of its glass, by trade:
+- grocer: tiered produce stands, two each side of the door;
+- boutique, bookshop, electronics: an A-frame board by the door, plus a cart of books for a bookshop;
+- restaurant: planters flanking the door and a menu stand (its terrace as before);
+- bar: high tables with bar stools along the window (library pieces, so they can be sat on) and a chalk board;
+- club: a velvet rope on brass posts running from the door along the front.
+
+The club's line is recorded as an area `club_queue` for the host. Everything is kept on the paving, clear of the door and the road, at the paving's height. `RT_FRONT_DEBUG=1` prints each dressed front.
+
+**Consequences.** island_8_nature: 284 fronts dressed (61 boutiques, 58 restaurants, 49 cafés, 27 bars, 24 electronics, 21 bookshops, 16 grocers, 2 clubs). Most shop fronts have less paving than that in front of them and are not dressed. Lots tag `2026-10-09.3`. Owed: the sim lining the night's crowd up in `club_queue` with a bouncer at the door; projecting blade signs.
