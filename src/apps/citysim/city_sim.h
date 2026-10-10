@@ -649,8 +649,20 @@ public:
     // strips from the DRIVABLE width (band-model semantics, sim-side). The
     // render bridge lines its lane arrows up with the same spacing.
     engine::Real laneSpacingFor(int li) const;
+    int walkerFile(const Agent& a) const;       // which file across the pavement a walker keeps (0 = by the kerb)
+    engine::Real walkerVerge(const Agent& a) const;   // ...as its distance in from the kerb
     const engine::NavGraph* graph() const { return nav_; }
     SignalController& signals() { return signals_; }
+    // RT_TRAFFIC_DEBUG: why a walker last stood still (1 kerb gap, 2 signal line, 3 a car body, 4 its leader) and
+    // its follow gap -- the "spawn point" heaps
+    int holdWhyOf(int i) const { return i >= 0 && i < static_cast<int>(holdWhy_.size()) ? holdWhy_[static_cast<std::size_t>(i)] : 0; }
+    void holdWhy(const Agent& a, uint8_t why) {
+        const std::size_t i = static_cast<std::size_t>(&a - agents_.data());
+        if (holdWhy_.size() != agents_.size()) holdWhy_.assign(agents_.size(), 0);
+        if (i < holdWhy_.size()) holdWhy_[i] = why;
+    }
+    std::vector<uint8_t> holdWhy_;
+    std::vector<int> solverFrom_, solverNbr_;   // the overlap solver's neighbours, gathered once a tick (advance)
 
     // --- three-tier traffic (P4) --------------------------------------------
     // Public knobs with the approved defaults; a level/test opts in by setting
@@ -1736,6 +1748,10 @@ private:
     // coarse tick, when its position actually moves). junctionGrid_ is a static
     // bake of junctions_ so nearJunction() stops scanning the whole list.
     AgentGrid grid_;
+    AgentGrid carGrid_;               // the K tier's cars only, rebuilt each tick (stepTick: the walkers' car checks)
+    std::vector<int> carGridIds_;
+    AgentGrid pedGrid_;               // the K tier's walkers out on the street, rebuilt each tick (the overlap solver)
+    std::vector<int> pedGridIds_;
     // ...and the same cells holding ONE tier each (setTier keeps them): the wake check asks for dormant agents in a
     // kilometre and the promote check for far ones in 500 m -- from grid_ that was everyone there (~5,000 at 100k),
     // each loaded and sorted to read its tier

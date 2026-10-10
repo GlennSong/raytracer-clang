@@ -9297,3 +9297,49 @@ Still open:
 - **Street links by planting:** 4,032 bare, 272 avenue, 2,646 mixed, 3,070 sparse, 1,388 saplings, 2,180 palms, 196 flowering.
 
 Tests: `streets_are_planted_by_their_character`, `street_tree_species_grow_to_their_kind`. Owed: trunk colliders (still); tuning the wealth field against what reads on the ground.
+
+## ADR-0152 — Cars off the pavement, the bus slot, walkers in files, and a crowd that doesn't stop the frame
+
+**Context.** Glenn, downtown Saltwood at 07:48 after the busy-streets change (ADR-0150) had three reports:
+- "cars driving on the sidewalk ... spawning on the sidewalk and then sliding out into the street";
+- "several buses piled up on one another ... no bus body, only the NOT IN SERVICE sign";
+- "all the agents and vehicles are starting in one place ... like it's some spawn point. That's killing the frame rate."
+
+The near-ring census in `traffic?` shows where cars sit across their link, cars parked past the kerb (with `RT_TRAFFIC_DEBUG`, who they are), and the biggest 1.5 m piles of drawn agents. It found five separate causes.
+
+**Decision.**
+- **The bus slot.** The scripted fleet names slot 24 "bus", but the slot's type came from the built-in 12-entry table by slot number (24 wraps to a sedan). `ambientSlotFor`, which skips Bus slots, therefore dealt 1 in 25 ordinary cars the bus slot: a 12 m "sedan" wearing NOT IN SERVICE. The slot named "bus" is now a Bus, and the sign draws only for real buses. Every car's model draw shifts with it.
+- **Cabs without a bay wait off the street.** That applies both when placed from the schedule and at a fare's end. Before, they stood on the verge fallback 2.8 m past the kerb, eight setback slots per node, and every cab whose "home" was one tower's node made a heap of 40 on the pavement.
+- **Out of a garage.** A car parked off-street keeps idlePose's verge spot as its stored pose, so `startTrip` drew it pulling out from the pavement into its lane. Off-street cars now appear in their lane with no pull-out, and a trip that finds no route leaves the car in the garage.
+- **Seated goal clocks** start somewhere in the state's dwell (agent bits and the day), not at 0. At 0, everyone resting in one state ended the dwell on the same tick. `RT_SEAT_AT_ZERO` restores the old behaviour.
+- **Walkers in files.** Up to three files, 0.9 m apart and as wide as the pavement allows (`junctionPad_`), each with its own following chain. Before, a tower door's strollers walked the one line in single file, 0.4 m apart, at a third of walking pace (`holdWhyOf`: their leader). `RT_ONE_FILE` restores the old behaviour.
+- **The step.** Three changes, each with an A/B or measured:
+  - The overlap solver gathers each walker's neighbours once per tick instead of querying the grid six times (`RT_SOLVER_REQUERY` restores the old behaviour).
+  - The gather uses a per-tick grid of the K tier's street walkers (`pedGrid_`).
+  - The walkers' car checks (body ahead, kerb inbound traffic, footprint squeeze, the cars in view) use a per-tick grid of the K tier's cars (`carGrid_`).
+
+  All of these previously queried `grid_`, which holds the hundreds of residents INDOORS at a tower's door, and kept only the few that mattered.
+
+**Tried and dropped.**
+- **Lanes from each street's own band spec.** The edges' spec indices are not rebased when nets are combined: "3 travel lanes" in a 7 m street. Worth fixing on its own.
+- **Narrowing every link with a parking band.** 0 cars over the bay line before and after.
+- **Per-walker kerb stand-backs and impatient walkers passing crawling cars.** No change to the piles, and 2 contacts in `walkers_gap_accept_at_unsignalled_junctions`.
+
+**Consequences.** Glenn's spot (-3853, -590) at 07:48:
+
+| Measure | Before | After |
+|---|---|---|
+| Cars parked past the kerb | 41 → 17 | 0 |
+| NOT IN SERVICE signs drawn with no bus near | 15 | 0 |
+| Walkers piled 4+ to a 1.5 m spot | 169 / 135 / 116 / 120 | 134 / 82 / 84 / 79 |
+| Worst pile | 17, standing | 6–11, walking |
+| City step | 112 ms (solver 72, tail 15, move 11) | 11–14 ms (solver 0.7–1.0, tail 3, move 1.6) |
+| Frame p50 / p90 / p99 | 138 / 164 / 260 ms | 21.5 / 26 / 120 ms (fixed 15 / 18 / 57) |
+
+Tests: `walkers_keep_files_across_a_wide_pavement`; 1550/1550, lanes 29/29.
+
+Owed:
+- The near ring holds ~4,500 K agents against nearTarget 1500 downtown.
+- Cabs still crowd downtown (53 of 61 drivers near).
+- Spec lane counts (above).
+- The p99 hitches (120 ms).

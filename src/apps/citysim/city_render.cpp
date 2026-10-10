@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <map>
+#include <unordered_map>
 #include <sstream>
 #include <chrono>
 #include <cstdlib>
@@ -561,7 +562,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 // Which slot is the BUS, by the script's own class name --
                 // so the transit fleet draws as a bus without a hard-coded
                 // index that a reordered fleet would silently break.
-                if (className == "bus") busVariant_ = v;
+                // ...and the slot IS a bus to the sim too: the type came from the built-in table by slot number
+                // (slot 24 wraps to a sedan), so ambientSlotFor, which skips Bus slots, dealt ordinary cars the bus
+                // body -- 1 in 25 cars a 12 m "sedan" wearing NOT IN SERVICE (Glenn: the signs stacked over the kerb)
+                if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
                 catalogue.push_back(body);
             }
@@ -2237,7 +2241,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         const int v = drawSlotFor(static_cast<int>(ai));
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
         // THE DESTINATION SIGN: the bus's line, or NOT IN SERVICE on its way in (same pose as the body)
-        if (v == busVariant_ && !busSignGroups_.empty()) {
+        if (v == busVariant_ && sim_.isBus(static_cast<int>(ai)) && !busSignGroups_.empty()) {
             const int row = busSignRowFor(static_cast<int>(ai));
             if (InstanceGroup* sg = row >= 0 ? world.get<InstanceGroup>(busSignGroups_[static_cast<std::size_t>(row)]) : nullptr) {
                 const auto po = physPose_.find(static_cast<int>(ai));
@@ -3626,12 +3630,130 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     l += " | roles:"; for (int k = 0; k < 16; ++k) l += " " + std::to_string(roles[k]);
                     std::fprintf(stderr, "%s\n", l.c_str());
                 }
-                char tb[512];
+                // WHERE THE DRAWN CARS SIT ACROSS THE ROAD (Glenn: "cars driving on the sidewalk... down the middle of
+                // the road and not within a lane"): each near K car's drawn pose against its link -- under way, how far
+                // from the lane centre refreshPose aims at (pulling out counted apart); at rest on the street, whether
+                // it stands past the kerb of the nearest carriageway
+                int laneN = 0, laneOff = 0, laneOut = 0, laneInBays = 0, pulling = 0, restN = 0, restKerb = 0;
+                Real laneErrSum = 0;
+                std::string kerbWho;
+                for (int nearIdx : sim_.nearAgents()) {
+                    const Agent& a = ag[static_cast<std::size_t>(nearIdx)];
+                    if (a.mode != Agent::Mode::Driver || a.far() || a.released) continue;
+                    if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                    const Vec3 w3 = agentPose(a).transformPoint(Vec3(0, 0, 0));
+                    const Vec2 w(w3.x, w3.z);
+                    if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
+                        if (a.pullLen > 0 && a.pullS < a.pullLen) { ++pulling; continue; }
+                        const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L.from)], d = nav_.direction(li);
+                        const Real side = dot(w - A, Vec2(d.y, -d.x));
+                        const int lanes = std::max(1, L.lanes);
+                        const Real sp = sim_.laneSpacingFor(li);
+                        Real want = (0.5 + std::clamp(Real(a.laneF), Real(0), Real(lanes - 1))) * sp;
+                        if (L.oneWay) want -= lanes * 0.5 * sp;
+                        ++laneN;
+                        laneErrSum += std::fabs(side - want);
+                        laneOff += std::fabs(side - want) > 1.0;
+                        laneOut += std::fabs(side) > L.width * 0.5;
+                        // over the bay line: the body reaches into the kerbside parking strip the street was built with
+                        const Real pw = L.parkWidth > 0 ? L.parkWidth : 0;
+                        laneInBays += pw > 0 && std::fabs(side) + 0.9 > L.width * 0.5 - pw + 0.2;
+                    } else if (!a.moving) {
+                        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                            sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet) continue;
+                        const int li = nav_.nearestLink(w);
+                        if (li < 0) continue;
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L.from)], B = nav_.nodes[static_cast<std::size_t>(L.to)];
+                        const Real l2 = (B - A).lengthSquared();
+                        const Real t = l2 > 1e-9 ? std::clamp(dot(w - A, B - A) / l2, Real(0), Real(1)) : Real(0);
+                        ++restN;
+                        const Real past = (w - (A + (B - A) * t)).length() - L.width * 0.5;
+                        if (past > 0.3) {
+                            ++restKerb;
+                            if (kerbWho.size() < 700) {   // who: drawn where, its car where, at home or work
+                                const Vec2 vp = a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size())
+                                                    ? sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].pos : Vec2(0, 0);
+                                char b[240];
+                                const int hn = a.home;
+                                const int outs = hn >= 0 && hn < nav_.nodeCount() ? static_cast<int>(nav_.outLinks[static_cast<std::size_t>(hn)].size()) : -1;
+                                const bool offS = a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                                                  sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet;
+                                std::snprintf(b, sizeof(b), " [%d %.1f,%.1f +%.1fm car %d %.1f,%.1f%s act %d goal %d rest %d bay %d h%d(out %d) w%d mode %d legs %zu trip %d]",
+                                              nearIdx, w.x, w.y, past, a.vehicle, vp.x, vp.y, offS ? " OFF" : "", static_cast<int>(a.activity), a.goal,
+                                              a.restNode, a.parkedBay, a.home, outs, a.work, static_cast<int>(a.mode), a.route.links.size(), a.tripGoal);
+                                kerbWho += b;
+                            }
+                        }
+                    }
+                }
+                // PILES (Glenn: "all the agents and vehicles are starting in one place... on top of one another like
+                // it's some spawn point"): drawn near K agents by 1.5 m cell -- how many stand in a cell with 3+ others,
+                // the biggest pile, and who is in it
+                std::unordered_map<int64_t, std::vector<int>> pile;
+                for (int nearIdx : sim_.nearAgents()) {
+                    const Agent& a = ag[static_cast<std::size_t>(nearIdx)];
+                    if (a.far() || a.released) continue;
+                    if (a.mode == Agent::Mode::Pedestrian && !sim_.pedVisible(nearIdx)) continue;
+                    if (a.mode == Agent::Mode::Driver && !a.moving && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                        sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet) continue;
+                    if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                    const int64_t cx = static_cast<int64_t>(std::floor(a.pos.x / 1.5)), cz = static_cast<int64_t>(std::floor(a.pos.y / 1.5));
+                    pile[(cx << 32) ^ (cz & 0xffffffff)].push_back(nearIdx);
+                }
+                int piled = 0;
+                const std::vector<int>* worst = nullptr;
+                for (const auto& [k, v] : pile) {
+                    if (v.size() >= 4) piled += static_cast<int>(v.size());
+                    if (!worst || v.size() > worst->size()) worst = &v;
+                }
+                std::string pileWho;
+                if (worst && worst->size() >= 4) {
+                    int cars = 0, peds = 0, mov = 0;
+                    std::map<int, int> homes, acts;
+                    for (int i : *worst) {
+                        const Agent& a = ag[static_cast<std::size_t>(i)];
+                        ++(a.mode == Agent::Mode::Driver ? cars : peds);
+                        mov += a.moving;
+                        ++homes[a.home];
+                        ++acts[static_cast<int>(a.activity)];
+                    }
+                    const Agent& a0 = ag[static_cast<std::size_t>(worst->front())];
+                    char pb[256];
+                    std::snprintf(pb, sizeof(pb), "; piled 4+ to a 1.5 m spot: %d agents, the worst %zu at %.1f,%.1f (%d cars %d on foot, %d moving, %zu homes, acts",
+                                  piled, worst->size(), a0.pos.x, a0.pos.y, cars, peds, mov, homes.size());
+                    pileWho = pb;
+                    for (const auto& [k, n] : acts) pileWho += " " + std::to_string(k) + ":" + std::to_string(n);
+                    pileWho += ")";
+                    if (std::getenv("RT_TRAFFIC_DEBUG"))
+                        for (std::size_t q = 0; q < worst->size() && q < 6; ++q) {
+                            const int i = (*worst)[q];
+                            const Agent& a = ag[static_cast<std::size_t>(i)];
+                            const int li = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+                            char qb[260];
+                            const engine::NavLink* Lq = li >= 0 ? &nav_.links[static_cast<std::size_t>(li)] : nullptr;
+                            std::snprintf(qb, sizeof(qb), " {%d st %d v %.2f leg %d/%zu link %d len %.1f w %.1f d %.1f hold %.1f junc %d sig %d next %d why %d gap %.2f/%.2f}",
+                                          i, static_cast<int>(a.state), a.speed, a.leg, a.route.links.size(), li, Lq ? Lq->length : -1.0, Lq ? Lq->width : -1.0,
+                                          a.distOnLeg, a.holdTimer, Lq ? static_cast<int>(nav_.isJunction(Lq->to)) : -1,
+                                          li >= 0 ? static_cast<int>(sim_.signals().hasSignal(li)) : -1,
+                                          a.leg + 1 < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg + 1)] : -1,
+                                          sim_.holdWhyOf(i), std::min(sim_.gapOf(i), Real(99)), sim_.minGapOf(i));
+                            pileWho += qb;
+                        }
+                } else {
+                    pileWho = "; piled 4+ to a 1.5 m spot: " + std::to_string(piled);
+                }
+                char tb[768];
                 std::snprintf(tb, sizeof(tb), "driving %d island-wide; within 300 m: %d driving (%d cars, %d cabs, %d buses), %d on foot, %d indoors, %d in tier K; "
-                              "car owners under way K/V/D %d/%d/%d, at rest %d/%d/%d; sleeper waypoints %ld",
+                              "car owners under way K/V/D %d/%d/%d, at rest %d/%d/%d; sleeper waypoints %ld; "
+                              "near K cars under way %d (off their lane >1 m %d, over the bay line %d, past the kerb %d, mean lane error %.2f m), pulling out %d; "
+                              "at rest on the street %d (past the kerb %d)",
                               drivingAll, drivingNear, nearCars, nearCabs, nearBuses, nearPeds, nearIndoors, nearK,
-                              drvMoving[0], drvMoving[1], drvMoving[2], drvRest[0], drvRest[1], drvRest[2], sim_.dormantWaypoints());
-                ctx.settings.setString("traffic.telemetry", tb);
+                              drvMoving[0], drvMoving[1], drvMoving[2], drvRest[0], drvRest[1], drvRest[2], sim_.dormantWaypoints(),
+                              laneN, laneOff, laneInBays, laneOut, laneN ? laneErrSum / laneN : 0.0, pulling, restN, restKerb);
+                ctx.settings.setString("traffic.telemetry", std::string(tb) + pileWho + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho : std::string()));
             }
         }
         // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and

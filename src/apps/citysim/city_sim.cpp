@@ -252,6 +252,20 @@ bool CitySim::nearJunction(Vec2 pos, Real margin) const {
     return false;
 }
 
+// WALKERS IN FILES ACROSS THE PAVEMENT (Glenn: "sitting on top of one another like it's some spawn point"). Every
+// walker kept the one line 1 m in from the kerb and followed whoever was ahead on it, so a tower door's worth of
+// strollers (homes by floor area: hundreds to a door) went down a 5 m pavement in single file, 0.4 m apart, crawling at
+// a third of a walking pace -- and stood in a heap at the door. Up to three files, 0.9 m apart, as wide as the
+// pavement allows (junctionPad_, the street look's), each its own following chain. RT_ONE_FILE: as before.
+int CitySim::walkerFile(const Agent& a) const {
+    static const bool oneFile = std::getenv("RT_ONE_FILE") != nullptr;
+    if (oneFile) return 0;
+    const int files = std::clamp(static_cast<int>(std::floor((junctionPad_ - 1.7) / 0.9)) + 1, 1, 3);
+    return files <= 1 ? 0 : static_cast<int>((a.brain >> 20) % static_cast<uint32_t>(files));
+}
+
+Real CitySim::walkerVerge(const Agent& a) const { return 1.0 + 0.9 * static_cast<Real>(walkerFile(a)); }
+
 Real CitySim::laneSpacingFor(int li) const {
     const engine::NavLink& l = nav_->links[li];
     Real w = l.width;
@@ -289,7 +303,7 @@ std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
             Real t = static_cast<Real>(k) / n;
             Vec2 p = (a.mode == Agent::Mode::Driver)
                          ? nav_->laneCenter(li, lane, t, spacing)
-                         : nav_->sidewalkPoint(li, t);
+                         : nav_->sidewalkPoint(li, t, walkerVerge(a));
             if (out.empty() || (p - out.back()).length() > 1e-6) out.push_back(p);
         }
     }
@@ -684,6 +698,10 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
                         static_cast<int>(agents_.size()));
         vGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(agents_.size()));
         dGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(agents_.size()));
+        carGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(agents_.size()));
+        carGridIds_.clear();
+        pedGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(agents_.size()));
+        pedGridIds_.clear();
         rebuildTierLists();
         rehashAll_ = true;
         for (std::size_t i = 0; i < agents_.size(); ++i)
@@ -1983,6 +2001,11 @@ void CitySim::placeFromSchedule(int idx) {
                         vehicles_[static_cast<std::size_t>(a.car)].heading = a.heading;
                         parkedGrid_.place(a.car, a.pos);
                         grid_.place(who, a.pos);
+                    } else if (!bays_.empty()) {
+                        // NO BAY FREE: at a rank off the street, not on the verge past the kerb -- every cab whose home
+                        // node is one tower's stood there in a heap of eight spots on the pavement (Glenn: "a spawn point")
+                        vehicles_[static_cast<std::size_t>(a.car)].offStreet = true;
+                        vehicles_[static_cast<std::size_t>(a.car)].pos = a.pos;
                     }
                 }
                 return;
@@ -1999,6 +2022,19 @@ void CitySim::placeFromSchedule(int idx) {
         if (goal < 0) return;   // this table has no such state: leave as built
         a.goal = goal;
         a.goalHours = 0;
+        // ONE CLOCK EACH: seated at 0, everyone resting in one state ended its dwell on the same tick -- and with homes
+        // by floor area a tower is hundreds of households, so they walked out of its door together and down the street
+        // as one heap of 16 (Glenn: "sitting on top of one another like it's some spawn point"). Somewhere in the dwell
+        // instead, by the agent's own bits and the day (no rng draw). RT_SEAT_AT_ZERO: as before.
+        static const bool atZero = std::getenv("RT_SEAT_AT_ZERO") != nullptr;
+        if (!atZero && s.where != Snapshot::Where::AtWork && eveningGoal < 0) {
+            const double dwell = t.state(goal).dwellHours;
+            if (dwell > 0) {
+                uint32_t h = a.brain * 0x9E3779B1u ^ static_cast<uint32_t>(std::floor(clockTotalHours_ / 24.0)) * 0x85EBCA77u;
+                h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+                a.goalHours = static_cast<Real>(dwell * ((h & 0xFFFF) / 65536.0));
+            }
+        }
         a.activity = want;
         a.wakeAt = -1;
         // AT WORK SINCE WHEN: the morning at work ends in lunch (a dwell), so a
@@ -3968,6 +4004,13 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         (fromRest && a.parkedBay >= 0 && a.parkedBay < static_cast<int>(bays_.size()) &&
          nav_->links[static_cast<std::size_t>(bays_[static_cast<std::size_t>(a.parkedBay)].link)].to == origin)
             ? a.parkedBay : -1;
+    // OUT OF A GARAGE (no bay was free where it parked): its stored pose is only the verge spot idlePose gave it --
+    // past the kerb, on the pavement. Pulling out from there drew every such car sliding off the sidewalk into the
+    // street (Glenn), so it comes out in its lane instead; and a trip that finds no route leaves it in the garage
+    // rather than parked on the pavement in plain view (the 40 cars heaped outside one tower's door).
+    const bool wasOffStreet = a.car >= 0 && a.car < static_cast<int>(vehicles_.size()) &&
+                              vehicles_[static_cast<std::size_t>(a.car)].offStreet;
+    const Real wasParkedY = wasOffStreet ? vehicles_[static_cast<std::size_t>(a.car)].parkedY : Real(-1e30);
     remountOwnedCar(a);
     if (a.car >= 0 && a.car < static_cast<int>(vehicles_.size()))
     {
@@ -4075,6 +4118,11 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
             a.pos = bays_[static_cast<std::size_t>(a.parkedBay)].pos;
         else
             a.pos = idlePose(origin, a.mode, a.brain);
+        if (wasOffStreet) {   // (see wasOffStreet) back in the garage it never left
+            vehicles_[static_cast<std::size_t>(a.car)].offStreet = true;
+            vehicles_[static_cast<std::size_t>(a.car)].parkedY = wasParkedY;
+            vehicles_[static_cast<std::size_t>(a.car)].pos = a.pos;
+        }
         if (a.targetBay >= 0 && a.targetBay < static_cast<int>(bays_.size()) &&
             bays_[static_cast<std::size_t>(a.targetBay)].occupant == indexOf(a))
             bays_[static_cast<std::size_t>(a.targetBay)].occupant = -1;
@@ -4145,7 +4193,7 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     // CHAINED trip keeps a pull already under way -- cutting it short snapped
     // the car into its lane mid-merge (a 9 m jump and a 158-degree pivot).
     if (fromRest) a.pullLen = 0;
-    if (fromRest && a.mode == Agent::Mode::Driver && !a.far()) {
+    if (fromRest && a.mode == Agent::Mode::Driver && !a.far() && !wasOffStreet) {
         const Vec2 off = pulledFrom - a.pos;
         const Real d = off.length();
         if (d > 0.5 && d < 40.0) {
@@ -4185,7 +4233,7 @@ void CitySim::refreshPose(Agent& a) {
     // Sample this agent's own guide line (lane centre / sidewalk) on a link.
     auto sample = [&](int link, Real t) {
         if (t < 0) t = 0; else if (t > 1) t = 1;
-        if (a.mode != Agent::Mode::Driver) return nav_->sidewalkPoint(link, t);
+        if (a.mode != Agent::Mode::Driver) return nav_->sidewalkPoint(link, t, walkerVerge(a));
         const engine::NavLink& LL = nav_->links[link];
         const int lanes = std::max(1, LL.lanes);
         // FRACTIONAL lane (device: visible lane changes): laneF eases toward
@@ -5001,6 +5049,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         Real slowZone = kPedSlowZone;
         target = followCap(target, gap, minGap, slowZone);
         a.speed = std::min(target, a.speed + accel * dt);
+        if (a.speed < 0.3 && gap < 1e8) holdWhy(a, 4);
     }
 
     // Gridlock clock + escape. A jam's terminal form is a RING: cars pinned
@@ -5066,7 +5115,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             if (gate.distToLine >= -kLineSlack - 1e-6) {
                 Real room = std::max(Real(0), gate.distToLine);
                 Real motion = std::min(a.speed * dt, room);
-                if (motion < a.speed * dt) a.speed = 0;   // held at the line
+                if (motion < a.speed * dt) { a.speed = 0; if (!car) holdWhy(a, 2); }   // held at the line
                 a.distOnLeg += motion;
                 // FSM: red = Waiting; holding a turn for oncoming = Yielding.
                 // A pedestrian held at the kerb is Waiting too (honest red ring).
@@ -5112,7 +5161,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             // Grid candidates (P4.1): the widest accepted-gap radius is
             // speed * 2.5 + 4 at the fastest personality-scaled class speed
             // (~32 m/s -> ~85 m); 92 m covers it plus a step's drift.
-            grid_.query(nodeP, 92.0, queryScratch_);
+            carGrid_.query(nodeP, 92.0, queryScratch_);
             for (int ci : queryScratch_) {
                 const Agent& c = agents_[ci];
                 if (c.mode != Agent::Mode::Driver || c.far() ||
@@ -5125,6 +5174,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                 if (near) { carInbound = true; break; }
             }
             if (carInbound) {
+                holdWhy(a, 1);
                 a.holdTimer += dt;
                 a.speed = 0;
                 a.state = Agent::State::Waiting;
@@ -5154,7 +5204,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
         // mirrors its driver's pose, so driver candidates near the probe find
         // every body the vehicles_ scan found. 26 m covers the 6 m body test
         // plus a launch-tick's ghost-vs-mirror gap.
-        grid_.query(probe, 26.0, queryScratch_);
+        carGrid_.query(probe, 26.0, queryScratch_);
         for (int di : queryScratch_) {
             const Agent& drv = agents_[di];
             if (drv.mode != Agent::Mode::Driver || drv.far() ||
@@ -5183,6 +5233,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
                 a.speed = 0;
                 motion = 0;
                 a.state = Agent::State::Waiting;
+                holdWhy(a, 3);
                 break;
             }
         }
@@ -5544,7 +5595,9 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             a.parkedBay = bay;
             a.pos = bays_[bay].pos;
             a.heading = bays_[bay].heading;
-        } else if (parksInBays(a) && !bays_.empty()) {
+        } else if ((parksInBays(a) || isTaxi(myIdx)) && !bays_.empty()) {
+            // (a cab too: on the verge past the kerb, one fare's end after another, the cabs at a busy door stood
+            // heaped on the pavement -- Glenn's "spawn point". It waits off the street, at a rank, until it is hailed.)
             // NO FREE SPACE NEAR: off-street (a garage, a driveway) rather
             // than onto the verge at the corner, where every such car used to
             // pile up. It is not drawn and is not a body until it leaves. A
@@ -5739,7 +5792,7 @@ void CitySim::computeGaps() {
         // followers/leaders actually driving that link's lanes.
         int laneKey = (a.mode == Agent::Mode::Driver)
                           ? std::min(a.lane, std::max(1, nav_->links[li].lanes) - 1)
-                          : 1024;
+                          : 1024 + (nav_->links[li].footpath ? 0 : walkerFile(a));   // each file follows its own
         return static_cast<long long>(li) * 4096 + laneKey;
     };
     std::unordered_map<long long, std::vector<std::pair<Real, int>>> lanes;
@@ -5770,7 +5823,7 @@ void CitySim::computeGaps() {
             return a.first != b.first ? a.first < b.first : a.second < b.second;
         });
         minEntry[kv.first] = { v.front().first, v.front().second };
-        const bool walkers = (kv.first % 4096) == 1024;
+        const bool walkers = (kv.first % 4096) >= 1024;
         for (std::size_t k = 0; k + 1 < v.size(); ++k) {
             // WALKERS go side by side, not in file: one LEVEL with me (within a body's depth along the way) is not in
             // front of me -- the lean takes us past each other. Counted as a leader, a crowd that set off from one
@@ -6869,6 +6922,18 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     phaseMark(phase_.goals);   // clock + signals + goal pass + sensed build
     computeGaps();
     computeCarWedge();   // S7 senses: bodies in the forward corridor
+    // THE NEAR CARS, on their own grid for the walkers' car checks (the body ahead, the kerb's inbound traffic, the
+    // squeeze out of a footprint). Those asked grid_ -- everyone, the hundreds INDOORS at a tower's door among them --
+    // for the cars within 26-92 m of every walker, every tick, and kept only the few cars (14 ms of a 42 ms step
+    // downtown). Same members those scans kept (K drivers with a car), placed where grid_ has them this tick.
+    for (int id : carGridIds_) carGrid_.remove(id);
+    carGridIds_.clear();
+    for (int i : kIdx_) {
+        const Agent& c = agents_[static_cast<std::size_t>(i)];
+        if (c.mode != Agent::Mode::Driver || c.far() || c.vehicle < 0) continue;
+        carGrid_.place(i, c.pos);
+        carGridIds_.push_back(i);
+    }
     phaseMark(phase_.gaps);
     int tetherHeldThisTick = 0;   // stranded by the leash, city-wide
     for (int ai : active_) {
@@ -7187,7 +7252,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // mirrors its driver's pose, and ascending driver order IS
             // ascending vehicle order (drivers are built first, one car each),
             // so the bias sum accumulates in the vehicles_ scan's order.
-            grid_.query(a.pos, 26.0, queryScratch_);
+            carGrid_.query(a.pos, 26.0, queryScratch_);
             for (int di : queryScratch_) {
                 const Agent& drv = agents_[di];
                 if (drv.mode != Agent::Mode::Driver ||
@@ -7247,8 +7312,48 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // Hard body-overlap floor: several symmetric relaxation passes so two people
     // (whether or not they saw each other) never interpenetrate.
     phaseMark(phase_.advPop);
+    // WHO EACH WALKER CAN TOUCH, gathered ONCE a tick (below: why the radius carries six passes of drift) instead of
+    // queried six times. Nothing that picks a neighbour changes between passes -- mode, tier, moving, stepped, seen
+    // -- and the grid itself is not re-placed during them, so the passes see the same pairs in the same order. The
+    // query was the step: a tower's door holds its hundreds of residents INDOORS in the grid, every walker near it
+    // waded through them six times a tick (72 ms of a 112 ms step downtown at 07:48, Glenn: "that's killing the
+    // frame rate"); now the indoor ones are dropped once, when the list is made. RT_SOLVER_REQUERY: as before.
+    static const bool requery = std::getenv("RT_SOLVER_REQUERY") != nullptr;
+    solverFrom_.clear();
+    solverNbr_.clear();
+    // ...from the walkers OUT ON THE STREET only (the K tier's, moving or standing in view): the indoor residents at a
+    // door were most of what every gather waded through (10 ms of a 21 ms step). (Where they stand now: the query
+    // radius carries 4 m of slack, a tick of walking is 2 cm.)
+    for (int id : pedGridIds_) pedGrid_.remove(id);
+    pedGridIds_.clear();
+    if (!requery)
+        for (int ki : kIdx_) {
+            const Agent& b = agents_[static_cast<std::size_t>(ki)];
+            if (b.mode != Agent::Mode::Pedestrian || b.far() || (!b.moving && !pedVisible(ki))) continue;
+            pedGrid_.place(ki, b.pos);
+            pedGridIds_.push_back(ki);
+        }
+    for (int ai : active_) {
+        const std::size_t i = static_cast<std::size_t>(ai);
+        solverFrom_.push_back(static_cast<int>(solverNbr_.size()));
+        if (requery) continue;
+        const Agent& a = agents_[i];
+        if (a.mode != Agent::Mode::Pedestrian || !a.moving || !advanced[i]) continue;
+        pedGrid_.query(a.pos, kPedBodyMin + 4.0, pairScratch_);
+        for (int gj : pairScratch_) {
+            const std::size_t j = static_cast<std::size_t>(gj);
+            if (j == i) continue;
+            const Agent& b = agents_[j];
+            if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
+            const bool still = (!b.moving || !advanced[j]) && pedVisible(gj);
+            if (!still && (!b.moving || j <= i)) continue;
+            solverNbr_.push_back(still ? -1 - gj : gj);   // (still: its own ground, encoded negative)
+        }
+    }
+    solverFrom_.push_back(static_cast<int>(solverNbr_.size()));
     for (int iter = 0; iter < 6; ++iter)
-        for (int ai : active_) {
+        for (std::size_t k = 0; k < active_.size(); ++k) {
+            const int ai = active_[k];
             Agent& a = agents_[ai];
             const std::size_t i = static_cast<std::size_t>(ai);
             if (a.mode != Agent::Mode::Pedestrian || !a.moving)
@@ -7272,18 +7377,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // carries the body minimum plus room for six passes of drift. Pairs
             // beyond it could not have touched anyway -- the push only fires
             // below kPedBodyMin.
-            grid_.query(a.pos, kPedBodyMin + 4.0, pairScratch_);
-            for (int gj : pairScratch_) {
-                const std::size_t j = static_cast<std::size_t>(gj);
-                if (j == i) continue;
-                Agent& b = agents_[j];
-                if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
-                // A person STANDING or SITTING out on the street holds their ground too: the walker steps round
-                // them. (Only walker pairs were separated, so a walker could brush through someone standing at
-                // a stop or sitting on a bench -- the one overlapping pair macOS CI caught.) Walker pairs are
-                // visited once (j > i); a still body never runs this loop, so it is visited from every walker.
-                const bool still = (!b.moving || !advanced[j]) && pedVisible(gj);
-                if (!still && (!b.moving || j <= i)) continue;
+            auto touch = [&](int gj, bool still) {
+                Agent& b = agents_[static_cast<std::size_t>(gj)];
                 Real dx = a.pos.x - b.pos.x, dy = a.pos.y - b.pos.y;
                 Real d = std::sqrt(dx * dx + dy * dy);
                 if (d > 1e-4 && d < kPedBodyMin) {
@@ -7303,6 +7398,27 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                         b.pos.x -= kPedBodyMin * 0.5;
                     }
                 }
+            };
+            if (!requery) {
+                for (int n = solverFrom_[k]; n < solverFrom_[k + 1]; ++n) {
+                    const int e = solverNbr_[static_cast<std::size_t>(n)];
+                    touch(e < 0 ? -1 - e : e, e < 0);
+                }
+                continue;
+            }
+            grid_.query(a.pos, kPedBodyMin + 4.0, pairScratch_);
+            for (int gj : pairScratch_) {
+                const std::size_t j = static_cast<std::size_t>(gj);
+                if (j == i) continue;
+                Agent& b = agents_[j];
+                if (b.mode != Agent::Mode::Pedestrian || b.far()) continue;
+                // A person STANDING or SITTING out on the street holds their ground too: the walker steps round
+                // them. (Only walker pairs were separated, so a walker could brush through someone standing at
+                // a stop or sitting on a bench -- the one overlapping pair macOS CI caught.) Walker pairs are
+                // visited once (j > i); a still body never runs this loop, so it is visited from every walker.
+                const bool still = (!b.moving || !advanced[j]) && pedVisible(gj);
+                if (!still && (!b.moving || j <= i)) continue;
+                touch(gj, still);
             }
         }
 
@@ -7384,7 +7500,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 a.pos.x += r.x * s * py; a.pos.y += r.y * s * py;
             }
         };
-        grid_.query(a.pos, 26.0, queryScratch_);
+        carGrid_.query(a.pos, 26.0, queryScratch_);
         for (int di : queryScratch_) {
             const Agent& drv = agents_[di];
             if (drv.mode != Agent::Mode::Driver || drv.far() ||

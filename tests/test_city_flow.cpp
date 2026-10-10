@@ -542,3 +542,50 @@ TEST_CASE(walkers_gap_accept_at_unsignalled_junctions) {
     CHECK(pedNearBox > 0);   // walkers really do reach and cross the junction
     CHECK(contact == 0);     // never under a fast car's bumper while doing so
 }
+
+// WALKERS IN FILES (Glenn: "all the agents ... on top of one another like it's some spawn point"). A tower door's
+// strollers went down one line 1 m in from the kerb, each held behind the next: single file at a third of a walking
+// pace, a heap at the door. On a wide pavement they keep up to three files, each its own following chain; on a narrow
+// one (and where the sim knows no pavement) one file, as before.
+TEST_CASE(walkers_keep_files_across_a_wide_pavement) {
+    NavGraph nav = citytest::cityNav(600.0, 120.0, 5);
+    CitySim sim;
+    sim.setWander(true);
+    sim.build(nav, 0, 300, 11);
+    int byFile[3] = {0, 0, 0};
+    for (const Agent& a : sim.agents()) ++byFile[std::clamp(sim.walkerFile(a), 0, 2)];
+    CHECK(byFile[0] == 300);   // no pavement known: the one line by the kerb
+
+    sim.setJunctionPad(5.0);   // the island's 5 m pavements
+    int files[3] = {0, 0, 0};
+    for (const Agent& a : sim.agents()) ++files[std::clamp(sim.walkerFile(a), 0, 2)];
+    std::printf("    [files] %d / %d / %d of 300\n", files[0], files[1], files[2]);
+    for (int f = 0; f < 3; ++f) CHECK(files[f] > 60);
+    // ...0.9 m apart, the outermost 2.8 m in: on a 5 m pavement, short of the shopfronts
+    Real most = 0;
+    for (const Agent& a : sim.agents()) most = std::max(most, sim.walkerVerge(a));
+    CHECK(std::fabs(most - 2.8) < 1e-6);
+
+    sim.setJunctionPad(3.0);   // a narrow pavement: two files
+    int narrow = 0;
+    for (const Agent& a : sim.agents()) narrow = std::max(narrow, sim.walkerFile(a));
+    CHECK(narrow == 1);
+
+    // where they walk: their own file's distance in from the kerb
+    sim.setJunctionPad(5.0);
+    for (int t = 0; t < 200; ++t) sim.step(0.05, 0.0);
+    int checked = 0, onFile = 0;
+    for (const Agent& a : sim.agents()) {
+        if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
+        const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
+        if (L.length < 30 || a.distOnLeg < 12 || a.distOnLeg > L.length - 12) continue;   // clear of the corners
+        const Vec2 A = nav.nodes[static_cast<std::size_t>(L.from)], d = nav.direction(li);
+        const Real side = (a.pos.x - A.x) * d.y - (a.pos.y - A.y) * d.x;   // rightOf(d)
+        ++checked;
+        onFile += std::fabs(side - (L.width * 0.5 + sim.walkerVerge(a))) < 1.7;   // (less the lean)
+    }
+    std::printf("    [files] %d of %d walkers mid-link on their file\n", onFile, checked);
+    CHECK(checked > 30);
+    CHECK(onFile * 10 >= checked * 8);
+}
