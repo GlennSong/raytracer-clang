@@ -68,6 +68,13 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
                       {"elevated", {{"kind", "guardrail"}}}, {"at_grade", {{"kind", "guardrail"}, {"min_drop", 2.0}}}};
         scene["classes"]["mountain"] = m;
     }
+    // ROAD EDGES (the city's next ten #5; Glenn's guardrails, "in places"): the freeway, its ramps and the roads
+    // between towns get a guardrail at grade where the ground 5 m out drops 2.5 m or more -- an embankment, a bank
+    // above a river, a cut's far side -- and nowhere else. Their other edges keep their defaults.
+    for (const char* k : {"freeway", "ramp", "rural"})
+        if (scene.contains("classes") && scene["classes"].contains(k) && !(scene["classes"][k].contains("edges") &&
+                                                                           scene["classes"][k]["edges"].contains("at_grade")))
+            scene["classes"][k]["edges"]["at_grade"] = {{"kind", "guardrail"}, {"min_drop", 2.5}};
     json edges = json::array();
     const bool windowed = o.windowHalf > 0.0;
     auto inWin = [&](const Vec2& p, double margin) {
