@@ -3580,6 +3580,26 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
             std::snprintf(buf, sizeof(buf), "kerb %d/%d taken, garage stalls %d/%d taken; nearest taken stall %.1f %.1f %.1f (%.0f m)",
                           kerbTaken, kerb, stallsTaken, stalls, best.x, bestY, best.y, bestD < 1e29 ? bestD : -1.0);
             ctx.settings.setString("parking.telemetry", buf);
+            // `traffic?` (the city's next ten: "the streets look empty"): drivers on the road island-wide and within
+            // 300 m of the camera, by tier, and how many of those near are parked, walking, cabs or buses
+            {
+                int drivingAll = 0, drivingNear = 0, nearCars = 0, nearCabs = 0, nearBuses = 0, nearPeds = 0, nearIndoors = 0, nearK = 0;
+                const auto& ag = sim_.agents();
+                for (std::size_t i = 0; i < ag.size(); ++i) {
+                    const Agent& a = ag[i];
+                    const bool driving = a.mode == Agent::Mode::Driver && a.vehicle >= 0 && a.moving;
+                    drivingAll += driving;
+                    if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                    if (a.tier == Agent::Tier::K) ++nearK;
+                    if (driving) { ++drivingNear; if (sim_.isBus(static_cast<int>(i))) ++nearBuses; else if (sim_.isTaxi(static_cast<int>(i))) ++nearCabs; else ++nearCars; }
+                    else if (a.indoors) ++nearIndoors;
+                    else if (a.mode == Agent::Mode::Pedestrian) ++nearPeds;
+                }
+                char tb[256];
+                std::snprintf(tb, sizeof(tb), "driving %d island-wide; within 300 m: %d driving (%d cars, %d cabs, %d buses), %d on foot, %d indoors, %d in tier K",
+                              drivingAll, drivingNear, nearCars, nearCabs, nearBuses, nearPeds, nearIndoors, nearK);
+                ctx.settings.setString("traffic.telemetry", tb);
+            }
         }
         // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and
         // someone who works there is at work; `opensigns?` says how many
