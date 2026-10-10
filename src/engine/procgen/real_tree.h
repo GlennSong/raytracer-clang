@@ -27,7 +27,18 @@
 
 namespace engine {
 
-enum class RealSpecies : uint8_t { Spruce = 0, Fir, Pine, Oak, Beech, Birch, Maple, Aspen, Willow, Alder, Shrub, Count };
+// The STREET TREES of a tropical island town (Glenn, 2026-10-10: "a variety of trees for the city beyond the ones
+// seen along the island's forests"), after Shrub so the forest species keep their numbers:
+//   royal_palm    a smooth pale-grey column, a green crownshaft, a head of arching feather fronds
+//   coconut_palm  a slim ringed trunk that leans and bows, drooping fronds, a bunch of nuts
+//   monkeypod     the rain tree: a short trunk forking low into a vast flat umbrella of fine leaves
+//   poinciana     the flame tree: a smaller umbrella, a good share of it in red-orange flower
+//   jacaranda     an open rounded crown, mostly lilac-purple in bloom
+//   plumeria      frangipani: a short candelabra of thick pale limbs, paddle leaves and cream flowers at the tips
+enum class RealSpecies : uint8_t { Spruce = 0, Fir, Pine, Oak, Beech, Birch, Maple, Aspen, Willow, Alder, Shrub,
+                                   RoyalPalm, CoconutPalm, Monkeypod, Poinciana, Jacaranda, Plumeria, Count };
+// a palm: a column and a head of fronds, no limbs (its trunk collider is its column)
+inline bool realSpeciesIsPalm(RealSpecies s) { return s == RealSpecies::RoyalPalm || s == RealSpecies::CoconutPalm; }
 bool realSpeciesFromName(const std::string& name, RealSpecies& out);
 const char* realSpeciesName(RealSpecies s);
 

@@ -956,3 +956,40 @@ TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
     CHECK(closedInHours > 0);   // the gate does something
     CHECK(openHours > 0);       // ...and a staffed place does open
 }
+
+// THE BUSY STREETS: homes and jobs are drawn by floor area -- a block of flats houses a block of flats' people, a
+// tower holds a tower's staff -- not one share per building.
+TEST_CASE(people_live_and_work_where_the_floor_space_is) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 200, 600, 31);
+    PlaceMap places;
+    std::vector<PlaceId> houses;
+    for (int i = 0; i < 10; ++i) {
+        const PlaceId h = places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+        places.setFloorArea(h, 180);   // a two-storey house
+        houses.push_back(h);
+    }
+    const PlaceId flats = places.add(PlaceType::Home, Vec2(-200, -170), nav);
+    places.setFloorArea(flats, 18000);   // twelve storeys of 1500 m2
+    std::vector<PlaceId> shops;
+    for (int i = 0; i < 6; ++i) {
+        const PlaceId s = places.add(PlaceType::Shop, Vec2(-300 + i * 120.0, 330), nav, 8, 22);
+        places.setFloorArea(s, 120);
+        shops.push_back(s);
+    }
+    const PlaceId tower = places.add(PlaceType::Office, Vec2(150, 170), nav);
+    places.setFloorArea(tower, 30000);
+    sim.assignPlaces(places, nav);
+    int inFlats = 0, inHouses = 0, atTower = 0, atShops = 0;
+    for (const Agent& a : sim.agents()) {
+        if (a.homePlace == flats) ++inFlats;
+        for (PlaceId h : houses) inHouses += a.homePlace == h;
+        if (a.workPlace == tower) ++atTower;
+        for (PlaceId s : shops) atShops += a.workPlace == s;
+    }
+    std::printf("    [floors] flats %d residents, 10 houses %d; tower %d staff, 6 shops %d\n", inFlats, inHouses, atTower, atShops);
+    CHECK(inFlats > 5 * inHouses);   // 18000 m2 against 1800: ten to one
+    CHECK(inHouses > 0);             // ...and the houses are still lived in
+    CHECK(atTower > 2 * atShops);    // the walkers' band and the drivers' draws both lean to the tower
+}

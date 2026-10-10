@@ -505,3 +505,39 @@ TEST_CASE(a_dormant_traveller_wakes_further_along_its_trip) {
     CHECK(sim.wakes() > 0);
     CHECK(sim.resumedTrips() > 0);
 }
+
+// THROUGH TRAFFIC (the busy streets): a sleeper under way is moved along its trip as it goes -- it used to keep the
+// pose it set off from until it arrived, so a car driving past the player from across the island never woke.
+TEST_CASE(a_dormant_traveller_moves_on_and_wakes_where_it_has_got_to) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 200, 100, 11);
+    sim.tieringEnabled = true;
+    sim.dormancyEnabled = true;
+    sim.dormantRadius = 600.0;
+    sim.dormantResumeRadius = 500.0;
+    sim.rememberSeconds = 0;
+    sim.seedFromSchedule(8.5);
+    const Real dt = 1.0 / 60.0;
+    auto run = [&](Vec2 c, Real seconds) {
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i) { sim.setTierCenter(c); sim.step(dt, 0.05); }
+    };
+    run(Vec2(-700, -700), 3.0);
+    std::vector<std::pair<int, Vec2>> movers;
+    for (std::size_t i = 0; i < sim.agents().size(); ++i) {
+        const Agent& a = sim.agents()[i];
+        if (a.tier == Agent::Tier::D && a.moving && !sim.isBus(static_cast<int>(i))) movers.push_back({static_cast<int>(i), a.pos});
+    }
+    run(Vec2(-700, -700), 20.0);
+    int moved = 0, still = 0;
+    for (const auto& [i, p0] : movers) {
+        const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+        if (a.tier != Agent::Tier::D || !a.moving) continue;   // woke, or got there
+        ((a.pos - p0).length() > 30.0 ? moved : still) += 1;
+    }
+    std::printf("    [through] %zu sleepers under way; 20 s on: %d moved on, %d where they were; %ld waypoints\n",
+                movers.size(), moved, still, sim.dormantWaypoints());
+    CHECK(!movers.empty());
+    CHECK(sim.dormantWaypoints() > 0);
+    CHECK(moved > still);
+}

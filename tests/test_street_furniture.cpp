@@ -6,6 +6,8 @@
 //     the junction uncontrolled (T-junctions, by device feedback).
 #include "test_framework.h"
 
+#include <set>
+
 #include "../src/engine/procgen/city/street_furniture.h"
 
 using namespace engine;
@@ -234,4 +236,72 @@ TEST_CASE(kerb_life_lines_the_pavements_and_keeps_off_the_road) {
     const StreetFurniturePlan bare = planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
     CHECK(bare.trees.empty() && bare.props.empty());
     CHECK(bare.lampBases.size() == plan.lampBases.size());
+}
+
+// EACH STREET ITS OWN PLANTING (Glenn: "some have trees, some don't, some have them spaced differently ... suburbs vs
+// downtown, poor vs wealthy areas, newly developed areas vs old areas"): the scheme follows the street's character,
+// and one street keeps one planting along its length.
+TEST_CASE(streets_are_planted_by_their_character) {
+    using C = StreetCharacter;
+    auto many = [](C c, RoadClass k) {
+        int n[8] = {0};
+        Real spacing = 0, scale = 0, gaps = 0;
+        int planted = 0;
+        for (int i = 0; i < 400; ++i) {
+            const StreetPlanting pl = choosePlanting(c, k, (i % 20 + 0.5) / 20.0, (i / 20 + 0.5) / 20.0);
+            ++n[pl.scheme];
+            if (pl.scheme == StreetPlanting::None) continue;
+            ++planted; spacing += pl.spacing; scale += 0.5 * (pl.scaleLo + pl.scaleHi); gaps += pl.gaps;
+        }
+        struct R { int none, planted; Real spacing, scale, gaps; int palms; };
+        return R{n[StreetPlanting::None], planted, planted ? spacing / planted : 0, planted ? scale / planted : 0,
+                 planted ? gaps / planted : 0, n[StreetPlanting::Palms]};
+    };
+    C rich; rich.wealth = 0.85; rich.age = 0.6;
+    C poor; poor.wealth = 0.15; poor.age = 0.6;
+    C fresh; fresh.wealth = 0.5; fresh.age = 0.1;
+    C old; old.wealth = 0.5; old.age = 0.95;
+    C works; works.kind = C::Industrial;
+    C coast; coast.coastal = true; coast.wealth = 0.5;
+    C core; core.kind = C::Downtown;
+    const auto r = many(rich, RoadClass::Local), p = many(poor, RoadClass::Local), f = many(fresh, RoadClass::Local);
+    const auto o = many(old, RoadClass::Local), i = many(works, RoadClass::Local), s = many(coast, RoadClass::Local);
+    const auto d = many(core, RoadClass::Arterial);
+    std::printf("    [planting] rich none %d spacing %.1f scale %.2f | poor none %d spacing %.1f gaps %.2f | new scale %.2f | "
+                "old scale %.2f gaps %.2f | industrial none %d | coast palms %d | downtown arterial palms %d none %d\n",
+                r.none, r.spacing, r.scale, p.none, p.spacing, p.gaps, f.scale, o.scale, o.gaps, i.none, s.palms, d.palms, d.none);
+    CHECK(r.none == 0 && p.none > 100);            // the leafy streets are all planted; the poor ones often bare
+    CHECK(r.spacing < p.spacing - 4.0);            // ...close-set against far apart
+    CHECK(p.gaps > r.gaps + 0.25);                 // ...and the poor streets' rows are broken
+    CHECK(f.scale < 0.6 && o.scale > f.scale + 0.35);   // saplings on the new estates, big old trees in the old town
+    CHECK(i.none > 250);                           // the works: bare kerbs
+    CHECK(s.palms > 120);                          // palms by the sea
+    CHECK(d.palms > 100 && d.none > 50);           // downtown boulevards: palms, or nothing
+
+    // ON THE MAP: a wealthy east side and a poor industrial west on one crossroads -- the east arm planted close and
+    // of ONE kind all along it (both kerbs), the west arm bare or nearly
+    RoadGraph g;
+    const int w = g.addNode({-400, 0}), e = g.addNode({400, 0}), c = g.addNode({0, 0}), n = g.addNode({0, 300});
+    g.addEdge(w, c, 10, RoadClass::Local); g.addEdge(c, e, 10, RoadClass::Local); g.addEdge(c, n, 10, RoadClass::Local);
+    NavGraph nav = buildNavGraph(g);
+    for (NavLink& L : nav.links) L.access |= road_access::kFrontage;
+    StreetFurnitureParams fp;
+    fp.character = [](Vec2 at) {
+        C ch;
+        if (at.x < -20) { ch.kind = C::Industrial; return ch; }
+        ch.wealth = 0.9; ch.age = 0.6;
+        return ch;
+    };
+    const StreetFurniturePlan plan = planStreetFurniture(nav, [](Real, Real) { return Real(0); }, fp);
+    int west = 0, east = 0;
+    std::set<int> eastKinds;
+    for (const StreetTree& t : plan.trees) {
+        if (std::fabs(t.base.z) > 20) continue;   // (the north arm)
+        if (t.base.x < -20) ++west;
+        else if (t.base.x > 20) { ++east; eastKinds.insert(static_cast<int>(t.species)); }
+    }
+    std::printf("    [planting] crossroads: west (industrial) %d trees, east (well off) %d trees of %zu kind(s)\n", west, east, eastKinds.size());
+    CHECK(east > 60);
+    CHECK(west < east / 3);
+    CHECK(eastKinds.size() == 1);
 }

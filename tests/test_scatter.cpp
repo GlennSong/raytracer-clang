@@ -342,6 +342,53 @@ TEST_CASE(real_trees_stay_in_budget_repeat_and_fill_their_impostor) {
     }
 }
 
+// The street trees (real_tree.h, Glenn 2026-10-10: "a variety of trees for the city"): each grows to its kind -- the
+// palms a tall bare column under a head of fronds (no foliage low down, the crown about a frond's length across),
+// the rain tree wider than it is tall, the frangipani a small tree, the flowering ones partly in their bloom colour
+// (redder for the flame tree, bluer for the jacaranda) -- and the forest species are untouched by them.
+TEST_CASE(street_tree_species_grow_to_their_kind) {
+    using engine::RealSpecies;
+    auto lowestLeaf = [](const engine::RealTree& t) {
+        double lo = 1e30;
+        for (const auto& v : t.foliage.vertices) lo = std::min(lo, static_cast<double>(v.position.y));
+        return lo;
+    };
+    for (uint32_t seed : {11u, 222u, 3333u}) {
+        for (RealSpecies sp : {RealSpecies::RoyalPalm, RealSpecies::CoconutPalm}) {
+            const engine::RealTree t = engine::realTree(sp, seed, 0.0);
+            CHECK(engine::realSpeciesIsPalm(sp));
+            CHECK(t.height > 9.0 && t.height < 27.0);
+            CHECK(lowestLeaf(t) > 0.45 * t.height);                 // a bare column under the head (old fronds hang)
+            CHECK(t.crownRadius > 2.5 && t.crownRadius < 9.0);      // fronds of 3.4-5.4 m
+            CHECK(t.trunkRadius > 0.15 && t.trunkRadius < 0.6);
+        }
+        const engine::RealTree mp = engine::realTree(RealSpecies::Monkeypod, seed, 0.0);
+        CHECK(2.0 * mp.crownRadius > mp.height);                     // an umbrella wider than the tree is tall
+        const engine::RealTree pl = engine::realTree(RealSpecies::Plumeria, seed, 0.0);
+        CHECK(pl.height > 3.0 && pl.height < 9.5);
+        CHECK(!engine::realSpeciesIsPalm(RealSpecies::Plumeria) && !engine::realSpeciesIsPalm(RealSpecies::Oak));
+    }
+    // in flower: some leaf cards wear the bloom colour
+    auto bloomShare = [](RealSpecies sp, bool red) {
+        const engine::RealTree t = engine::realTree(sp, 7u, 0.0);
+        int n = 0, bloom = 0;
+        for (std::size_t i = 0; i < t.foliage.vertices.size(); i += 4, ++n) {
+            const engine::Vec3 c = t.foliage.vertices[i].color;
+            bloom += red ? (c.x > 2.0 * c.y) : (c.z > c.y);
+        }
+        return n ? double(bloom) / n : 0.0;
+    };
+    CHECK(bloomShare(RealSpecies::Poinciana, true) > 0.2);
+    CHECK(bloomShare(RealSpecies::Jacaranda, false) > 0.3);
+    CHECK(bloomShare(RealSpecies::Oak, true) == 0.0);
+    // names round-trip
+    for (RealSpecies sp : {RealSpecies::RoyalPalm, RealSpecies::CoconutPalm, RealSpecies::Monkeypod, RealSpecies::Poinciana,
+                           RealSpecies::Jacaranda, RealSpecies::Plumeria}) {
+        RealSpecies back = RealSpecies::Spruce;
+        CHECK(engine::realSpeciesFromName(engine::realSpeciesName(sp), back) && back == sp);
+    }
+}
+
 // Trails (procgen/trails.h, ADR-0134): the distance to a path is the distance to its nearest segment,
 // capped, from any side.
 TEST_CASE(trail_network_measures_distance_to_the_nearest_path) {

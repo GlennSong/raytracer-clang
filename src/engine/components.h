@@ -662,6 +662,10 @@ struct AuthoredPlace {
     // hall's beds); 0 = no limit.
     uint8_t campus = 0;
     int capacity = 0;
+    // Its FLOOR AREA, m2 (the busy streets): every storey of the building, so a tower draws the residents or the staff
+    // a tower holds and a corner shop a corner shop's -- the citysim weights who lives and works where by it. 0: unknown
+    // (an authored marker), weighed as one ordinary house.
+    float floorArea = 0;
     // Optional building (Living City Phase 4): when width/depth/height are all > 0
     // the loader spawns a static box STRUCTURE of this footprint at the site, so
     // the place IS a building you can walk up to (its door snaps to the sidewalk).
@@ -731,6 +735,7 @@ struct CitySimConfig {
     // About this many agents in the full sim round the player (the K ring's radii adapt; the GPU crowd shows the
     // rest). 0: the radii as authored. For a level whose population is past what a full ring carries.
     int nearTarget = 0;
+    int farTarget = 0;    // the far (V) ring held to about this many agents (0: the radii as set)
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     // The in-world hour the level OPENS at. Agents are placed straight from

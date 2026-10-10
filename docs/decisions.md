@@ -9242,3 +9242,58 @@ The club's line is recorded as an area `club_queue` for the host. Everything is 
 - **Jumps stream.** A jump loads in place only what lies within `kJumpNear` (150 m); the rest prepares on the workers as in movement. The stand-ins keep the far ring whole meanwhile. A level's first frame (`update` with no jobs) still loads everything.
 
 **Consequences.** A scripted fly across Saltwood at 200 m/s (`fly_probe.py`): before, empty blocks beyond the first streets; with the stand-ins, boxes hold the shape; with the look-ahead, full detail throughout. At 60 m/s it was already complete. After a 9 km jump the first frame shows the stand-ins and detail follows within a few seconds. Tests unchanged (1545/1545).
+
+---
+
+## ADR-0150 — Busy streets: people where the floors are, through traffic, more cars, a capped far ring
+
+**Context.** Glenn: "I would take a look at the empty street problem next." Measured at 17:30 on island_8_nature with the clock running (the island runs a real-time day, `dayMinutes` 1440, and `daynight hold` sets the sim's rate to 0 and so freezes every departure; earlier "empty" numbers were taken held). Within 300 m of downtown Saltwood: 6–11 cars moving, about 80 people outdoors, 572 indoors. Island-wide, about 830 of 17,000 cars were moving (5%, a realistic share). The deficits were elsewhere:
+- **Headcount.** 17k cars against 204k walkers.
+- **Placement.** Homes and jobs were drawn one per building, so a 30-storey block of flats housed as many people as a bungalow. Downtown held no more people than a suburb.
+- **Trip length.** Drivers took the nearest of 24 random jobs, giving a median drive to work of 76 s.
+- **Through traffic.** A dormant agent under way kept the pose it set off from until it arrived, so a car crossing the island never woke as it passed the player.
+
+**Decision.**
+- **Floor area.** `AuthoredPlace::floorArea` / `Place::floorArea` is every storey of every unit, less the shop fronts, which are places of their own. `assignPlaces` draws homes, drivers' and bus commuters' job candidates, and walkers' jobs within walking range in proportion to it, using cumulative weights per pool. A place with no area weighs as a house. Population cache format 7.
+- **Drivers.** A driver takes the nearest of 8 draws, not 24.
+- **Through traffic.** A dormant traveller gets a waypoint event every 4 s (`kDormantWaypointSeconds`). `dormantGlide` moves it along its route at the pace its arrival was timed by and re-places it in the dormant grid, so the D→V wake finds it where it is. The GPU crowd record is left alone, so there is no pop.
+- **Level.** island_8_nature sets `carsPerLaneKm` 90 (was 35), so 43.6k cars. `taxiFraction` 0.05 keeps the cab count about the same.
+- **Far ring.** A new level knob `farTarget` (6000) scales the dormancy radii to hold about that many V agents. Downtown's towers put tens of thousands of people inside the old 1.2 km ring, and the V tick and `tierPass` took a frame to 130 ms. `nearTarget` still counts every K agent: counting only the awake ones let K reach 8,000 and cost 16 ms per fixed step.
+- **Measuring.** `traffic?` reports car owners under way and at rest by tier, plus sleeper waypoints. `RT_CARS_SCALE=k` and `RT_TRAFFIC_DEBUG=1` (schedule histograms) are for A/B runs.
+
+**Consequences.** At 17:30, within 300 m of downtown Saltwood: 58–70 cars and cabs moving (was 6–11), 270–400 people outdoors (was 50–100), and about 5,900 indoors (was 572). Frame time is p50 13 ms / p90 21 ms with `farTarget` (`RT_VSYNC=0`, standing downtown). Shots: tr8_busy/salt_play.png, a royal-palm boulevard with traffic both ways.
+
+Still open:
+- Cabs gather downtown (20 → 43 in two minutes), because demand is there and nothing sends them elsewhere.
+- The median drive is still short; real commuter trips run 15–25 minutes against this island's 1–2.
+- Through traffic is drawn but simplified: no queueing until it wakes.
+- Pedestrians past the shrunken K ring rely on the GPU crowd.
+
+## ADR-0151 — Each street its own planting; the island's street trees
+
+**Context.** Glenn: "some have trees, some don't, some have them spaced differently ... a way to denote suburbs vs downtown, poor vs wealthy areas, newly developed areas vs old areas. It would be nice to have a variety of trees for the city beyond the ones seen along the island's forests." Kerb life (ADR-0146) planted every street with the same three broadleaves at 9 m.
+
+**Decision.**
+- **Species.** real_tree gains `RoyalPalm`, `CoconutPalm`, `Monkeypod`, `Poinciana`, `Jacaranda` and `Plumeria`. The palms have a new `palm()` builder: a column, a crownshaft, and arching fronds as chained cards on a frond tile. The others are shell crowns with a bloom colour and share, worn by a painted flower tile. The forest species are byte-identical; extra draws are taken only by the new ones. Sizes are measured against UF/IFAS fact sheets (CREDITS).
+- **Character.** `StreetCharacter` (kind, wealth, age, coastal) comes from the loader:
+  - **Kind:** the lots' districts and heights in 80 m cells (avg ≥ 7 storeys is Downtown; oldtown, industrial, commercial).
+  - **Wealth:** ground height (the hills) plus value noise.
+  - **Age:** distance to the town's hub plus noise.
+  - **Coastal:** ground under 5 m.
+- **Planting.** `choosePlanting` picks a `StreetPlanting` (none / avenue / mixed / sparse / saplings / palms / flowering; species, spacing, size, gaps, one side):
+  - **Downtown:** palms or a formal avenue on the boulevards, young trees or bare on the side streets.
+  - **Industrial:** mostly bare.
+  - **Wealthy:** close canopy or a blossom street.
+  - **Poor:** often bare, otherwise sparse with half the row gone.
+  - **New estates:** small saplings.
+  - **Old town:** big trees with gaps.
+  - **By the sea:** coconut palms.
+
+  The draw is keyed on the street's line (bearing to 10°, offset to 30 m, 700 m stretches, class), so a street keeps one planting along its length and on both kerbs. `RT_ONE_PLANTING=1` restores the old planting.
+- **Loader.** Two models per species, each at its own street height (royal palm 15 m, plumeria 5.5 m), built only for the kinds some street planted.
+
+**Consequences.** island_8_nature has 18,656 street trees, against 40,378 before:
+- **By kind:** royal palm 4,118; monkeypod 2,817; plumeria 2,375; maple 2,363; poinciana 2,235; beech 1,717; jacaranda 1,108; coconut palm 1,025; oak 917.
+- **Street links by planting:** 4,032 bare, 272 avenue, 2,646 mixed, 3,070 sparse, 1,388 saplings, 2,180 palms, 196 flowering.
+
+Tests: `streets_are_planted_by_their_character`, `street_tree_species_grow_to_their_kind`. Owed: trunk colliders (still); tuning the wealth field against what reads on the ground.

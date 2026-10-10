@@ -98,6 +98,8 @@ struct Place {
     // The university (campus milestone 4): 1 teaching hall, 2 library, 3 residence
     // hall, 4 quad, 5 sports field; 0 = not campus. Students live, study and sit here.
     uint8_t campus = 0;
+    // Floor area, m2 (AuthoredPlace::floorArea): the weight of this place in the draw of homes and jobs. 0 = unknown.
+    Real floorArea = 0;
 
     // Is this place open at in-world hour `clock` (0..24)? Handles a window that
     // wraps midnight (openHour > closeHour, e.g. a 20→4 late shop).
@@ -135,6 +137,9 @@ public:
     }
     void setCampus(PlaceId id, uint8_t role) {
         if (id < places_.size()) places_[id].campus = role;
+    }
+    void setFloorArea(PlaceId id, Real m2) {
+        if (id < places_.size()) places_[id].floorArea = m2;
     }
 
     // All place ids of a given type, in insertion order. Empty if none.

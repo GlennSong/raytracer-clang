@@ -9,6 +9,87 @@
 
 namespace engine {
 
+const char* streetSpeciesName(StreetSpecies s) {
+    static const char* const n[] = {"maple", "oak", "beech", "royal_palm", "coconut_palm", "monkeypod", "poinciana", "jacaranda", "plumeria"};
+    const int i = static_cast<int>(s);
+    return i >= 0 && i < static_cast<int>(StreetSpecies::Count) ? n[i] : "maple";
+}
+
+const char* plantingSchemeName(StreetPlanting::Scheme s) {
+    static const char* const n[] = {"none", "avenue", "mixed", "sparse", "saplings", "palms", "flowering"};
+    return s <= StreetPlanting::Flowering ? n[s] : "?";
+}
+
+StreetPlanting choosePlanting(const StreetCharacter& c, RoadClass klass, Real u, Real v) {
+    using S = StreetSpecies;
+    StreetPlanting pl;
+    auto one = [&](StreetPlanting::Scheme sc, S a, Real spacing, Real lo, Real hi) {
+        pl.scheme = sc; pl.species[0] = a; pl.kinds = 1; pl.spacing = spacing; pl.scaleLo = lo; pl.scaleHi = hi;
+    };
+    auto mix = [&](StreetPlanting::Scheme sc, S a, S b, S d, int kinds, Real spacing, Real lo, Real hi) {
+        pl.scheme = sc; pl.species[0] = a; pl.species[1] = b; pl.species[2] = d; pl.kinds = kinds;
+        pl.spacing = spacing; pl.scaleLo = lo; pl.scaleHi = hi;
+    };
+    const bool main = klass != RoadClass::Local;
+    const S shade[4] = {S::Monkeypod, S::Oak, S::Maple, S::Beech};
+    const S bloom[3] = {S::Poinciana, S::Jacaranda, S::Plumeria};
+    const S shadeK = shade[std::min(3, static_cast<int>(v * 4))];
+    const S bloomK = bloom[std::min(2, static_cast<int>(v * 3))];
+    const S palmK = c.coastal ? S::CoconutPalm : S::RoyalPalm;
+    switch (c.kind) {
+        case StreetCharacter::Rural:
+            pl.scheme = StreetPlanting::None;
+            break;
+        case StreetCharacter::Industrial:   // yards and loading bays: bare kerbs, a few scrappy survivors
+            if (u < 0.75) pl.scheme = StreetPlanting::None;
+            else { mix(StreetPlanting::Sparse, S::Monkeypod, S::Plumeria, S::Maple, 3, 20.0, 0.7, 1.1); pl.gaps = 0.4; }
+            break;
+        case StreetCharacter::Downtown:     // the boulevards get their palms or a formal row; the side streets pits of young trees
+            if (main) {
+                if (u < 0.45) one(StreetPlanting::Palms, palmK, 9.0, 0.95, 1.1);
+                else if (u < 0.75) one(StreetPlanting::Avenue, shadeK, 9.0, 0.95, 1.1);
+                else pl.scheme = StreetPlanting::None;   // a plaza of glass and nothing green
+            } else {
+                if (u < 0.35) pl.scheme = StreetPlanting::None;
+                else one(StreetPlanting::Saplings, v < 0.5 ? S::Plumeria : shadeK, 11.0, 0.5, 0.65);
+            }
+            break;
+        case StreetCharacter::Commercial:   // the low strips: open to the signs, now and then a row of palms
+            if (u < 0.4) pl.scheme = StreetPlanting::None;
+            else if (u < 0.7) one(StreetPlanting::Palms, palmK, 12.0, 0.9, 1.1);
+            else { mix(StreetPlanting::Sparse, S::Plumeria, S::Monkeypod, S::Poinciana, 3, 16.0, 0.7, 1.0); pl.gaps = 0.25; }
+            break;
+        case StreetCharacter::OldTown:
+        case StreetCharacter::Residential:
+        default: {
+            const Real age = c.kind == StreetCharacter::OldTown ? std::max(c.age, Real(0.8)) : c.age;
+            if (c.coastal && u < 0.45) { one(StreetPlanting::Palms, S::CoconutPalm, 12.0 + 4.0 * v, 0.85, 1.15); pl.gaps = 0.1; break; }
+            if (age < 0.3) {   // a new estate: one kind, evenly spaced, still small
+                if (u < 0.2) pl.scheme = StreetPlanting::None;
+                else one(StreetPlanting::Saplings, v < 0.4 ? bloomK : shadeK, 9.0 + 2.0 * v, 0.42, 0.58);
+                break;
+            }
+            if (c.wealth > 0.65) {   // the leafy streets: a closed canopy, or a street famous for its blossom
+                if (u < 0.55) one(StreetPlanting::Avenue, shadeK, 8.0 + 2.0 * v, 1.05, 1.3);
+                else one(StreetPlanting::Flowering, bloomK, 9.0 + 2.0 * v, 0.95, 1.2);
+                pl.gaps = 0.03;
+            } else if (c.wealth < 0.35) {   // the poorer streets: mostly bare, what was planted half gone
+                if (u < 0.45) pl.scheme = StreetPlanting::None;
+                else { mix(StreetPlanting::Sparse, shadeK, S::Plumeria, S::Monkeypod, 3, 15.0 + 7.0 * v, 0.7, 1.2); pl.gaps = 0.45; }
+            } else {   // in between: a mix at a looser spacing, now and then one side only
+                mix(StreetPlanting::Mixed, shadeK, bloomK, v < 0.5 ? S::Monkeypod : S::Maple, 3, 11.0 + 3.0 * v, 0.8, 1.1);
+                pl.gaps = 0.12;
+                pl.oneSide = !main && u > 0.75;
+            }
+            if (age > 0.7 && pl.scheme != StreetPlanting::None) {   // old streets: bigger trees, more of them lost
+                pl.scaleLo *= 1.12; pl.scaleHi *= 1.15; pl.gaps = std::min(Real(0.6), pl.gaps + 0.1);
+            }
+            break;
+        }
+    }
+    return pl;
+}
+
 StreetFurniturePlan planStreetFurniture(
     const NavGraph& nav, const std::function<Real(Real, Real)>& ground,
     const StreetFurnitureParams& p) {
@@ -399,7 +480,7 @@ StreetFurniturePlan planStreetFurniture(
         return false;
     };
     auto add = [&](Spaced& s, Vec2 v, Vec2 d) { s.g[keyOf(v, s.spacing)].push_back({v, d}); };
-    Spaced trees{std::max(p.treeSpacing, Real(4)), {}}, bins{30.0, {}}, props{std::max(p.propSpacing, Real(10)), {}};
+    Spaced trees{p.character ? Real(24) : std::max(p.treeSpacing, Real(4)), {}}, bins{30.0, {}}, props{std::max(p.propSpacing, Real(10)), {}};
     Spaced lamps{12.0, {}}, poles{12.0, {}};
     for (const Vec3& b : out.lampBases) add(lamps, Vec2(b.x, b.z), Vec2(0, 0));
     for (const SignalSpot& s : out.signals) add(poles, Vec2(s.base.x, s.base.z), Vec2(0, 0));
@@ -442,17 +523,51 @@ StreetFurniturePlan planStreetFurniture(
         const Vec2 dir = (b - a) * (Real(1) / len);
         const bool main = L.klass != RoadClass::Local;
         const int steps = std::max(1, static_cast<int>(std::ceil(len / Real(1.5))));
+        // THIS STREET'S PLANTING: by its character, and the same all along it -- the draw is keyed on the street's
+        // LINE (its bearing to 10 degrees, its offset across to 30 m, 700 m stretches along it, its class), so both
+        // directions of a two-way street and every block of a straight one agree, and the next street over may not
+        StreetPlanting pl;
+        pl.spacing = p.treeSpacing;
+        Vec2 lineDir = dir;
+        if (p.character) {
+            constexpr Real kPi = 3.14159265358979;
+            const Real kBear = kPi / 18.0;
+            Real ang = std::atan2(dir.y, dir.x);
+            if (ang < 0) ang += kPi;
+            if (ang >= kPi) ang -= kPi;
+            const int ab = static_cast<int>(std::lround(ang / kBear)) % 18;
+            lineDir = Vec2(std::cos(ab * kBear), std::sin(ab * kBear));
+            const Vec2 mid = (a + b) * Real(0.5);
+            const long long off = static_cast<long long>(std::llround(dot(mid, Vec2(-lineDir.y, lineDir.x)) / 30.0));
+            const long long along = static_cast<long long>(std::floor(dot(mid, lineDir) / 700.0));
+            uint64_t k = 0x9E3779B97F4A7C15ull ^ (static_cast<uint64_t>(ab) * 0xBF58476D1CE4E5B9ull) ^
+                         (static_cast<uint64_t>(off) * 0x94D049BB133111EBull) ^ (static_cast<uint64_t>(along) * 0xD6E8FEB86659FD93ull) ^
+                         static_cast<uint64_t>(L.klass) * 0x2545F4914F6CDD1Dull;
+            k ^= k >> 31; k *= 0xBF58476D1CE4E5B9ull; k ^= k >> 29;
+            pl = choosePlanting(p.character(mid), L.klass, (k & 0xFFFF) / 65536.0, ((k >> 16) & 0xFFFF) / 65536.0);
+            ++out.planted[std::min<int>(pl.scheme, 7)];
+        }
+        const bool plantHere = !p.character || (pl.scheme != StreetPlanting::None && (!pl.oneSide || dot(dir, lineDir) > 0));
         for (int k = 0; k <= steps; ++k) {
             const Real t = static_cast<Real>(k) / steps;
             const Real dj = distToJunction(L, kerbPoint(li, t, p.treeVerge));
             // A STREET TREE
             {
                 const Vec2 sp = kerbPoint(li, t, p.treeVerge);
-                if (dj >= p.treeJunctionClear && clearOfRoad(sp, 0.4) && !near(trees, sp, dir, p.treeSpacing * 0.92, true) &&
+                if (plantHere && dj >= p.treeJunctionClear && clearOfRoad(sp, 0.4) && !near(trees, sp, dir, pl.spacing * 0.92, true) &&
                     !near(lamps, sp, dir, 3.2, false) && !near(poles, sp, dir, 3.5, false) && !near(bins, sp, dir, 2.0, false) &&
                     !near(props, sp, dir, 2.5, false)) {
                     h = h * 1664525u + 1013904223u;
-                    out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), Real(0.75) + (h >> 8 & 0xFF) / 255.0 * 0.35, (h >> 16) % 3u});
+                    if (!p.character) {
+                        const uint32_t v = (h >> 16) % 3u;
+                        out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), Real(0.75) + (h >> 8 & 0xFF) / 255.0 * 0.35, v,
+                                             static_cast<StreetSpecies>(v)});
+                    } else if ((h >> 24) / 256.0 >= pl.gaps) {   // (a gap keeps its place in the row: the pit stays empty)
+                        const uint32_t h2 = h * 2654435761u;
+                        out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y),
+                                             pl.scaleLo + (pl.scaleHi - pl.scaleLo) * ((h >> 8) & 0xFF) / 255.0, (h2 >> 20) % 3u,
+                                             pl.species[(h >> 16) % static_cast<uint32_t>(std::max(1, pl.kinds))]});
+                    }
                     add(trees, sp, dir);
                 }
             }

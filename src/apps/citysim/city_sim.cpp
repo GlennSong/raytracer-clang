@@ -714,7 +714,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 6;   // (6: garage stalls are bays) bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 7;   // (7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
 struct Fnv {
     uint64_t h = 1469598103934665603ull;
     void bytes(const void* p, std::size_t n) {
@@ -958,7 +958,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
         for (const Place& p : places.places()) {
             k.pod(p.id); k.pod(p.type); k.vec(p.site); k.vec(p.entrance); k.pod(p.entranceLink); k.real(p.entranceT);
-            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours); k.pod(p.campus);
+            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours); k.pod(p.campus); k.real(p.floorArea);
         }
         for (std::size_t i = 0; i < agents_.size(); ++i) {
             const Agent& a = agents_[i];
@@ -1036,6 +1036,32 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         jobLo = Vec2(std::min(jobLo.x, q.x), std::min(jobLo.y, q.y));
         jobHi = Vec2(std::max(jobHi.x, q.x), std::max(jobHi.y, q.y));
     }
+    // PEOPLE WHERE THE FLOORS ARE (the busy streets): a home or a job is drawn in proportion to its floor area, not one
+    // per building -- a 30-storey block of flats housed as many as a bungalow, so downtown, its towers full of offices
+    // and flats, held 711 people within 300 m of the core and every street looked like a suburb's. A place with no
+    // area (an authored marker) weighs as a house. Cumulative weights per pool; a draw is one binary search.
+    auto weightOf = [&](PlaceId id) {
+        const Real m2 = places[id].floorArea;
+        return m2 > 0 ? std::clamp(static_cast<double>(m2), 40.0, 60000.0) : 120.0;
+    };
+    std::unordered_map<const std::vector<PlaceId>*, std::vector<double>> poolCum;
+    auto addPool = [&](const std::vector<PlaceId>& v) {
+        std::vector<double>& c = poolCum[&v];
+        c.resize(v.size());
+        double t = 0;
+        for (std::size_t j = 0; j < v.size(); ++j) c[j] = (t += weightOf(v[j]));
+    };
+    addPool(homes);
+    addPool(jobs);
+    for (const auto& v : townJobs) addPool(v);
+    for (const auto& v : nearbyJobs) addPool(v);
+    for (const auto& v : farJobs) addPool(v);
+    auto drawFrom = [&](const std::vector<PlaceId>& v, uint32_t h) {
+        const std::vector<double>& c = poolCum.at(&v);
+        const double u = (static_cast<double>(h) + 0.5) / 4294967296.0 * c.back();
+        const std::size_t j = static_cast<std::size_t>(std::upper_bound(c.begin(), c.end(), u) - c.begin());
+        return v[std::min(j, v.size() - 1)];
+    };
     constexpr uint8_t kTallyCross = 1, kTallyBusTried = 2, kTallyBus = 4, kTallyDriverJob = 8;
     std::vector<uint8_t> tally(agents_.size(), 0);
     std::vector<Real> driverDist(agents_.size(), 0);
@@ -1050,7 +1076,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         hmix ^= hmix >> 16; hmix *= 0x7feb352dU;
         hmix ^= hmix >> 15; hmix *= 0x846ca68bU;
         hmix ^= hmix >> 16;
-        PlaceId hp = homes[hmix % homes.size()];
+        PlaceId hp = drawFrom(homes, hmix);
         int hn = nodeOf(hp);
         a.homePlace = hp;
         a.home = hn;
@@ -1176,7 +1202,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     for (int c = 0; c < 24; ++c) {
                         uint32_t hh = bc + static_cast<uint32_t>(c) * 0x9E3779B9u;
                         hh ^= hh >> 16; hh *= 0x7feb352dU; hh ^= hh >> 15;
-                        const PlaceId cand = (*pool)[hh % pool->size()];
+                        const PlaceId cand = drawFrom(*pool, hh);
                         const int net = buses_.networkOf(nodeOf(cand));
                         if (net < 0 || net == homeNet) continue;
                         far.push_back({(places[cand].site - homePos).lengthSquared(), cand});
@@ -1232,10 +1258,20 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     });
                 const std::size_t far =
                     static_cast<std::size_t>(split - jobDist.begin());
-                const std::size_t takeFar = std::min<std::size_t>(8, far);
-                std::partial_sort(jobDist.begin(), jobDist.begin() + takeFar, split, byDist);
-                for (std::size_t c = 0; c < takeFar && pick == kNoPlace; ++c)
-                    if (commutable(hn, nodeOf(jobDist[c].second))) pick = jobDist[c].second;
+                // ...by floor area among those in walking range (the office tower down the road, more often than
+                // the corner shop): eight draws, in order of the band (sorted, so the draws are deterministic)
+                std::sort(jobDist.begin(), split, byDist);
+                thread_local std::vector<double> bandCum;
+                bandCum.resize(far);
+                double bandW = 0;
+                for (std::size_t c = 0; c < far; ++c) bandCum[c] = (bandW += weightOf(jobDist[c].second));
+                for (int c = 0; c < 8 && far > 0 && pick == kNoPlace; ++c) {
+                    uint32_t wh = a.brain * 0x27d4eb2fU + static_cast<uint32_t>(c) * 0x9E3779B9u;
+                    wh ^= wh >> 15; wh *= 0x2c1b3c6dU; wh ^= wh >> 12;
+                    const double u = (static_cast<double>(wh) + 0.5) / 4294967296.0 * bandW;
+                    const std::size_t j = std::min(far - 1, static_cast<std::size_t>(std::upper_bound(bandCum.begin(), bandCum.end(), u) - bandCum.begin()));
+                    if (commutable(hn, nodeOf(jobDist[j].second))) pick = jobDist[j].second;
+                }
                 if (pick == kNoPlace) {   // nothing beyond the floor routes
                     // the nearest 8 OUTSIDE the band, from every job: widen the reach until 8 of them lie inside it
                     // (or it covers every job), so the ranking matches a scan of all of them
@@ -1274,13 +1310,15 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     else if (reach != Reach::Own && !nb.empty()) pool = &nb;
                     else if (!own.empty()) pool = &own;
                 }
-                const int kCandidates = 24;
+                // the nearest of EIGHT draws by floor area (it was 24 by building: the nearest of so many was always round
+                // the corner -- a median drive to work of 76 s, and nobody driving into town)
+                const int kCandidates = 8;
                 std::pair<Real, PlaceId> cands[kCandidates];
                 int nc = 0;
                 for (int c = 0; c < kCandidates; ++c) {
                     uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
                     h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
-                    PlaceId cand = (*pool)[h % pool->size()];
+                    PlaceId cand = drawFrom(*pool, h);
                     const Vec2 d = places[cand].site - homePos;
                     cands[nc++] = {d.x * d.x + d.y * d.y, cand};
                 }
@@ -1326,7 +1364,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     for (int c = 0; c < kCandidates; ++c) {
                         uint32_t h = a.brain + static_cast<uint32_t>(c) * 0x9E3779B9u;
                         h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15;
-                        const PlaceId cand = own[h % own.size()];
+                        const PlaceId cand = drawFrom(own, h);
                         const Real d2 = (places[cand].site - homePos).lengthSquared();
                         if ((d2 < best || (d2 == best && cand < pick)) && commutable(hn, nodeOf(cand))) { best = d2; pick = cand; }
                     }
@@ -2103,6 +2141,12 @@ void CitySim::scheduleDormantEvent(int i) {
         const engine::NavLink& L0 = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
         const Real pace = a.mode == Agent::Mode::Driver ? engine::classSpeed(L0.klass) * a.speedFactor : kWalkSpeed * a.speedFactor;
         at = clockTotalHours_ + std::max(Real(0), left) / std::max(pace, Real(0.3)) * hoursPerSecond_;
+        // THROUGH TRAFFIC (the empty streets): a sleeper under way kept the pose it set off from until it arrived, so
+        // nobody driving across the island ever woke as it went by you -- the bubble only ever saw trips that began
+        // in it. It is moved on every few seconds (a waypoint, below), and the D -> V wake finds it where it is.
+        if (dormantArriveAt_.size() != agents_.size()) dormantArriveAt_.assign(agents_.size(), -1.0);
+        dormantArriveAt_[static_cast<std::size_t>(i)] = at;
+        at = std::min(at, clockTotalHours_ + kDormantWaypointSeconds * hoursPerSecond_);
     } else if (a.home != a.work) {
         // at rest: its next departure (to work, or home)
         const Real now = clockHours_;
@@ -2138,6 +2182,18 @@ void CitySim::runDormantEvents() {
         Agent& a = agents_[i];
         if (a.tier != Agent::Tier::D) { dormantEventAt_[i] = -1.0; continue; }
         --budget;
+        if (a.moving && i < dormantArriveAt_.size() && ev.at < dormantArriveAt_[i] - 1e-9) {
+            // a waypoint on the way: where it has got to, at the pace its arrival was timed by
+            dormantGlide(a, simSeconds_ - a.vLastTick);
+            a.vLastTick = simSeconds_;
+            dGrid_.place(ev.agent, a.pos);
+            grid_.place(ev.agent, a.pos);
+            ++dormantWaypoints_;
+            const double next = std::min(dormantArriveAt_[i], clockTotalHours_ + kDormantWaypointSeconds * hoursPerSecond_);
+            dormantEventAt_[i] = next;
+            dormantHeap_.push({next, ev.agent});
+            continue;
+        }
         placeFromSchedule(ev.agent);
         a.vLastTick = simSeconds_;   // its pose is of now (the crowd's t0, a wake's resume)
         grid_.place(ev.agent, a.pos);
@@ -2146,6 +2202,27 @@ void CitySim::runDormantEvents() {
         ++dormantEventsRun_;
         scheduleDormantEvent(ev.agent);
     }
+}
+
+void CitySim::dormantGlide(Agent& a, Real seconds) {
+    // Along its route at one pace -- the pace scheduleDormantEvent timed the arrival by and the GPU crowd draws it at
+    // (no junction holds: those are the far tier's) -- never onto the last metre: arriving is the arrival event's job.
+    if (!nav_ || seconds <= 0 || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) return;
+    const engine::NavLink& L0 = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+    const Real pace = a.mode == Agent::Mode::Driver ? engine::classSpeed(L0.klass) * a.speedFactor : kWalkSpeed * a.speedFactor;
+    Real m = seconds * std::max(pace, Real(0.3));
+    const int legs = static_cast<int>(a.route.links.size());
+    while (m > 0 && a.leg < legs) {
+        const Real len = nav_->links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])].length;
+        const Real room = len - a.distOnLeg;
+        if (m < room || a.leg == legs - 1) { a.distOnLeg = std::min(len - Real(0.5), a.distOnLeg + m); break; }
+        m -= room;
+        ++a.leg;
+        a.distOnLeg = 0;
+    }
+    if (a.distOnLeg < 0) a.distOnLeg = 0;
+    refreshPose(a);
+    a.heading = nav_->direction(a.route.links[static_cast<std::size_t>(a.leg)]);
 }
 
 bool CitySim::eveningPlan(const Agent& a, Real& start, Real& end) const {

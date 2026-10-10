@@ -229,6 +229,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
         params_.nearTarget = c.nearTarget;
+        params_.farTarget = c.farTarget;
         // RT_MAX_AMBIENT=<n>: the population cap per class for this run (scale tests on a real level without
         // editing it -- the bake never sees it)
         if (const char* m = std::getenv("RT_MAX_AMBIENT")) params_.maxAmbient = std::max(6, std::atoi(m));
@@ -239,6 +240,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             params_.carsPerLaneKm *= f;
             params_.pedsPerKm *= f;
         }
+        // RT_CARS_SCALE=<k>: cars per lane-km alone times k (the busy-streets A/B: more cars, the same walkers)
+        if (const char* k = std::getenv("RT_CARS_SCALE")) params_.carsPerLaneKm *= std::max(0.01, std::atof(k));
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.startHour = c.startHour;
@@ -460,6 +463,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         placeOfAuthored_[static_cast<std::size_t>(&ap - authoredPlaces_.data())] = pid;
         if (synthetic) places_.setAuthoredHours(pid, false);
         if (ap.campus) places_.setCampus(pid, ap.campus);
+        if (ap.floorArea > 0) places_.setFloorArea(pid, ap.floorArea);
     }
 
     // DENSITY population (roads-v2.1 4c): -1 counts are computed from the
@@ -699,6 +703,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // A level whose population needs it sets "nearTarget" (island_8_nature: 1500); RT_NEAR_TARGET overrides.
     sim_.nearTarget = params_.nearTarget;
     if (const char* nt = std::getenv("RT_NEAR_TARGET")) sim_.nearTarget = std::max(0, std::atoi(nt));
+    sim_.farTarget = params_.farTarget;   // (the busy streets: downtown's towers fill the far ring too)
     if (const char* ft = std::getenv("RT_FAR_TARGET")) sim_.farTarget = std::max(0, std::atoi(ft));
     sim_.dormancyEnabled = params_.dormantAgents;
     sim_.pedPromoteRadius = params_.pedPromoteRadius;
@@ -3583,21 +3588,49 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
             // `traffic?` (the city's next ten: "the streets look empty"): drivers on the road island-wide and within
             // 300 m of the camera, by tier, and how many of those near are parked, walking, cabs or buses
             {
+                int drvMoving[3] = {0, 0, 0}, drvRest[3] = {0, 0, 0};   // car owners by tier K/V/D: under way, at rest
                 int drivingAll = 0, drivingNear = 0, nearCars = 0, nearCabs = 0, nearBuses = 0, nearPeds = 0, nearIndoors = 0, nearK = 0;
                 const auto& ag = sim_.agents();
                 for (std::size_t i = 0; i < ag.size(); ++i) {
                     const Agent& a = ag[i];
                     const bool driving = a.mode == Agent::Mode::Driver && a.vehicle >= 0 && a.moving;
                     drivingAll += driving;
+                    if (a.mode == Agent::Mode::Driver || a.archetype == Agent::Mode::Driver) {
+                        const int t = a.tier == Agent::Tier::K ? 0 : a.tier == Agent::Tier::V ? 1 : 2;
+                        ++(a.moving ? drvMoving[t] : drvRest[t]);
+                    }
                     if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
                     if (a.tier == Agent::Tier::K) ++nearK;
                     if (driving) { ++drivingNear; if (sim_.isBus(static_cast<int>(i))) ++nearBuses; else if (sim_.isTaxi(static_cast<int>(i))) ++nearCabs; else ++nearCars; }
                     else if (a.indoors) ++nearIndoors;
                     else if (a.mode == Agent::Mode::Pedestrian) ++nearPeds;
                 }
-                char tb[256];
-                std::snprintf(tb, sizeof(tb), "driving %d island-wide; within 300 m: %d driving (%d cars, %d cabs, %d buses), %d on foot, %d indoors, %d in tier K",
-                              drivingAll, drivingNear, nearCars, nearCabs, nearBuses, nearPeds, nearIndoors, nearK);
+                static const bool dbg = std::getenv("RT_TRAFFIC_DEBUG") != nullptr;
+                if (dbg && parkingTick_ % 600 == 0) {
+                    int where[8] = {0}, dh[24] = {0}, dw[24] = {0}, roles[16] = {0};
+                    std::vector<Real> cs;
+                    for (const Agent& a : ag) {
+                        if (a.archetype != Agent::Mode::Driver || sim_.isBus(static_cast<int>(&a - ag.data())) || sim_.isTaxi(static_cast<int>(&a - ag.data()))) continue;
+                        ++where[static_cast<int>(sim_.scheduleSnapshot(a, sim_.clockHours()).where)];
+                        ++dh[static_cast<int>(std::fmod(a.departHome + 24.0, 24.0)) % 24];
+                        ++dw[static_cast<int>(sim_.departWorkHour(a)) % 24];
+                        ++roles[std::min(15, static_cast<int>(a.role))];
+                        cs.push_back(a.commuteSeconds);
+                    }
+                    std::sort(cs.begin(), cs.end());
+                    std::string l = "[traffic-debug] clock " + std::to_string(sim_.clockHours()) + " median(all) " + std::to_string(sim_.commuteSecondsMedian()) + " where:";
+                    for (int k = 0; k < 7; ++k) l += " " + std::to_string(where[k]);
+                    l += " | commuteSeconds p10/50/90 " + (cs.empty() ? std::string("-") : std::to_string(cs[cs.size() / 10]) + "/" + std::to_string(cs[cs.size() / 2]) + "/" + std::to_string(cs[cs.size() * 9 / 10]));
+                    l += " | departWorkHour:"; for (int k = 0; k < 24; ++k) l += " " + std::to_string(dw[k]);
+                    l += " | departHome:"; for (int k = 0; k < 24; ++k) l += " " + std::to_string(dh[k]);
+                    l += " | roles:"; for (int k = 0; k < 16; ++k) l += " " + std::to_string(roles[k]);
+                    std::fprintf(stderr, "%s\n", l.c_str());
+                }
+                char tb[512];
+                std::snprintf(tb, sizeof(tb), "driving %d island-wide; within 300 m: %d driving (%d cars, %d cabs, %d buses), %d on foot, %d indoors, %d in tier K; "
+                              "car owners under way K/V/D %d/%d/%d, at rest %d/%d/%d; sleeper waypoints %ld",
+                              drivingAll, drivingNear, nearCars, nearCabs, nearBuses, nearPeds, nearIndoors, nearK,
+                              drvMoving[0], drvMoving[1], drvMoving[2], drvRest[0], drvRest[1], drvRest[2], sim_.dormantWaypoints());
                 ctx.settings.setString("traffic.telemetry", tb);
             }
         }

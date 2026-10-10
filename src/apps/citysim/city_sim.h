@@ -671,6 +671,7 @@ public:
     Real farScale() const { return farScale_; }
     long resumedTrips() const { return resumedTrips_; }
     long dormantEvents() const { return dormantEventsRun_; }   // schedule events run for sleeping agents
+    long dormantWaypoints() const { return dormantWaypoints_; }   // sleepers under way moved on (through traffic)
     double dormantEventMs() const { return dormantEventMs_; }   // ...and the wall time they took, in all
     Real carPromoteRadius = 500.0;   // V->K inside this range of the player...
     Real carDemoteRadius = 620.0;    // ...K->V beyond this (hysteresis)
@@ -1872,6 +1873,11 @@ private:
     double dormantEventMs_ = 0;
     void scheduleDormantEvent(int i);
     void runDormantEvents();
+    // through traffic: a sleeper under way is moved on every few seconds (a waypoint event) so the wake finds it
+    static constexpr Real kDormantWaypointSeconds = 4.0;
+    std::vector<double> dormantArriveAt_;   // per agent: when its trip ends (its arrival event), -1 none
+    long dormantWaypoints_ = 0;
+    void dormantGlide(Agent& a, Real seconds);
     std::vector<int> crowdDirty_;  // takeCrowdChanges
     bool crowdDirtyAll_ = true;
     void crowdChanged(int i) {
