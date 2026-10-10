@@ -9231,3 +9231,14 @@ Two kinds of place keep their posted hours: one nobody was hired at (a lab town,
 The club's line is recorded as an area `club_queue` for the host. Everything is kept on the paving, clear of the door and the road, at the paving's height. `RT_FRONT_DEBUG=1` prints each dressed front.
 
 **Consequences.** island_8_nature: 284 fronts dressed (61 boutiques, 58 restaurants, 49 cafés, 27 bars, 24 electronics, 21 bookshops, 16 grocers, 2 clubs). Most shop fronts have less paving than that in front of them and are not dressed. Lots tag `2026-10-09.3`. Owed: the sim lining the night's crowd up in `club_queue` with a bouncer at the door; projecting blade signs.
+
+## ADR-0149 — Streaming ahead of a flying camera: stand-ins that cover, a look-ahead, jumps that stream
+
+**Context.** The city's next ten, #10. Every aerial shot after a camera jump showed bare blocks, and a fast free camera outran the building cells. Each cell has a mass-box proxy that is always resident, but it drew only past `facadeDistance`. Inside that ring, a cell whose facade and detail tiers had not arrived drew nothing at all, despite residency.h's promise of "a brief loss of detail, never a hole".
+
+**Decision.**
+- **Stand-ins cover.** The detail and facade tiers' `commit` and `unload` keep a count per render cell (`CellCover`, level_loader). While a cell has no tier resident, its proxies' `minDistance` is 0 and they draw at every distance; when a tier lands they return to the far ring. `RT_NO_STANDIN=1` restores the old rule for A/B.
+- **A look-ahead.** `Residency::update` also measures distance from where the camera will be in about 0.75 s (45 frames at this frame's step), and runs twice the prepare jobs (6) when the camera moves over about 1.5 m a frame.
+- **Jumps stream.** A jump loads in place only what lies within `kJumpNear` (150 m); the rest prepares on the workers as in movement. The stand-ins keep the far ring whole meanwhile. A level's first frame (`update` with no jobs) still loads everything.
+
+**Consequences.** A scripted fly across Saltwood at 200 m/s (`fly_probe.py`): before, empty blocks beyond the first streets; with the stand-ins, boxes hold the shape; with the look-ahead, full detail throughout. At 60 m/s it was already complete. After a 9 km jump the first frame shows the stand-ins and detail follows within a few seconds. Tests unchanged (1545/1545).

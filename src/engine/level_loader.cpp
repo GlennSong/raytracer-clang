@@ -6587,6 +6587,28 @@ bool LevelLoader::load(const std::string& path,
                 world.add<engine::CityBuildings>(world.create(),
                                                 std::move(cityB));
             }
+            // NO HOLES WHILE A CELL STREAMS (the city's next ten #10; every aerial shot after a jump or a fast flight
+            // showed empty blocks): a cell's mass-box proxy draws only past facadeDistance, so while its facade and
+            // detail tiers were still streaming in nothing at all stood there. The tiers' commit and unload keep a
+            // count per cell; with none resident the proxy draws at every distance, and goes back to the far ring the
+            // moment a tier lands.
+            struct CellCover {
+                std::map<std::pair<int, int>, int> resident;
+                std::map<std::pair<int, int>, std::vector<Entity>> proxies;
+                double farFrom = 0;   // the proxies' minDistance when a tier is resident
+            };
+            auto cellCover = std::make_shared<CellCover>();
+            static const bool noStandIn = std::getenv("RT_NO_STANDIN") != nullptr;   // A/B: the proxies' old far-only rule
+            auto setCover = [cellCover, wpc = &world](std::pair<int, int> key, int delta) {
+                if (noStandIn) return;
+                int& n = cellCover->resident[key];
+                const bool was = n > 0;
+                n = std::max(0, n + delta);
+                if (was == (n > 0)) return;
+                for (Entity e : cellCover->proxies[key])
+                    if (wpc->alive(e))
+                        if (Renderable* r = wpc->get<Renderable>(e)) r->minDistance = n > 0 ? cellCover->farFrom : 0.0;
+            };
             // One entity per non-empty part class, with the shape-grammar's OWN
             // material recipes: materialFor(PartId) names the procedural surface
             // (brick/concrete/stucco/metal), which gets world-scaled UVs + the
@@ -6844,9 +6866,11 @@ bool LevelLoader::load(const std::string& path,
                             }
                             return out;
                         };
-                        it.commit = [commitChunk, assetsP, ents, minD, maxD, scale](std::shared_ptr<void> payload) -> std::size_t {
+                        const std::pair<int, int> coverKey{cx, cz};
+                        it.commit = [commitChunk, assetsP, ents, minD, maxD, scale, setCover, coverKey](std::shared_ptr<void> payload) -> std::size_t {
                             auto* p = static_cast<Prepared*>(payload.get());
                             if (!p) return 0;
+                            setCover(coverKey, +1);
                             std::size_t bytes = 0;
                             for (Chunk& c : p->chunks) {
                                 bytes += c.mesh.vertexCount * 56 + c.mesh.indexCount * 4;
@@ -6857,7 +6881,8 @@ bool LevelLoader::load(const std::string& path,
                         };
                         World* wp = &world;
                         AssetManager* ap = &assets;
-                        it.unload = [ents, wp, ap]() {
+                        it.unload = [ents, wp, ap, setCover, coverKey]() {
+                            setCover(coverKey, -1);
                             for (Entity e : *ents) {
                                 if (!wp->alive(e)) continue;
                                 if (const Renderable* r = wp->get<Renderable>(e)) ap->releaseMesh(r->mesh);
@@ -6977,7 +7002,11 @@ bool LevelLoader::load(const std::string& path,
                     r.material.roughness = glass ? 0.8f : 0.9f;
                     r.material.metallic = 0.0f;
                     r.material.emissiveMap = litWindows;
-                    r.minDistance = dd;
+                    // past the facade ring -- or anywhere, while the cell's tiers are still streaming (CellCover)
+                    const std::pair<int, int> ck{std::get<0>(key), std::get<1>(key)};
+                    const bool streamed = grown.bundle && !grown.cellParts.empty() && !(std::getenv("RT_STREAM_BUILDINGS") && std::getenv("RT_STREAM_BUILDINGS")[0] == '0');
+                    cellCover->farFrom = dd;
+                    r.minDistance = !streamed || noStandIn || cellCover->resident[ck] > 0 ? dd : 0.0;
                     r.lodCell = cell;   // swaps with the cell's facades (render_system lockstep)
                     r.mesh = assets.acquireMesh(pmesh, "");
                     Entity e = world.create();
@@ -6985,6 +7014,7 @@ bool LevelLoader::load(const std::string& path,
                     world.add<Transform>(e, t);
                     world.add<PrevTransform>(e, PrevTransform{t});
                     world.add<Renderable>(e, r);
+                    if (streamed) cellCover->proxies[ck].push_back(e);
                     // 0.4, not the panes' 1.3: mipmapping has already averaged the grid to a
                     // third, and at the night exposure a box glowing evenly at 1.3 read as a
                     // pale slab — the far city should be a soft, tinted glow, not lit boxes.
@@ -6996,6 +7026,12 @@ bool LevelLoader::load(const std::string& path,
                     ng.dayAlbedo = r.material.albedo;
                     world.add<engine::NightGlow>(e, ng);
                 }
+            }
+            {
+                int cells = 0, near0 = 0;
+                for (const auto& [k, es] : cellCover->proxies) { ++cells; if (cellCover->resident[k] == 0) ++near0; }
+                LOG_INFO << "[lots] stand-ins: " << cells << " cells' proxies follow their tiers' residency (" << near0
+                         << " drawing at every distance until a tier lands)";
             }
             lotStage("hlod proxies");
             // Publish the plan (blocks + lots + collider prisms) for the
