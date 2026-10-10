@@ -9185,3 +9185,11 @@ Each sculptor works on the largest rectangle that fits the lot square to its str
 The forest scatter now also stays off the lots' sealed ground (`loadForest(..., sealedLots)`). It had only avoided flattened pads, so island trees grew through the playgrounds and park paths.
 
 **Consequences.** On island_8_nature: 17 car parks (22 surface lots with 437 stalls for the drivers, counting the big boxes), 180 playgrounds, 293 community gardens and 1,356 pocket parks. 377 lots stay green. Lots tag `2026-10-09.2`. Test: `lots_that_do_not_build_get_a_use`. The skyline census reports `car_park` open space too.
+
+## ADR-0145 — Bigger downtown blocks for the island's cities
+
+**Context.** Glenn, on the first island walk-through: "Saltwood downtown blocks should be bigger". The island brief gave every place the same 94 x 64 m core grid (street centre to centre), which leaves about a 72 x 42 m site once the streets and pavements are taken out. That is small for towers, and from the air the downtown read as towers crammed onto small blocks.
+
+**Decision.** `islandSiteBrief` gives a CITY a 128 x 96 m core block and a 165 x 118 m midtown block; a town keeps 94 x 64 and 158 x 108, its walkable grid. Of the sizes tried (112 x 84 up to 128 x 96), 128 x 96 merged the fewest streets by the plan's own check (ADR from a954c161): Saltwood plus Weyby 203 m of roadway in another, against 242 m on the old grid and 355 m at 120 x 90.
+
+**Consequences.** island_8_nature re-planned and re-baked: the financial districts' footprint grows from 257,000 to 327,000 m2, towers over 20 storeys from 122 to 132, Weyby gets a real downtown. Blocks 1207 -> 991 (bigger blocks, fewer of them), lots 13,156 -> 13,884.

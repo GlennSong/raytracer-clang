@@ -525,8 +525,11 @@ json islandSiteBrief(const IslandWorld& w, int site) {
         {"size", size},
         {"center", {s.at.x, s.at.y}},
         {"relief", 3.0},   // the island is the relief; the brief's hills would only roughen it
-        {"core", {{"angle", angle}, {"arterialEvery", 3}, {"block", {94.0, 64.0}}, {"radius", core}}},
-        {"midtown", {{"block", {158.0, 108.0}}, {"radius", mid}, {"warp", city ? 18.0 : 10.0}}},
+        // a CITY's downtown blocks are big enough for towers with room round them (Glenn: "Saltwood downtown blocks
+        // should be bigger"; 94 x 64 left a 72 x 42 m site; 128 x 96 leaves ~105 x 75, and of the sizes tried it merged the fewest streets); a town keeps its
+        // small walkable grid
+        {"core", {{"angle", angle}, {"arterialEvery", 3}, {"block", city ? json::array({128.0, 96.0}) : json::array({94.0, 64.0})}, {"radius", core}}},
+        {"midtown", {{"block", city ? json::array({165.0, 118.0}) : json::array({158.0, 108.0})}, {"radius", mid}, {"warp", city ? 18.0 : 10.0}}},
         {"outskirts", {{"curvature", 24.0}, {"margin", 120.0}, {"ringSpacing", city ? 140.0 : 120.0}, {"spokes", city ? 10 : 6}, {"streetSpacing", 95.0}}},
         {"freeway", {{"radius", 0.0}, {"radials", 0}, {"wobble", 0.0}}},   // no ring: the island's freeway serves it
         {"roads", {{"arterial", 22.0}, {"collector", 16.0}, {"freeway", 30.0}, {"local", 12.0}, {"sidewalk", 5.0}}},
