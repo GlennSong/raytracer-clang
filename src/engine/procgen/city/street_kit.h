@@ -68,6 +68,13 @@ void emitTrafficSignal(RenderMesh& out, const Vec3& base, const Vec2& faceDir,
 // instead of baking the geometry at every corner.
 RenderMesh trafficSignalProto(const SignalParams& p = {});
 
+// KERB LIFE (2026-10-09, the city's next ten #3): the small pieces a real pavement carries, each built once at the
+// origin as an instance prototype. Frame: +X along the street, +Z from the kerb toward the buildings, y = 0 the
+// pavement.
+RenderMesh litterBinProto();    // a black steel bin with a domed lid, 1.0 m
+RenderMesh bikeRackProto();     // three steel hoops in a row along the kerb
+RenderMesh newsBoxesProto();    // a pair of coin newspaper boxes on a plinth, their fronts to the pavement
+RenderMesh treePitProto();      // a 1.4 m square tree pit: dark soil inside a steel grate frame
 }  // namespace engine
 
 #endif

@@ -182,4 +182,57 @@ RenderMesh streetLamp(const LampParams& p) {
     return out;
 }
 
+RenderMesh litterBinProto() {
+    RenderMesh out;
+    const Vec3 steel(0.05, 0.055, 0.06);
+    place(out, MeshBuilder::cylinder(0.26f, 0.86f, 14), steel, Vec3(0, 0.43, 0), 0);      // the body
+    place(out, MeshBuilder::cylinder(0.29f, 0.05f, 14), steel * 1.4, Vec3(0, 0.885, 0), 0);  // the rim
+    {
+        RenderMesh dome = MeshBuilder::sphere(0.27f, 6, 14);
+        for (Vertex& v : dome.vertices) if (v.position.y < 0) v.position.y = 0;              // a half dome
+        place(out, dome, steel, Vec3(0, 0.91, 0), 0);
+    }
+    place(out, MeshBuilder::box(Vec3(0.14, 0.05, 0.02)), Vec3(0.02, 0.02, 0.02), Vec3(0, 0.98, 0.26), 0);   // the mouth
+    return out;
+}
+
+RenderMesh bikeRackProto() {
+    RenderMesh out;
+    const Vec3 steel(0.42, 0.44, 0.46);
+    for (int k = 0; k < 3; ++k) {   // an inverted U per hoop, across the kerb line
+        const Real x = (k - 1) * 0.9;
+        place(out, MeshBuilder::box(Vec3(0.05, 0.82, 0.05)), steel, Vec3(x, 0.41, -0.35), 0);
+        place(out, MeshBuilder::box(Vec3(0.05, 0.82, 0.05)), steel, Vec3(x, 0.41, 0.35), 0);
+        place(out, MeshBuilder::box(Vec3(0.05, 0.05, 0.75)), steel, Vec3(x, 0.84, 0), 0);
+    }
+    return out;
+}
+
+RenderMesh newsBoxesProto() {
+    RenderMesh out;
+    const Vec3 cols[2] = {Vec3(0.55, 0.08, 0.06), Vec3(0.08, 0.20, 0.45)};
+    place(out, MeshBuilder::box(Vec3(1.15, 0.08, 0.5)), Vec3(0.3, 0.3, 0.3), Vec3(0, 0.04, 0), 0);   // the plinth
+    for (int k = 0; k < 2; ++k) {
+        const Real x = (k - 0.5) * 0.56;
+        place(out, MeshBuilder::box(Vec3(0.5, 0.95, 0.42)), cols[k], Vec3(x, 0.555, 0), 0);
+        place(out, MeshBuilder::box(Vec3(0.40, 0.32, 0.02)), Vec3(0.75, 0.78, 0.80), Vec3(x, 0.72, 0.215), 0);   // the window
+        place(out, MeshBuilder::box(Vec3(0.12, 0.06, 0.03)), Vec3(0.6, 0.6, 0.62), Vec3(x + 0.12, 0.95, 0.22), 0);  // coin slot
+    }
+    return out;
+}
+
+RenderMesh treePitProto() {
+    RenderMesh out;
+    const Vec3 soil(0.06, 0.045, 0.03), iron(0.10, 0.10, 0.11);
+    const Vec3 up(0, 1, 0);
+    pushQuad(out, Vec3(-0.6, 0.02, -0.6), Vec3(0.6, 0.02, -0.6), Vec3(0.6, 0.02, 0.6), Vec3(-0.6, 0.02, 0.6), up, soil);
+    for (int s = 0; s < 4; ++s) {   // the grate's frame, a 0.1 m band
+        const Real a = s * 1.5707963267948966;
+        const Vec3 u(std::cos(a), 0, std::sin(a)), v(-u.z, 0, u.x);
+        const Vec3 c0 = u * 0.7 + v * 0.7, c1 = u * 0.7 - v * 0.7, c2 = u * 0.6 - v * 0.6, c3 = u * 0.6 + v * 0.6;
+        pushQuad(out, c0 + up * 0.025, c1 + up * 0.025, c2 + up * 0.025, c3 + up * 0.025, up, iron);
+    }
+    return out;
+}
+
 }  // namespace engine

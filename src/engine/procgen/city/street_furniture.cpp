@@ -375,6 +375,108 @@ StreetFurniturePlan planStreetFurniture(
             grid[cellKey(cx, cz)].push_back({sp, dir});
         }
     }
+    if (!p.kerbLife) return out;
+
+    // KERB LIFE: every city street that has a pavement and fronts lots (not a freeway, a ramp, a bridge, the road
+    // between towns): street trees in pits at treeSpacing, kept off the lamps, the signal poles and the junctions'
+    // sightlines; a litter bin by each corner; bike racks and news boxes along the main streets. The same sampling and
+    // the same "off the asphalt" rules as the lamps, each kind spaced along its own kerb (direction-aware).
+    struct Placed { Vec2 at, dir; };
+    auto keyOf = [&](const Vec2& v, Real c) { return cellKey(static_cast<int>(std::floor(v.x / c)), static_cast<int>(std::floor(v.y / c))); };
+    struct Spaced {
+        Real spacing;
+        std::unordered_map<long long, std::vector<Placed>> g;
+    };
+    auto near = [&](Spaced& s, Vec2 v, Vec2 d, Real r, bool sameKerb) {
+        const int cx = static_cast<int>(std::floor(v.x / s.spacing)), cz = static_cast<int>(std::floor(v.y / s.spacing));
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dx = -1; dx <= 1; ++dx) {
+                auto it = s.g.find(cellKey(cx + dx, cz + dz));
+                if (it == s.g.end()) continue;
+                for (const Placed& q : it->second)
+                    if ((!sameKerb || dot(q.dir, d) > 0) && (q.at - v).length() < r) return true;
+            }
+        return false;
+    };
+    auto add = [&](Spaced& s, Vec2 v, Vec2 d) { s.g[keyOf(v, s.spacing)].push_back({v, d}); };
+    Spaced trees{std::max(p.treeSpacing, Real(4)), {}}, bins{30.0, {}}, props{std::max(p.propSpacing, Real(10)), {}};
+    Spaced lamps{12.0, {}}, poles{12.0, {}};
+    for (const Vec3& b : out.lampBases) add(lamps, Vec2(b.x, b.z), Vec2(0, 0));
+    for (const SignalSpot& s : out.signals) add(poles, Vec2(s.base.x, s.base.z), Vec2(0, 0));
+    auto streetWithPavement = [&](const NavLink& L) {
+        return (L.klass == RoadClass::Local || L.klass == RoadClass::Collector || L.klass == RoadClass::Arterial) &&
+               L.layer == 0 && !L.elevAbsolute && L.walkable && (L.access & road_access::kFrontage) && L.width <= p.maxLampRoadWidth;
+    };
+    auto clearOfRoad = [&](const Vec2& v, Real margin) {
+        if (insideAnyCarriageway(v)) return false;
+        if (!p.deck) return true;
+        // depthInside is 0 off the deck: the point and four around it at `margin` must all be off it
+        for (const Vec2 o : {Vec2(0, 0), Vec2(margin, 0), Vec2(-margin, 0), Vec2(0, margin), Vec2(0, -margin)})
+            if (p.deck->depthInside(v.x + o.x, v.y + o.y) > 0.0) return false;
+        return true;
+    };
+    auto distToJunction = [&](const NavLink& L, const Vec2& v) {
+        Real d = 1e30;
+        if (nav.isJunction(L.to)) d = std::min(d, (v - nav.nodes[L.to]).length());
+        if (nav.isJunction(L.from)) d = std::min(d, (v - nav.nodes[L.from]).length());
+        return d;
+    };
+    // THE KERB AS DRAWN: a link's width is its travel lanes, and a street with parking bands has its kerb a
+    // band further out -- so walk out from the centreline until off the asphalt, then add the verge
+    auto kerbPoint = [&](int li, Real t, Real verge) {
+        const Vec2 c = nav.pointOnLink(li, t);
+        const Vec2 s1 = nav.sidewalkPoint(li, t, 1.0);
+        if (!p.deck || (s1 - c).length() < 1e-6) return nav.sidewalkPoint(li, t, verge);
+        const Vec2 n = normalize(s1 - c);
+        Real s = nav.links[li].width * 0.5;
+        while (s < 16.0 && p.deck->depthInside(c.x + n.x * s, c.y + n.y * s) > 0.0) s += 0.25;
+        return c + n * (s + verge);
+    };
+    uint32_t h = 0x5EED7u;
+    for (int li = 0; li < nav.linkCount(); ++li) {
+        const NavLink& L = nav.links[li];
+        if (!streetWithPavement(L)) continue;
+        const Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
+        const Real len = (b - a).length();
+        if (len < Real(0.5)) continue;
+        const Vec2 dir = (b - a) * (Real(1) / len);
+        const bool main = L.klass != RoadClass::Local;
+        const int steps = std::max(1, static_cast<int>(std::ceil(len / Real(1.5))));
+        for (int k = 0; k <= steps; ++k) {
+            const Real t = static_cast<Real>(k) / steps;
+            const Real dj = distToJunction(L, kerbPoint(li, t, p.treeVerge));
+            // A STREET TREE
+            {
+                const Vec2 sp = kerbPoint(li, t, p.treeVerge);
+                if (dj >= p.treeJunctionClear && clearOfRoad(sp, 0.4) && !near(trees, sp, dir, p.treeSpacing * 0.92, true) &&
+                    !near(lamps, sp, dir, 3.2, false) && !near(poles, sp, dir, 3.5, false) && !near(bins, sp, dir, 2.0, false) &&
+                    !near(props, sp, dir, 2.5, false)) {
+                    h = h * 1664525u + 1013904223u;
+                    out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), Real(0.75) + (h >> 8 & 0xFF) / 255.0 * 0.35, (h >> 16) % 3u});
+                    add(trees, sp, dir);
+                }
+            }
+            // A LITTER BIN by the corner, just past the junction's clear zone, near the kerb
+            {
+                const Vec2 sp = kerbPoint(li, t, 1.0);   // (past curbGap: insideAnyCarriageway pads every kerb by it)
+                if (dj >= p.junctionClear && dj < p.junctionClear + 4.0 && clearOfRoad(sp, 0.2) && !near(bins, sp, dir, 25.0, true) &&
+                    !near(trees, sp, dir, 1.6, false) && !near(lamps, sp, dir, 1.2, false) && !near(poles, sp, dir, 1.5, false)) {
+                    out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), normalize(sp - nav.pointOnLink(li, t)), KerbProp::Bin});
+                    add(bins, sp, dir);
+                }
+            }
+            // A BIKE RACK or NEWS BOXES along a main street, mid-block
+            if (main && dj > 25.0) {
+                const Vec2 sp = kerbPoint(li, t, 1.0);
+                if (clearOfRoad(sp, 0.3) && !near(props, sp, dir, p.propSpacing, true) && !near(trees, sp, dir, 2.6, false) &&
+                    !near(lamps, sp, dir, 2.0, false) && !near(poles, sp, dir, 2.5, false)) {
+                    h = h * 1664525u + 1013904223u;
+                    out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), normalize(sp - nav.pointOnLink(li, t)), static_cast<uint8_t>((h >> 12) % 3u ? KerbProp::BikeRack : KerbProp::NewsBoxes)});
+                    add(props, sp, dir);
+                }
+            }
+        }
+    }
     return out;
 }
 

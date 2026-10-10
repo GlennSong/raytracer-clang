@@ -9193,3 +9193,16 @@ The forest scatter now also stays off the lots' sealed ground (`loadForest(..., 
 **Decision.** `islandSiteBrief` gives a CITY a 128 x 96 m core block and a 165 x 118 m midtown block; a town keeps 94 x 64 and 158 x 108, its walkable grid. Of the sizes tried (112 x 84 up to 128 x 96), 128 x 96 merged the fewest streets by the plan's own check (ADR from a954c161): Saltwood plus Weyby 203 m of roadway in another, against 242 m on the old grid and 355 m at 120 x 90.
 
 **Consequences.** island_8_nature re-planned and re-baked: the financial districts' footprint grows from 257,000 to 327,000 m2, towers over 20 storeys from 122 to 132, Weyby gets a real downtown. Blocks 1207 -> 991 (bigger blocks, fewer of them), lots 13,156 -> 13,884.
+
+## ADR-0146 — Kerb life: street trees, litter bins, bike racks, news boxes
+
+**Context.** The city's next ten, #3. Downtown streets had lamps, signals and nothing else: bare 5 m pavements, no street trees anywhere on the island.
+
+**Decision.** `planStreetFurniture` (street_furniture.cpp), after the lamps, walks every city street with a pavement that fronts lots (local, collector, arterial; at grade; walkable; frontage) with the lamps' rules and adds:
+- **Street trees** in 1.4 m pits, 9 m apart along each kerb, 1.5 m beyond it, at least 13 m from a junction (sightlines), 3.2 m from lamps and 3.5 m from signal poles. They are three of the forest's real species (maple, oak, beech, 9 m; `realTree`), instanced in 280 m cells.
+- **A litter bin** at each corner, just past the junction's clear zone.
+- **Bike racks and pairs of news boxes** every 55 m of collector and arterial kerb, mid-block.
+
+The kerb is found ON THE DECK: a nav link's width is its travel lanes, and a street with parking bands has its kerb a band further out, so the planner walks out from the centreline until `depthInside` is 0. Each piece is oriented by the vector from the street's centre to it (+Z of the prototype), because "right of the link" is mirrored in this world. `RT_NO_KERB_LIFE=1` turns it off (A/B).
+
+**Consequences.** island_8_nature: 40,378 street trees, 1,916 bins, 2,554 bike racks, 1,294 news boxes. Downtown Saltwood with RT_VSYNC=0: 64-68 fps against 69-71 without, at a 700 m draw distance (+4.6 M triangles), so the trees draw to 450 m (`citysim.kerbLifeDistance`). Test: `kerb_life_lines_the_pavements_and_keeps_off_the_road`. Owed: trunk colliders (you walk through a street tree), bins at corners the deck check still rejects.

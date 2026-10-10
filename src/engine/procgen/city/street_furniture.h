@@ -59,7 +59,21 @@ struct StreetFurnitureParams {
     // 10 m, not 12: junction corners are exactly where a pedestrian wants
     // light. Still clear of the signal poles, which stand ~9.6 m out.
     Real junctionClear = 10.0;     // no lamps this close to a junction corner
+    // KERB LIFE (the city's next ten #3): street trees in pits along every city street with a pavement, a litter
+    // bin at each corner, bike racks and newspaper boxes along the main streets. Off = lamps and signals only.
+    bool kerbLife = true;
+    Real treeSpacing = 9.0;        // metres between street trees along one kerb
+    Real treeVerge = 1.5;          // the pit's centre beyond the kerb
+    Real treeJunctionClear = 13.0; // sightlines: no tree this close to a junction
+    Real propSpacing = 55.0;       // a bike rack or a pair of news boxes every this many metres of main-street kerb
 };
+
+// A street tree (its pit's centre, on the pavement), its size and which of the tree kit's varieties it is.
+struct StreetTree { Vec3 base; Real scale = 1; uint32_t variety = 0; };
+// A small kerb piece: where it stands, the street's direction there (+X of the prototype), and what it is.
+// `toPavement`: from the street's centre out to the piece (the prototype's +Z), so it faces the right way whichever
+// side of its link the pavement is.
+struct KerbProp { enum Kind : uint8_t { Bin, BikeRack, NewsBoxes }; Vec3 base; Vec2 toPavement{0, 1}; uint8_t kind = Bin; };
 
 struct StreetFurniturePlan {
     std::vector<SignalSpot> signals;
@@ -70,6 +84,8 @@ struct StreetFurniturePlan {
     std::vector<Vec2> unpoledApproaches;
     std::vector<Vec3> lampBases;   // pole feet (instance translations)
     std::vector<Vec3> lampHeads;   // bulb positions (night point lights)
+    std::vector<StreetTree> trees; // kerb life (StreetFurnitureParams::kerbLife)
+    std::vector<KerbProp> props;
 };
 
 // Plan every pole from the nav graph: a signal per junction-entering link

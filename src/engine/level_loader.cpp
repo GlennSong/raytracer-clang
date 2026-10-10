@@ -7117,6 +7117,7 @@ bool LevelLoader::load(const std::string& path,
                     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
                         if (!fp.deck && !d.field.spines.empty()) fp.deck = &d.field;
                     });
+                    fp.kerbLife = !std::getenv("RT_NO_KERB_LIFE");   // A/B: lamps and signals only
                     return engine::planStreetFurniture(nav, furnGround, fp);
                 }();
             if (!fplan.unpoledApproaches.empty()) {
@@ -7342,6 +7343,105 @@ bool LevelLoader::load(const std::string& path,
                              << " condensed, smallest capitals " << minCap << " px";
                 }
                 world.add<engine::StreetDirectory>(world.create(), std::move(dir));
+            }
+            // KERB LIFE (the city's next ten #3): street trees in their pits, litter bins, bike racks, news boxes --
+            // instanced in 280 m cells like the lamps. The trees are the lot pass's street-tree kit (growTree, three
+            // varieties), bark and leaves as two groups a cell.
+            if (!fplan.trees.empty() || !fplan.props.empty()) {
+                const Real cellSz = 280.0;
+                auto cellOf = [&](const Vec3& b) { return std::make_pair((int)std::floor(b.x / cellSz), (int)std::floor(b.z / cellSz)); };
+                const double kerbDist = root.contains("citysim") ? root["citysim"].value("kerbLifeDistance", 450.0) : 450.0;   // (700 m: +4.6 M triangles downtown, ~1 ms)
+                // the forest's real species (real_tree.h), one model each, 9 m: a maple, an oak, a beech
+                struct StreetTreeKit { MeshHandle bark, leaves; RenderMaterial barkMat, leafMat; };
+                std::vector<StreetTreeKit> kits;
+                const engine::RealSpecies streetSpecies[3] = {engine::RealSpecies::Maple, engine::RealSpecies::Oak, engine::RealSpecies::Beech};
+                for (uint32_t v = 0; v < 3; ++v) {
+                    const uint32_t seed = 0x57EE7u + v * 977u;
+                    const engine::RealTree rt = engine::realTree(streetSpecies[v], seed, 9.0);
+                    const TextureData fol = engine::realFoliageTexture(streetSpecies[v], 512, seed);
+                    StreetTreeKit k;
+                    k.bark = assets.acquireMesh(rt.bark, "streetTree:" + std::to_string(v) + ":bark");
+                    k.leaves = assets.acquireMesh(rt.foliage, "streetTree:" + std::to_string(v) + ":leaves");
+                    k.barkMat.albedo = Vec3(1, 1, 1);
+                    k.barkMat.roughness = 0.92f;
+                    k.leafMat = k.barkMat;
+                    k.leafMat.roughness = 0.85f;
+                    k.leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_WIND;
+                    k.leafMat.albedoMap = renderer.uploadTexture(fol.width, fol.height, fol.channels, fol.pixels.data());
+                    kits.push_back(std::move(k));
+                }
+                std::map<std::pair<int, int>, std::array<std::vector<Mat4>, 3>> treeCells;
+                std::map<std::pair<int, int>, std::vector<Mat4>> pitCells;
+                for (const engine::StreetTree& st : fplan.trees) {
+                    const Real yaw = std::fmod(st.base.x * 1.7 + st.base.z * 2.3, 6.2831853);
+                    treeCells[cellOf(st.base)][st.variety % 3u].push_back(
+                        Mat4::trs(st.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(st.scale, st.scale, st.scale)));
+                    pitCells[cellOf(st.base)].push_back(Mat4::translate(st.base.x, st.base.y, st.base.z));
+                }
+                for (auto& [key, byVar] : treeCells)
+                    for (uint32_t v = 0; v < 3; ++v) {
+                        if (byVar[v].empty()) continue;
+                        InstanceGroup g;
+                        g.mesh = kits[v].bark;
+                        g.material = kits[v].barkMat;
+                        g.transforms = byVar[v];
+                        g.drawDistance = kerbDist;
+                        g.drawClass = engine::DrawClass::Scenery;
+                        g.renderLayer = engine::LayerFoliage;
+                        groupBounds(g, 11.0);
+                        world.add<InstanceGroup>(world.create(), g);
+                        if (kits[v].leaves.index) {
+                            InstanceGroup lg;
+                            lg.mesh = kits[v].leaves;
+                            lg.material = kits[v].leafMat;
+                            lg.transforms = std::move(byVar[v]);
+                            lg.drawDistance = kerbDist;
+                            lg.drawClass = engine::DrawClass::Scenery;
+                            lg.renderLayer = engine::LayerFoliage;
+                            groupBounds(lg, 11.0);
+                            world.add<InstanceGroup>(world.create(), lg);
+                        }
+                    }
+                MeshHandle pitMesh = assets.acquireMesh(engine::treePitProto(), "city:treepit");
+                for (auto& [key, transforms] : pitCells) {
+                    InstanceGroup g;
+                    g.mesh = pitMesh;
+                    g.material.albedo = Vec3(1, 1, 1);
+                    g.material.roughness = 0.9f;
+                    g.transforms = std::move(transforms);
+                    g.drawDistance = kerbDist * 0.6;
+                    g.drawClass = engine::DrawClass::Furniture;
+                    groupBounds(g, 1.0);
+                    world.add<InstanceGroup>(world.create(), g);
+                }
+                const MeshHandle propMesh[3] = {assets.acquireMesh(engine::litterBinProto(), "city:litterbin"),
+                                                assets.acquireMesh(engine::bikeRackProto(), "city:bikerack"),
+                                                assets.acquireMesh(engine::newsBoxesProto(), "city:newsboxes")};
+                std::map<std::pair<int, int>, std::array<std::vector<Mat4>, 3>> propCells;
+                int nProp[3] = {0, 0, 0};
+                for (const engine::KerbProp& kp : fplan.props) {
+                    // the prototype's +Z out to the pavement: a yaw about +Y takes +Z to (sin, cos)
+                    const Real yaw = std::atan2(kp.toPavement.x, kp.toPavement.y);
+                    propCells[cellOf(kp.base)][kp.kind % 3u].push_back(
+                        Mat4::trs(kp.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    ++nProp[kp.kind % 3u];
+                }
+                for (auto& [key, byKind] : propCells)
+                    for (int k = 0; k < 3; ++k) {
+                        if (byKind[k].empty()) continue;
+                        InstanceGroup g;
+                        g.mesh = propMesh[k];
+                        g.material.albedo = Vec3(1, 1, 1);
+                        g.material.metallic = k == 1 ? 0.6f : 0.2f;
+                        g.material.roughness = 0.5f;
+                        g.transforms = std::move(byKind[k]);
+                        g.drawDistance = kerbDist * 0.5;
+                        g.drawClass = engine::DrawClass::Furniture;
+                        groupBounds(g, 1.5);
+                        world.add<InstanceGroup>(world.create(), g);
+                    }
+                LOG_INFO << "[furniture] kerb life: " << fplan.trees.size() << " street trees, " << nProp[0] << " litter bins, "
+                         << nProp[1] << " bike racks, " << nProp[2] << " news boxes";
             }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "
                      << fplan.lampBases.size() << " street lamps";
