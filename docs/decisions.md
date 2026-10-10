@@ -9206,3 +9206,13 @@ The forest scatter now also stays off the lots' sealed ground (`loadForest(..., 
 The kerb is found ON THE DECK: a nav link's width is its travel lanes, and a street with parking bands has its kerb a band further out, so the planner walks out from the centreline until `depthInside` is 0. Each piece is oriented by the vector from the street's centre to it (+Z of the prototype), because "right of the link" is mirrored in this world. `RT_NO_KERB_LIFE=1` turns it off (A/B).
 
 **Consequences.** island_8_nature: 40,378 street trees, 1,916 bins, 2,554 bike racks, 1,294 news boxes. Downtown Saltwood with RT_VSYNC=0: 64-68 fps against 69-71 without, at a 700 m draw distance (+4.6 M triangles), so the trees draw to 450 m (`citysim.kerbLifeDistance`). Test: `kerb_life_lines_the_pavements_and_keeps_off_the_road`. Owed: trunk colliders (you walk through a street tree), bins at corners the deck check still rejects.
+
+## ADR-0147 — A place with staff is open only while one of them is on shift
+
+**Context.** The city's next ten, #4 (owed from ADR stage 3b, the OPEN signs): a shop's sign lit only when someone who works there was at work, but the sim still sent customers to it whatever the sign said.
+
+**Decision.** `CitySim::Venue` carries `place` and `staffed`, a 24-bit mask: bit h is set when someone hired there is AtWork at h:30 by `scheduleSnapshot`, the same rule the OPEN signs and a dormant agent's wake-up use. `Venue::openAt` requires the bit, so every customer chooser (outings, lunch, the evening's venue, activities) respects it with no change of its own. `indexVenueStaffing` runs after places are assigned, and again when the clock rate changes, because a commute is seconds and its share of the day moves with the rate. It costs one pass over the shops' staff, 24 snapshots each.
+
+Two kinds of place keep their posted hours: one nobody was hired at (a lab town, a population capped below its jobs) and one whose staff the schedule never has at work (a commute longer than the shift on the game clock). Shutting those for good would be the sim's arithmetic, not a shop.
+
+**Consequences.** island_8_nature: 2,585 shops, cafes, restaurants, bars and clubs gated; 1,315 staffed at 10:00 and 742 at 22:00. On the game clock staff reach work late in the morning, so half the shops open late; that is the sim's commute model, and the OPEN signs already showed it. The host logs `[citysim] staffed places`. Test: `a_shop_is_open_to_customers_only_while_someone_works_there`.

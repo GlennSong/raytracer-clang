@@ -1218,7 +1218,14 @@ public:
         engine::Vec2 door;
         Real openHour = 0, closeHour = 24;
         uint8_t campus = 0;   // Place::campus: 1 teaching hall, 2 library, 3 residence, 4 quad, 5 field
+        PlaceId place = kNoPlace;
+        // THE HOURS SOMEBODY WORKS THERE (bit h: someone hired there is at work at h:30; indexVenueStaffing). A shop,
+        // cafe, restaurant, bar, club or supermarket nobody is on shift at is CLOSED to customers, whatever its hours
+        // say (Glenn's OPEN signs, made true). All bits set: not gated (a park, a civic hall, a place nobody was hired at).
+        uint32_t staffed = 0xFFFFFFu;
         bool openAt(Real h) const {
+            const int hr = static_cast<int>(std::floor(std::fmod(h + 24.0, 24.0))) % 24;
+            if (!(staffed >> hr & 1u)) return false;
             if (openHour == closeHour) return true;
             if (openHour < closeHour) return h >= openHour && h < closeHour;
             return h >= openHour || h < closeHour;
@@ -1762,6 +1769,13 @@ private:
     // the night's venues (restaurants, bars, clubs) by 250 m cell, for eveningVenue (indexNightVenues)
     std::unordered_map<int64_t, std::vector<int>> nightVenues_;
     void indexNightVenues();
+    // Venue::staffed from the hired staff's work windows (their schedules: at work from departHome + the commute to
+    // their work departure). Counts of the result in venueStaffing_.
+    void indexVenueStaffing();
+public:
+    struct VenueStaffing { int gated = 0, neverStaffed = 0, staffedNow = 0; };
+    VenueStaffing venueStaffing(Real clock) const;
+private:
     std::vector<SeatSpot> seats_;
     struct Loop { std::vector<engine::Vec2> pts; std::vector<Real> cum; Real length = 0; };
     std::vector<Loop> loops_;
@@ -1786,6 +1800,7 @@ private:
     // Last step's clock rate, so a sleeping agent can convert "in-world hours
     // until my next event" into a sim-second wake time.
     Real hoursPerSecond_ = 0.05;
+    Real staffingRate_ = 0;   // the clock rate Venue::staffed was worked out at (indexVenueStaffing)
     int sleeping_ = 0;   // agents skipped this step by the scheduled wake
     PhaseTimes phase_;   // print-only instrumentation
     Real clockHours_ = 6.0;

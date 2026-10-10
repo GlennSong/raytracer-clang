@@ -918,3 +918,41 @@ TEST_CASE(lawn_groups_take_their_formations_and_poses) {
     CHECK(cat.pairLo >= 6.0 && cat.pairHi <= 12.5);
     CHECK(cat.standing == cat.settledSamples);
 }
+
+// PLACES CLOSE WHEN NOBODY IS ON SHIFT (the city's next ten #4; the OPEN signs made true): a shop, cafe, restaurant,
+// bar or club with staff is open to customers only in the hours somebody hired there is at work by their own
+// schedule -- so a customer is never sent to a dark shop, and the venues' hours agree with the staff's.
+TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 40, 300, 23);
+    PlaceMap places;
+    for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-300 + i * 160.0, 330), nav, 8, 22);
+    places.add(PlaceType::Cafe, Vec2(120, -40), nav, 6, 23);
+    places.add(PlaceType::Bar, Vec2(-120, 40), nav, 16, 2);
+    sim.assignPlaces(places, nav);
+    const CitySim::VenueStaffing at10 = sim.venueStaffing(10.0);
+    std::printf("    [staffed] %d places gated, %d staffed at 10:00, %d at 03:00\n", at10.gated, at10.staffedNow, sim.venueStaffing(3.0).staffedNow);
+    CHECK(at10.gated > 0);
+    int disagree = 0, closedInHours = 0;
+    for (const CitySim::Venue& v : sim.venues()) {
+        if (v.staffed == 0xFFFFFFu) continue;
+        for (int h = 0; h < 24; ++h) {
+            bool someone = false;
+            for (const Agent& a : sim.agents())
+                if (a.workPlace == v.place && sim.scheduleSnapshot(a, h + 0.5).where == CitySim::Snapshot::Where::AtWork) someone = true;
+            const bool posted = v.openHour == v.closeHour || (v.openHour < v.closeHour ? h + 0.5 >= v.openHour && h + 0.5 < v.closeHour
+                                                                                     : h + 0.5 >= v.openHour || h + 0.5 < v.closeHour);
+            if (v.openAt(h + 0.5) != (posted && someone)) ++disagree;
+            if (posted && !someone) ++closedInHours;
+        }
+    }
+    int openHours = 0;
+    for (const CitySim::Venue& v : sim.venues())
+        if (v.staffed != 0xFFFFFFu) for (int h = 0; h < 24; ++h) openHours += v.openAt(h + 0.5);
+    std::printf("    [staffed] %d place-hours inside the posted hours with nobody on shift: closed; %d open\n", closedInHours, openHours);
+    CHECK(disagree == 0);
+    CHECK(closedInHours > 0);   // the gate does something
+    CHECK(openHours > 0);       // ...and a staffed place does open
+}

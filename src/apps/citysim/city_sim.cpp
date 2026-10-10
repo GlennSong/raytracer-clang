@@ -794,6 +794,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         v.openHour = p.openHour;
         v.closeHour = p.closeHour;
         v.campus = p.campus;
+        v.place = p.id;
         if (v.node >= 0) venues_.push_back(v);
     }
 
@@ -1626,6 +1627,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
     }
     indexNightVenues();   // where the sleepers go out to (eveningVenue)
+    indexVenueStaffing();   // ...and only to places somebody is working at
     commuteStats_ = CommuteStats{};
     commuteStats_.towns = static_cast<int>(townNets.size());
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {   // where the work went, cached or decided
@@ -1773,6 +1775,52 @@ void CitySim::staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vect
             if (n < 0xFFFF) ++n;
         }
     }
+}
+
+void CitySim::indexVenueStaffing() {
+    staffingRate_ = hoursPerSecond_;
+    if (venues_.empty()) return;
+    auto gated = [](PlaceType t) {
+        return t == PlaceType::Shop || t == PlaceType::Cafe || t == PlaceType::Restaurant || t == PlaceType::Bar ||
+               t == PlaceType::Club || t == PlaceType::Supermarket;
+    };
+    PlaceId maxPlace = 0;
+    for (const Venue& v : venues_) if (v.place != kNoPlace) maxPlace = std::max(maxPlace, v.place);
+    std::vector<uint32_t> mask(static_cast<std::size_t>(maxPlace) + 1, 0u);
+    std::vector<uint8_t> hired(mask.size(), 0), isGated(mask.size(), 0);
+    for (Venue& v : venues_) {
+        v.staffed = 0xFFFFFFu;   // ungated while the staff's own schedules are read (an evening's venue is chosen by openAt)
+        if (v.place != kNoPlace && gated(v.type)) isGated[v.place] = 1;
+    }
+    for (const Agent& a : agents_) {
+        if (a.workPlace == kNoPlace || a.workPlace > maxPlace || !isGated[a.workPlace]) continue;
+        hired[a.workPlace] = 1;
+        for (int h = 0; h < 24; ++h)   // the schedule's own word for where it is at h:30
+            if (scheduleSnapshot(a, h + 0.5).where == Snapshot::Where::AtWork) mask[a.workPlace] |= 1u << h;
+    }
+    bool anyHired = false;
+    for (uint8_t x : hired) anyHired = anyHired || x;
+    for (Venue& v : venues_) {
+        v.staffed = 0xFFFFFFu;
+        // a place nobody was hired at keeps its posted hours (a lab town, a population capped below its jobs): only
+        // a place WITH staff can be found with none of them on shift
+        // ...and so does one whose staff the schedule never has at work (a commute longer than the shift, on the game
+        // clock): shut for good would be the sim's arithmetic, not a shop
+        if (!anyHired || !gated(v.type) || v.place == kNoPlace || !hired[v.place] || !mask[v.place]) continue;
+        v.staffed = mask[v.place];
+    }
+}
+
+CitySim::VenueStaffing CitySim::venueStaffing(Real clock) const {
+    VenueStaffing s;
+    const int hr = static_cast<int>(std::floor(std::fmod(clock + 24.0, 24.0))) % 24;
+    for (const Venue& v : venues_) {
+        if (v.staffed == 0xFFFFFFu) continue;
+        ++s.gated;
+        if (v.staffed == 0) ++s.neverStaffed;
+        if (v.staffed >> hr & 1u) ++s.staffedNow;
+    }
+    return s;
 }
 
 void CitySim::indexNightVenues() {
@@ -6575,6 +6623,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // the day and so needs the CURRENT rate, not last step's.
     rerateSleep(hoursPerSecond);
     hoursPerSecond_ = hoursPerSecond;
+    // the staffed hours ride on the clock rate (a commute is so many seconds, so much of the day): a new rate, new hours
+    if (hoursPerSecond > 0 && staffingRate_ > 0 && std::fabs(hoursPerSecond - staffingRate_) > staffingRate_ * 1e-3) indexVenueStaffing();
     if (hoursPerSecond > 0) lastLiveRate_ = hoursPerSecond;
     // P4.2: the tier bubble — demote K agents past the outer ring, promote V
     // agents inside the inner one (each with a catch-up tick, so the handoff

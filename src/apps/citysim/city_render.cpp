@@ -933,6 +933,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (sim_.populationCache().used)
         LOG_INFO << "[citysim] population: " << (sim_.populationCache().hit ? "read from" : "decided, cached in")
                  << " cache/population/" << std::hex << sim_.populationCache().key << std::dec << ".pop";
+    {
+        const CitySim::VenueStaffing at10 = sim_.venueStaffing(10.0), at22 = sim_.venueStaffing(22.0);
+        LOG_INFO << "[citysim] staffed places: " << at10.gated << " shops, cafes, restaurants, bars and clubs open only while"
+                 << " someone is on shift (" << at10.neverStaffed << " never staffed); staffed at 10:00 " << at10.staffedNow
+                 << ", at 22:00 " << at22.staffedNow;
+    }
     LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
              << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
              << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m; "
