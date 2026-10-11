@@ -2247,8 +2247,13 @@ void CityRenderSystem::syncCarLamps(World& world) {
         if (v == busVariant_ && sim_.isBus(static_cast<int>(ai)) && !putAway && !busSignGroups_.empty()) {
             const int row = busSignRowFor(static_cast<int>(ai));
             if (InstanceGroup* sg = row >= 0 ? world.get<InstanceGroup>(busSignGroups_[static_cast<std::size_t>(row)]) : nullptr) {
+                // THE BODY'S OWN POSE, as drawn this bake: agentPose(a) without the index skips the body's tilt
+                // low-pass, and up at the roof's front edge that difference was the sign sliding about on the bus
+                // (Glenn: "It's like it's not attached to the bus itself")
+                const auto drawn = busDrawnPose_.find(static_cast<int>(ai));
                 const auto po = physPose_.find(static_cast<int>(ai));
-                sg->transforms.push_back((po != physPose_.end() ? po->second : agentPose(a)) * busSignLocal_);
+                const Mat4 body = drawn != busDrawnPose_.end() ? drawn->second : po != physPose_.end() ? po->second : agentPose(a);
+                sg->transforms.push_back(body * busSignLocal_);
                 ++busSignsDrawn_;
                 busSignAt_ = sg->transforms.back().transformPoint(Vec3(0, 0, 0));
             }

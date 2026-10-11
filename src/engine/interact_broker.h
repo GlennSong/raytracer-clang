@@ -37,6 +37,18 @@ struct InteractOffer {
     bool inVolume = false;     // VOLUME: the player stands in it (no reach / look test)
     bool exclusive = false;    // while offered, the only one (and no marker)
     bool needsSight = true;    // POINT: nothing solid between the eye and the anchor
+    // CARRIED: the thing rides the player's carrier (a train seat). `local` is the marker in the carrier's frame,
+    // re-placed at draw time from InteractCarrier -- an anchor fixed at update() sits on the carriage as it was at
+    // the last step, and the view is put on the carriage as DRAWN, between steps: the marker shook against it
+    // (Glenn: "the UI jitters a lot ... It's like it's being updated behind the frame").
+    bool carried = false;
+    Vec3 local{0, 0, 0};
+};
+
+// On the player while a system carries it (TrainSystem): the carrier's pose AS DRAWN this frame, written in that
+// system's render() -- which runs before the broker's.
+struct InteractCarrier {
+    Mat4 drawn;
 };
 
 struct InteractOffers {

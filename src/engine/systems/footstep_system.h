@@ -56,6 +56,7 @@ private:
     int lastVariant_ = -1;
     Vec3 lastFeet_{};                 // where the feet were last tick: pace is what they MOVED, not what was asked
     bool haveLastFeet_ = false;
+    bool wasAboard_ = false;   // the last pace point was a carrier-frame one (Passenger::local)
     uint8_t lastSurface_ = 0;         // the ground last stood on (a push-off happens as the feet leave it)
     sfx::Ground lastGround_ = sfx::Ground::Concrete;
     // the ground under the standing foot, re-read ~10x a second for the swish (#85)

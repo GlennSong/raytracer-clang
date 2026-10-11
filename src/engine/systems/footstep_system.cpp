@@ -92,14 +92,21 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     // PACE FROM WHERE THE FEET WENT: the controller's velocity is what was asked for, and pushing into a
     // wall or up a slope too steep to climb asks for walking speed while going nowhere. A jump in position
     // (a teleport, a respawn) is not a walk either.
+    // ABOARD A BUS OR A TRAIN the world moves you at its speed: the pace is the walk in the carrier's own frame
+    // (Passenger::local), and a seated rider takes no steps at all (Glenn: "it sounds like I'm running when I'm
+    // sitting on the bus").
+    const Passenger* aboard = ctx.world.get<Passenger>(player);
+    if (aboard && !aboard->onFoot) { swishLevel_ = 0; tracker_ = FootstepTracker{}; haveLastFeet_ = false; return; }
+    const Vec3 paceAt = aboard ? aboard->local : feet;
     double horiz = 0.0;
-    if (haveLastFeet_ && dt > 0) {
-        const double dx = feet.x - lastFeet_.x, dz = feet.z - lastFeet_.z;
+    if (haveLastFeet_ && dt > 0 && wasAboard_ == (aboard != nullptr)) {
+        const double dx = paceAt.x - lastFeet_.x, dz = paceAt.z - lastFeet_.z;
         const double moved = std::sqrt(dx * dx + dz * dz);
         horiz = moved < 1.0 ? moved / dt : 0.0;
     }
-    lastFeet_ = feet;
+    lastFeet_ = paceAt;
     haveLastFeet_ = true;
+    wasAboard_ = aboard != nullptr;
     // SWIMMING (#43): no feet on the ground -- a splash going in (bigger the harder you hit the water), then a
     // soft stroke every ~0.9 s while you swim
     if (cc.swimming) {
@@ -123,7 +130,9 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     }
     wasSwimming_ = false;
     fallBeforeWater_ = std::max(0.0, -v.y);
-    const FootstepEvent ev = tracker_.update(onGround, horiz, v.y, dt, cc.halfHeight < 0.3);
+    // (aboard, the floor is always under you: the pinned character's own ground state and fall speed are the
+    // carrier's, and a bus over a crest would read as a jump and a landing)
+    const FootstepEvent ev = tracker_.update(aboard ? true : onGround, horiz, aboard ? 0.0 : v.y, dt, cc.halfHeight < 0.3);
 
     // #64: tall grass brushing the legs -- only where the ground under the foot IS grass (or earth), asking each
     // grass field with the real slope (it thins grass on steep ground; asked as if flat it called a rock face a
@@ -155,7 +164,8 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
         return;
     }
     const bool leaving = ev.kind == FootstepEvent::Kind::Jump || under == INVALID_PHYSICS_BODY;
-    const uint8_t surface = leaving ? lastSurface_ : pw.bodySurface(under);
+    // (aboard: the carriage's floor, whatever the pinned character's probe found under the road below it)
+    const uint8_t surface = aboard ? static_cast<uint8_t>(ColliderSurface::Concrete) : leaving ? lastSurface_ : pw.bodySurface(under);
     const sfx::Ground ground = leaving && ev.kind == FootstepEvent::Kind::Jump ? lastGround_ : groundAt(ctx.world, surface, feet.x, feet.y, feet.z);
     lastSurface_ = surface;
     lastGround_ = ground;

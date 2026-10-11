@@ -141,6 +141,8 @@ void TrainSystem::update(engine::FrameContext& ctx) {
         engine::InteractOffer so = o;
         so.key = i;
         so.anchor = P.m.transformPoint(s) + Vec3(0, 0.55, 0);
+        so.carried = true;   // (re-placed on the carriage as drawn: InteractCarrier, render())
+        so.local = s + Vec3(0, 0.55, 0);
         so.reach = 2.4;
         so.name = "seat";
         so.tap = "sit down";
@@ -251,6 +253,7 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         }
         sitRequest_ = -2;
     }
+    if (auto* ps = ctx.world.get<engine::Passenger>(player)) ps->onFoot = seat_ < 0;   // (the footsteps: seated, silent)
     if (seat_ >= 0) {   // seated: pinned to the seat, the walk keys do nothing
         const Vec3 w = P.m.transformPoint(coach_.seats[static_cast<std::size_t>(seat_)]);
         pin(Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
@@ -295,6 +298,7 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         leave(out);
         return;
     }
+    if (auto* ps = ctx.world.get<engine::Passenger>(player)) ps->local = local_;   // (a gangway's re-expression is a jump: no step)
     const Vec3 w = P.m.transformPoint(local_);
     pin(Vec3(w.x, w.y + kStandingEye - kEyeAboveTransform, w.z));
 }
@@ -340,8 +344,17 @@ void TrainSystem::render(engine::FrameContext& ctx) {
         if (g) { g->boundsCenter = centre; g->boundsRadius = radius; }
 
     // THE EYE IN THE CARRIAGE AS DRAWN, and the view turning with it
+    Entity player;
+    ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) { if (!player.valid()) player = e; });
+    if (player.valid() && !(train_ >= 0 && car_ >= 1) && ctx.world.has<engine::InteractCarrier>(player))
+        ctx.world.remove<engine::InteractCarrier>(player);
     if (train_ >= 0 && car_ >= 1) {
         const CarPose P = sim_.carPose(train_, car_, alpha);
+        // ...and the seat markers on it (the broker draws after this: InteractOffer::carried)
+        if (player.valid()) {
+            if (!ctx.world.has<engine::InteractCarrier>(player)) ctx.world.add<engine::InteractCarrier>(player);
+            ctx.world.get<engine::InteractCarrier>(player)->drawn = P.m;
+        }
         const Real yaw = yawOf(P.m);
         if (haveYaw_) {
             Real d = yaw - lastYaw_;

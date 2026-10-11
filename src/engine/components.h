@@ -523,7 +523,13 @@ struct InVehicle {
 // leaves the character alone while this is present -- no walking, no gravity,
 // no ground snapping -- because the carrier owns the position every step, and
 // the character's own motion between its pins was what jittered the view.
-struct Passenger {};
+struct Passenger {
+    // Where the rider stands IN THE CARRIER'S OWN FRAME, and whether on their feet: the footsteps pace by this,
+    // not by how far the world moved them (Glenn, seated on a bus: "it sounds like I'm running"). A rider
+    // system that never sets them (a cab, a car's seat) leaves a seated passenger: silent.
+    Vec3 local{0, 0, 0};
+    bool onFoot = false;
+};
 
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the
 // SAME physics Vehicle, but its {throttle, steer, brake} come from
