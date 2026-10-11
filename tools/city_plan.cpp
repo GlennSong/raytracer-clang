@@ -17,6 +17,7 @@
 #include "engine/procgen/world/road_signs.h"
 #include "engine/procgen/world/road_sign_build.h"
 #include "engine/procgen/world/island_scene.h"
+#include "engine/procgen/world/island_rail.h"
 #include "engine/procgen/city/street_names.h"
 #include "engine/ai/nav_graph.h"
 #include "engine/ai/pathfind.h"
@@ -46,7 +47,8 @@ static int usage() {
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
-                 "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n");
+                 "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n"
+                 "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M]   the island loop beside the freeway, a station per town (the level's hubs); --write puts it in the graph\n");
     return 2;
 }
 
@@ -378,6 +380,41 @@ int main(int argc, char** argv) {
             z.half = d.half;
             engine::writeIslandMap(w, outDir + "/" + d.name + ".png", 1400, z);
         }
+        return 0;
+    }
+    if (verb == "island-rail" && argc >= 4) {
+        // THE ISLAND LOOP (island_rail.h): a double track beside the freeway, a station at every town, added to a
+        // lanes graph already written -- the island is not re-grown for it. Without --write: the report only.
+        nlohmann::json graph, level;
+        { std::ifstream in(argv[2]); if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", argv[2]); return 1; } in >> graph; }
+        { std::ifstream in(argv[3]); if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", argv[3]); return 1; } in >> level; }
+        bool write = false;
+        engine::IslandRailOptions ro;
+        for (int a = 4; a < argc; ++a) {
+            if (std::string(argv[a]) == "--write") write = true;
+            if (std::string(argv[a]) == "--offset" && a + 1 < argc) ro.offset = std::atof(argv[a + 1]);
+            if (std::string(argv[a]) == "--grade" && a + 1 < argc) ro.gMax = std::atof(argv[a + 1]);
+            if (std::string(argv[a]) == "--balance" && a + 1 < argc) ro.balance = std::atof(argv[a + 1]);
+        }
+        std::vector<engine::RailTown> towns;
+        if (level.contains("citysim") && level["citysim"].contains("districts") && level["citysim"]["districts"].contains("hubs"))
+            for (const nlohmann::json& h : level["citysim"]["districts"]["hubs"])
+                towns.push_back({h.value("_place", "town"), engine::Vec2(h["at"][0].get<double>(), h["at"][1].get<double>())});
+        const engine::IslandRailResult r = engine::islandRailLoop(graph, towns, ro);
+        std::printf("island loop: %.0f m, %zu edges, crosses %d roads, %d river floors, %zu stations\n", r.length, r.edges.size(), r.crossings,
+                    r.floors, r.stations.size());
+        for (const auto& sn : r.stations)
+            std::printf("  %-18s at (%7.0f, %7.0f), %6.0f m along, %4.0f m from the town's hub\n", sn.name.c_str(), sn.at.x, sn.at.y, sn.station, sn.fromTown);
+        for (const auto& w : r.skipped) std::printf("  no station: %s\n", w.c_str());
+        if (!write) return 0;
+        nlohmann::json kept = nlohmann::json::array();
+        for (const nlohmann::json& e : graph["edges"]) if (e.value("id", "").rfind(ro.idPrefix + "_", 0) != 0) kept.push_back(e);
+        for (const nlohmann::json& e : r.edges) kept.push_back(e);
+        graph["edges"] = kept;
+        graph["classes"]["rail"] = r.railClass;
+        std::ofstream out(argv[2]);
+        out << graph.dump(1) << "\n";
+        std::printf("wrote %s\n", argv[2]);
         return 0;
     }
     if (verb == "rivers" && argc >= 3) {

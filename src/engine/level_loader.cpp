@@ -636,6 +636,8 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
     for (std::size_t mi = 0; mi < meshes.size(); ++mi) {
         roads::RoadMesh& rm = meshes[mi];
         if (rm.mesh.vertices.empty()) continue;
+        static const bool noTrackKit = std::getenv("RT_NO_TRACK_KIT") != nullptr;   // A/B: the sleepers' and rails' cost
+        if (noTrackKit && (rm.name == "sleeper" || rm.name == "rail")) continue;
         const bool onHost = hostTakesFirst && spawned == 0;
         const Entity me = onHost ? host : world.create();
         if (!onHost) createEntityCommon(me, ent, world);

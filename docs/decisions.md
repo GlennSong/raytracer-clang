@@ -9382,3 +9382,38 @@ lanes_tool: every lanes invariant passes.
 Owed: shuttles (open lines reverse at the ends), sitting (E on a seat), interior lighting, sound, NPC riders and
 rail legs in planTrip, the station bus line, level crossings, the island loop along the freeway, light rail in the
 cities, tunnels.
+
+## ADR-0154 — The island loop: a double track beside the freeway, a station at every town
+
+Glenn, 2026-10-11: "should we try and get trains into the city?" ... "yes, go ahead with the island loop".
+
+Decision:
+- **The line is derived, not drawn** (`engine::islandRailLoop`, island_rail.h): the freeway's outer closed chain,
+  resampled at 10 m and offset 45 m outward on a tangent read over +-30 m. On island 8 that clears every ramp on the
+  seaward side by 26 m, never touches water, and crosses 10 roads. The freeway's WATER floors (holds over 35 m) carry
+  over to the nearest point of the line, so the track bridges each river where the freeway does.
+- **A station per town** (the level's `citysim.districts.hubs`): the point of the line nearest the hub where a 140 m
+  platform stands on a straight (radius >= 900 m over the platform and 40 m either side), at least 150 m beyond its
+  ends from any road crossing and clear of the bridges. Two-sided, one platform per track. Island 8: all eight towns,
+  333-1168 m from their hubs.
+- **Cut between stations into edges** (a closed edge cannot close on itself), each holding its station's platform.
+- **The island's rail class**: 3.5 % and cut-and-fill (balance 0.5) over the built-in 2.5 % fill-only class, which rode
+  28 of 37 km of coastal hills on viaducts.
+- **Added to a graph already written**: `city_plan island-rail GRAPH LEVEL [--write]` -- the island is not re-grown
+  for it (the graph is backed up first; island_8_nature's in ~/Claude/backups/island_8_nature_2026-10-11/).
+
+The builder, for tracks:
+- **A track is never met at grade** (`separates`): any crossing with a track is a grade separation, whatever the
+  scene's rules -- there are no level crossings yet.
+- **The track moves, not the road**: it rises over the road at its own grade unless the road already clears it.
+  Lifting the higher of the two raised Saltwood's streets over the line at 18 % and the links under the diamonds.
+- **A shared end is a node, not an overpass**: the lift pass skipped nothing at a joint, so two sections of one line
+  "crossed" there and lifted each other 7 m at every joint (23 km of viaduct).
+
+Island 8 with the line, against the same graph without it: the same checks fail with the same roads, except link28
+(10.9 % against 10 %: it rises 2.5 m to clear the track) and link35 clearing the track by 7.33 m of 7.40.
+Track: 37.0 km, 11.1 km of it on structure (the freeway on the same ground: 37 %).
+Cost: 1.75 M triangles in the bundle (sleepers 1.14 M, rails 0.44 M, ballast 0.16 M) over 191 cells. Three views over the
+line at Saltwood, RT_VSYNC=0, with and without the sleepers and rails (RT_NO_TRACK_KIT): frame p50 17.2/17.3,
+18.4/18.2, 13.3/13.0 ms -- no measurable cost, so no track LOD yet. Owed: a way onto the platforms (Saltwood's stands
+on an embankment a few metres up), a bus stop at each station, people choosing the train, level crossings.

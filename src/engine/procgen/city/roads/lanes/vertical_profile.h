@@ -40,6 +40,9 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
 struct CrossingMeet { std::size_t hi = 0, lo = 0; Vec2 p; double sHi = 0, sLo = 0; bool ramp = false, tee = false, sep = false; };
 // Two roads that may never meet at grade where their centrelines cross: a freeway and any road but a ramp.
 bool mustSeparate(const EdgeSpec& a, const EdgeSpec& b);
+// A TRACK crossing anything (a road, a ramp, the freeway) is a grade separation, whatever the scene's rules: there are
+// no level crossings yet (the island loop, 2026-10-11). Two of the graph's crossings that must be structure.
+bool separates(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b);
 std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g);
 // crossingConsistency over the cached meets: the same pairs, in the same order, the same result.
 double crossingConsistency(RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, double radius = 100.0);

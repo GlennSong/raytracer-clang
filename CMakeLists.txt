@@ -130,6 +130,7 @@ add_library(engine_core STATIC
     src/engine/procgen/world/road_signs.cpp
     src/engine/procgen/world/road_sign_build.cpp
     src/engine/procgen/world/island_scene.cpp
+    src/engine/procgen/world/island_rail.cpp
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
@@ -791,6 +792,7 @@ add_executable(run_tests
     tests/test_city_taxi.cpp
     tests/test_city_bus.cpp
     tests/test_rail_sim.cpp
+    tests/test_island_rail.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp

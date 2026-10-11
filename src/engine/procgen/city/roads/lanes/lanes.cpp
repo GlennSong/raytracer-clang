@@ -124,7 +124,11 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                 const std::size_t crossedAB = crossings(a.xy, b.xy).size();   // crossingsInclusive lists the true crossings first
                 for (std::size_t mi = 0; mi < meetsAB.size(); ++mi) {
                     const Vec2& p = meetsAB[mi];
-                    const bool sep = mi < crossedAB && R.freewaySeparates && mustSeparate(a, b);   // a freeway crossing is structure at any height
+                    // a SHARED END is a node, never an overpass: two pieces of one line joined end to start "cross" there
+                    // (the island loop's sections lifted each other 7 m at every joint, and rode on viaducts between)
+                    if (std::min(distance(a.xy.front(), p), distance(a.xy.back(), p)) < R.endpointTol &&
+                        std::min(distance(b.xy.front(), p), distance(b.xy.back(), p)) < R.endpointTol) continue;
+                    const bool sep = mi < crossedAB && separates(g, a, b);   // a freeway (or a track) crossing is structure at any height
                     const double za = projectZ(a, p), zb = projectZ(b, p); if (!sep && std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
                     // which goes over: the higher; for a forced separation, the one the scene asked to (a floor
                     // point over the crossing), else the freeway
@@ -132,7 +136,17 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     if (sep) {
                         auto floored = [&](const EdgeSpec& e) { for (const auto& fp : e.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 40.0) return true; return false; };
                         const bool fa = floored(a), fb = floored(b);
+                        const bool ta = g.cls(a).track, tb = g.cls(b).track;
                         if (fa != fb) aHi = fa;
+                        else if (ta != tb) {
+                            // A TRACK MOVES, NOT THE ROAD: it rises over the road at its own gentle grade, unless the road
+                            // already clears it (a link on its way up over the freeway). Lifting the higher of the two lifted
+                            // Saltwood's streets over the island loop at 18 % and the links under the diamonds' ramps.
+                            const EdgeSpec& road = ta ? b : a;
+                            const double zRoad = ta ? zb : za, zTrack = ta ? za : zb;
+                            const bool roadClears = zRoad - zTrack >= R.underClearance + g.cls(road).thick + R.structureDepth;
+                            aHi = roadClears ? !ta : ta;
+                        }
                         else if (std::fabs(za - zb) < R.bridgeH && (a.cls == "freeway") != (b.cls == "freeway")) aHi = a.cls == "freeway";
                     }
                     EdgeSpec& hi = aHi ? a : b; EdgeSpec& lo = aHi ? b : a;

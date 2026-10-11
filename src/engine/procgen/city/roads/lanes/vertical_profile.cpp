@@ -154,6 +154,11 @@ double nodeMismatch(const RoadLabGraph& g, double tol, double maxDz, NodeMismatc
     return worst;
 }
 
+bool separates(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b) {
+    if (g.cls(a).track || g.cls(b).track) return true;
+    return g.rules.freewaySeparates && mustSeparate(a, b);
+}
+
 bool mustSeparate(const EdgeSpec& a, const EdgeSpec& b) {
     // Ramps stay out of it: a ramp is pinned to its anchors and meets what it crosses by height, as
     // before (ring_city's ramps run beside the other carriageway's ends).
@@ -201,7 +206,7 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
         }
         for (std::size_t mi = 0; mi < meet.size(); ++mi) {
             const Vec2& p = meet[mi];
-            if (mi < crossed && g.rules.freewaySeparates && mustSeparate(a, b)) continue;   // a freeway is never met at grade
+            if (mi < crossed && separates(g, a, b)) continue;   // a freeway (or a track) is never met at grade
             // Only a SHARED node belongs to nodeConsistency — both roads ending here.
             // One road ending mid-span of the other is a T, and nodeConsistency only
             // recognises it within endpointTol (0.5 m) of the centreline; a metre out
@@ -267,7 +272,7 @@ std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g) {
             m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;
             m.ramp = a.isRamp() || b.isRamp();
             m.tee = streets && mi >= crossed;   // an END under the other's band, not a crossing of centrelines
-            m.sep = mi < crossed && g.rules.freewaySeparates && mustSeparate(a, b);
+            m.sep = mi < crossed && separates(g, a, b);
             out.push_back(m);
         }
     }
