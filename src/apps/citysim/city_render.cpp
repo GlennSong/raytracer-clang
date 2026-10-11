@@ -2241,7 +2241,10 @@ void CityRenderSystem::syncCarLamps(World& world) {
         const int v = drawSlotFor(static_cast<int>(ai));
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
         // THE DESTINATION SIGN: the bus's line, or NOT IN SERVICE on its way in (same pose as the body)
-        if (v == busVariant_ && sim_.isBus(static_cast<int>(ai)) && !busSignGroups_.empty()) {
+        // (never without its body: the same off-street rule syncGroups draws the bus by)
+        const bool putAway = !a.moving && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                             sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet;
+        if (v == busVariant_ && sim_.isBus(static_cast<int>(ai)) && !putAway && !busSignGroups_.empty()) {
             const int row = busSignRowFor(static_cast<int>(ai));
             if (InstanceGroup* sg = row >= 0 ? world.get<InstanceGroup>(busSignGroups_[static_cast<std::size_t>(row)]) : nullptr) {
                 const auto po = physPose_.find(static_cast<int>(ai));
@@ -3847,8 +3850,15 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     if (!sim_.isBus(static_cast<int>(i)) && drawSlotFor(static_cast<int>(i)) == busVariant_ &&
                         ag[i].mode == Agent::Mode::Driver)
                         ++wrongDriver;
-                char b4[128];
-                std::snprintf(b4, sizeof(b4), " [bus bodies outside a depot: %d parked, %d non-bus drivers]", kerbBus, wrongDriver);
+                // a bus being driven whose vehicle still says off-street: no body whenever it stands (the sign alone)
+                int putAway = 0;
+                for (std::size_t i = 0; i < ag.size(); ++i)
+                    if (sim_.isBus(static_cast<int>(i)) && ag[i].mode == Agent::Mode::Driver && ag[i].vehicle >= 0 &&
+                        ag[i].vehicle < static_cast<int>(vs.size()) && vs[static_cast<std::size_t>(ag[i].vehicle)].offStreet)
+                        ++putAway;
+                char b4[160];
+                std::snprintf(b4, sizeof(b4), " [bus bodies outside a depot: %d parked, %d non-bus drivers; driven but put away: %d]",
+                              kerbBus, wrongDriver, putAway);
                 stalled += b4;
             }
             ctx.settings.setString("depots.stalled", stalled);

@@ -2019,6 +2019,16 @@ void CitySim::placeFromSchedule(int idx) {
         for (int st = 0; st < t.stateCount(); ++st)
             if (t.state(st).activity == want) { goal = st; break; }
         if (eveningGoal >= 0) goal = eveningGoal;
+        // A DAY OUT HAS NO "AT WORK". Inside a stroller's outing window the day says AtWork, and its table has no
+        // state wearing that: left as built (AtHome), every stroller in the window fired DepartWork on the first
+        // tick -- a tower's hundreds of households out of one door together, one block marching down the street
+        // (Glenn: "when the simulation starts there's just a massive block of agents all moving together"). It is
+        // out and about instead, its pause clock somewhere in the pause (below), so each leaves on its own minute.
+        bool outAndAbout = false;
+        if (goal < 0 && want == Agent::Activity::AtWork && !travelling) {
+            const int st = t.findState("OutAndAbout");
+            if (st >= 0) { goal = st; outAndAbout = true; }
+        }
         if (goal < 0) return;   // this table has no such state: leave as built
         a.goal = goal;
         a.goalHours = 0;
@@ -2027,7 +2037,7 @@ void CitySim::placeFromSchedule(int idx) {
         // as one heap of 16 (Glenn: "sitting on top of one another like it's some spawn point"). Somewhere in the dwell
         // instead, by the agent's own bits and the day (no rng draw). RT_SEAT_AT_ZERO: as before.
         static const bool atZero = std::getenv("RT_SEAT_AT_ZERO") != nullptr;
-        if (!atZero && s.where != Snapshot::Where::AtWork && eveningGoal < 0) {
+        if (!atZero && (s.where != Snapshot::Where::AtWork || outAndAbout) && eveningGoal < 0) {
             const double dwell = t.state(goal).dwellHours;
             if (dwell > 0) {
                 uint32_t h = a.brain * 0x9E3779B1u ^ static_cast<uint32_t>(std::floor(clockTotalHours_ / 24.0)) * 0x85EBCA77u;
@@ -2035,13 +2045,13 @@ void CitySim::placeFromSchedule(int idx) {
                 a.goalHours = static_cast<Real>(dwell * ((h & 0xFFFF) / 65536.0));
             }
         }
-        a.activity = want;
+        a.activity = outAndAbout ? Agent::Activity::Outing : want;
         a.wakeAt = -1;
         // AT WORK SINCE WHEN: the morning at work ends in lunch (a dwell), so a
         // city opened at 12:30 must know its workers arrived hours ago -- with
         // the clock started at the seed, every lunch fell after the shift and
         // nobody went out.
-        if (s.where == Snapshot::Where::AtWork) {
+        if (s.where == Snapshot::Where::AtWork && !outAndAbout) {
             Real since = std::fmod(clockHours_ - departWorkHour(a) + 48.0, 24.0) -
                          a.commuteSeconds * hoursPerSecond_;
             a.goalHours = std::max(Real(0), since);
@@ -2058,7 +2068,10 @@ void CitySim::placeFromSchedule(int idx) {
             // At one end of the day (or out for the evening). Rest there, and park the car with it.
             const bool out = s.where == Snapshot::Where::AtEvening;
             const Venue* ev = out ? &venues_[static_cast<std::size_t>(s.venue)] : nullptr;
-            const int node = out ? ev->node : s.where == Snapshot::Where::AtWork ? a.work : a.home;
+            // (a stroller out and about starts from home, indoors: its "work" is one park node a whole tower shares,
+            // and seated there they stood 75 to a spot)
+            const bool atWorkEnd = s.where == Snapshot::Where::AtWork && !outAndAbout;
+            const int node = out ? ev->node : atWorkEnd ? a.work : a.home;
             a.restNode = node;
             a.moving = false;
             a.speed = 0;
@@ -2088,7 +2101,6 @@ void CitySim::placeFromSchedule(int idx) {
                 }
                 if (a.mode == Agent::Mode::Pedestrian) { a.pos = ev->door; a.indoors = true; }
             } else if (a.mode == Agent::Mode::Pedestrian) {
-                const bool atWorkEnd = s.where == Snapshot::Where::AtWork;
                 if (!atWorkEnd && a.homePlace != kNoPlace) {
                     a.pos = a.homeDoor;
                     a.indoors = true;
@@ -2483,6 +2495,10 @@ void CitySim::remountOwnedCar(Agent& a) {
     if (vehicles_[a.car].driver >= 0) return;   // someone else is in it
     a.vehicle = a.car;
     vehicles_[a.car].driver = static_cast<int>(&a - agents_.data());
+    // ON THE STREET the moment it is driven (as boardVehicle says): a bus that once ended a trip with no depot bay
+    // was put away off-street, and only the commute's trip start took it out again -- so back in service it drew
+    // no body whenever it stood still, only its destination sign (Glenn: "it was just the display on the front")
+    vehicles_[a.car].offStreet = false;
     a.mode = Agent::Mode::Driver;
 }
 
