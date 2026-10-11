@@ -1,6 +1,7 @@
 #include "train_system.h"
 
 #include "../../engine/asset_manager.h"
+#include "../../engine/interact_broker.h"
 #include "../../engine/camera/fly_camera_controller.h"
 #include "../../engine/input/input_map.h"
 #include "../../engine/systems/physics_system.h"
@@ -26,6 +27,8 @@ constexpr Real kWalk = 1.8;               // m/s along a carriage
 constexpr Real kStandingEye = 1.62;       // eye above the floor
 constexpr Real kEyeAboveTransform = 0.7;  // PlayerSystem's eye above the capsule centre
 constexpr Real kWallClear = 0.28;         // how near a wall a standing body comes
+constexpr Real kSeatedEye = 0.74;         // eye above the seat's hip point
+constexpr Real kSeatReach = 2.2;          // seats offered within this of where you stand
 
 Vec3 col(const Mat4& m, int c) { return Vec3(m.m[0][c], m.m[1][c], m.m[2][c]); }
 Vec3 toLocal(const Mat4& m, const Vec3& p) {
@@ -110,6 +113,41 @@ bool TrainSystem::walkableAt(int car, const Vec3& local, int doorSide) const {
     return ax <= static_cast<Real>(M.aisleHalf);
 }
 
+// SITTING (Glenn, 2026-10-10: "You can't sit anywhere. There's no interaction for sitting"): aboard, every seat within
+// reach is an offer of the interaction broker's E, the marker on the seat you look at; seated, the one verb is standing.
+void TrainSystem::update(engine::FrameContext& ctx) {
+    if (train_ < 0 || car_ < 1) return;
+    Entity player;
+    ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) { if (!player.valid()) player = e; });
+    if (!player.valid()) return;
+    engine::InteractCommand cmd;
+    if (engine::takeInteractCommand(ctx.world, player, "train", cmd)) sitRequest_ = seat_ >= 0 ? -1 : static_cast<int>(cmd.key);
+    engine::InteractOffer o;
+    o.provider = "train";
+    o.needsSight = false;
+    const CarPose P = sim_.carPose(train_, car_, 1.0);
+    if (seat_ >= 0) {
+        o.tap = "stand up";
+        o.name = "seat";
+        o.exclusive = true;
+        if (const Transform* pt = ctx.world.get<Transform>(player)) o.anchor = pt->position;
+        engine::offerInteraction(ctx.world, player, o);
+        return;
+    }
+    for (std::size_t i = 0; i < coach_.seats.size(); ++i) {
+        const Vec3& s = coach_.seats[i];
+        const Real dx = s.x - local_.x, dz = s.z - local_.z;
+        if (dx * dx + dz * dz > kSeatReach * kSeatReach) continue;
+        engine::InteractOffer so = o;
+        so.key = i;
+        so.anchor = P.m.transformPoint(s) + Vec3(0, 0.55, 0);
+        so.reach = 2.4;
+        so.name = "seat";
+        so.tap = "sit down";
+        engine::offerInteraction(ctx.world, player, so);
+    }
+}
+
 void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
     if (!tried_) build(ctx);
     if (sim_.trains().empty()) return;
@@ -160,6 +198,7 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         if (ctx.world.has<engine::Passenger>(player)) ctx.world.remove<engine::Passenger>(player);
         LOG_INFO << "[trains] you stepped off train " << train_ << " at (" << where.x << ", " << where.z << ")";
         train_ = car_ = -1;
+        seat_ = -1;
     };
 
     if (train_ >= 0) {
@@ -167,6 +206,7 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         if ((pt->position - pinned_).length() > 3.0 && pinned_.lengthSquared() > 0) {
             if (ctx.world.has<engine::Passenger>(player)) ctx.world.remove<engine::Passenger>(player);
             train_ = car_ = -1;
+            seat_ = -1;
             return;
         }
     } else {
@@ -189,7 +229,8 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
                               static_cast<Real>(coach_.floor), l.z);
                 haveYaw_ = false;
                 if (!ctx.world.has<engine::Passenger>(player)) ctx.world.add<engine::Passenger>(player);
-                LOG_INFO << "[trains] you boarded train " << ti << ", car " << c;
+                LOG_INFO << "[trains] you boarded train " << ti << ", car " << c << " (feet " << feet.x << " " << feet.y << " " << feet.z
+                         << ", car-local " << l.x << " " << l.y << " " << l.z << ")";
                 break;
             }
         }
@@ -197,9 +238,25 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
     }
     if (!ctx.world.has<engine::Passenger>(player)) ctx.world.add<engine::Passenger>(player);
 
-    // WALK the carriage in its own frame
     const Train& T = sim_.trains()[static_cast<std::size_t>(train_)];
     CarPose P = sim_.carPose(train_, car_, 1.0);
+    if (sitRequest_ != -2) {
+        if (sitRequest_ == -1 && seat_ >= 0) {   // stand up in the aisle beside the seat
+            const Vec3& s = coach_.seats[static_cast<std::size_t>(seat_)];
+            local_ = Vec3(std::clamp(s.x, Real(-coach_.aisleHalf), Real(coach_.aisleHalf)), static_cast<Real>(coach_.floor), s.z);
+            seat_ = -1;
+        } else if (sitRequest_ >= 0 && sitRequest_ < static_cast<int>(coach_.seats.size())) {
+            seat_ = sitRequest_;
+            LOG_INFO << "[trains] you sat down: seat " << seat_ << " of car " << car_;
+        }
+        sitRequest_ = -2;
+    }
+    if (seat_ >= 0) {   // seated: pinned to the seat, the walk keys do nothing
+        const Vec3 w = P.m.transformPoint(coach_.seats[static_cast<std::size_t>(seat_)]);
+        pin(Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
+        return;
+    }
+    // WALK the carriage in its own frame
     const Vec3 fwdAxis = col(P.m, 2), leftAxis = col(P.m, 0);
     Vec3 move = fly_.forward() * static_cast<Real>(ctx.actions.axis("cam_forward")) + fly_.right() * static_cast<Real>(ctx.actions.axis("cam_right"));
     move.y = 0;
@@ -294,8 +351,9 @@ void TrainSystem::render(engine::FrameContext& ctx) {
         }
         lastYaw_ = yaw;
         haveYaw_ = true;
-        const Vec3 w = P.m.transformPoint(local_);
-        const Vec3 eye(w.x, w.y + kStandingEye, w.z);
+        const bool sat = seat_ >= 0 && seat_ < static_cast<int>(coach_.seats.size());
+        const Vec3 w = P.m.transformPoint(sat ? coach_.seats[static_cast<std::size_t>(seat_)] : local_);
+        const Vec3 eye(w.x, w.y + (sat ? kSeatedEye : kStandingEye), w.z);
         engine::CameraState& cam = ctx.view.camera;
         if ((eye - cam.position).length() < 3.0) {   // only the first-person eye
             cam.position = eye;

@@ -415,7 +415,10 @@ std::vector<RailTrack> railTracks(const Result& r) {
                 const double b = project(l.xy, l.s, pointAt(e.xy, e.s, std::clamp(P.s1, 0.0, e.s.back()))).station;
                 st.s0 = t.dir > 0 ? std::min(a, b) : len - std::max(a, b);
                 st.s1 = t.dir > 0 ? std::max(a, b) : len - std::min(a, b);
-                st.side = side * t.dir;   // spine-left is the train's left when it runs along the spine
+                // The train's left is its body's +x (rail_sim CarPose: cross(up, forward)). The plan's left normal,
+                // perp(), is the OTHER side once plan y is world z -- the doors opened away from the platform
+                // (Glenn, 2026-10-10: "the doors did not slide open for me ... It may have opened on the wrong side").
+                st.side = -side * t.dir;
                 st.top = r.heights->deck(static_cast<int>(li), pointAt(l.xy, l.s, project(l.xy, l.s, q).station)) + kRailHeadAbove + P.h;
                 t.stops.push_back(st);
             }

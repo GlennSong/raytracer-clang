@@ -20,7 +20,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kRailBuildTag = "2026-10-10.1";   // .1: ballast, sleepers, rails, platforms; tracks out of the twin
+const char* const kRailBuildTag = "2026-10-10.2";   // .2: a stop's side is the body's +x; .1: ballast, sleepers, rails, platforms; tracks out of the twin
 const char* const kLanesBuildTag = "2026-10-02.2";   // .2: a street bridging a street is not a junction in the twin   // 2026-10-02.1: the seam pull stands down across a bridge (pass8 over Third and Dogwood)  //   // 2026-09-30.2: deck undersides in the concrete mesh (#97)   // .3: balanced mountain profiles, authored-class guardrails with min_drop, girders under their bridges
 //   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
 //   // .1: the nav twin carries travel-lane widths (cars in the lane centre)

@@ -33,6 +33,7 @@ namespace citysim {
 class TrainSystem : public engine::System {
 public:
     TrainSystem(engine::PhysicsSystem& physics, engine::FlyCameraController& fly) : physics_(physics), fly_(fly) {}
+    void update(engine::FrameContext& ctx) override;   // the seat offers (the interaction broker's E)
     void fixedUpdate(engine::FrameContext& ctx) override;
     void render(engine::FrameContext& ctx) override;
 
@@ -56,6 +57,8 @@ private:
     // aboard: which train and car, the floor point in that car's frame
     int train_ = -1, car_ = -1;
     engine::Vec3 local_{0, 0, 0};
+    int seat_ = -1;              // the seat held in car_ (coach_.seats), -1 standing
+    int sitRequest_ = -2;        // from the broker: a seat to take, -1 stand up, -2 nothing
     bool haveYaw_ = false;
     engine::Real lastYaw_ = 0;
     engine::Vec3 pinned_{0, 0, 0};

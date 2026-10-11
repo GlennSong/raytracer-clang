@@ -96,7 +96,9 @@ TrainBodyMesh buildTrainCarriage(const TrainBodySpec& sp) {
     const Real dh = out.doorHalf, gw = out.gangwayHalf;
 
     // under the floor: the frame and its equipment, the bogies
-    box(m, {-hw, sill, -hl}, {hw, F - 0.02, hl}, kUnder);
+    // inside the skirt and the end walls, well under the floor: its faces coplanar with theirs (and its top 2 cm
+    // under the floor's) z-fought from outside (Glenn, 2026-10-10)
+    box(m, {-hw + 0.06, sill, -hl + 0.06}, {hw - 0.06, F - 0.12, hl - 0.06}, kUnder);
     box(m, {-hw + 0.25, 0.6, -hl * 0.55}, {hw - 0.25, sill, hl * 0.55}, kUnder);
     bogie(m, 0.32 * L);
     bogie(m, -0.32 * L);
@@ -197,7 +199,9 @@ TrainBodyMesh buildTrainCarriage(const TrainBodySpec& sp) {
         wallX(m, gw, -1, d0, d1, F, gTop, kRubber);
         quad(m, {-dw, dTop, d0}, {dw, dTop, d0}, {dw, dTop, d1}, {-dw, dTop, d1}, {0, 1, 0}, kRubber);
         quad(m, {-gw, gTop, d0}, {gw, gTop, d0}, {gw, gTop, d1}, {-gw, gTop, d1}, {0, -1, 0}, kRubber);
-        quad(m, {-gw, F, d0}, {gw, F, d0}, {gw, F, d1}, {-gw, F, d1}, {0, 1, 0}, kSeatFrame);
+        // the two halves overlap a little at the coupling: the front one 5 mm up, so they never share a plane
+        const Real plate = F + (e > 0 ? 0.005f : 0.0f);
+        quad(m, {-gw, plate, d0}, {gw, plate, d0}, {gw, plate, d1}, {-gw, plate, d1}, {0, 1, 0}, kSeatFrame);
     }
 
     // SEATS
