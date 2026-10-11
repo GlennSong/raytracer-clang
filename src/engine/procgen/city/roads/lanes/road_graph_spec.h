@@ -74,6 +74,21 @@ struct RoadClassSpec {
     double balance = 0.0;
     // indexed by EdgeRole: seam, median, vs street, elevated, at grade
     std::array<BarrierSpec, 5> edges{};
+    // RAIL (Glenn, 2026-10-10: "it should define rail lines and we should probably build them like we build lanes of
+    // the freeway"): a TRACK class is a road class whose lanes are tracks -- the same lanes, profiles, decks, bridges
+    // and terrain conform, but the deck is a ballast bed with sleepers and rails on each lane's centreline, no paint,
+    // and nothing in the road twin (no car, walker or lot ever routes onto it). Its lanes leave as rail tracks.
+    bool track = false;
+};
+
+// A station platform beside a track edge, authored on the edge: "platforms": [{"name": "Central", "s0": 300,
+// "s1": 420, "side": "both", "w": 4.5}]. Built on the OUTSIDE of the edge's outermost track on that side, its
+// edge `kPlatformGap` off the train body, its top at the height a carriage floor stands (railhead + h).
+struct PlatformSpec {
+    std::string name;
+    double s0 = 0, s1 = 0;    // stations along the edge's spine
+    int side = 0;             // 0 both, +1 the spine's left (plan), -1 its right
+    double w = 4.5, h = 1.05; // width, and the top above the railhead
 };
 
 struct Rules {
@@ -121,6 +136,7 @@ struct EdgeSpec {
     std::vector<std::array<double, 4>> floorPts;   // (x, y, z, half-span): the profile must clear z within half-span of that station, approached at design grade beyond
     LaneLayout lanes;
     std::vector<PocketSpec> pockets;
+    std::vector<PlatformSpec> platforms;   // track classes only
     // resolved geometry and profile
     std::vector<Vec2> xy;                // spine, resampled at rules.step
     std::vector<double> s, z, t;         // station, deck height, terrain height along the spine

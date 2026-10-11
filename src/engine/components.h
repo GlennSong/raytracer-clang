@@ -9,6 +9,7 @@
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
+#include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
 #include "world.h"
@@ -891,6 +892,11 @@ struct LevelRoadGraph {
 // the mesher carved 0.22 m under it.
 struct RoadDeck {
     RoadDeckField field;
+};
+
+// The RAIL TRACKS a road entity's builder laid (rail_track.h), stored beside its RoadDeck: what the trains run on.
+struct RailTracks {
+    std::vector<RailTrack> tracks;
 };
 
 struct StreetFurniture {

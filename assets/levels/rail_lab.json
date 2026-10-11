@@ -1,0 +1,84 @@
+{
+  "citysim": {
+    "buildChance": 0.9,
+    "buildLots": false,
+    "cars": 0,
+    "debugWidgets": false,
+    "detailDistance": 300,
+    "downtownRadius": 60,
+    "facadeDistance": 950,
+    "hoursPerSecond": 0.0,
+    "hubRadius": 200,
+    "midtownRadius": 150,
+    "pedestrians": 0,
+    "perceptionReliability": 1.0,
+    "plinth": 0.45,
+    "seed": 3,
+    "sidewalk": 3.5,
+    "wander": false,
+    "_note": "RAIL LAB (Glenn, 2026-10-10): an isolated test bed for trains -- a 2.9 km double-track loop (rail_loop.json), two stations, trains each way around the clock. Nothing else runs here.",
+    "vehicles": "vehicles.lua",
+    "maxAmbient": 0,
+    "busRoutes": 0,
+    "buses": 0,
+    "tiered": false,
+    "dormancy": false,
+    "startHour": 10.0,
+    "physicalCars": 0,
+    "ambientBus": false
+  },
+  "entities": [
+    {
+      "id": 1,
+      "lanelab": {
+        "graph": "assets/lanelab/rail_loop.json"
+      },
+      "name": "rail_loop",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "shape": "lanelab"
+    }
+  ],
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  },
+  "player": {
+    "collider": {
+      "halfHeight": 0.4,
+      "radius": 0.3,
+      "shape": "capsule"
+    },
+    "friction": 0.5,
+    "position": [
+      0.0,
+      3.0,
+      -212.0
+    ]
+  },
+  "version": 1
+}

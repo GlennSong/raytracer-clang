@@ -22,6 +22,12 @@ const std::map<std::string, RoadClassSpec>& defaultClasses() {
         add("local", 3.5, 1, 1, 0.0, 1.8, 0.0, 1, 0.09, 40.0, 0.5);
         add("ramp", 3.6, 1, 0, 1.2, 0.0, 0.0, 0, 0.09, 40.0, 1.0);
         add("divider", 0.0, 0, 0, 0.0, 0.0, 1.5, -1, 1.0, 1.0, 0.0);
+        // double track: one track per direction at 4 m centres, a railway's grade (2.5 %) over a long window
+        add("rail", 4.0, 1, 1, 0.0, 0.0, 0.0, 3, 0.025, 400.0, 0.8);
+        m["rail"].track = true;
+        // a parapet where the track stands on structure; nothing at grade (the lab's own fence comes later)
+        BarrierSpec wall; wall.kind = BarrierKind::Wall; wall.h = 1.0; wall.set = true;
+        m["rail"].edges[3] = wall;   // EdgeRole::Elevated
         return m;
     }();
     return k;
@@ -183,6 +189,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         c.lanes.w = num(j, "w", c.lanes.w); c.lanes.fwd = static_cast<int>(num(j, "fwd", c.lanes.fwd)); c.lanes.back = static_cast<int>(num(j, "back", c.lanes.back));
         c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
         c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
+        if (j.contains("track") && j["track"].is_boolean()) c.track = j["track"].get<bool>();
         if (j.contains("edges") && j["edges"].is_object()) {
             static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
             for (size_t i = 0; i < 5; ++i) {
@@ -230,6 +237,12 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 P.dir = p.value("dir", std::string("fwd")) == "back" ? -1 : +1; P.s0 = p.at("s0").get<double>(); P.s1 = p.at("s1").get<double>();
                 P.taper = num(p, "taper", 10 * e.lanes.w); P.taperOut = num(p, "taper_out", 0.0); e.pockets.push_back(P);
             }
+        }
+        if (ej.contains("platforms")) for (const auto& pj : ej["platforms"]) {
+            PlatformSpec P; P.name = pj.value("name", std::string()); P.s0 = num(pj, "s0", 0.0); P.s1 = num(pj, "s1", 0.0);
+            const std::string side = pj.value("side", std::string("both")); P.side = side == "left" ? +1 : side == "right" ? -1 : 0;
+            P.w = num(pj, "w", P.w); P.h = num(pj, "h", P.h);
+            if (P.s1 > P.s0) e.platforms.push_back(P);
         }
         if (ej.contains("z_min")) { e.hasZMin = true; e.zMin = ej["z_min"].get<double>(); }
         if (ej.contains("lots_range")) { e.lotsFrom = ej["lots_range"].at(0).get<double>(); e.lotsTo = ej["lots_range"].at(1).get<double>(); }

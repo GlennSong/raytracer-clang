@@ -3689,6 +3689,46 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                         }
                     }
                 }
+                // PARKED CARS NOBODY IS IN (Glenn, 2026-10-10: "there are still a lot of cars on the sidewalk"): the cars
+                // the parked pass draws -- no driver, not off-street -- within 300 m, past the kerb of the nearest street
+                int parkN = 0, parkKerb = 0, parkInBay = 0;
+                std::string parkWho;
+                {
+                    const auto& vs = sim_.vehicles();
+                    std::vector<char> bayCar(vs.size(), 0);
+                    for (const CitySim::ParkingBay& b : sim_.parkingBays())
+                        if (b.occupant >= 0 && b.occupant < static_cast<int>(ag.size())) {
+                            const int c = ag[static_cast<std::size_t>(b.occupant)].vehicle;
+                            if (c >= 0 && c < static_cast<int>(vs.size())) bayCar[static_cast<std::size_t>(c)] = 1;
+                        }
+                    for (std::size_t vi = 0; vi < vs.size(); ++vi) {
+                        const SimVehicle& sv = vs[vi];
+                        if (sv.driver >= 0 || sv.offStreet) continue;
+                        if ((sv.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                        ++parkN;
+                        parkInBay += bayCar[vi];
+                        const int li = nav_.nearestLink(sv.pos);
+                        if (li < 0) continue;
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L.from)], B = nav_.nodes[static_cast<std::size_t>(L.to)];
+                        const Real l2 = (B - A).lengthSquared();
+                        const Real t = l2 > 1e-9 ? std::clamp(dot(sv.pos - A, B - A) / l2, Real(0), Real(1)) : Real(0);
+                        const Real past = (sv.pos - (A + (B - A) * t)).length() - L.width * 0.5;
+                        if (past > 0.3 && !bayCar[vi]) {
+                            ++parkKerb;
+                            if (parkWho.size() < 900) {
+                                char b[200];
+                                int owner = -1;
+                                for (std::size_t i = 0; i < ag.size() && owner < 0; ++i) if (ag[i].vehicle == static_cast<int>(vi)) owner = static_cast<int>(i);
+                                const Agent* o = owner >= 0 ? &ag[static_cast<std::size_t>(owner)] : nullptr;
+                                std::snprintf(b, sizeof(b), " [car %zu %.1f,%.1f +%.1fm link %d%s owner %d mode %d act %d moving %d far %d]", vi, sv.pos.x, sv.pos.y, past, li,
+                                              L.footpath ? " foot" : "", owner, o ? static_cast<int>(o->mode) : -1, o ? static_cast<int>(o->activity) : -1,
+                                              o ? int(o->moving) : -1, o ? int(o->far()) : -1);
+                                parkWho += b;
+                            }
+                        }
+                    }
+                }
                 // PILES (Glenn: "all the agents and vehicles are starting in one place... on top of one another like
                 // it's some spawn point"): drawn near K agents by 1.5 m cell -- how many stand in a cell with 3+ others,
                 // the biggest pile, and who is in it
@@ -3753,7 +3793,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                               drivingAll, drivingNear, nearCars, nearCabs, nearBuses, nearPeds, nearIndoors, nearK,
                               drvMoving[0], drvMoving[1], drvMoving[2], drvRest[0], drvRest[1], drvRest[2], sim_.dormantWaypoints(),
                               laneN, laneOff, laneInBays, laneOut, laneN ? laneErrSum / laneN : 0.0, pulling, restN, restKerb);
-                ctx.settings.setString("traffic.telemetry", std::string(tb) + pileWho + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho : std::string()));
+                char pb[160];
+                std::snprintf(pb, sizeof(pb), "; parked with nobody in: %d drawn near (%d in a bay), %d past the kerb", parkN, parkInBay, parkKerb);
+                ctx.settings.setString("traffic.telemetry", std::string(tb) + pileWho + pb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
             }
         }
         // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and
@@ -3783,6 +3825,31 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                 std::snprintf(b3, sizeof(b3), " [signs: %zu groups, %d drawn, last at %.1f %.1f %.1f]", busSignGroups_.size(), busSignsDrawn_,
                               busSignAt_.x, busSignAt_.y, busSignAt_.z);
                 stalled += b3;
+            }
+            // BUS BODIES OUTSIDE A DEPOT (Glenn, 2026-10-10: "We shouldn't see buses parallel parked anymore"): a parked
+            // car drawn as the bus, or a driver who is not on the bus roster wearing it
+            {
+                int kerbBus = 0, wrongDriver = 0;
+                const auto& vs = sim_.vehicles();
+                std::vector<char> inDepot(vs.size(), 0);
+                for (const CitySim::ParkingBay& b : sim_.parkingBays())
+                    if (b.busOnly && b.occupant >= 0 && b.occupant < static_cast<int>(ag.size())) {
+                        const int c = ag[static_cast<std::size_t>(b.occupant)].vehicle;
+                        if (c >= 0 && c < static_cast<int>(vs.size())) inDepot[static_cast<std::size_t>(c)] = 1;
+                    }
+                for (std::size_t vi = 0; vi < vs.size(); ++vi) {
+                    if (vs[vi].driver >= 0 || vs[vi].offStreet || inDepot[vi]) continue;
+                    int v = sim_.ambientSlotFor(static_cast<int>(vi));
+                    if (drawVariantCount() > 0 && v >= drawVariantCount()) v %= drawVariantCount();
+                    if (v == busVariant_ || vs[vi].type == VehicleType::Bus) ++kerbBus;
+                }
+                for (std::size_t i = 0; i < ag.size(); ++i)
+                    if (!sim_.isBus(static_cast<int>(i)) && drawSlotFor(static_cast<int>(i)) == busVariant_ &&
+                        ag[i].mode == Agent::Mode::Driver)
+                        ++wrongDriver;
+                char b4[128];
+                std::snprintf(b4, sizeof(b4), " [bus bodies outside a depot: %d parked, %d non-bus drivers]", kerbBus, wrongDriver);
+                stalled += b4;
             }
             ctx.settings.setString("depots.stalled", stalled);
             const Vec3 cam = ctx.view.camera.position;

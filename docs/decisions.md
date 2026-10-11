@@ -9343,3 +9343,42 @@ Owed:
 - Cabs still crowd downtown (53 of 61 drivers near).
 - Spec lane counts (above).
 - The p99 hitches (120 ms).
+
+## ADR-0153 — Rail: a track class in the lanes builder, trains on its lanes, a carriage you walk through
+
+Glenn, 2026-10-10: "it makes sense if it follows the highway in a loop and there's a station. There should be trains
+going in each direction ... the train system should piggy back off our other algorithms and systems of construction --
+it should define rail lines and we should probably build them like we build lanes of the freeway ... closed loop
+tracks for the island-wide rail ... run 24 hours a day at an interval ... carriages ... like the bus where you can move
+around the carriages and between them and they shouldn't be jittery ... Building an isolated testbed scene for a train
+would be a good idea."
+
+Decision (stage 1, the test bed):
+- **Track is a road class** (ADR-0055's extensibility invariant): `RoadClassSpec::track`, built-in class `rail`
+  (4 m track centres, one track per direction, 2.5 % grade, 400 m profile window, parapets on structure). The lanes
+  builder does everything it does for a road -- profile, decks, bridges and piers, terrain conform -- and the mesher
+  makes the deck a ballast bed with sleepers (0.65 m) and two rails at standard gauge on each lane, no paint, no
+  junction boxes. Platforms are authored on the edge (`"platforms": [{name, s0, s1, side, w}]`), built outside the
+  outer track at floor height with a canopy. Tracks are left out of the road twin, so no car, walker, lot or sign ever
+  routes onto one.
+- **Tracks leave the builder as data**: `RailTrack` (rail_track.h) per track lane -- the railhead line in running
+  order and the platforms beside it -- through the city bundle (`rail/tracks`, optional) to a `RailTracks` component.
+  A graph with a track class keys `kRailBuildTag` too, so the track kit can change without re-baking road-only levels.
+- **RailSim** (rail_sim.h) joins tracks end to start into LINES (a double-track loop is two lines, one each way;
+  nothing switches or crosses), spreads trains evenly (the timetable is the spacing), and runs them around the clock:
+  line speed, curve speed (v^2/r <= 1 m/s^2, braked for ahead), braking for the next platform and the train ahead,
+  a dwell with the doors open on the platform's side. Kinds: intercity (locomotive + 3 coaches), subway, light rail.
+- **A carriage's pose is a function of the head's station** (each body between two bogie points on the rail), so the
+  renderer draws the head between its last two steps and every car -- and the rider -- moves along the rails' own
+  curve at the frame's moment. Aboard is the bus's answer: a floor point in one car's frame, walked within the aisle,
+  vestibules and doorways; through the gangway it is re-expressed in the next car's frame; out of an open door onto
+  the platform. The eye is placed on the carriage as drawn in render(); the view turns with the car.
+
+Test bed: `assets/levels/rail_lab.json` (`assets/lanelab/rail_loop.json`): a 2.9 km loop, two stations, a bridge each
+side, a street by Central. `trains?` reports lines, stops, trains; `train_board <train> [car]` puts the player aboard.
+Measured: lines 2844 / 2869 m, 4 trains, stops at both platforms, ~95 s between stations at up to 22 m/s;
+lanes_tool: every lanes invariant passes.
+
+Owed: shuttles (open lines reverse at the ends), sitting (E on a seat), interior lighting, sound, NPC riders and
+rail legs in planTrip, the station bus line, level crossings, the island loop along the freeway, light rail in the
+cities, tunnels.

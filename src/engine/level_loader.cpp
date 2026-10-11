@@ -556,6 +556,9 @@ static RenderMaterial::Surface surfaceForRoadMaterial(const std::string& name) {
     if (name == "sidewalk") return S::Pavement;                          // scored concrete flags
     if (name == "terrain") return S::TerrainGround;                      // the lab's ground: micro-relief over the baked grass colour
     if (name == "guardrail") return S::CorrugatedMetal;                  // a W-beam is corrugated; the loader keeps it dull
+    if (name == "ballast") return S::Asphalt;                            // crushed stone: asphalt's grain over its own colour (cobblestone read as blotches)
+    if (name == "sleeper") return S::Concrete;                           // concrete sleepers
+    if (name == "platform") return S::Pavement;                          // a platform is paving
     return S::None;                                                      // median grass slabs, paint_white, paint_yellow
 }
 
@@ -565,6 +568,8 @@ static ColliderSurface colliderSurfaceForRoadMaterial(const std::string& name) {
     if (name == "concrete" || name == "sidewalk") return ColliderSurface::Concrete;
     if (name == "terrain") return ColliderSurface::Terrain;
     if (name == "guardrail") return ColliderSurface::Metal;
+    if (name == "ballast") return ColliderSurface::Rock;
+    if (name == "platform") return ColliderSurface::Concrete;
     if (name.find("median") != std::string::npos || name.find("grass") != std::string::npos) return ColliderSurface::Grass;
     return ColliderSurface::Unknown;
 }
@@ -741,6 +746,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     spawnRoadMeshes(ent, built.meshes, r, world, assets, "road:" + std::to_string(index), e, true);
     // The deck the mesh rode, for everything that must stand ON it (RoadDeck).
     if (!deck.empty()) world.add<RoadDeck>(e, RoadDeck{std::move(deck)});
+    if (!built.rails.empty()) world.add<RailTracks>(e, RailTracks{built.rails});
 #ifdef RT_ROADS_LANES
     publishCityProducts(builder, buildIn, built, world);
 #endif
@@ -799,6 +805,10 @@ static void loadLanesEntity(const json& ent, World& world, AssetManager& assets,
         if (built.bands.curbHeight > 0) net.look.curb = built.bands.curbHeight;
     }
     if (!built.deck.empty()) world.add<RoadDeck>(doc, RoadDeck{std::move(built.deck)});
+    if (!built.rails.empty()) {
+        LOG_INFO << "[lanelab] e" << index << ": " << built.rails.size() << " rail tracks";
+        world.add<RailTracks>(doc, RailTracks{built.rails});
+    }
     world.add<RoadEntity>(doc, net);      // an empty graph, but its LOOK is the city's
     publishCityProducts(b, in, built, world);
     LOG_INFO << "[lanelab] e" << index << ": " << built.meshes.size() << " cell meshes, " << tris

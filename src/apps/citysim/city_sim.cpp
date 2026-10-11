@@ -5595,9 +5595,11 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             a.parkedBay = bay;
             a.pos = bays_[bay].pos;
             a.heading = bays_[bay].heading;
-        } else if ((parksInBays(a) || isTaxi(myIdx)) && !bays_.empty()) {
+        } else if ((parksInBays(a) || isTaxi(myIdx) || isBus(myIdx)) && !bays_.empty()) {
             // (a cab too: on the verge past the kerb, one fare's end after another, the cabs at a busy door stood
             // heaped on the pavement -- Glenn's "spawn point". It waits off the street, at a rank, until it is hailed.)
+            // (and a BUS with no depot bay -- its depot full, or its route given none: it went onto the verge too,
+            // a bus parallel parked over the kerb all night; Glenn: "We shouldn't see buses parallel parked anymore")
             // NO FREE SPACE NEAR: off-street (a garage, a driveway) rather
             // than onto the verge at the corner, where every such car used to
             // pile up. It is not drawn and is not a body until it leaves. A

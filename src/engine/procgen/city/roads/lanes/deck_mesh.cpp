@@ -3,6 +3,7 @@
 #include "log.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
+#include "engine/procgen/city/rail_track.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -27,6 +28,7 @@ Vec3 world(const Vec2& p, double h) { return Vec3(static_cast<Real>(p.x), static
 // environment to reflect just renders black, which is what a first pass at 0.65 did.
 const Vec3 kAsphalt(0.085f, 0.085f, 0.090f), kConcrete(0.80f, 0.79f, 0.75f), kSidewalk(0.62f, 0.60f, 0.55f), kShoulder(0.115f, 0.115f, 0.120f),
            kGuardrail(0.66f, 0.68f, 0.70f),
+           kBallast(0.30f, 0.28f, 0.25f), kSleeper(0.55f, 0.53f, 0.49f), kRailSteel(0.42f, 0.40f, 0.38f), kPlatform(0.70f, 0.69f, 0.66f),
            kMedian(0.22f, 0.34f, 0.14f), kPaintWhite(0.9f, 0.9f, 0.85f), kPaintYellow(0.95f, 0.75f, 0.15f), kGrass(0.20f, 0.30f, 0.13f);
 
 // WELDED, AND NO UNDERSIDE WHERE NOBODY CAN SEE ONE (ADR-0095). Every deck triangle used to be
@@ -261,11 +263,170 @@ void strip(RenderMesh& mesh, const std::vector<Vec2>& pts, const std::vector<dou
     }
 }
 
+bool trackClass(const RoadLabGraph& g, const std::string& cls) {
+    const auto it = g.classes.find(cls);
+    return it != g.classes.end() && it->second.track;
+}
+
+bool trackLane(const Result& r, int li) {
+    if (li < 0 || li >= static_cast<int>(r.lanes.lanes.size())) return false;
+    const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
+    return !l.isConnector() && l.parent >= 0 && trackClass(r.graph, r.graph.edges[static_cast<size_t>(l.parent)].cls);
+}
+
+// A lane's left-normal offset from its parent spine (laneSlots' convention), measured where it starts.
+double laneOffset(const Result& r, const Lane& l) {
+    const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)];
+    if (e.xy.size() < 2 || l.xy.empty()) return 0;
+    return dot(l.xy.front() - e.xy.front(), perp(tangentAtStation(e.xy, e.s, 0.0)));
+}
+
+// One closed box of a track kit, standing on the deck: centre `c`, `t` along the track, `hx` half its length
+// ACROSS the track and `ht` half along it, from y0 to y1. No bottom face: it lies on the formation.
+void trackBox(RenderMesh& m, const Vec2& c, const Vec2& t, double hx, double ht, double y0, double y1, const Vec3& color) {
+    const Vec2 n = perp(t), a = c - n * hx - t * ht, b = c + n * hx - t * ht, cc = c + n * hx + t * ht, d = c - n * hx + t * ht;
+    MeshBuilder::emitQuad(m, world(a, y1), world(b, y1), world(cc, y1), world(d, y1), Vec3(0, 1, 0), color);
+    const Vec3 tn(static_cast<Real>(t.x), 0, static_cast<Real>(t.y)), nn(static_cast<Real>(n.x), 0, static_cast<Real>(n.y));
+    MeshBuilder::emitQuad(m, world(a, y0), world(b, y0), world(b, y1), world(a, y1), tn * Real(-1), color);
+    MeshBuilder::emitQuad(m, world(d, y0), world(cc, y0), world(cc, y1), world(d, y1), tn, color);
+    MeshBuilder::emitQuad(m, world(b, y0), world(cc, y0), world(cc, y1), world(b, y1), nn, color);
+    MeshBuilder::emitQuad(m, world(a, y0), world(d, y0), world(d, y1), world(a, y1), nn * Real(-1), color);
+}
+
+// THE TRACK on one lane: a sleeper every 0.65 m and two rails swept along the lane's centreline at gauge.
+void trackKit(RenderMesh& sleepers, RenderMesh& rails, const Result& r, int li) {
+    const Lane& l = r.lanes.lanes[static_cast<size_t>(li)]; const DeckHeight& H = *r.heights;
+    if (l.s.size() < 2 || l.s.back() < 1.0) return;
+    const double len = l.s.back();
+    for (double st = 0.3; st < len; st += 0.65) {
+        const Vec2 p = pointAt(l.xy, l.s, st), t = tangentAtStation(l.xy, l.s, st); const double z = H.deck(li, p);
+        trackBox(sleepers, p, t, 1.3, 0.13, z - 0.04, z + kSleeperTop, kSleeper);
+    }
+    const int n = std::max(2, static_cast<int>(std::ceil(len / 2.0)) + 1);
+    const double half = kRailGauge / 2 + 0.035, hw = 0.035;
+    for (int side = -1; side <= 1; side += 2) {
+        std::vector<Vec2> c(static_cast<size_t>(n)), nr(static_cast<size_t>(n)); std::vector<double> z(static_cast<size_t>(n));
+        for (int k = 0; k < n; ++k) {
+            const double st = len * k / (n - 1); const Vec2 p = pointAt(l.xy, l.s, st);
+            nr[static_cast<size_t>(k)] = perp(tangentAtStation(l.xy, l.s, st)); c[static_cast<size_t>(k)] = p + nr[static_cast<size_t>(k)] * (half * side);
+            z[static_cast<size_t>(k)] = H.deck(li, p);
+        }
+        for (int k = 0; k + 1 < n; ++k) {
+            const size_t i = static_cast<size_t>(k), j = i + 1;
+            const Vec2 ai = c[i] - nr[i] * hw, bi = c[i] + nr[i] * hw, aj = c[j] - nr[j] * hw, bj = c[j] + nr[j] * hw;
+            const double ti = z[i] + kRailHeadAbove, tj = z[j] + kRailHeadAbove, fi = z[i] + kSleeperTop, fj = z[j] + kSleeperTop;
+            MeshBuilder::emitQuad(rails, world(ai, ti), world(aj, tj), world(bj, tj), world(bi, ti), Vec3(0, 1, 0), kRailSteel);
+            const Vec3 nn(static_cast<Real>(nr[i].x), 0, static_cast<Real>(nr[i].y));
+            MeshBuilder::emitQuad(rails, world(bi, fi), world(bj, fj), world(bj, tj), world(bi, ti), nn, kRailSteel);
+            MeshBuilder::emitQuad(rails, world(ai, fi), world(aj, fj), world(aj, tj), world(ai, ti), nn * Real(-1), kRailSteel);
+        }
+    }
+}
+
+// The outermost track lane of edge `ei` on spine side `side` (+1 left, -1 right), or -1.
+int outerTrack(const Result& r, int ei, int side, double* offOut) {
+    int best = -1; double bestOff = 0;
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        const Lane& l = r.lanes.lanes[li];
+        if (l.parent != ei || l.isConnector()) continue;
+        const double off = laneOffset(r, l);
+        if (off * side <= 0 && !(off == 0 && side > 0)) continue;   // a centred single track serves both sides
+        if (best < 0 || off * side > bestOff * side) { best = static_cast<int>(li); bestOff = off; }
+    }
+    if (offOut) *offOut = bestOff;
+    return best;
+}
+
+// A STATION PLATFORM: a slab from the ground up to `h` over the railhead, its edge kPlatformGap off the outer
+// track, `w` wide, with a canopy down its middle (posts every 12 m, a roof 3.4 m over the platform).
+void platformKit(RenderMesh& plat, RenderMesh& concrete, const Result& r, const EdgeSpec& e, int ei, const PlatformSpec& P) {
+    for (int side = -1; side <= 1; side += 2) {
+        if (P.side != 0 && P.side != side) continue;
+        double off = 0; const int li = outerTrack(r, ei, side, &off); if (li < 0) continue;
+        const double inner = off + side * kPlatformGap, outer = inner + side * P.w;
+        const double s0 = std::max(0.0, P.s0), s1 = std::min(e.s.back(), P.s1); if (s1 - s0 < 2) continue;
+        const int n = std::max(2, static_cast<int>(std::ceil((s1 - s0) / 2.0)) + 1);
+        std::vector<Vec2> a(static_cast<size_t>(n)), b(static_cast<size_t>(n)); std::vector<double> top(static_cast<size_t>(n)), foot(static_cast<size_t>(n));
+        const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
+        for (int k = 0; k < n; ++k) {
+            const double st = s0 + (s1 - s0) * k / (n - 1); const Vec2 q = pointAt(e.xy, e.s, st), nr = perp(tangentAtStation(e.xy, e.s, st));
+            a[static_cast<size_t>(k)] = q + nr * inner; b[static_cast<size_t>(k)] = q + nr * outer;
+            const double rail = r.heights->deck(li, q + nr * off) + kRailHeadAbove;
+            top[static_cast<size_t>(k)] = rail + P.h; foot[static_cast<size_t>(k)] = rail - kRailHeadAbove - 0.3;
+        }
+        (void)l;
+        for (int k = 0; k + 1 < n; ++k) {
+            const size_t i = static_cast<size_t>(k), j = i + 1;
+            MeshBuilder::emitQuad(plat, world(a[i], top[i]), world(a[j], top[j]), world(b[j], top[j]), world(b[i], top[i]), Vec3(0, 1, 0), kPlatform);
+            Vec2 d = a[j] - a[i]; const double dl = d.length(); if (dl < 1e-9) continue; d = d / dl;
+            const Vec2 toTrack = perp(d) * (side > 0 ? -1.0 : 1.0);   // the platform edge faces its track
+            const Vec3 fn(static_cast<Real>(toTrack.x), 0, static_cast<Real>(toTrack.y));
+            MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(a[j], foot[j]), world(a[j], top[j]), world(a[i], top[i]), fn, kConcrete);
+            MeshBuilder::emitQuad(concrete, world(b[i], foot[i]), world(b[j], foot[j]), world(b[j], top[j]), world(b[i], top[i]), fn * Real(-1), kConcrete);
+        }
+        for (int end = 0; end < 2; ++end) {
+            const size_t i = end == 0 ? 0 : static_cast<size_t>(n - 1);
+            const Vec2 d = end == 0 ? a[1] - a[0] : a[i] - a[i - 1]; const double dl = d.length(); if (dl < 1e-9) continue;
+            const Vec3 en(static_cast<Real>(d.x / dl * (end == 0 ? -1 : 1)), 0, static_cast<Real>(d.y / dl * (end == 0 ? -1 : 1)));
+            MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(b[i], foot[i]), world(b[i], top[i]), world(a[i], top[i]), en, kConcrete);
+        }
+        // the canopy
+        const double mid = (inner + outer) / 2, roofHalf = std::max(1.0, P.w / 2 - 0.4);
+        for (double st = s0 + 6; st <= s1 - 6; st += 12) {
+            const Vec2 q = pointAt(e.xy, e.s, st), t = tangentAtStation(e.xy, e.s, st), nr = perp(t);
+            const double y = r.heights->deck(li, q + nr * off) + kRailHeadAbove + P.h;
+            trackBox(concrete, q + nr * mid, t, 0.12, 0.12, y, y + 3.4, kConcrete);
+        }
+        for (int k = 0; k + 1 < n; ++k) {
+            const size_t i = static_cast<size_t>(k), j = i + 1;
+            const double st0 = s0 + (s1 - s0) * k / (n - 1), st1 = s0 + (s1 - s0) * (k + 1) / (n - 1);
+            const Vec2 q0 = pointAt(e.xy, e.s, st0), q1 = pointAt(e.xy, e.s, st1), n0 = perp(tangentAtStation(e.xy, e.s, st0)), n1 = perp(tangentAtStation(e.xy, e.s, st1));
+            const Vec2 c0 = q0 + n0 * (mid - roofHalf), d0 = q0 + n0 * (mid + roofHalf), c1 = q1 + n1 * (mid - roofHalf), d1 = q1 + n1 * (mid + roofHalf);
+            const double y0 = top[i] + 3.4, y1 = top[j] + 3.4;
+            MeshBuilder::emitQuad(concrete, world(c0, y0 + 0.2), world(c1, y1 + 0.2), world(d1, y1 + 0.2), world(d0, y0 + 0.2), Vec3(0, 1, 0), kConcrete);
+            MeshBuilder::emitQuad(concrete, world(c0, y0), world(c1, y1), world(d1, y1), world(d0, y0), Vec3(0, -1, 0), kConcrete);
+        }
+    }
+}
+
 }  // namespace
+
+std::vector<RailTrack> railTracks(const Result& r) {
+    std::vector<RailTrack> out;
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        if (!trackLane(r, static_cast<int>(li))) continue;
+        const Lane& l = r.lanes.lanes[li]; if (l.s.size() < 2) continue;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)];
+        RailTrack t; t.edge = e.id; t.cls = e.cls; t.dir = l.dir >= 0 ? +1 : -1;
+        const double len = l.s.back(); const int n = std::max(2, static_cast<int>(std::ceil(len / 2.0)) + 1);
+        for (int k = 0; k < n; ++k) {
+            const double st = len * k / (n - 1); const Vec2 p = pointAt(l.xy, l.s, st);
+            t.pts.push_back(world(p, r.heights->deck(static_cast<int>(li), p) + kRailHeadAbove));
+        }
+        if (t.dir < 0) std::reverse(t.pts.begin(), t.pts.end());
+        // the platforms beside it: on the side it is outermost on, in its own running stations
+        for (const PlatformSpec& P : e.platforms)
+            for (int side = -1; side <= 1; side += 2) {
+                if (P.side != 0 && P.side != side) continue;
+                if (outerTrack(r, l.parent, side, nullptr) != static_cast<int>(li)) continue;
+                const Vec2 q = pointAt(e.xy, e.s, std::clamp((P.s0 + P.s1) / 2, 0.0, e.s.back()));
+                RailStop st; st.name = P.name;
+                const double a = project(l.xy, l.s, pointAt(e.xy, e.s, std::clamp(P.s0, 0.0, e.s.back()))).station;
+                const double b = project(l.xy, l.s, pointAt(e.xy, e.s, std::clamp(P.s1, 0.0, e.s.back()))).station;
+                st.s0 = t.dir > 0 ? std::min(a, b) : len - std::max(a, b);
+                st.s1 = t.dir > 0 ? std::max(a, b) : len - std::min(a, b);
+                st.side = side * t.dir;   // spine-left is the train's left when it runs along the spine
+                st.top = r.heights->deck(static_cast<int>(li), pointAt(l.xy, l.s, project(l.xy, l.s, q).station)) + kRailHeadAbove + P.h;
+                t.stops.push_back(st);
+            }
+        out.push_back(std::move(t));
+    }
+    return out;
+}
 
 std::vector<NamedMesh> buildMeshes(const Result& r) {
     const RoadLabGraph& g = r.graph; const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
-    RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail;
+    RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail, ballast, sleepers, rails, platform;
     // The ground under a deck, for the underside rule (slab): the conformed grid, or 0 on a flat level.
     const std::function<double(const Vec2&)> groundUnder = [&r](const Vec2& q) {
         return r.hasTerrain ? r.terrain.sample(q.x, q.y) : 0.0;
@@ -337,7 +498,10 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
                 uv[ti][static_cast<size_t>(2 * k)] = static_cast<float>(lateral); uv[ti][static_cast<size_t>(2 * k + 1)] = static_cast<float>(pr.station);
             }
         }
-        slab(asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, kAsphalt, kConcrete, &uv, &seamFn, &groundUnder, &hiddenFn);
+        // a deck all of whose lanes are track is a ballast bed, not asphalt
+        bool track = !s.triOwner.empty();
+        for (int o : s.triOwner) if (!trackLane(r, o)) { track = false; break; }
+        slab(track ? ballast : asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, track ? kBallast : kAsphalt, kConcrete, &uv, &seamFn, &groundUnder, &hiddenFn);
     }
     // layers
     auto layer = [&](const PolySet& poly, RenderMesh& top, const Vec3& color, double lift, double thick, bool anyRoad) {
@@ -392,6 +556,12 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         MeshBuilder::appendTransformed(concrete, box, Mat4::translate(static_cast<Real>(p.xy.x), static_cast<Real>(p.z0 + h / 2), static_cast<Real>(p.xy.y)));
     }
     mark("piers");
+    // RAIL: sleepers and rails on every track lane, platforms where the graph puts a station
+    for (size_t li = 0; li < L.lanes.size(); ++li)
+        if (trackLane(r, static_cast<int>(li))) trackKit(sleepers, rails, r, static_cast<int>(li));
+    for (size_t ei = 0; ei < g.edges.size(); ++ei)
+        if (trackClass(g, g.edges[ei].cls))
+            for (const PlatformSpec& P : g.edges[ei].platforms) platformKit(platform, concrete, r, g.edges[ei], static_cast<int>(ei), P);
     if (deckStats) {
         std::string o;
         for (std::size_t k = 1; k < concreteBy.size(); ++k)
@@ -424,7 +594,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     std::map<int, std::vector<Span>> spans;
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         const Lane& l = L.lanes[li]; if (l.isConnector() || l.parent < 0 || l.s.size() < 2) continue;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (e.isRamp() || e.cls == "freeway" || r.graph.cls(e).rank < 1) continue;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (e.isRamp() || e.cls == "freeway" || r.graph.cls(e).rank < 1 || trackClass(r.graph, e.cls)) continue;
         int n = std::max(2, static_cast<int>(l.s.back() / 2.0) + 1); double in0 = -1, inLast = 0; int rankMax = -1;
         for (int k = 0; k <= n; ++k) {
             int cr = -1; double st = 0;
@@ -449,6 +619,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     // markings: each lane edge classified by what lies just outside it
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         const Lane& l = L.lanes[li];
+        if (trackLane(r, static_cast<int>(li))) continue;   // a track is not painted
         for (int side = 0; side < 2; ++side) {
             const std::vector<Vec2>& E = side == 0 ? l.left : l.right; std::vector<Vec2> pts; std::vector<double> z; std::vector<int> style;   // 0 edge, 1 lane, 2 centre
             std::vector<double> Es = stations(E); int n = std::max(2, static_cast<int>(Es.back() / 4.0) + 1);
@@ -608,6 +779,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     auto add = [&](const char* n, RenderMesh& m, const Vec3& c) { if (!m.indices.empty()) out.push_back({n, std::move(m), c}); };
     add("asphalt", asphalt, kAsphalt); add("concrete", concrete, kConcrete); add("guardrail", guardrail, kGuardrail); add("sidewalk", sidewalk, kSidewalk); add("shoulder", shoulder, kShoulder); add("median", median, kMedian);
     add("paint_white", paintW, kPaintWhite); add("paint_yellow", paintY, kPaintYellow); add("terrain", terrain, kGrass);
+    add("ballast", ballast, kBallast); add("sleeper", sleepers, kSleeper); add("rail", rails, kRailSteel); add("platform", platform, kPlatform);
     return out;
 }
 

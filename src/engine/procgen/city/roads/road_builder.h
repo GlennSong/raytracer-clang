@@ -4,6 +4,7 @@
 #include "ground_grid.h"
 #include "road_entity.h"
 #include "../polygon.h"
+#include "../rail_track.h"
 #include <string>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -76,6 +77,7 @@ struct RoadProducts {
     // graph's faces and has no freeway right-of-way to keep them out of.
     RoadGraph row;                  // freeway + ramp right-of-way: the lot pass's keep-out
     std::vector<Poly2> holes;       // un-inset pavement holes: the city's blocks
+    std::vector<RailTrack> rails;   // track lanes, for whatever runs trains (empty from the lattice)
 };
 
 // WHAT A BUILDER DOES TO THE GROUND — asked BEFORE anything is built, because a

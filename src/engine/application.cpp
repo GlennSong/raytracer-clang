@@ -921,6 +921,12 @@ std::string Application::handleControlCommand(const std::string& line) {
     if (cmd.name == "parking?") return "ok " + settingsStore.getString("parking.telemetry", "none");
     if (cmd.name == "traffic?") return "ok " + settingsStore.getString("traffic.telemetry", "none");
     if (cmd.name == "opensigns?") return "ok " + settingsStore.getString("opensigns.telemetry", "none");
+    // the trains (citysim train_system): lines, stops, every train's place, speed and doors, and whether you are aboard
+    if (cmd.name == "trains?") return "ok " + settingsStore.getString("trains.telemetry", "none");
+    if (cmd.name == "train_board") {   // `train_board <train> [car]`: aboard, standing mid-carriage
+        settingsStore.setString("train.board", (cmd.args.empty() ? std::string("0") : cmd.args[0]) + " " + (cmd.args.size() > 1 ? cmd.args[1] : std::string("1")));
+        return "ok staged";
+    }
     if (cmd.name == "depots?") return "ok " + settingsStore.getString("depots.telemetry", "none") + "; stalled heading in:" + settingsStore.getString("depots.stalled", "");
     // `pin <agent>` / `unpin <agent>`: FOLLOW an agent -- it stays in the full sim however far it goes
     if (cmd.name == "pin" || cmd.name == "unpin") {

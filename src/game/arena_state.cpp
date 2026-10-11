@@ -31,6 +31,7 @@
 #include "../apps/citysim/city_walkers.h"
 #include "../apps/citysim/city_player_body.h"
 #include "../apps/citysim/city_player_transit.h"
+#include "../apps/citysim/train_system.h"
 #include "../apps/citysim/city_map_tool.h"
 #include "../apps/citysim/city_possess.h"
 #endif
@@ -202,6 +203,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<citysim::CityPlayerBodySystem>();
     // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
     addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
+    addSystem<citysim::TrainSystem>(physSys, camSys.flyController());   // trains on the level's tracks, and the player aboard
     // The map: tool slot 3 (city_map_tool) -- the city SVG through the game UI
     // layer; drag pans, the wheel zooms, C centres on you.
     addSystem<citysim::CityMapToolSystem>(citySys, camSys.flyController());

@@ -92,6 +92,7 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/car_mesh.cpp
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
+    src/engine/procgen/vehicle/train_mesh.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
     src/engine/procgen/earthwork.cpp
@@ -425,6 +426,7 @@ add_library(citysim STATIC
     src/apps/citysim/city_transit.cpp   # carrying people: the shared ride primitive
     src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
     src/apps/citysim/city_bus.cpp   # fixed-loop transit: derived routes and stops
+    src/apps/citysim/rail_sim.cpp   # trains on the road builder's tracks: lines, timetable, carriage poses
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
@@ -788,6 +790,7 @@ add_executable(run_tests
     tests/test_city_dispatch.cpp
     tests/test_city_taxi.cpp
     tests/test_city_bus.cpp
+    tests/test_rail_sim.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp
@@ -1025,6 +1028,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
         src/apps/citysim/city_player_transit.cpp  # the player's passenger seat on a bus or cab
+        src/apps/citysim/train_system.cpp   # trains drawn, and the player aboard one
         src/apps/citysim/city_map_tool.cpp  # the map: tool slot 3, drawn with the game UI layer
         src/apps/citysim/city_possess.cpp   # the control channel's avatar (ADR-0079)
     )
