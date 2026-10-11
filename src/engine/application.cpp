@@ -589,6 +589,12 @@ std::string Application::handleControlCommand(const std::string& line) {
     };
 
     if (cmd.name == "ping") return "ok pong";
+    // A QUESTION WAS ASKED (any `name?`): the systems that keep island-wide debug counts for those answers count
+    // only while someone is asking (telemetry.askedAt, steady seconds) -- counted every half second regardless,
+    // they were a 65-130 ms frame twice a second (Glenn on a bus: "a lot of frame stutter")
+    if (!cmd.name.empty() && cmd.name.back() == '?')
+        settingsStore.setDouble("telemetry.askedAt",
+                                std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
 
     if (cmd.name == "info") {
         char buf[512];

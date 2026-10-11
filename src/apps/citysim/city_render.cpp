@@ -3575,7 +3575,11 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     {
         // `parking?`: the kerbside bays and the garages' stalls, how many are taken, and the nearest taken garage
         // stall to the camera (where to go and look)
-        if (++parkingTick_ % 60 == 0) {
+        // (the counts below walk every agent and vehicle on the island: kept only while a probe is asking -- see
+        // telemetry.askedAt in the control channel. The first question after a quiet spell answers from the last count.)
+        const double askedAt = ctx.settings.getDouble("telemetry.askedAt", -1e30);
+        const bool asked = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - askedAt < 60.0;
+        if (++parkingTick_ % 60 == 0 && asked) {
             int kerb = 0, kerbTaken = 0, stalls = 0, stallsTaken = 0;
             Real bestD = 1e30;
             Vec2 best;
@@ -3806,7 +3810,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.settings, ctx.view.camera.position);
         // THE BUS DEPOTS: `depots?` -- in service or not, buses on the road / heading in / parked in a depot bay, and the
         // depot nearest the camera
-        if (built_ && parkingTick_ % 30 == 0 && sim_.depotCount() > 0) {
+        if (built_ && parkingTick_ % 30 == 0 && asked && sim_.depotCount() > 0) {
             int driving = 0, toDepot = 0, offDuty = 0, inBay = 0, buses = 0;
             const auto& ag = sim_.agents();
             for (std::size_t i = 0; i < ag.size(); ++i) {
@@ -3847,8 +3851,8 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     if (v == busVariant_ || vs[vi].type == VehicleType::Bus) ++kerbBus;
                 }
                 for (std::size_t i = 0; i < ag.size(); ++i)
-                    if (!sim_.isBus(static_cast<int>(i)) && drawSlotFor(static_cast<int>(i)) == busVariant_ &&
-                        ag[i].mode == Agent::Mode::Driver)
+                    if (ag[i].mode == Agent::Mode::Driver && !sim_.isBus(static_cast<int>(i)) &&
+                        drawSlotFor(static_cast<int>(i)) == busVariant_)
                         ++wrongDriver;
                 // a bus being driven whose vehicle still says off-street: no body whenever it stands (the sign alone)
                 int putAway = 0;
