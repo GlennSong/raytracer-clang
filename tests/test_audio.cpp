@@ -955,3 +955,36 @@ TEST_CASE(splashes_and_a_lake_shore) {
     CHECK(swing > 3.0);   // wavelets come and go
     maybeDump("loop_lake_lap", lap, rate);
 }
+
+// ---- THE TRAINS' SOUNDS (Glenn: "No train track clacking. No whistle or bell when it stops or when the doors open") ----
+TEST_CASE(train_sounds_clack_roll_sound_the_horn_and_chime) {
+    const uint32_t rate = 48000;
+    const auto clack = sfx::railClack(rate, 11), rumble = sfx::railRumble(rate, 5), horn = sfx::trainHorn(rate, 1);
+    const auto open = sfx::trainDoorChime(true, rate, 1), shut = sfx::trainDoorChime(false, rate, 1);
+    maybeDump("rail_clack", clack, rate);
+    maybeDump("rail_rumble", rumble, rate);
+    maybeDump("train_horn", horn, rate);
+    maybeDump("door_chime_open", open, rate);
+    maybeDump("door_chime_shut", shut, rate);
+    for (const auto* f : {&clack, &rumble, &horn, &open, &shut}) {
+        CHECK(!f->empty());
+        for (float x : *f) CHECK(std::fabs(x) <= 1.0f);
+    }
+    const Voiceprint vc = voiceprint(clack, rate), vr = voiceprint(rumble, rate), vh = voiceprint(horn, rate);
+    const Voiceprint vo = voiceprint(open, rate), vs = voiceprint(shut, rate);
+    std::printf("    [train] clack bands %.2f %.2f %.2f %.2f len %.3f | rumble %.2f %.2f %.2f %.2f | horn %.2f %.2f %.2f %.2f len %.2f"
+                " | open %.2f %.2f len %.2f | shut %.2f %.2f len %.2f\n",
+                vc.band[0], vc.band[1], vc.band[2], vc.band[3], vc.length, vr.band[0], vr.band[1], vr.band[2], vr.band[3],
+                vh.band[0], vh.band[1], vh.band[2], vh.band[3], vh.length, vo.band[1], vo.band[2], vo.length, vs.band[1], vs.band[2], vs.length);
+    CHECK(vc.length < 0.12);                       // a clack is a knock, over in a moment: the beat comes from the axles
+    CHECK(vc.band[0] > 0.2 && vc.band[1] + vc.band[2] > 0.1);   // a thump with a steel ring on it
+    CHECK(vr.band[0] > 0.7);                       // the roll is a low roar
+    CHECK(vh.length > 1.0);                        // the horn is held
+    CHECK(vh.band[1] > vh.band[0]);                // a brassy note, not a rumble
+    CHECK(vo.length > 0.5 && vs.length < vo.length);   // a ringing chime; the beeps are clipped short
+    CHECK(vo.band[1] + vo.band[2] > 0.7);          // tonal, in the bell's range (a one-pole split leaks some low)
+    // the roll loops: its seam no worse than its own sample steps
+    float maxStep = 0.0f;
+    for (size_t i = 1; i < rumble.size(); ++i) maxStep = std::max(maxStep, std::fabs(rumble[i] - rumble[i - 1]));
+    CHECK(std::fabs(rumble.front() - rumble.back()) <= maxStep * 1.5f + 1e-4f);
+}

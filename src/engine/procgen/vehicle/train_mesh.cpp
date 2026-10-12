@@ -212,6 +212,7 @@ TrainBodyMesh buildTrainCarriage(const TrainBodySpec& sp) {
         const Real bz = z - facing * 0.26;
         box(m, {x - 0.23, seatY, bz - 0.05}, {x + 0.23, seatY + 0.68, bz + 0.05}, kSeat);
         out.seats.push_back(Vec3(x, seatY, z));
+        out.seatYaw.push_back(facing > 0 ? 0.0 : 3.14159265358979);
     };
     if (!longitudinal) {
         // transverse pairs either side of the aisle, in bays facing each other, between the vestibules
@@ -240,7 +241,10 @@ TrainBodyMesh buildTrainCarriage(const TrainBodySpec& sp) {
                 box(m, {std::min(xin, xw), F + 0.36, z0}, {std::max(xin, xw), seatY, z1}, kSeat);
                 box(m, {std::min(xin, xw), F + 0.05, z0 + 0.1}, {std::max(xin, xw), F + 0.36, z1 - 0.1}, kSeatFrame);
                 box(m, {s > 0 ? hw - t - 0.08 : -hw + t, seatY, z0}, {s > 0 ? hw - t : -hw + t + 0.08, wb0 + 0.1, z1}, kSeat);
-                for (Real z = z0 + 0.3; z <= z1 - 0.3; z += 0.55) out.seats.push_back(Vec3(s * (hw - t - 0.28), seatY, z));
+                for (Real z = z0 + 0.3; z <= z1 - 0.3; z += 0.55) {
+                    out.seats.push_back(Vec3(s * (hw - t - 0.28), seatY, z));
+                    out.seatYaw.push_back(s > 0 ? -1.5707963267949 : 1.5707963267949);   // facing across the car
+                }
             }
         }
         for (double dz : out.doorZ)

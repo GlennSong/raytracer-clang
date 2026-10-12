@@ -37,6 +37,7 @@ struct TrainBodyMesh {
     double aisleHalf = 0.4;
     double gangwayHalf = 0.55;
     std::vector<Vec3> seats;
+    std::vector<double> seatYaw;   // the way each seat faces, radians about +y: 0 toward +z (atan2(face.x, face.z))
     bool walkable = false;  // a carriage (true) or the locomotive (false: its cab is not ours)
 };
 

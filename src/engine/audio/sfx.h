@@ -89,6 +89,18 @@ std::vector<float> elevatorDoors(uint32_t sampleRate = 48000, uint32_t seed = 1)
 // ~2 s loop; the caller fades it with the cab's speed.
 std::vector<float> elevatorHum(uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// TRAINS (Glenn, 2026-10-11: "there's no sound on the train. No train track clacking. No whistle or bell when it stops
+// or when the doors open").
+// One wheelset over a rail joint, ~0.2 s: a thump in the rail bed, the steel's ring, a scuffed burst. Played per axle
+// as each crosses a joint, so a car makes the "ta-dum ... ta-dum" of its two bogies.
+std::vector<float> railClack(uint32_t sampleRate = 48000, uint32_t seed = 1);
+// The roll under it, a seamless loop (~1.5 s): low wheel-on-rail roar and a faint steel hiss. Gain and pitch by speed.
+std::vector<float> railRumble(uint32_t sampleRate = 48000, uint32_t seed = 1);
+// A locomotive's two-tone horn, high then low, ~1.7 s: sounded coming into a station.
+std::vector<float> trainHorn(uint32_t sampleRate = 48000, uint32_t seed = 1);
+// The doors: opening, a falling two-note chime (~1.3 s); closing, three short warning beeps (~0.9 s).
+std::vector<float> trainDoorChime(bool opening, uint32_t sampleRate = 48000, uint32_t seed = 1);
+
 // The firing rate the clip is baked at: pitch 1.0 sounds like this many
 // combustion events per second (~1700 rpm on a four-cylinder four-stroke, two
 // firings per revolution). Callers multiply it; the mapping core owns the band.

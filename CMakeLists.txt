@@ -428,6 +428,8 @@ add_library(citysim STATIC
     src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
     src/apps/citysim/city_bus.cpp   # fixed-loop transit: derived routes and stops
     src/apps/citysim/rail_sim.cpp   # trains on the road builder's tracks: lines, timetable, carriage poses
+    src/apps/citysim/city_rail_riders.cpp   # people taking the train: stations on the streets, who is where
+    src/apps/citysim/station_boards.cpp   # the stations' names on their platforms
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
@@ -792,6 +794,7 @@ add_executable(run_tests
     tests/test_city_taxi.cpp
     tests/test_city_bus.cpp
     tests/test_rail_sim.cpp
+    tests/test_rail_riders.cpp
     tests/test_island_rail.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp

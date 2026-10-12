@@ -1,6 +1,10 @@
 #include "train_system.h"
+#include "city_render.h"
+#include "station_boards.h"
 
 #include "../../engine/asset_manager.h"
+#include "../../engine/audio/sfx.h"
+#include "../../engine/procgen/vehicle/occupant.h"
 #include "../../engine/interact_broker.h"
 #include "../../engine/camera/fly_camera_controller.h"
 #include "../../engine/input/input_map.h"
@@ -70,9 +74,18 @@ void TrainSystem::build(engine::FrameContext& ctx) {
     std::string kindName = tracks.front().cls == "metro" ? "subway" : tracks.front().cls == "light_rail" ? "light_rail" : "intercity";
     if (const char* k = std::getenv("RT_TRAIN_KIND")) kindName = k;
     const TrainKind kind = trainKindNamed(kindName);
-    int perLine = 2;
+    // THE TIMETABLE: a train per ~9 km of the longest line, two at least -- the island's 37 km loop ran two each way, a
+    // train every ~14 minutes, and its platforms filled with people waiting for one (46 at 21 minutes in)
+    double longest = 0;
+    {
+        RailSim probe;
+        probe.build(tracks, kind, 1);
+        for (const RailLine& L : probe.lines()) longest = std::max(longest, L.length);
+    }
+    int perLine = std::max(2, static_cast<int>(std::lround(longest / 9000.0)));
     if (const char* n = std::getenv("RT_TRAINS_PER_LINE")) perLine = std::max(1, std::atoi(n));
     sim_.build(tracks, kind, perLine);
+    if (city_) city_->simMutable().setRail(&sim_);   // the city's people take these trains
     engine::TrainBodySpec spec;
     spec.kind = kind.name;
     spec.width = kind.width;
@@ -87,6 +100,70 @@ void TrainSystem::build(engine::FrameContext& ctx) {
     coachBody_ = makeGroup(ctx, coach_.body, "train:coach", false);
     coachGlass_ = makeGroup(ctx, coach_.glass, "train:coachglass", true);
     leaves_ = makeGroup(ctx, coach_.doorLeaf, "train:door", false);
+    // THE STATIONS' NAMES on their platforms (station_boards.h): one frame group, one lettered group per name
+    if (const engine::Font* font = engine::signFont()) {
+        const std::vector<StationBoard> boards = stationBoards(sim_);
+        auto place = [&](Entity e, const std::vector<const StationBoard*>& on) {
+            InstanceGroup* g = e.valid() ? ctx.world.get<InstanceGroup>(e) : nullptr;
+            if (!g || on.empty()) return;
+            Vec3 c(0, 0, 0);
+            for (const StationBoard* b : on) { g->transforms.push_back(b->m); c = c + col(b->m, 3); }
+            c = c * (1.0 / static_cast<double>(on.size()));
+            Real r = 0;
+            for (const StationBoard* b : on) r = std::max(r, (col(b->m, 3) - c).length());
+            g->boundsCenter = c;
+            g->boundsRadius = r + 8;
+            g->drawDistance = 400.0;
+        };
+        std::vector<const StationBoard*> all;
+        for (const StationBoard& b : boards) all.push_back(&b);
+        const Entity frame = makeGroup(ctx, stationBoardFrame(), "train:boardframe", false);
+        if (InstanceGroup* g = frame.valid() ? ctx.world.get<InstanceGroup>(frame) : nullptr) { g->material.metallic = 0.0f; g->material.roughness = 0.6f; }
+        place(frame, all);
+        boards_.push_back(frame);
+        std::vector<std::string> names;
+        for (const StationBoard& b : boards) if (std::find(names.begin(), names.end(), b.name) == names.end()) names.push_back(b.name);
+        const engine::RenderMesh faces = stationBoardFaces();
+        for (const std::string& name : names) {
+            engine::TextImage img;
+            stationBoardImage(*font, name, img);
+            const Entity e = makeGroup(ctx, faces, "train:boardfaces", false);
+            InstanceGroup* g = e.valid() ? ctx.world.get<InstanceGroup>(e) : nullptr;
+            if (!g) continue;
+            g->material.albedoMap = ctx.renderer.uploadTexture(img.w, img.h, 4, img.rgba.data());
+            g->material.metallic = 0.0f;
+            g->material.roughness = 0.5f;
+            g->material.flags |= engine::RenderMaterial::FLAG_TWO_SIDED;
+            g->drawClass = engine::DrawClass::Furniture;
+            std::vector<const StationBoard*> on;
+            for (const StationBoard& b : boards) if (b.name == name) on.push_back(&b);
+            place(e, on);
+            boards_.push_back(e);
+        }
+        LOG_INFO << "[trains] station name boards: " << boards.size() << " for " << names.size() << " stations";
+    }
+    // THE CITY'S PEOPLE ABOARD: seated figures, three outfits, in the coach's seats as the riders fill them
+    if (city_) {
+        const Vec3 shirts[3] = {Vec3(0.30, 0.36, 0.62), Vec3(0.66, 0.30, 0.22), Vec3(0.84, 0.80, 0.70)};
+        const Vec3 trousers[3] = {Vec3(0.18, 0.18, 0.20), Vec3(0.30, 0.27, 0.22), Vec3(0.14, 0.16, 0.24)};
+        const Vec3 skins[3] = {Vec3(0.78, 0.60, 0.48), Vec3(0.50, 0.35, 0.25), Vec3(0.90, 0.74, 0.62)};
+        for (int k = 0; k < 3; ++k) {
+            engine::OccupantParams op;
+            op.hipToHeel = 0.45;
+            op.sittingHeight = 0.86;
+            op.backAngle = 12.0;
+            op.armReach = 24.0;
+            op.shirt = shirts[k];
+            op.trousers = trousers[k];
+            op.skin = skins[k];
+            riders_[k] = makeGroup(ctx, engine::buildSeatedOccupant(op), "train:rider" + std::to_string(k), false);
+            if (InstanceGroup* g = riders_[k].valid() ? ctx.world.get<InstanceGroup>(riders_[k]) : nullptr) {
+                g->material.metallic = 0.0f;
+                g->material.roughness = 0.85f;
+                g->drawDistance = 160.0;
+            }
+        }
+    }
     LOG_INFO << "[trains] " << kind.name << ": " << sim_.describe() << "; coach " << coach_.body.indices.size() / 3
              << " tris, " << coach_.seats.size() << " seats; locomotive " << loco_.body.indices.size() / 3 << " tris";
 }
@@ -115,7 +192,112 @@ bool TrainSystem::walkableAt(int car, const Vec3& local, int doorSide) const {
 
 // SITTING (Glenn, 2026-10-10: "You can't sit anywhere. There's no interaction for sitting"): aboard, every seat within
 // reach is an offer of the interaction broker's E, the marker on the seat you look at; seated, the one verb is standing.
+// THE TRAINS' SOUNDS, heard from the camera (Glenn: "there's no sound on the train. No train track clacking. No whistle
+// or bell when it stops or when the doors open"). Each axle near the ear clacks as it rolls over a rail joint -- every
+// kJointSpacing of its own travel, so a car's two bogies give the "ta-dum ... ta-dum" and the beat quickens with speed;
+// under it a rolling rumble on the nearest car; the horn coming up to a platform; a chime as the doors open and three
+// beeps before they shut. Aboard, the same sounds are simply near: the ear is in the car.
+void TrainSystem::sounds(engine::FrameContext& ctx) {
+    if (sim_.trains().empty() || !ctx.audio.ready()) return;
+    if (!audioTried_) {
+        audioTried_ = true;
+        const uint32_t rate = ctx.audio.sampleRate();
+        auto clip = [&](const std::vector<float>& pcm) { return ctx.audio.createClip(pcm.data(), pcm.size(), 1, rate); };
+        for (int k = 0; k < 3; ++k) clack_[k] = clip(engine::sfx::railClack(rate, 11 + 3 * k));
+        rumble_ = clip(engine::sfx::railRumble(rate, 5));
+        horn_ = clip(engine::sfx::trainHorn(rate, 1));
+        chimeOpen_ = clip(engine::sfx::trainDoorChime(true, rate, 1));
+        chimeShut_ = clip(engine::sfx::trainDoorChime(false, rate, 1));
+    }
+    constexpr double kJointSpacing = 18.0;   // metres of rail between joints (jointed track: the clatter people expect)
+    constexpr double kClackRange = 70.0, kRumbleRange = 140.0, kHornRange = 600.0, kChimeRange = 35.0;
+    const Vec3 ear = ctx.view.camera.position;
+    const auto& trains = sim_.trains();
+    if (ears_.size() != trains.size()) ears_.assign(trains.size(), TrainEar{});
+    engine::AudioPlayParams pp;
+    pp.bus = engine::AudioBus::Sfx;
+    for (std::size_t ti = 0; ti < trains.size(); ++ti) {
+        const Train& T = trains[ti];
+        TrainEar& E = ears_[ti];
+        const RailLine& L = sim_.lines()[static_cast<std::size_t>(T.line)];
+        const std::vector<CarPose> cars = sim_.carPoses(static_cast<int>(ti), 1.0);
+        // the nearest car to the ear
+        double nearD = 1e30;
+        Vec3 nearC(0, 0, 0);
+        for (const CarPose& P : cars) {
+            const Vec3 c = col(P.m, 3);
+            const double d = (c - ear).length();
+            if (d < nearD) { nearD = d; nearC = c; }
+        }
+        // CLATTER: axles (two per bogie, 2.5 m apart; bogies at 0.18 and 0.82 of each body) past a joint since last frame
+        if (E.lastOdo >= 0 && T.odometer > E.lastOdo && nearD < kClackRange + 30) {
+            const double speed = std::min(1.0, T.v / 25.0);
+            double front = 0;   // metres behind the head
+            for (int c = 0; c < static_cast<int>(cars.size()); ++c) {
+                const double len = cars[static_cast<std::size_t>(c)].length;
+                for (double b : {0.18, 0.82})
+                    for (double ax : {-1.25, 1.25}) {
+                        const double off = front + b * len + ax;
+                        if (std::floor((T.odometer - off) / kJointSpacing) <= std::floor((E.lastOdo - off) / kJointSpacing)) continue;
+                        const Vec3 at = L.at(T.s - off);
+                        if ((at - ear).length() > kClackRange) continue;
+                        pp.volume = static_cast<float>(0.25 + 0.6 * speed);
+                        pp.pitch = static_cast<float>(0.92 + 0.16 * speed);
+                        ctx.audio.playAt(clack_[static_cast<std::size_t>(c + (ax > 0 ? 1 : 0)) % 3], Vec3(at.x, at.y + 0.5, at.z), static_cast<float>(kClackRange), pp);
+                    }
+                front += len + T.kind.gap;
+            }
+        }
+        E.lastOdo = T.odometer;
+        // RUMBLE on the nearest car, by speed
+        const float roll = static_cast<float>(std::min(1.0, T.v / 20.0));
+        if (nearD < kRumbleRange && roll > 0.02f) {
+            if (!E.rumble.valid() || !ctx.audio.isPlaying(E.rumble)) {
+                engine::AudioPlayParams lp = pp;
+                lp.loop = true;
+                lp.volume = 0.0f;
+                E.rumble = ctx.audio.playAt(rumble_, nearC, static_cast<float>(kRumbleRange), lp);
+            }
+            ctx.audio.setVoicePosition(E.rumble, nearC);
+            ctx.audio.setVoiceVolume(E.rumble, 0.75f * roll);
+            ctx.audio.setVoicePitch(E.rumble, 0.7f + 0.5f * roll);
+        } else if (E.rumble.valid()) {
+            ctx.audio.stop(E.rumble);
+            E.rumble = engine::AudioVoiceHandle{};
+        }
+        // THE HORN coming into a platform: once, ~300 m out
+        if (!T.dwelling && T.nextStop >= 0 && T.nextStop < static_cast<int>(L.stops.size()) && E.hornedFor != T.nextStop) {
+            double ahead = L.stops[static_cast<std::size_t>(T.nextStop)].s1 - T.s;
+            if (L.loop && ahead < 0) ahead += L.length;
+            if (ahead > 0 && ahead < 320.0) {
+                E.hornedFor = T.nextStop;
+                const Vec3 head = L.at(T.s);
+                if ((head - ear).length() < kHornRange) {
+                    pp.volume = 0.9f;
+                    pp.pitch = 1.0f;
+                    ctx.audio.playAt(horn_, Vec3(head.x, head.y + 4.0, head.z), static_cast<float>(kHornRange), pp);
+                }
+            }
+        }
+        // THE DOORS: a chime as they open, three beeps a little before they shut -- at each carriage near the ear
+        auto chimeAll = [&](engine::AudioClipHandle clip) {
+            for (const CarPose& P : cars) {
+                if (P.loco) continue;
+                const Vec3 c = col(P.m, 3);
+                if ((c - ear).length() > kChimeRange + 10) continue;
+                pp.volume = 0.7f;
+                pp.pitch = 1.0f;
+                ctx.audio.playAt(clip, Vec3(c.x, c.y + 2.2, c.z), static_cast<float>(kChimeRange), pp);
+            }
+        };
+        if (T.doorSide != 0 && E.lastDoor == 0) { chimeAll(chimeOpen_); E.beeped = false; }
+        if (T.doorSide != 0 && !E.beeped && T.dwellLeft < 5.2) { chimeAll(chimeShut_); E.beeped = true; }
+        E.lastDoor = T.doorSide;
+    }
+}
+
 void TrainSystem::update(engine::FrameContext& ctx) {
+    sounds(ctx);
     if (train_ < 0 || car_ < 1) return;
     Entity player;
     ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) { if (!player.valid()) player = e; });
@@ -177,7 +359,35 @@ void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
                           sim_.trains()[static_cast<std::size_t>(train_)].v);
             aboard = b;
         }
-        ctx.settings.setString("trains.telemetry", sim_.describe() + "; " + aboard);
+        std::string riders;
+        if (city_) {   // the city's people on the line: how many chose it, where they are now
+            const RailRiders& rr = city_->sim().railRiders();
+            int phase[5] = {0, 0, 0, 0, 0};
+            int walking = 0, onBus = 0, still = 0;
+            std::vector<double> left;   // metres to the station's way in, of those still on the street
+            const CitySim& cs = city_->sim();
+            for (int p : rr.passengers()) {
+                const RailTrip* t = rr.tripOf(p);
+                if (!t) continue;
+                ++phase[static_cast<int>(t->phase)];
+                if (t->phase != RailTrip::Phase::ToStation || p >= static_cast<int>(cs.agents().size())) continue;
+                const Agent& a = cs.agents()[static_cast<std::size_t>(p)];
+                if (cs.buses().tripOf(p)) ++onBus; else if (a.moving) ++walking; else ++still;
+                const Vec2 acc = rr.stations()[static_cast<std::size_t>(t->from)].access;
+                left.push_back(std::hypot(a.pos.x - acc.x, a.pos.y - acc.y));
+            }
+            std::sort(left.begin(), left.end());
+            char lb[160];
+            std::snprintf(lb, sizeof(lb), " (walking %d, bus %d, standing %d; to go: nearest %.0f m, median %.0f m)", walking, onBus,
+                          still, left.empty() ? 0.0 : left.front(), left.empty() ? 0.0 : left[left.size() / 2]);
+            char b[600];
+            std::snprintf(b, sizeof(b), "; riders: %zu stations pinned, planned %ld entered %ld boarded %ld set down %ld gave up %ld | "
+                          "now to station %d%s, in the way in %d, on platforms %d, aboard %d, on the way out %d",
+                          rr.stations().size(), rr.stats.planned, rr.stats.entered, rr.stats.boarded, rr.stats.setDown,
+                          rr.stats.gaveUp, phase[0], lb, phase[1], phase[2], phase[3], phase[4]);
+            riders = b;
+        }
+        ctx.settings.setString("trains.telemetry", sim_.describe() + "; " + aboard + riders);
     }
 }
 
@@ -338,9 +548,41 @@ void TrainSystem::render(engine::FrameContext& ctx) {
                 }
         }
     }
+    // THE CITY'S RIDERS in their seats: each aboard rider has a carriage (by a hash of who they are) and the next free
+    // seat in it, a stride through the seats so a half-empty coach is spread out, not filled from one end
+    InstanceGroup* rg[3] = {nullptr, nullptr, nullptr};
+    for (int k = 0; k < 3; ++k) {
+        rg[k] = riders_[k].valid() ? ctx.world.get<InstanceGroup>(riders_[k]) : nullptr;
+        if (rg[k]) rg[k]->transforms.clear();
+    }
+    if (city_ && rg[0] && !coach_.seats.empty() && coach_.seatYaw.size() == coach_.seats.size()) {
+        const RailRiders& rr = city_->sim().railRiders();
+        const int nSeats = static_cast<int>(coach_.seats.size());
+        std::vector<int> filled;   // per (train, car)
+        const int maxCars = 16;
+        filled.assign(sim_.trains().size() * maxCars, 0);
+        for (int p : rr.passengers()) {
+            const RailTrip* t = rr.tripOf(p);
+            if (!t || t->phase != RailTrip::Phase::Aboard || t->train < 0 || t->train >= static_cast<int>(sim_.trains().size())) continue;
+            const int cars = sim_.carCount(t->train) - 1;
+            if (cars < 1) continue;
+            const uint32_t h = static_cast<uint32_t>(p) * 2654435761u;
+            const int car = 1 + static_cast<int>((h >> 8) % static_cast<uint32_t>(cars));
+            int& n = filled[static_cast<std::size_t>(t->train) * maxCars + std::min(car, maxCars - 1)];
+            if (n >= nSeats) continue;
+            int seat = (n * 37 + t->train * 11) % nSeats;   // 37: coprime with the seat count, every seat once
+            ++n;
+            if (t->train == train_ && car == car_ && seat == seat_) continue;   // the player's
+            const CarPose P = sim_.carPose(t->train, car, alpha);
+            const Vec3& sp = coach_.seats[static_cast<std::size_t>(seat)];
+            if (InstanceGroup* g = rg[(h >> 20) % 3])
+                g->transforms.push_back(P.m * Mat4::translate(sp.x, sp.y, sp.z) *
+                                        Mat4::rotateY(static_cast<Real>(coach_.seatYaw[static_cast<std::size_t>(seat)])));
+        }
+    }
     const Vec3 centre = (lo + hi) * 0.5;
     const Real radius = (hi - lo).length() * 0.5 + 40;
-    for (InstanceGroup* g : {lb, lg, cb, cg, dl})
+    for (InstanceGroup* g : {lb, lg, cb, cg, dl, rg[0], rg[1], rg[2]})
         if (g) { g->boundsCenter = centre; g->boundsRadius = radius; }
 
     // THE EYE IN THE CARRIAGE AS DRAWN, and the view turning with it

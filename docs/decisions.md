@@ -9454,3 +9454,36 @@ platform. Walked at all eight: from the street end 22-24 m up the path, and from
 town. Buses stop at all eight ways in -- Coldwell's at first took the node of a scrap of street nearer than the
 boulevard it leaves from (a network too small for buses) and got none; anchors now look only in networks buses run
 in, and the log names any way in left without a bus and why. Owed: lifts for anyone who can't take stairs.
+
+## ADR-0156 — People take the train; the trains sound; the stations say their names
+
+Glenn, 2026-10-11: "Okay" to people choosing the train next; then, watching it: "I don't see anyone on the train
+though ... there's no sound on the train. No train track clacking. No whistle or bell when it stops or when the doors
+open. Train stations could use the name of the station so you know what station it is."
+
+Decision:
+- **Riders** (`citysim::RailRiders`, city_rail_riders.h): the stations pinned to street nodes (nearest walkable node to
+  the way in, in a network buses run in -- the anchors' rule), each node's street network, the stop each line makes
+  there. A walker's trip into another network goes by train when both have a station: `startGoalTrip` plans it first
+  and aims the street leg (bus if it beats walking, else on foot) at the station's way in. Then: in along the footway
+  (a timed absence: the footway is not in the nav graph), waiting on the platform (a spread of spots in a band clear of
+  the edge and the stair, drawn at the platform's top -- `CityRenderSystem::floorAt`), aboard (not drawn on foot;
+  follows the train for tiers; never dormant), out along the far footway, and on from the far way in. RailSim is only
+  read: a train standing with its doors open sets down whoever this stop is for, then takes on whoever waits for its
+  line here. `sendAgentByTrain` for scripts and tests. `trains?` reports the riders.
+- **Seated in the coaches**: each rider aboard gets a coach (a hash of who they are) and the next seat in a stride
+  through it; three outfits of the bus's seated occupant. Seats now carry their facing (`TrainBodyMesh::seatYaw`).
+- **The timetable**: a train per ~9 km of the longest line, two at least -- the island's 37 km loop ran two each way
+  (a train every ~14 minutes) and its platforms filled; now four.
+- **Sounds** (sfx.h): `railClack` per axle as it crosses a joint (every 18 m of its own travel, so a car's two bogies
+  give the beat and it quickens with speed), `railRumble` (a seamless loop on the nearest car, by speed), `trainHorn`
+  (high then low, ~300 m before each platform), `trainDoorChime` (a falling ding-dong as the doors open, three beeps a
+  little before they shut). Heard from the camera, so aboard they are simply near.
+- **Name boards** (station_boards.h): white on blue, 4.2 x 0.7 m on two posts, 3.6 m in from the platform edge, 16 m
+  from each end of every platform, lettered at load with the road signs' font (Overpass), both faces readable.
+
+Measured: headless, 24 sent across two towns all walked in, waited, rode, got off on the far town's streets, and took
+the train home (48 trips). Island 8 (real time): ~50 commuters choose the train at load, most walk a median 1.3 km to
+their station (none chose a bus for it); the first reach a platform ~7 min in; with four trains a way, 9 of the first
+20 in had boarded ~20 min in. Owed: seeing a platform crowd and a full coach on the island in pictures; the walk along
+the footway drawn (it is an absence); lifts; trains that are not intercity (light rail, subways).

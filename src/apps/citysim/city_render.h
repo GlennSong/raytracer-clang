@@ -293,6 +293,13 @@ public:
         return pedAgentIds_;
     }
     Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
+    // What agent `i` stands on at (x, z): the ground, or -- waiting for a train -- its platform's top (the platform is
+    // not ground: a walker posed on the ground under it stood inside the embankment, out of sight)
+    Real floorAt(int i, Real x, Real z) const {
+        if (const RailTrip* t = sim_.railRiders().tripOf(i))
+            if (t->phase == RailTrip::Phase::Waiting && (Vec2(x, z) - t->spot).length() < 12.0) return t->top;
+        return groundAt(x, z);
+    }
     // Where an agent is DRAWN this step: one tick behind, interpolated through the sim's tick (the same rule the
     // crowd's instances follow -- agentPose). Between ticks the raw position holds still and then hops; at a slowed
     // tick (the adaptive rate, down to 7.5 Hz) a walker posed from it read as flickering at superspeed.

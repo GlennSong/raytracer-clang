@@ -314,5 +314,119 @@ std::vector<float> elevatorHum(uint32_t sampleRate, uint32_t seed) {
     return frames;
 }
 
+
+std::vector<float> railClack(uint32_t sampleRate, uint32_t seed) {
+    const auto count = static_cast<size_t>(sampleRate * 0.22);
+    std::vector<float> frames(count);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    // the ring's partials: a rail's bending modes are inharmonic; the seed nudges them so axles differ a little
+    const double detune = 1.0 + 0.04 * (static_cast<double>(seed % 7) - 3.0) / 3.0;
+    const double ring[3] = {870.0 * detune, 1390.0 * detune, 2240.0 * detune};
+    double lp = 0, bp = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double attack = 1.0 - std::exp(-t * 1500.0);
+        // the thump: a falling low note, the wheel dropping into the joint gap and out
+        const double thump = std::sin(TWO_PI * (95.0 - 120.0 * t) * t) * std::exp(-t * 38.0);
+        double r = 0;
+        for (int k = 0; k < 3; ++k) r += std::sin(TWO_PI * ring[k] * t) * std::exp(-t * (28.0 + 14.0 * k)) / (1.0 + k);
+        // the scuff: noise through a soft band, very short
+        const double n = noise(rng);
+        lp += 0.25 * (n - lp);
+        bp = n - lp;
+        const double scuff = bp * std::exp(-t * 120.0);
+        frames[i] = static_cast<float>(attack * (0.9 * thump + 0.35 * r + 0.30 * scuff));
+    }
+    normalize(frames, 0.8f);
+    return frames;
+}
+
+std::vector<float> railRumble(uint32_t sampleRate, uint32_t seed) {
+    // filtered noise rendered past the loop's length; the overrun crossfaded into the head makes the seam continuous
+    const auto count = static_cast<size_t>(sampleRate * 1.5);
+    const auto fade = static_cast<size_t>(sampleRate * 0.25);
+    std::vector<float> raw(count + fade);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    double l1 = 0, l2 = 0, h1 = 0, hp = 0, prev = 0;
+    for (size_t i = 0; i < raw.size(); ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double n = noise(rng);
+        l1 += 0.020 * (n - l1);          // the roar: two poles low
+        l2 += 0.020 * (l1 - l2);
+        hp = 0.97 * (hp + n - prev);     // the hiss: steel on steel
+        prev = n;
+        h1 += 0.30 * (hp - h1);
+        // a slow swell, whole cycles over the loop (no seam): the roll is never quite even
+        const double swell = 1.0 + 0.15 * std::sin(TWO_PI * 2.0 * t / 1.5);
+        raw[i] = static_cast<float>(swell * (9.0 * l2 + 0.05 * h1));
+    }
+    std::vector<float> frames(count);
+    for (size_t i = 0; i < count; ++i) frames[i] = raw[i];
+    for (size_t i = 0; i < fade; ++i) {
+        const double w = static_cast<double>(i) / fade;   // the tail fades out as the head fades in
+        frames[i] = static_cast<float>(w * raw[i] + (1.0 - w) * raw[count + i]);
+    }
+    normalize(frames, 0.7f);
+    return frames;
+}
+
+std::vector<float> trainHorn(uint32_t sampleRate, uint32_t seed) {
+    const auto count = static_cast<size_t>(sampleRate * 1.7);
+    std::vector<float> frames(count, 0.0f);
+    (void)seed;
+    // two notes in turn, high then low (a European loco's "too-taa"), each a pair of reeds a hair apart (the beat is
+    // the horn's warmth), a full brassy series, soft-clipped
+    struct Note { double f, t0, t1; };
+    const Note notes[2] = {{370.0, 0.0, 0.62}, {311.1, 0.66, 1.62}};
+    for (const Note& nt : notes) {
+        const size_t a = static_cast<size_t>(nt.t0 * sampleRate), b = std::min(count, static_cast<size_t>(nt.t1 * sampleRate));
+        for (size_t i = a; i < b; ++i) {
+            const double t = static_cast<double>(i - a) / sampleRate, left = static_cast<double>(b - i) / sampleRate;
+            const double env = (1.0 - std::exp(-t * 30.0)) * (1.0 - std::exp(-left * 25.0));
+            double v = 0;
+            for (int h = 1; h <= 8; ++h) {
+                const double g = 1.0 / std::pow(static_cast<double>(h), 0.9) * (h % 2 ? 1.0 : 0.7);
+                v += g * (std::sin(TWO_PI * nt.f * h * t) + std::sin(TWO_PI * nt.f * 1.006 * h * t));
+            }
+            frames[i] += static_cast<float>(env * std::tanh(0.35 * v));
+        }
+    }
+    normalize(frames, 0.85f);
+    return frames;
+}
+
+std::vector<float> trainDoorChime(bool opening, uint32_t sampleRate, uint32_t seed) {
+    (void)seed;
+    const auto count = static_cast<size_t>(sampleRate * (opening ? 1.3 : 0.9));
+    std::vector<float> frames(count, 0.0f);
+    auto bell = [&](double f, double at, double decay) {
+        for (size_t i = static_cast<size_t>(at * sampleRate); i < count; ++i) {
+            const double t = static_cast<double>(i) / sampleRate - at;
+            const double v = (1.0 - std::exp(-t * 700.0)) *
+                             (0.7 * std::sin(TWO_PI * f * t) + 0.15 * std::sin(TWO_PI * f * 2.0 * t) * std::exp(-t * 4.0)) *
+                             std::exp(-t * decay);
+            frames[i] += static_cast<float>(v);
+        }
+    };
+    if (opening) {   // ding-dong, falling: G5 then E5
+        bell(784.0, 0.0, 3.2);
+        bell(659.3, 0.42, 2.6);
+    } else {         // three beeps, short and level
+        for (int k = 0; k < 3; ++k) {
+            const double at = 0.25 * k;
+            for (size_t i = static_cast<size_t>(at * sampleRate); i < count && i < static_cast<size_t>((at + 0.14) * sampleRate); ++i) {
+                const double t = static_cast<double>(i) / sampleRate - at;
+                const double env = (1.0 - std::exp(-t * 400.0)) * (1.0 - std::exp(-(0.14 - t) * 400.0));
+                frames[i] += static_cast<float>(env * (0.8 * std::sin(TWO_PI * 1046.5 * t) + 0.1 * std::sin(TWO_PI * 3139.5 * t)));
+            }
+        }
+    }
+    normalize(frames, 0.7f);
+    return frames;
+}
+
 }  // namespace sfx
+
 }  // namespace engine

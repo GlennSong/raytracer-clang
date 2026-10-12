@@ -18,6 +18,7 @@
 #include "../../engine/system.h"
 #include "../../engine/components.h"
 #include "../../engine/procgen/vehicle/train_mesh.h"
+#include "../../engine/audio/audio_engine.h"
 #include "rail_sim.h"
 
 #include <string>
@@ -30,9 +31,13 @@ class FlyCameraController;
 
 namespace citysim {
 
+class CityRenderSystem;
+
 class TrainSystem : public engine::System {
 public:
-    TrainSystem(engine::PhysicsSystem& physics, engine::FlyCameraController& fly) : physics_(physics), fly_(fly) {}
+    // `city`: the level's city, if it has one -- its people ride these trains (CitySim::setRail)
+    TrainSystem(engine::PhysicsSystem& physics, engine::FlyCameraController& fly, CityRenderSystem* city = nullptr)
+        : physics_(physics), fly_(fly), city_(city) {}
     void update(engine::FrameContext& ctx) override;   // the seat offers (the interaction broker's E)
     void fixedUpdate(engine::FrameContext& ctx) override;
     void render(engine::FrameContext& ctx) override;
@@ -42,17 +47,32 @@ public:
 
 private:
     void build(engine::FrameContext& ctx);
+    void sounds(engine::FrameContext& ctx);   // clatter, rumble, horn, door chimes (sfx.h railClack ...)
     void ride(engine::FrameContext& ctx, engine::Real dt);
     bool walkableAt(int car, const engine::Vec3& local, int doorSide) const;
     const engine::TrainBodyMesh& model(int car) const { return car == 0 ? loco_ : coach_; }
 
     engine::PhysicsSystem& physics_;
     engine::FlyCameraController& fly_;
+    CityRenderSystem* city_ = nullptr;
     bool tried_ = false;
     RailSim sim_;
     engine::TrainBodyMesh loco_, coach_;
     // instance groups: locomotive body + glass, carriage body + glass, door leaves
     engine::Entity locoBody_, locoGlass_, coachBody_, coachGlass_, leaves_;
+    engine::Entity riders_[3];
+    std::vector<engine::Entity> boards_;
+    // THE SOUNDS: clips made once; per train its rumble voice and what it has already sounded
+    bool audioTried_ = false;
+    engine::AudioClipHandle clack_[3], rumble_, horn_, chimeOpen_, chimeShut_;
+    struct TrainEar {
+        engine::AudioVoiceHandle rumble;
+        double lastOdo = -1;     // the odometer at the last frame: axles crossing a joint since then clack
+        int hornedFor = -1;      // the stop it has sounded its horn for
+        int lastDoor = 0;        // doorSide at the last frame
+        bool beeped = false;     // the doors-closing warning, this dwell
+    };
+    std::vector<TrainEar> ears_;   // the stations' name boards (station_boards.h): frames, then one lettered group per name   // the city's people in the seats (CitySim's train riders), three outfits
     int tick_ = 0;
     // aboard: which train and car, the floor point in that car's frame
     int train_ = -1, car_ = -1;

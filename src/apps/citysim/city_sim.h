@@ -11,6 +11,7 @@
 #include "city_goals.h"
 #include "city_roles.h"   // every resident's day comes from its role (RoleCatalog, buildDayTable)
 #include "city_bus.h"
+#include "city_rail_riders.h"
 #include "city_dispatch.h"
 #include "city_transit.h"
 #include "places.h"
@@ -800,6 +801,34 @@ public:
         return true;
     }
 
+    // The same by TRAIN (city_rail_riders.h): plan the journey to `dest` in another town, register it, and walk the
+    // agent to the station's way in; the sim takes it from there. False when no train helps (same town, or a town
+    // without a station) or the station cannot be walked to.
+    bool sendAgentByTrain(int agentIndex, engine::Vec2 dest) {
+        if (!nav_ || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
+        Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        if (a.mode != Agent::Mode::Pedestrian || isBus(agentIndex) || isTaxi(agentIndex) || buses_.tripOf(agentIndex) ||
+            rail_.tripOf(agentIndex))
+            return false;
+        const int origin = nav_->nearestNode(a.pos);
+        const int to = nav_->nearestNode(dest);
+        if (origin < 0 || to < 0 || origin == to) return false;
+        RailTrip t;
+        if (!rail_.plan(origin, nav_->nodes[static_cast<std::size_t>(origin)], to, nav_->nodes[static_cast<std::size_t>(to)], t))
+            return false;
+        const int acc = rail_.stations()[static_cast<std::size_t>(t.from)].accessNode;
+        if (acc != origin && !engine::findRoute(*nav_, origin, acc, /*pedestrian=*/true).valid()) return false;
+        rail_.start(agentIndex, t);
+        ++rail_.stats.planned;
+        a.wakeAt = -1;
+        a.activity = Activity::Outing;
+        if (acc == origin) { enterStation(a, agentIndex); return true; }
+        startTrip(a, origin, acc, /*fromRest=*/!a.moving);
+        if (!a.moving) { rail_.forget(agentIndex); return false; }
+        a.state = Agent::State::Walking;
+        return true;
+    }
+
     // GO INSIDE (ADR-0091). A place is somewhere people are hidden from the
     // street while they are in it — pedVisible() is false for a still agent
     // that is indoors, so its body is reaped and it is simply "in there" until
@@ -1193,6 +1222,8 @@ public:
         // came. (A rider still WALKING to the stop is `moving`, so the GoTo
         // branch leaves them alone anyway.)
         if (const BusTrip* bt = buses_.tripOf(i)) { if (!bt->aboard) return true; }
+        // ...and anyone past the street on a train journey: in a station, on a platform, aboard, on the way out
+        if (const RailTrip* rt = rail_.tripOf(i)) { if (rt->phase != RailTrip::Phase::ToStation) return true; }
         return dispatch_.isWaiting(i) || dispatch_.driverFor(i) >= 0;
     }
     const Dispatch& dispatch() const { return dispatch_; }
@@ -1209,6 +1240,10 @@ public:
     void setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk);
     // Places a bus loop must stop at (the stations' ways in); set BEFORE setBuses.
     std::vector<engine::Vec2> busAnchors;
+    // TRAINS (city_rail_riders.h): the host's running RailSim, read each tick. Between two towns with a station
+    // each, walkers go by train. Kept across a rebuild (the stations are re-pinned to the new streets).
+    void setRail(const RailSim* rail);
+    const RailRiders& railRiders() const { return rail_; }
     // The SERVICE DAY. Outside [startHour, endHour) buses finish up, deadhead
     // to the yard and sit there. endHour <= startHour means around the clock,
     // which is the old behaviour and stays the default.
@@ -1637,6 +1672,8 @@ private:
     // Promotion runs this as its catch-up so the K handoff pose is exact.
     // The actual advance. step() is the cadence gate in front of it.
     void stepTick(Real dt, Real hoursPerSecond);
+    void railPass(Real dt);                        // walks in and out, boarding, riding (city_rail_riders.h)
+    void enterStation(Agent& a, int self);
     void tickV(int i, Real hoursPerSecond);
     bool clearPromotion(int i);   // seat a promoted car behind live traffic
     // Advance a V agent along its REAL route at the modelled speed: link class
@@ -1775,6 +1812,8 @@ private:
     std::vector<uint8_t> taxi_;      // per-agent: runs the taxi table
     GoalTable taxiTable_;
     BusNetwork buses_;
+    RailRiders rail_;
+    const RailSim* railSrc_ = nullptr;
     std::vector<int> busRoute_, busStop_;   // per agent; -1 = not a bus
     GoalTable busTable_;
     Real busMaxWalk_ = 0;

@@ -338,7 +338,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         if (restNow) {
             city_.simMutable().clearAgentTether(w.agentId);
-            const Real gy = rp.kind == CitySim::RestPose::Kind::Seat ? rp.hip - 0.45 : city_.groundHeightAt(rp.pos.x, rp.pos.y);
+            const Real gy = rp.kind == CitySim::RestPose::Kind::Seat ? rp.hip - 0.45 : city_.floorAt(w.agentId, rp.pos.x, rp.pos.y);
             if (cc && cc->characterId != engine::INVALID_CHARACTER)
                 pw.setCharacterPosition(cc->characterId, Vec3(rp.pos.x, gy + kCapsuleHalf + kCapsuleRadius, rp.pos.y));
             const Quat yaw = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(rp.face.x, rp.face.y));
@@ -397,7 +397,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 w.handoff = L > ease ? w.handoff * ((L - ease) / L) : Vec2(0, 0);
                 dp = dp + w.handoff;
             }
-            t->position = Vec3(dp.x, city_.groundHeightAt(dp.x, dp.y) + kCapsuleHalf + kCapsuleRadius, dp.y);
+            t->position = Vec3(dp.x, city_.floorAt(w.agentId, dp.x, dp.y) + kCapsuleHalf + kCapsuleRadius, dp.y);
             if (g.speed > 0.05) w.facing = hd;
             t->orientation = Quat::fromAxisAngle(
                 Vec3(0, 1, 0), std::atan2(w.facing.x, w.facing.y));
@@ -538,7 +538,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 pw.setCharacterPosition(
                     cc->characterId,
                     Vec3(g.pos.x,
-                         city_.groundHeightAt(g.pos.x, g.pos.y) + kCapsuleHalf +
+                         city_.floorAt(w.agentId, g.pos.x, g.pos.y) + kCapsuleHalf +
                              kCapsuleRadius,
                          g.pos.y));
                 pos = pw.characterPosition(cc->characterId);

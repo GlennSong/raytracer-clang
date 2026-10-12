@@ -26,6 +26,7 @@ using engine::NavGraph;
 namespace {
 // How many a bus carries. Beyond this it drives past a stop full.
 constexpr int kBusSeats = 24;
+constexpr int kTrainSeatsPerCar = 72;   // a coach's seats (train_mesh's coach reports 72)
 // How long a bus stands at a stop: a base wait so a walker (or the player) who
 // is nearly there can still make it, plus boarding/alighting time per person.
 constexpr Real kBusDwellBase = 10.0;
@@ -727,6 +728,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     // authored places never calls that, and scheduleSnapshot (and the host's
     // clock-scale warning) both need a travel time to be meaningful.
     measureCommute(graph);
+    if (railSrc_) rail_.build(railSrc_, graph); else rail_.clear();   // the stations on the new streets
 }
 
 
@@ -2663,6 +2665,37 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
         a.outingTo = -1;
     }
 
+    // BY TRAIN (city_rail_riders.h): a trip into another town -- no street joins them -- goes by train when both
+    // have a station. The trip is the journey's; what is launched here is only its street leg to the station's
+    // way in, by bus if one helps (the bus block below, aimed at the station) or on foot.
+    int railLegTo = -1;
+    {
+        const int self = indexOf(a);
+        if (a.mode == Agent::Mode::Pedestrian && nav_ && rail_.active() && !isBus(self) && !isTaxi(self) &&
+            !buses_.tripOf(self) && origin >= 0 && origin < nav_->nodeCount()) {
+            RailTrip* rt = rail_.tripOf(self);
+            if (!rt) {
+                const int to = chosen >= 0 ? chosen : goalNodeFor(a, s.target);
+                RailTrip t;
+                if (to >= 0 && to < nav_->nodeCount() && to != origin && rail_.networkOf(origin) != rail_.networkOf(to) &&
+                    rail_.plan(origin, nav_->nodes[static_cast<std::size_t>(origin)], to,
+                               nav_->nodes[static_cast<std::size_t>(to)], t)) {
+                    rail_.start(self, t);
+                    ++rail_.stats.planned;
+                    rt = rail_.tripOf(self);
+                }
+            }
+            if (rt && rt->phase == RailTrip::Phase::ToStation) {
+                railLegTo = rail_.stations()[static_cast<std::size_t>(rt->from)].accessNode;
+                if (railLegTo == origin) {   // there already (off a bus at its stop)
+                    enterStation(a, self);
+                    a.activity = s.activity;
+                    return true;
+                }
+            }
+        }
+    }
+
     // CATCH THE BUS. This lived in goalThink's "at a GoTo state and not moving"
     // branch, which MEASURED as the wrong place: walkers are never in that
     // state (1.46M goalThink entries, ZERO at a resting GoTo), because
@@ -2675,7 +2708,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     const int busSelf = indexOf(a);
     if (a.mode == Agent::Mode::Pedestrian && nav_ && !buses_.empty() && busesInService() &&   // (no bus after hours)
         !isBus(busSelf) && !buses_.tripOf(busSelf) && !isTaxi(busSelf)) {
-        const int to = chosen >= 0 ? chosen : goalNodeFor(a, s.target);
+        const int to = railLegTo >= 0 ? railLegTo : chosen >= 0 ? chosen : goalNodeFor(a, s.target);
         if (to >= 0 && origin >= 0 && origin < nav_->nodeCount() &&
             to < nav_->nodeCount() && to != origin) {
             const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(origin)];
@@ -2709,6 +2742,15 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
                 buses_.stopWaiting(busSelf);   // could not reach the stop
             }
         }
+    }
+    if (railLegTo >= 0) {   // on foot to the station
+        startTrip(a, origin, railLegTo, fromRest);
+        if (a.moving) {
+            a.activity = s.activity;
+            return true;
+        }
+        rail_.forget(indexOf(a));   // no way there: the day goes on without the train
+        ++rail_.stats.gaveUp;
     }
     switch (s.target) {
         case GoalTarget::Random:
@@ -3141,11 +3183,107 @@ void CitySim::alightRide(int passenger, int atNode) {
         agents_[static_cast<std::size_t>(passenger)].restNode = atNode;
 }
 
+// TRAINS (city_rail_riders.h) ------------------------------------------------------------------------------------
+void CitySim::setRail(const RailSim* rail) {
+    railSrc_ = rail;
+    if (rail && nav_) rail_.build(rail, *nav_);
+    else rail_.clear();
+}
+
+// In at the station's way in: along the footway (not drawn), then onto the platform (railPass).
+void CitySim::enterStation(Agent& a, int self) {
+    RailTrip* rt = rail_.tripOf(self);
+    if (!rt) return;
+    rt->phase = RailTrip::Phase::Entering;
+    rt->timer = rail_.stations()[static_cast<std::size_t>(rt->from)].walkIn;
+    a.moving = false;
+    a.speed = 0;
+    a.indoors = false;
+    ++rail_.stats.entered;
+}
+
+// Every tick, after the drivers: the walks along the ways in and out run down, riders aboard go where their train
+// goes, and every train standing at a platform with its doors open sets down whoever this stop is for, then takes
+// on whoever is waiting for its line here. Riders in ascending order; trains in index order (ADR-0002).
+void CitySim::railPass(Real dt) {
+    if (!rail_.active() || rail_.count() == 0) return;
+    const RailSim& R = *rail_.rail();
+    const auto& trains = R.trains();
+    const auto& lines = R.lines();
+    const std::vector<int> riders = rail_.passengers();
+    std::vector<int> aboard(trains.size(), 0);
+    for (int p : riders) {
+        if (p < 0 || p >= static_cast<int>(agents_.size())) { rail_.forget(p); continue; }
+        RailTrip& t = *rail_.tripOf(p);
+        Agent& a = agents_[static_cast<std::size_t>(p)];
+        if (t.phase == RailTrip::Phase::Entering) {
+            t.timer -= dt;
+            if (t.timer > 0) continue;
+            Vec2 pos, face;
+            Real top = 0;
+            if (rail_.platformSpot(t.from, t.line, p, pos, top, face)) {
+                a.pos = pos;
+                a.tickFromPos = pos;
+                a.heading = face;
+                t.spot = pos;
+                t.top = top;
+                grid_.place(p, pos);
+            }
+            t.phase = RailTrip::Phase::Waiting;
+        } else if (t.phase == RailTrip::Phase::Leaving) {
+            t.timer -= dt;
+            if (t.timer > 0) continue;
+            // out on the street at the far station's way in: the day's trip goes on from there (goalThink)
+            const int node = rail_.stations()[static_cast<std::size_t>(t.to)].accessNode;
+            if (node >= 0 && node < nav_->nodeCount()) {
+                a.pos = nav_->nodes[static_cast<std::size_t>(node)];
+                a.tickFromPos = a.pos;
+                a.restNode = node;
+                grid_.place(p, a.pos);
+            }
+            rail_.forget(p);
+        } else if (t.phase == RailTrip::Phase::Aboard && t.train >= 0 && t.train < static_cast<int>(trains.size())) {
+            const Train& T = trains[static_cast<std::size_t>(t.train)];
+            const engine::Vec3 h = lines[static_cast<std::size_t>(T.line)].at(T.s);
+            a.pos = Vec2(h.x, h.z);
+            a.tickFromPos = a.pos;
+            grid_.place(p, a.pos);
+            ++aboard[static_cast<std::size_t>(t.train)];
+        }
+    }
+    for (std::size_t ti = 0; ti < trains.size(); ++ti) {
+        const Train& T = trains[ti];
+        if (!T.dwelling || T.doorSide == 0) continue;
+        const int stop = T.nextStop;
+        const int seats = T.kind.cars * kTrainSeatsPerCar;
+        for (int p : riders) {
+            RailTrip* t = rail_.tripOf(p);
+            if (!t) continue;
+            if (t->phase == RailTrip::Phase::Aboard && t->train == static_cast<int>(ti) && t->toStop == stop) {
+                t->phase = RailTrip::Phase::Leaving;
+                t->timer = rail_.stations()[static_cast<std::size_t>(t->to)].walkIn;
+                t->train = -1;
+                --aboard[ti];
+                ++rail_.stats.setDown;
+            } else if (t->phase == RailTrip::Phase::Waiting && t->line == T.line && t->fromStop == stop &&
+                       aboard[ti] < seats) {
+                t->phase = RailTrip::Phase::Aboard;
+                t->train = static_cast<int>(ti);
+                ++aboard[ti];
+                ++rail_.stats.boarded;
+            }
+        }
+    }
+}
+
 bool CitySim::pedVisible(int i) const {
     if (i < 0 || i >= static_cast<int>(agents_.size())) return false;
     const Agent& a = agents_[static_cast<std::size_t>(i)];
     if (a.mode != Agent::Mode::Pedestrian || a.far()) return false;
     if (riding(i)) return false;   // drawn in the vehicle, not on the pavement
+    // on a train journey: seen only on the street and waiting on the platform (the way in, a carriage: not drawn here)
+    if (const RailTrip* rt = rail_.tripOf(i))
+        if (rt->phase != RailTrip::Phase::ToStation && rt->phase != RailTrip::Phase::Waiting) return false;
     return a.moving || !a.indoors;
 }
 
@@ -5410,6 +5548,15 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
                 }
                 return;
             }
+            // AT THE STATION: in along its way in (city_rail_riders.h)
+            if (const RailTrip* rt = rail_.tripOf(self); rt && rt->phase == RailTrip::Phase::ToStation && !bt) {
+                const int at = !a.route.links.empty() ? nav_->links[static_cast<std::size_t>(a.route.links.back())].to : -1;
+                if (at >= 0 && at == rail_.stations()[static_cast<std::size_t>(rt->from)].accessNode) {
+                    a.restNode = at;
+                    enterStation(a, self);
+                    return;
+                }
+            }
         }
     }
     // A BUS AT A STOP: set down everyone whose stop this is, then pick up
@@ -7603,6 +7750,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         rider.speed = drv.speed;
         grid_.place(r.first, rider.pos);
     }
+    railPass(dt);   // train riders: after the drivers, like the bus riders
     // PULL-OUT PROGRESS is the distance each car actually moved this tick,
     // whichever path moved it. Counting it inside advance() missed the
     // stop-line approach, which moves the car and returns early -- the pull
@@ -7694,7 +7842,7 @@ void CitySim::tierPass(Real hoursPerSecond) {
             // 40 buses far, 5 moved in five minutes, and the regional loop (18 km, nearly
             // all of it far) carried nobody. A rider rebuilt from their schedule on waking
             // would also lose the ride. Forty buses ticking at 1 Hz cost nothing.
-            if (isBus(static_cast<int>(i)) || buses_.tripOf(static_cast<int>(i))) continue;
+            if (isBus(static_cast<int>(i)) || buses_.tripOf(static_cast<int>(i)) || rail_.tripOf(static_cast<int>(i))) continue;
             const Real dx = a.pos.x - c.x, dy = a.pos.y - c.y;
             if (dx * dx + dy * dy <= dormR * dormR) continue;
             setTier(static_cast<int>(i), Agent::Tier::D);
