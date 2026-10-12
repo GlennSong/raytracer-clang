@@ -72,3 +72,28 @@ TEST_CASE(island_rail_stations_stand_near_their_towns_clear_of_crossings_and_bri
             }
     CHECK(platforms == 3);
 }
+
+TEST_CASE(island_rail_every_station_gets_a_way_in_from_the_nearest_street_over_the_line) {
+    // a street outside the line along the north side, 80 m beyond it: North's way leaves from it
+    json g = squareIsland();
+    g["edges"].push_back({{"id", "front"}, {"class", "local"}, {"path", {{"points", json::array({json::array({-600.0, 2125.0}), json::array({600.0, 2125.0})})}}}});
+    const IslandRailResult r = islandRailLoop(g, {{"North", Vec2(0, 2600)}}, IslandRailOptions{});
+    CHECK(r.stations.size() == 1);
+    CHECK(r.ways.size() == 1);
+    if (r.ways.empty() || r.stations.empty()) return;
+    const json& w = r.ways[0];
+    const IslandRailStation& s = r.stations[0];
+    CHECK(w["class"] == "footway");
+    CHECK(s.street == "front");
+    const json& pts = w["path"]["points"];
+    // it starts on the street's sidewalk (local: 3.5 m to the kerb, 1 m in), outside the line
+    CHECK(std::fabs(pts.front()[1].get<double>() - (2125.0 - 4.5)) < 0.5);
+    // the leg runs beside the line on the street's side, and the bridge ends past the far platform
+    CHECK(std::fabs(pts[2][1].get<double>() - (s.at.y + 14.0)) < 1.0);
+    CHECK(std::fabs(pts.back()[1].get<double>() - (s.at.y - 10.05)) < 0.5);
+    CHECK(std::fabs(pts.back()[0].get<double>() - s.at.x) < 0.5);
+    // the hold over the line, its height left to the builder
+    CHECK(w["floor"].size() == 1);
+    CHECK(w["floor"][0][2].get<double>() < -100.0);
+    CHECK(w["floor"][0][3].get<double>() >= 10.05);
+}

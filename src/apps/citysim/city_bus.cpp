@@ -255,7 +255,8 @@ BusRoute BusNetwork::reverseOf(const BusRoute& f, const engine::NavGraph& nav) c
 }
 
 void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
-                       int stopsPerRoute, uint32_t seed) {
+                       int stopsPerRoute, uint32_t seed, const std::vector<engine::Vec2>& anchors) {
+    anchorsServed_ = 0; anchorCount_ = static_cast<int>(anchors.size());
     routes_.clear();
     waiting_.clear();
     hubs_.clear();
@@ -317,6 +318,17 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         if (L.walkable && L.klass != engine::RoadClass::Freeway && L.klass != engine::RoadClass::Ramp)
             compStreet[static_cast<std::size_t>(comp[static_cast<std::size_t>(L.from)])] += 0.5 * L.length;
     const int mainComp = static_cast<int>(std::max_element(compSize.begin(), compSize.end()) - compSize.begin());
+
+    // THE ANCHORS' NODES: the nearest street node to each (a walkable street, not a freeway or ramp), within 80 m
+    std::vector<int> anchorNode(anchors.size(), -1);
+    for (std::size_t a = 0; a < anchors.size(); ++a) {
+        Real bd = 80.0;
+        for (const engine::NavLink& L : nav.links) {
+            if (!L.walkable || L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp) continue;
+            const Real d = dist(nav.nodes[static_cast<std::size_t>(L.from)], anchors[a]);
+            if (d < bd) { bd = d; anchorNode[a] = L.from; }
+        }
+    }
 
     // Loops over ONE network `c`: steps 1-4 below.
     std::vector<int> streetUses(nav.links.size(), 0);
@@ -396,6 +408,16 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
             const int hub = hubNodes[static_cast<std::size_t>((r + k) % H)];
             if (std::find(ring.begin(), ring.end(), hub) == ring.end())
                 ring.push_back(hub);
+        }
+        // the network's anchors, shared out over its loops: each a corner of one (a station on the line gets a bus)
+        {
+            int k = 0;
+            for (std::size_t a = 0; a < anchorNode.size(); ++a) {
+                const int an = anchorNode[a];
+                if (an < 0 || comp[static_cast<std::size_t>(an)] != c) continue;
+                if (k++ % routeCount != r) continue;
+                if (std::find(ring.begin(), ring.end(), an) == ring.end()) ring.push_back(an);
+            }
         }
         if (ring.size() < 3) continue;   // a loop needs three corners
 
@@ -535,6 +557,11 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         buildLoops(c, want, (seed ? seed : 1u) ^ (static_cast<uint32_t>(c) * 0x9E3779B9u));
     }
     buildRegional(nav);
+    for (const int an : anchorNode) {
+        bool served = false;
+        for (const BusRoute& r : routes_) for (const BusStop& st : r.stops) if (an >= 0 && st.node == an) served = true;
+        anchorsServed_ += served ? 1 : 0;
+    }
 
     // BOTH WAYS ROUND (Glenn: "Buses should probably go in both directions"). A one-way loop made the stop just
     // behind you a whole lap away -- on the island's 80-minute regional, the next town back. Each loop gets a twin

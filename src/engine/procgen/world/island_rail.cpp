@@ -1,6 +1,7 @@
 #include "island_rail.h"
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -73,6 +74,83 @@ bool segCross(Vec2 p1, Vec2 p2, Vec2 p3, Vec2 p4, Vec2* at) {
     return true;
 }
 
+// A street's half width to its kerb (the lanes builder's hw): its class's lanes, from the graph's class table
+double streetHalfWidth(const json& graph, const std::string& cls) {
+    double w = 3.5, fwd = 1, back = 1, gap = 0;
+    if (graph.contains("classes") && graph["classes"].contains(cls)) {
+        const json& c = graph["classes"][cls];
+        w = c.value("w", w); fwd = c.value("fwd", fwd); back = c.value("back", back); gap = c.value("gap", gap);
+    }
+    // laneSlots: travel bands side by side, the median gap between directions; the outermost lane's edge
+    return (back > 0 && fwd > 0) ? std::max(fwd, back) * w + gap / 2 : 0.5 * (fwd + back) * w;
+}
+
+void wayIn(const json& graph, const IslandRailOptions& o, IslandRailResult& r, const std::function<Vec2(double)>& at) {
+    // the streets a way may leave from, and every centreline it must not cross
+    struct Line { std::string id, cls; std::vector<Vec2> p; };
+    std::vector<Line> streets, all;
+    for (const json& e : graph["edges"]) {
+        const std::string cls = e.value("class", "");
+        Line l{e.value("id", ""), cls, pointsOf(e)};
+        if (l.p.size() < 2 || cls == "footway") continue;
+        if (cls != "freeway" && cls != "ramp" && cls != "rail" && cls != "mountain" && !e.contains("from") && !e.contains("to")) streets.push_back(l);
+        all.push_back(l);
+    }
+    for (const json& e : r.edges) all.push_back({e["id"].get<std::string>(), "rail", pointsOf(e)});
+    auto crossesAny = [&](Vec2 a, Vec2 b, const std::string& except) {
+        for (const Line& l : all) {
+            if (l.id == except) continue;
+            for (std::size_t j = 0; j + 1 < l.p.size(); ++j) if (segCross(a, b, l.p[j], l.p[j + 1], nullptr)) return true;
+        }
+        return false;
+    };
+    for (std::size_t si = 0; si < r.stations.size(); ++si) {
+        IslandRailStation& sn = r.stations[si];
+        const Vec2 m = at(sn.station), t0 = at(sn.station + 5) - at(sn.station - 5);
+        const Vec2 t = t0 * (1.0 / std::max(1e-9, t0.length())), n(-t.y, t.x);
+        // per side and direction along the track, the leg's far end B, and the nearest street point to it that a
+        // straight path reaches without crossing anything
+        struct Pick { double d = 1e30; int side = 0, dir = 0; Vec2 a, b; std::string id, cls; } best;
+        for (int side = -1; side <= 1; side += 2)
+            for (int dir = -1; dir <= 1; dir += 2) {
+                const Vec2 b = m + t * (dir * o.wayLeg) + n * (side * o.wayOffset);
+                for (const Line& l : streets)
+                    for (std::size_t j = 0; j + 1 < l.p.size(); ++j) {
+                        const Vec2 u = l.p[j], v = l.p[j + 1], uv = v - u;
+                        const double k = std::clamp(((b - u).x * uv.x + (b - u).y * uv.y) / std::max(1e-9, uv.x * uv.x + uv.y * uv.y), 0.0, 1.0);
+                        const Vec2 q = u + uv * k; const double d = dist(q, b);
+                        if (d >= best.d || d > o.wayMaxStreet) continue;
+                        if (((q - m).x * n.x + (q - m).y * n.y) * side < o.wayOffset) continue;   // behind the leg, on its side
+                        if (crossesAny(q, b, l.id)) continue;
+                        best = {d, side, dir, q, b, l.id, l.cls};
+                    }
+            }
+        if (best.side == 0) { r.skipped.push_back(sn.name + ": no street within reach of the platforms"); continue; }
+        // the way: from just inside the street's kerb (its end on the sidewalk, so the builder joins it to the
+        // street), to B, along the track to the line's crossing, over it to beyond the far platform
+        const Vec2 toB = (best.b - best.a) * (1.0 / std::max(1e-9, dist(best.b, best.a)));
+        const Vec2 a = best.a + toB * (streetHalfWidth(graph, best.cls) + 1.0);
+        const Vec2 corner = m + n * (best.side * o.wayOffset);
+        std::vector<Vec2> pts{a, best.b};
+        for (double s = o.wayLeg - 10; s > 4; s -= 10) pts.push_back(corner + t * (best.dir * s));
+        pts.push_back(corner + t * (best.dir * 3.0));
+        pts.push_back(corner - n * (best.side * 3.0));   // a 3 m chamfer round the corner
+        pts.push_back(m - n * (best.side * o.wayReach));   // (straight over the line, square to it)
+        json path = json::array();
+        double len = 0;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            path.push_back({std::round(pts[i].x * 100) / 100, std::round(pts[i].y * 100) / 100});
+            if (i) len += dist(pts[i], pts[i - 1]);
+        }
+        // the hold over the line: the builder sets its height (the footway goes OVER the track), this its reach
+        json e = {{"id", o.idPrefix + "_way_" + std::to_string(si)}, {"class", "footway"}, {"path", {{"points", path}}},
+                  {"floor", json::array({json::array({m.x, m.y, -1000.0, o.wayHold})})}};
+        r.ways.push_back(e);
+        sn.street = best.id;
+        sn.way = len;
+    }
+}
+
 }  // namespace
 
 IslandRailResult islandRailLoop(const json& graph, const std::vector<RailTown>& towns, const IslandRailOptions& o) {
@@ -108,7 +186,7 @@ IslandRailResult islandRailLoop(const json& graph, const std::vector<RailTown>& 
     // WHAT IT CROSSES: every other road's centreline (each a grade separation the builder makes)
     std::vector<double> crossAt;
     for (const json& e : graph["edges"]) {
-        if (e.value("class", "") == "freeway" || e.value("class", "") == "rail") continue;   // (nor a line written before)
+        if (e.value("class", "") == "freeway" || e.value("class", "") == "rail" || e.value("class", "") == "footway") continue;   // (nor a line written before)
         const std::vector<Vec2> p = pointsOf(e);
         if (p.size() < 2) continue;
         double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
@@ -225,6 +303,7 @@ IslandRailResult islandRailLoop(const json& graph, const std::vector<RailTown>& 
         if (!plats.empty()) e["platforms"] = plats;
         r.edges.push_back(e);
     }
+    if (o.ways) wayIn(graph, o, r, at);
     return r;
 }
 

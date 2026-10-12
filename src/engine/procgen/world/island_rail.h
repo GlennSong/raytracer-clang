@@ -42,6 +42,15 @@ struct IslandRailOptions {
     // A main line that cuts through what it cannot climb, at a mountain main line's grade.
     double gMax = 0.035;
     double balance = 0.5;
+    // THE WAY IN (Glenn, 2026-10-11: "make it accessible"): per station a footway from the nearest street on the
+    // nearer side, along the track beside the platforms, then over both tracks as a footbridge (stairs down to each
+    // platform are the builder's). The leg along the track is the ramp's length: ~7 m up at the footway's 12 %.
+    bool ways = true;
+    double wayOffset = 14.0;       // the leg along the track, off the track pair's centreline
+    double wayLeg = 60.0;          // its length
+    double wayHold = 11.0;         // the footbridge held flat this far either side of the line (the platforms' backs)
+    double wayReach = 10.05;       // the footbridge's far end, past the line (over the far platform's back edge)
+    double wayMaxStreet = 400.0;   // no street nearer than this: no way in
 };
 
 struct IslandRailStation {
@@ -49,10 +58,13 @@ struct IslandRailStation {
     Vec2 at;            // the platform's middle
     double station = 0; // along the loop (m)
     double fromTown = 0;
+    std::string street;     // the street its way in leaves from ("" -- none)
+    double way = 0;         // the way's length
 };
 
 struct IslandRailResult {
     std::vector<nlohmann::json> edges;   // lanes-graph edges, class "rail", in running order, joined end to start
+    std::vector<nlohmann::json> ways;    // class "footway": each station's way in
     nlohmann::json railClass;            // the graph's "rail" class settings (merged over the built-in)
     std::vector<IslandRailStation> stations;
     std::vector<std::string> skipped;    // towns with no station, and why

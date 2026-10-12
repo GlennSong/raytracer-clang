@@ -1,6 +1,7 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
+#include "engine/procgen/city/rail_track.h"   // kPlatformGap: piers keep off the platforms
 
 #include <algorithm>
 #include <chrono>
@@ -40,7 +41,12 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         for (int k = 0; k < 2; ++k) {
             const Vec2 q = k ? e.xy.back() : e.xy.front();
             bool met = false;
+            // a FOOTWAY's end its own floor holds stays up: a footbridge ends over the far platform, not on the ground
+            // there (any class at all lifted the island's diamond ramps off the ground at their ends: 0.5 % steeper)
+            if (g.cls(e).footway) for (const auto& fp : e.floorPts)
+                if (std::fabs(project(e.xy, e.s, Vec2(fp[0], fp[1])).station - (k ? e.s.back() : 0.0)) <= fp[3]) met = true;
             for (const EdgeSpec& o : g.edges) {
+                if (met) break;
                 if (&o == &e || o.xy.size() < 2) continue;
                 if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= R.endpointTol) { met = true; break; }
                 if (project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e)) { met = true; break; }
@@ -164,13 +170,20 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     const double spanLo = (0.5 * pavedW(hi) + 1.0) / sinT;
                     double zLo = aHi ? zb : za;
                     for (int k = -4; k <= 4; ++k) zLo = std::max(zLo, interp(lo.s, lo.z, std::clamp(sLo + spanLo * k / 4.0, 0.0, lo.s.back())));
-                    const double need = zLo + R.underClearance + g.cls(hi).thick + R.structureDepth;
+                    // over a TRACK, the thicker of the two slabs, as the clearance invariant measures it (a footbridge over
+                    // the 0.8 m bed, a link over the island loop, both came up short with the upper's own). Road over road
+                    // keeps the upper's: the thicker one lifted the island's diamond ramps over the freeway 0.2 m, steeper.
+                    const bool overTrack = g.cls(hi).track || g.cls(lo).track;
+                    const double need = zLo + R.underClearance + (overTrack ? std::max(g.cls(hi).thick, g.cls(lo).thick) : g.cls(hi).thick) + R.structureDepth;
                     const double sts[3] = {std::max(0.0, sHi - span), sHi, std::min(hi.s.back(), sHi + span)};
                     bool low = false; for (double st : sts) if (interp(hi.s, hi.z, st) < need - 0.02) low = true;
                     if (!low) continue;
                     static const bool trace = std::getenv("LANELAB_TRACE_CLEARANCE") != nullptr;
                     if (trace) std::fprintf(stderr, "clearance: %s over %s at (%.0f, %.0f) need %.2f, z before %.2f %.2f %.2f (span %.1f)", hi.id.c_str(), lo.id.c_str(), p.x, p.y, need, interp(hi.s, hi.z, sts[0]), interp(hi.s, hi.z, sts[1]), interp(hi.s, hi.z, sts[2]), span);
-                    { bool have = false; for (auto& fp : hi.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 0.5) { fp[2] = std::max(fp[2], need); fp[3] = std::max(fp[3], span); have = true; } if (!have) hi.floorPts.push_back({p.x, p.y, need, span}); }
+                    // (a hold the scene placed with no height -- its reach only, z far below -- is this crossing's within
+                    // 2 m: it put it on the line, the spine is resampled. Any other merges only at the point: a wider merge
+                    // folded the diamonds' neighbouring holds into one and steepened their ramps.)
+                    { bool have = false; for (auto& fp : hi.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < (fp[2] < -100.0 ? 2.0 : 0.5)) { fp[2] = std::max(fp[2], need); fp[3] = std::max(fp[3], span); have = true; } if (!have) hi.floorPts.push_back({p.x, p.y, need, span}); }
                     any = true; ++lifted;
                     if (hi.isRamp()) rampProfile(g, hi, terrain); else throughProfile(hi, terrain, g.cls(hi));
                     if (trace) std::fprintf(stderr, " -> after %.2f %.2f %.2f\n", interp(hi.s, hi.z, sts[0]), interp(hi.s, hi.z, sts[1]), interp(hi.s, hi.z, sts[2]));
@@ -187,10 +200,10 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     for (Lane& l : r.lanes.lanes) if (l.isConnector()) {
         l.z0 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.srcLane)], g, l.xy.front()); l.z1 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.dstLane)], g, l.xy.back());
     }
-    // LANELAB_DUMP_EDGE=<id>: an edge's solved profile against its ground, every 50 m (why a road floats)
+    // LANELAB_DUMP_EDGE=<id>[,<id>...]: an edge's solved profile against its ground, every 50 m (why a road floats)
     if (const char* dumpId = std::getenv("LANELAB_DUMP_EDGE"))
         for (const EdgeSpec& e : g.edges)
-            if (e.id == dumpId && e.s.size() == e.z.size() && e.t.size() == e.z.size()) {
+            if (("," + std::string(dumpId) + ",").find("," + e.id + ",") != std::string::npos && e.s.size() == e.z.size() && e.t.size() == e.z.size()) {   // (a comma list)
                 std::fprintf(stderr, "[dump] %s: station, deck z, ground, floors %zu\n", e.id.c_str(), e.floorPts.size());
                 double next = 0;
                 const char* stepEnv = std::getenv("LANELAB_DUMP_STEP");   // metres between rows (default 50)
@@ -222,6 +235,14 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
             constexpr double kReach = 1.3 + 1.5;
             if (p.x < b.minX - kReach || p.x > b.maxX + kReach || p.y < b.minY - kReach || p.y > b.maxY + kReach) continue;
             for (double dx : {-kReach, 0.0, kReach}) for (double dy : {-kReach, 0.0, kReach}) if (contains(fp, p + Vec2(dx, dy))) return true;
+        }
+        // ...nor on a station's platforms: the track's footprint stops at its rails, the platforms stand beyond it
+        for (const EdgeSpec& t : g.edges) {
+            if (&t == &own || t.platforms.empty() || t.xy.size() < 2) continue;
+            const Projection pr = project(t.xy, t.s, p);
+            const double trackOff = g.hw(t) - t.lanes.w / 2;
+            for (const PlatformSpec& P : t.platforms)
+                if (pr.station > P.s0 - 3.0 && pr.station < P.s1 + 3.0 && pr.distance < trackOff + kPlatformGap + P.w + 2.8) return true;
         }
         return false;
     };

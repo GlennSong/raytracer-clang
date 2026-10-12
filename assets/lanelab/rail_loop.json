@@ -13,6 +13,8 @@
     {"id": "north", "class": "rail", "path": {"type": "polyline", "points": [[400, 200], [-400, 200]]},
      "platforms": [{"name": "Harbour", "s0": 600, "s1": 740, "side": "both", "w": 4.5}]},
     {"id": "west", "class": "rail", "path": {"type": "arc", "center": [-400, 0], "r": 200, "a0": 90, "a1": 270}},
-    {"id": "station_road", "class": "local", "path": {"type": "polyline", "points": [[-260, -245], [260, -245]]}}
+    {"id": "station_road", "class": "local", "path": {"type": "polyline", "points": [[-260, -245], [260, -245]]}},
+    {"id": "central_way", "class": "footway", "path": {"type": "polyline", "points": [[-60, -240.5], [-60, -214], [-3, -214], [0, -211], [0, -189.95]]},
+     "floor": [[0, -200, -1000, 11]]}
   ]
 }

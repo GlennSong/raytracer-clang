@@ -3522,7 +3522,7 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     busRoute_.assign(agents_.size(), -1);
     busStop_.assign(agents_.size(), -1);
     if (!nav_ || routes <= 0 || busCount <= 0) return;
-    buses_.build(*nav_, routes, stopsPerRoute, rng_ ? rng_ : 1u);
+    buses_.build(*nav_, routes, stopsPerRoute, rng_ ? rng_ : 1u, busAnchors);
     if (buses_.empty()) return;
     // Each loop is driven both ways round by the SAME fleet, split between the directions. Doubling it (so each
     // direction kept its old headway) put 80 buses on metro_planned and gridlocked its centre: regional buses

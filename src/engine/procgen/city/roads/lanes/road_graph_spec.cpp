@@ -28,6 +28,15 @@ const std::map<std::string, RoadClassSpec>& defaultClasses() {
         // a parapet where the track stands on structure; nothing at grade (the lab's own fence comes later)
         BarrierSpec wall; wall.kind = BarrierKind::Wall; wall.h = 1.0; wall.set = true;
         m["rail"].edges[3] = wall;   // EdgeRole::Elevated
+        // a footway: one 3 m path, a parapet wherever it stands clear of the ground, and STAIRS where it is steep --
+        // the island's platforms stand 11-24 m over their streets (the track on the hillside above town): a 12 % ramp
+        // would have been 115-250 m long. 60 % is a stair's pitch (the mesher steps whatever is steeper than 15 %).
+        add("footway", 3.0, 1, 0, 0.0, 0.0, 0.0, 0, 0.6, 20.0, 0.4);
+        m["footway"].footway = true;
+        BarrierSpec parapet; parapet.kind = BarrierKind::Wall; parapet.h = 1.1; parapet.thick = 0.2; parapet.set = true;
+        m["footway"].edges[3] = parapet;   // EdgeRole::Elevated
+        m["footway"].edges[2].set = true;  // vs street: nothing (it meets one)
+        m["footway"].edges[4].set = true;  // at grade: nothing
         return m;
     }();
     return k;
@@ -190,6 +199,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
         c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
         if (j.contains("track") && j["track"].is_boolean()) c.track = j["track"].get<bool>();
+        if (j.contains("footway") && j["footway"].is_boolean()) c.footway = j["footway"].get<bool>();
         if (j.contains("edges") && j["edges"].is_object()) {
             static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
             for (size_t i = 0; i < 5; ++i) {

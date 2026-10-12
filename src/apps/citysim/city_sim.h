@@ -1207,6 +1207,8 @@ public:
     // bounds how far a rider will walk to a stop -- and so, in practice, how
     // often a bus is worth taking at all.
     void setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk);
+    // Places a bus loop must stop at (the stations' ways in); set BEFORE setBuses.
+    std::vector<engine::Vec2> busAnchors;
     // The SERVICE DAY. Outside [startHour, endHour) buses finish up, deadhead
     // to the yard and sit there. endHour <= startHour means around the clock,
     // which is the old behaviour and stays the default.

@@ -9417,3 +9417,39 @@ Cost: 1.75 M triangles in the bundle (sleepers 1.14 M, rails 0.44 M, ballast 0.1
 line at Saltwood, RT_VSYNC=0, with and without the sleepers and rails (RT_NO_TRACK_KIT): frame p50 17.2/17.3,
 18.4/18.2, 13.3/13.0 ms -- no measurable cost, so no track LOD yet. Owed: a way onto the platforms (Saltwood's stands
 on an embankment a few metres up), a bus stop at each station, people choosing the train, level crossings.
+
+## ADR-0155 — A way onto every platform: footways, station stairs, steps, and the bus at the door
+
+Glenn, 2026-10-11, on ADR-0154's owed list (stairs off the platform, a path to the nearest street, a bus stop there):
+"Yeah make it accessible".
+
+Decision:
+- **A footway class** (built-in "footway", `RoadClassSpec::footway`): 3 m, one lane, rank 0, paved as sidewalk, never
+  painted, left out of the road twin (nothing drives it). Elevated it carries a 1.1 m parapet wall; at grade nothing.
+- **Steps where it is steep**: footway grade runs to 0.6 (a stair's pitch) and wherever it passes
+  `kFootwayStairGrade` (0.15) the deck is built as treads at ~0.175 m risers. The first island bake held footways to a
+  ramp's grade: too short for 11-24 m climbs to a track on the hillside, they floated whole and pulled 26 lifts and a
+  13 m node mismatch through the diamonds. At stair pitch they follow the ground and climb only the last 20-30 m.
+- **Station stairs**: where a footway crosses a track over a platform, a flight runs down from the deck onto each
+  platform along its back edge (1.9 m with walls, opposite ways on the two platforms); the canopy is gapped under the
+  bridge and the stair, and the parapet opens at each stair top.
+- **The lift and profile rules it needed**:
+  - a footway END covered by its own floor point stays up (it ends on the bridge over the far platform), footways only;
+  - an authored heightless hold (z < -100) merges with the lift's crossing floor within 2 m, any other within 0.5 m;
+  - over a track the lift uses the thicker of the two slabs, which is what the clearance check measures (it was 0.37 m
+    short at the rail lab with the upper slab's thickness);
+  - piers keep off the platforms.
+- **Footways get their own parapet ring**: in a plan union with the tracks the footbridge's edges over the line
+  vanished, and with them its walls.
+- **A way in per station** (`island_rail` `wayIn`): from the nearest street behind the line, a leg 60 m along the line
+  14 m off it, a chamfered corner, then over both tracks to 10 m past the far platform, held over the line.
+  `city_plan island-rail ... --no-ways` leaves them out.
+- **The bus at the door**: each `RailStop` exports its footway's street end as `access`; citysim hands those to
+  `BusNetwork::build` as anchors, and each becomes a ring corner (so a hub stop) of one loop in its network.
+
+Island 8: eight ways in, 106-163 m. Against the rail-only graph the full lanes check fails the same items, link28
+11.26 % (was 10.90); diamonds back to their rail-only grades, node mismatch 0.27 cm.
+Baked and seen from above at Saltwood, Dunwyn Harbor and Weyby: street, ground-level path, walled steps, bridge,
+a stair down onto each platform. Buses stop at 7 of the 8 ways in. The rail lab's `central_way` was walked from
+platform over the bridge and down to the ground. Owed: which station's way in the buses miss and why; a walk test on
+the island (the probe's teleport doesn't settle on a deck); lifts for anyone who can't take stairs.

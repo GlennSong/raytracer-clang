@@ -79,6 +79,12 @@ struct RoadClassSpec {
     // and terrain conform, but the deck is a ballast bed with sleepers and rails on each lane's centreline, no paint,
     // and nothing in the road twin (no car, walker or lot ever routes onto it). Its lanes leave as rail tracks.
     bool track = false;
+    // A FOOTWAY (Glenn, 2026-10-11, the stations: "make it accessible"): a paved path for people on foot -- a
+    // station's way in from the nearest street, ramping up into the footbridge over the tracks. Built like any road
+    // (profile, deck, bridge, piers, ground), paved as a sidewalk, never painted, and left out of the road twin: no
+    // car routes onto it. An end held by the edge's own floor point stays up (a footbridge ends over a platform).
+    // Steeper than kFootwayStairGrade, its deck is built as steps.
+    bool footway = false;
 };
 
 // A station platform beside a track edge, authored on the edge: "platforms": [{"name": "Central", "s0": 300,
@@ -98,6 +104,8 @@ struct Rules {
     bool freewaySeparates = false;             // a freeway is never met at grade by a road crossing it (not a ramp): structure at any height. Off by default -- authored scenes (freeway_cross, ring_city) cross streets over freeways at grade -- and on for the island (ADR-0114)
     double rampLevelDz = 1.5;                  // a ramp within this of a street it crosses is at grade with it (the street meets it); above, it is structure (the ramp clears it)
 };
+
+constexpr double kFootwayStairGrade = 0.15;
 
 struct TerrainSpec {
     std::string type = "flat", file;

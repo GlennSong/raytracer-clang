@@ -111,8 +111,13 @@ public:
     // Deterministic in (graph, counts, seed): hub choice is farthest-point with
     // ties on the lower node index, and the legs come from the deterministic
     // A* the agents themselves use (ADR-0002).
+    // `anchors`: places a loop must stop at -- the island's stations, where each one's footway leaves the street
+    // (Glenn, 2026-10-10: "each station a bus line"). Each becomes a corner of one loop in its street network.
     void build(const engine::NavGraph& nav, int routeCount, int stopsPerRoute,
-               uint32_t seed);
+               uint32_t seed, const std::vector<engine::Vec2>& anchors = {});
+    // How many of the anchors a built route stops at (of how many there were).
+    int anchorsServed() const { return anchorsServed_; }
+    int anchorCount() const { return anchorCount_; }
 
     // The street network a nav node belongs to (junctions joined by walkable
     // streets; the city is one, each town out along the freeway another), or
@@ -223,6 +228,7 @@ public:
 
 private:
     void buildRegional(const engine::NavGraph& nav);
+    int anchorsServed_ = 0, anchorCount_ = 0;
     BusRoute reverseOf(const BusRoute& f, const engine::NavGraph& nav) const;
     std::vector<int> comp_;   // street network per nav node
     std::vector<BusRoute> routes_;

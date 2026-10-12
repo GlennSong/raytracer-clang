@@ -28,6 +28,9 @@ struct RailStop {
     double s0 = 0, s1 = 0;
     int side = +1;            // which side of the train it is on, looking the way the train runs: +1 left, -1 right
     double top = 0;           // platform top, world height
+    // THE WAY IN: where the station's footway leaves the street (plan x, z) -- what a bus line serves
+    bool hasAccess = false;
+    Vec2 access{0, 0};
 };
 
 struct RailTrack {
@@ -43,7 +46,11 @@ inline nlohmann::json railTracksToJson(const std::vector<RailTrack>& tracks) {
         nlohmann::json pts = nlohmann::json::array();
         for (const Vec3& p : t.pts) pts.push_back({p.x, p.y, p.z});
         nlohmann::json stops = nlohmann::json::array();
-        for (const RailStop& s : t.stops) stops.push_back({{"name", s.name}, {"s0", s.s0}, {"s1", s.s1}, {"side", s.side}, {"top", s.top}});
+        for (const RailStop& s : t.stops) {
+            nlohmann::json j = {{"name", s.name}, {"s0", s.s0}, {"s1", s.s1}, {"side", s.side}, {"top", s.top}};
+            if (s.hasAccess) j["access"] = {s.access.x, s.access.y};
+            stops.push_back(j);
+        }
         a.push_back({{"edge", t.edge}, {"cls", t.cls}, {"dir", t.dir}, {"pts", pts}, {"stops", stops}});
     }
     return a;
@@ -59,8 +66,11 @@ inline std::vector<RailTrack> railTracksFromJson(const nlohmann::json& a) {
         t.dir = j.value("dir", 1);
         for (const nlohmann::json& p : j.value("pts", nlohmann::json::array()))
             t.pts.push_back(Vec3(p.at(0).get<Real>(), p.at(1).get<Real>(), p.at(2).get<Real>()));
-        for (const nlohmann::json& s : j.value("stops", nlohmann::json::array()))
-            t.stops.push_back({s.value("name", std::string()), s.value("s0", 0.0), s.value("s1", 0.0), s.value("side", 1), s.value("top", 0.0)});
+        for (const nlohmann::json& s : j.value("stops", nlohmann::json::array())) {
+            RailStop st{s.value("name", std::string()), s.value("s0", 0.0), s.value("s1", 0.0), s.value("side", 1), s.value("top", 0.0)};
+            if (s.contains("access")) { st.hasAccess = true; st.access = Vec2(s["access"].at(0).get<double>(), s["access"].at(1).get<double>()); }
+            t.stops.push_back(st);
+        }
         out.push_back(std::move(t));
     }
     return out;

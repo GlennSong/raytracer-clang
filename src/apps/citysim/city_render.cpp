@@ -716,9 +716,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     sim_.setHailPolicy(params_.hailChance, params_.hailMinMetres);
     sim_.setTaxiFraction(params_.taxiFraction);
     // Buses AFTER the cabs: setBuses skips an agent already marked as a taxi.
+    // the stations' ways in: a loop stops at each (one point per station, both tracks name it)
+    sim_.busAnchors.clear();
+    world.each<engine::RailTracks>([&](Entity, engine::RailTracks& rt) {
+        for (const engine::RailTrack& t : rt.tracks)
+            for (const engine::RailStop& st : t.stops) {
+                if (!st.hasAccess) continue;
+                bool have = false;
+                for (const Vec2& q : sim_.busAnchors) if ((q - st.access).length() < 20.0) have = true;
+                if (!have) sim_.busAnchors.push_back(st.access);
+            }
+    });
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
+    if (!sim_.busAnchors.empty())
+        LOG_INFO << "[citysim] bus lines stop at " << sim_.buses().anchorsServed() << " of " << sim_.buses().anchorCount() << " stations' ways in";
     LOG_INFO << "[citysim] startup: setBuses " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     // THE BUSES' DAY: with a depot to go back to, they run from busServiceStart to busServiceEnd and spend the night in
     // its bays (Glenn: "a dedicated bus depot they return to at end of day"); without one, round the clock as before.

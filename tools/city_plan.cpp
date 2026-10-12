@@ -48,7 +48,7 @@ static int usage() {
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n"
-                 "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M]   the island loop beside the freeway, a station per town (the level's hubs); --write puts it in the graph\n");
+                 "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M] [--no-ways] [--way-leg M]   the island loop beside the freeway, a station per town (the level's hubs) and a footway in to each; --write puts it in the graph\n");
     return 2;
 }
 
@@ -395,6 +395,8 @@ int main(int argc, char** argv) {
             if (std::string(argv[a]) == "--offset" && a + 1 < argc) ro.offset = std::atof(argv[a + 1]);
             if (std::string(argv[a]) == "--grade" && a + 1 < argc) ro.gMax = std::atof(argv[a + 1]);
             if (std::string(argv[a]) == "--balance" && a + 1 < argc) ro.balance = std::atof(argv[a + 1]);
+            if (std::string(argv[a]) == "--no-ways") ro.ways = false;
+            if (std::string(argv[a]) == "--way-leg" && a + 1 < argc) ro.wayLeg = std::atof(argv[a + 1]);
         }
         std::vector<engine::RailTown> towns;
         if (level.contains("citysim") && level["citysim"].contains("districts") && level["citysim"]["districts"].contains("hubs"))
@@ -404,12 +406,14 @@ int main(int argc, char** argv) {
         std::printf("island loop: %.0f m, %zu edges, crosses %d roads, %d river floors, %zu stations\n", r.length, r.edges.size(), r.crossings,
                     r.floors, r.stations.size());
         for (const auto& sn : r.stations)
-            std::printf("  %-18s at (%7.0f, %7.0f), %6.0f m along, %4.0f m from the town's hub\n", sn.name.c_str(), sn.at.x, sn.at.y, sn.station, sn.fromTown);
+            std::printf("  %-18s at (%7.0f, %7.0f), %6.0f m along, %4.0f m from the town's hub; way in %3.0f m from %s\n", sn.name.c_str(), sn.at.x, sn.at.y,
+                        sn.station, sn.fromTown, sn.way, sn.street.empty() ? "(none)" : sn.street.c_str());
         for (const auto& w : r.skipped) std::printf("  no station: %s\n", w.c_str());
         if (!write) return 0;
         nlohmann::json kept = nlohmann::json::array();
         for (const nlohmann::json& e : graph["edges"]) if (e.value("id", "").rfind(ro.idPrefix + "_", 0) != 0) kept.push_back(e);
         for (const nlohmann::json& e : r.edges) kept.push_back(e);
+        for (const nlohmann::json& e : r.ways) kept.push_back(e);
         graph["edges"] = kept;
         graph["classes"]["rail"] = r.railClass;
         std::ofstream out(argv[2]);
