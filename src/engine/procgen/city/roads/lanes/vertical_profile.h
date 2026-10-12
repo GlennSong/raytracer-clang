@@ -43,10 +43,15 @@ bool mustSeparate(const EdgeSpec& a, const EdgeSpec& b);
 // A TRACK crossing anything (a road, a ramp, the freeway) is a grade separation, whatever the scene's rules: there are
 // no level crossings yet (the island loop, 2026-10-11). Two of the graph's crossings that must be structure.
 bool separates(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b);
+bool anyTrack(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b);   // a track is structure where a road ends under it too
 std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g);
 // crossingConsistency over the cached meets: the same pairs, in the same order, the same result.
 double crossingConsistency(RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, double radius = 100.0);
 void applyFloors(EdgeSpec& e, const RoadClassSpec& c);   // re-impose a through road's floor holds after other passes moved it
+// A LINE IN SECTIONS (a city's light rail, cut between stations): each track section's holds, carried onto the section
+// joined to it end to start (as chainFloors), one joint on. A lift's approach ran out over the joint on its own section
+// only, and the next section met it 4 m lower (Saltwood). Recompute whenever a track's floorPts change.
+void chainTrackFloors(RoadLabGraph& g, double tol);
 void rampProfile(RoadLabGraph& g, EdgeSpec& e, const HeightField& terrain);
 double projectZ(const EdgeSpec& e, const Vec2& p);
 double maxGrade(const EdgeSpec& e);

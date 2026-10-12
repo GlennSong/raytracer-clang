@@ -143,4 +143,36 @@ TEST_CASE(a_city_light_rail_loop_follows_its_streets_set_in_and_smooth) {
     }
     std::printf("    [city rail] %.0f m, %zu stations, %d crossings, tightest curve %.0f m\n", r.length, r.stations.size(), r.crossings, rMin);
     CHECK(rMin > 18.0);
+    // its sections join clear of the streets it crosses (a joint beside a lift stepped on the island): 200 m blocks
+    // leave room for 60 m along the line (the straight line to a crossing round a corner is a little less)
+    std::vector<Vec2> crossAt;   // where the line crosses a grid street
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        const Vec2 a = pts[i], b = pts[(i + 1) % pts.size()];
+        for (double c = -1000; c <= 1000; c += 200) {
+            if ((a.x - c) * (b.x - c) < 0) crossAt.push_back(a + (b - a) * ((c - a.x) / (b.x - a.x)));
+            if ((a.y - c) * (b.y - c) < 0) crossAt.push_back(a + (b - a) * ((c - a.y) / (b.y - a.y)));
+        }
+    }
+    double jointMin = 1e9;
+    for (const json& e : r.edges) {
+        const Vec2 j(e["path"]["points"].front()[0].get<double>(), e["path"]["points"].front()[1].get<double>());
+        for (const Vec2& x : crossAt) jointMin = std::min(jointMin, (x - j).length());
+    }
+    std::printf("    [city rail] nearest joint to a street it crosses: %.0f m\n", jointMin);
+    CHECK(jointMin > 45.0);
+    // every station reached from below: a way that ends past the line, and a level hold on the track over it
+    CHECK(r.ways.size() == r.stations.size());
+    for (const json& w : r.ways) {
+        CHECK(!w.contains("floor"));   // the way stays on the street's level
+        const json& last = w["path"]["points"].back();
+        const Vec2 end(last[0].get<double>(), last[1].get<double>());
+        bool held = false;
+        for (const json& e : r.edges)
+            if (e.contains("floor"))
+                for (const json& f : e["floor"]) {
+                    const Vec2 at(f[0].get<double>(), f[1].get<double>());
+                    if ((at - end).length() < 20.0 && f[3].get<double>() >= 40.0 + 5.0) held = true;   // half the 80 m platform and more
+                }
+        CHECK(held);
+    }
 }

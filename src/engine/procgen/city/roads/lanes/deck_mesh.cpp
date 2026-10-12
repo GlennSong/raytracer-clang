@@ -352,6 +352,9 @@ bool footwayLane(const Result& r, int li) {
 // (a footbridge), a flight from the footway's deck down onto each platform -- along the platform, against its back
 // edge, the two flights running opposite ways. The parapet opens where a flight leaves the deck, and the canopy
 // stops over the flight and under the bridge.
+// UP, where the footway passes UNDER the track (a city's light rail, held up over its streets): a flight from the
+// footway's edge up onto each platform, behind its back edge, landing level with it at the top. `top` is then the
+// landing beside the platform and `dir` runs down toward the footway, as on a footbridge's flight.
 struct StationStair {
     int edge = -1; const PlatformSpec* platform = nullptr; int side = 0;
     Vec2 top, dir, across;        // the top of the flight on the deck's edge (its middle); down the flight; across it
@@ -359,6 +362,7 @@ struct StationStair {
     double width = 1.9;           // walls included
     int steps = 0; double riser = 0, tread = 0.28;
     double bridge0 = 0, bridge1 = 0;   // the bridge over this platform, as track-edge stations
+    bool up = false; double zFoot = 0; // a flight up from a footway under the track; the footway's height at its foot
     double length() const { return (steps - 1) * tread; }
 };
 
@@ -391,12 +395,28 @@ std::vector<StationStair> stationStairs(const Result& r) {
                         if (P.side != 0 && P.side != side) continue;
                         double off = 0; const int li = outerTrack(r, static_cast<int>(ei), side, &off); if (li < 0) continue;
                         StationStair st; st.edge = static_cast<int>(ei); st.platform = &P; st.side = side;
-                        const double lateral = off + side * (kPlatformGap + P.w) - side * (0.15 + st.width / 2);
+                        const double platTop = r.heights->deck(li, pointAt(e.xy, e.s, sX) + ne * off) + kRailHeadAbove + P.h;
+                        st.up = r.heights->deck(fl, X) < platTop - 0.4;   // the footway under the track, not over it
+                        const double lateral = off + side * (kPlatformGap + P.w) + side * (st.up ? 0.02 + st.width / 2 : -(0.15 + st.width / 2));
                         const double alongC = lateral * cotT;
                         st.bridge0 = sX + alongC - halfDeck - 0.6; st.bridge1 = sX + alongC + halfDeck + 0.6;
                         const Vec2 onWay = pointAt(e.xy, e.s, sX + alongC) + ne * lateral;
+                        if (st.up) {
+                            st.zFoot = r.heights->deck(fl, onWay); st.zTop = platTop;
+                            const double rise = platTop - st.zFoot; if (rise < 0.4) continue;
+                            st.steps = static_cast<int>(std::ceil(rise / 0.175)); st.riser = rise / st.steps;
+                            // the flight climbs away from the footway, its landing (one tread) on the platform's level
+                            int d = side;
+                            auto fits = [&](int dd) { const double s1 = sX + alongC + dd * (halfDeck + st.length() + st.tread); return s1 > P.s0 + 2 && s1 < P.s1 - 2; };
+                            if (!fits(d)) d = -d;
+                            if (!fits(d)) continue;
+                            st.sTop = sX + alongC + d * (halfDeck + st.length());
+                            st.dir = te * static_cast<double>(-d); st.across = ne * static_cast<double>(side);
+                            st.top = pointAt(e.xy, e.s, st.sTop) + ne * lateral;
+                            out.push_back(st);
+                            continue;
+                        }
                         st.zTop = r.heights->deck(fl, onWay);
-                        const double platTop = r.heights->deck(li, pointAt(e.xy, e.s, sX + alongC) + ne * off) + kRailHeadAbove + P.h;
                         const double rise = st.zTop - platTop; if (rise < 0.4) continue;
                         st.steps = static_cast<int>(std::ceil(rise / 0.175)); st.riser = rise / st.steps;
                         int d = side;   // the two flights run opposite ways; either turns round if its end would leave the platform
@@ -454,10 +474,24 @@ void footwayStairs(RenderMesh& steps, const Result& r, int li) {
     }
 }
 
-// One flight: a solid block per step from the platform up, a wall each side a metre over the treads.
+// One flight: a solid block per step from the platform up, a wall each side a metre over the treads. Up from a
+// footway: the blocks stand on the footway's level, the landing is a tread too, and the wall on the platform's side
+// stops at the platform's level (stepped over onto it at the top).
 void stairKit(RenderMesh& treads, RenderMesh& concrete, const Result& r, const StationStair& st) {
     const EdgeSpec& e = r.graph.edges[static_cast<size_t>(st.edge)];
     double off = 0; const int li = outerTrack(r, st.edge, st.side, &off); if (li < 0) return;
+    if (st.up) {
+        for (int i = 0; i < st.steps; ++i) {
+            const Vec2 c = st.top + st.dir * (i * st.tread);
+            const double y = st.zTop - i * st.riser, floor = st.zFoot - 0.3;
+            trackBox(treads, c, st.dir, st.width / 2 - 0.15, st.tread / 2, floor, y, kPlatform);
+            for (int w = -1; w <= 1; w += 2)
+                trackBox(concrete, c + st.across * (w * (st.width / 2 - 0.075)), st.dir, 0.075, st.tread / 2, floor, w < 0 ? std::min(y + 1.0, st.zTop) : y + 1.0, kConcrete);
+        }
+        // the landing's far end walled (walked straight on, the flight's top led off it into the air)
+        trackBox(concrete, st.top - st.dir * (st.tread / 2 + 0.075), st.dir, st.width / 2, 0.075, st.zFoot - 0.3, st.zTop + 1.0, kConcrete);
+        return;
+    }
     for (int i = 1; i < st.steps; ++i) {
         const double a = (i - 0.5) * st.tread; const Vec2 c = st.top + st.dir * a;
         const double sAt = project(e.xy, e.s, c).station; const Vec2 q = pointAt(e.xy, e.s, sAt), nr = perp(tangentAtStation(e.xy, e.s, sAt));
@@ -470,16 +504,30 @@ void stairKit(RenderMesh& treads, RenderMesh& concrete, const Result& r, const S
 // A STATION PLATFORM: a slab from the ground up to `h` over the railhead, its edge kPlatformGap off the outer
 // track, `w` wide, with a canopy down its middle (posts every 12 m, a roof 3.4 m over the platform) -- stopped
 // under a footbridge and over its stair, which `stairs` holds.
+// HELD UP (a light rail's, over its streets): an underside, a railing along its back edge -- open beside the top of a
+// flight up to it -- and columns under its middle every 12 m, clear of the footway under it and any street.
 void platformKit(RenderMesh& plat, RenderMesh& concrete, const Result& r, const EdgeSpec& e, int ei, const PlatformSpec& P,
-                 const std::vector<StationStair>& stairs) {
+                 const std::vector<StationStair>& stairs, const std::function<double(const Vec2&)>& groundUnder,
+                 const std::function<bool(const Vec2&)>& pavedAt) {
     for (int side = -1; side <= 1; side += 2) {
         if (P.side != 0 && P.side != side) continue;
         double off = 0; const int li = outerTrack(r, ei, side, &off); if (li < 0) continue;
         const double inner = off + side * kPlatformGap, outer = inner + side * P.w;
         std::vector<std::pair<double, double>> gaps;   // track-edge stations the canopy keeps out of
+        std::vector<std::pair<double, double>> railGaps, colGaps;   // held up: the railing's openings; no columns
         for (const StationStair& st : stairs) {
             if (st.edge != ei || st.platform != &P || st.side != side) continue;
             const double sEnd = st.sTop + dot(st.dir, tangentAtStation(e.xy, e.s, st.sTop)) * st.length();
+            if (st.up) {
+                // open where the treads are within a metre of the platform (their wall is no higher than it), and the landing
+                const double ds = dot(st.dir, tangentAtStation(e.xy, e.s, st.sTop)), k = std::ceil(1.0 / st.riser) + 0.5;
+                const double a = st.sTop - ds * 0.5 * st.tread, b = st.sTop + ds * k * st.tread;
+                railGaps.push_back({std::min(a, b), std::max(a, b)});
+                colGaps.push_back({st.bridge0 - 1.0, st.bridge1 + 1.0});
+                colGaps.push_back({std::min(st.sTop, sEnd) - 1.0, std::max(st.sTop, sEnd) + 1.0});
+                stairKit(plat, concrete, r, st);
+                continue;
+            }
             gaps.push_back({st.bridge0, st.bridge1}); gaps.push_back({std::min(st.sTop, sEnd) - 0.4, std::max(st.sTop, sEnd) + 0.4});
             stairKit(plat, concrete, r, st);
         }
@@ -509,6 +557,30 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, const Result& r, const 
             const Vec2 d = end == 0 ? a[1] - a[0] : a[i] - a[i - 1]; const double dl = d.length(); if (dl < 1e-9) continue;
             const Vec3 en(static_cast<Real>(d.x / dl * (end == 0 ? -1 : 1)), 0, static_cast<Real>(d.y / dl * (end == 0 ? -1 : 1)));
             MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(b[i], foot[i]), world(b[i], top[i]), world(a[i], top[i]), en, kConcrete);
+        }
+        bool heldUp = false;
+        for (int k = 0; k < n; ++k) if (foot[static_cast<size_t>(k)] - groundUnder(b[static_cast<size_t>(k)]) > 2.0) heldUp = true;
+        if (heldUp) {
+            auto inSpans = [](const std::vector<std::pair<double, double>>& sp, double a0, double b0) { for (const auto& g0 : sp) if (b0 > g0.first && a0 < g0.second) return true; return false; };
+            for (int k = 0; k + 1 < n; ++k) {
+                const size_t i = static_cast<size_t>(k), j = i + 1;
+                MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(b[i], foot[i]), world(b[j], foot[j]), world(a[j], foot[j]), Vec3(0, -1, 0), kConcrete);
+                const double st0 = s0 + (s1 - s0) * k / (n - 1), st1 = s0 + (s1 - s0) * (k + 1) / (n - 1);
+                if (inSpans(railGaps, st0, st1)) continue;
+                const Vec2 mid2 = (b[i] + b[j]) * 0.5, d = b[j] - b[i]; const double dl = d.length(); if (dl < 1e-9) continue;
+                const Vec2 inward = (a[i] - b[i]) * (1.0 / std::max(1e-9, (a[i] - b[i]).length()));
+                trackBox(concrete, mid2 + inward * 0.08, d / dl, 0.08, dl / 2, 0.5 * (top[i] + top[j]) - 0.05, 0.5 * (top[i] + top[j]) + 1.1, kConcrete);
+            }
+            const double mid = (inner + outer) / 2;
+            for (double st = s0 + 6; st <= s1 - 6; st += 12) {
+                if (inSpans(colGaps, st - 0.5, st + 0.5)) continue;
+                const Vec2 q = pointAt(e.xy, e.s, st), t = tangentAtStation(e.xy, e.s, st), c = q + perp(t) * mid;
+                bool paved = false;
+                for (double dx : {-0.6, 0.6}) for (double dy : {-0.6, 0.6}) if (pavedAt(c + Vec2(dx, dy))) paved = true;
+                if (paved) continue;
+                const double y = r.heights->deck(li, q + perp(t) * off) - 0.3;
+                trackBox(concrete, c, t, 0.3, 0.3, groundUnder(c) - 0.5, y, kConcrete);
+            }
         }
         // the canopy
         const double mid = (inner + outer) / 2, roofHalf = std::max(1.0, P.w / 2 - 0.4);
@@ -717,9 +789,16 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     for (size_t li = 0; li < L.lanes.size(); ++li)
         if (footwayLane(r, static_cast<int>(li))) footwayStairs(sidewalk, r, static_cast<int>(li));
     const std::vector<StationStair> stairs = stationStairs(r);
+    const std::function<bool(const Vec2&)> anyPavedAt = [&](const Vec2& q) {
+        for (int ojI : laneGrid.at(q)) {
+            const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
+            if (q.x >= bb.minX && q.x <= bb.maxX && q.y >= bb.minY && q.y <= bb.maxY && footprint[oj].contains(q)) return true;
+        }
+        return false;
+    };
     for (size_t ei = 0; ei < g.edges.size(); ++ei)
         if (trackClass(g, g.edges[ei].cls))
-            for (const PlatformSpec& P : g.edges[ei].platforms) platformKit(platform, concrete, r, g.edges[ei], static_cast<int>(ei), P, stairs);
+            for (const PlatformSpec& P : g.edges[ei].platforms) platformKit(platform, concrete, r, g.edges[ei], static_cast<int>(ei), P, stairs, groundUnder, anyPavedAt);
     if (deckStats) {
         std::string o;
         for (std::size_t k = 1; k < concreteBy.size(); ++k)
@@ -1028,6 +1107,7 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
     const std::vector<StationStair> stairs = stationStairs(r);
     auto stairTop = [&](const Vec2& q) {
         for (const StationStair& st : stairs) {
+            if (st.up) continue;   // (its top is on the platform, not the footway)
             const Vec2 a = st.top - st.across * (st.width / 2), b = st.top + st.across * (st.width / 2), ab = b - a;
             const double u = std::clamp(dot(q - a, ab) / std::max(1e-9, dot(ab, ab)), 0.0, 1.0);
             if (distance(q, a + ab * u) < 0.4) return true;

@@ -9517,3 +9517,39 @@ one section, joint levelling pulls the other, steps of 1.6-4 m and a crossing 2.
 in is not the main line's: a footbridge OVER a track already ~8 m up came out under it (1.3 m). Owed before the island
 gets its city lines: joints cut clear of crossings, and elevated stations reached from below (a passage under the
 viaduct, flights UP to each platform -- station stairs only build down from a footbridge today).
+
+## ADR-0158 — A city's light rail on the island: holds that cross joints, stations reached from below
+
+Glenn, 2026-10-12: "Okay keep going" (after ADR-0157's island attempt failed its check for the two reasons it named).
+
+Decision:
+- **A track's holds run on across its joints** (`chainTrackFloors`, vertical_profile.h). A hold (a lift over a street,
+  a station's level) is a floor point of one edge; its approach at design grade ran out over the joint on that edge
+  alone, and the next section met it lower -- 4 m at Saltwood. Placing joints clear of crossings was not enough: in a
+  town a lift every ~125 m, each with a ~200 m approach, leaves no joint clear of all of them. Each track section now
+  takes its neighbours' holds (same class, shared end, one joint on) as `chainFloors` in its own stations, applied
+  wherever its own floors are. Joints are still cut as far from crossings as the gap allows (`jointClear` 60 m).
+- **A road that ends under a track is structure** (`anyTrack`): a tee was always forced level, so a dead end under the
+  light rail (Saltwood's p0_s42) held the line 7.3 m off its profile. A track is never met at grade, end or crossing.
+- **Raised stations are reached from below** (`IslandRailOptions::wayUnder`, the city loop's ways). The way runs from
+  the nearest sidewalk straight to just outside the platforms and on under the line -- no hold of its own, so the track
+  always goes over -- and the track gets a hold the platforms' length: the lift code sets it LEVEL, at the highest the
+  track stands along it. `stationStairs` builds a flight UP from the way to each platform where the footway is below
+  it (`up`): behind the platform's back edge, a solid stair from the way's level, a landing level with the platform,
+  walled at its far end; the platform's back railing opens beside the top. A platform standing clear of the ground
+  gets an underside, a back railing and columns under its middle (none on a street or the way).
+- **Stations stand clear of the streets** the loop crosses (`platformClear`, 8 m past each end): a flight cannot land
+  on a street. Where the 550-900 m window has no such place the search runs 400 m further rather than leave a gap.
+- **The loop keeps clear of the streets it runs beside.** The set-in is the graph's own (`setIn` 0): the widest arterial
+  or collector to the back of its sidewalk, plus a station's platforms and flights and a metre -- island 8's arterials
+  are 3+3 lanes and a 5 m sidewalk, so a fixed 21 m left 1.4 m, and rounding the corners took that away (Weyby's deck
+  edge stood over the sidewalk, 2.4-4 m up on a lift's approach). After rounding, any point running along a street
+  (within 30 degrees) inside its back of sidewalk and the pair's half width is pushed out and the curve relaxed again:
+  Saltwood 179 points short -> 7, Weyby 316 -> 2 (the rest by under 2 m, beside oblique crossings).
+- **The cache key** carries the rail tag for `light_rail` graphs too (it keyed only class `rail`: the lab kept loading
+  its old bake after a rail tag bump).
+
+The light-rail lab: its loop moved 18 m inside the streets (14 m left a flight on the sidewalk), a way under each
+station; the player walks from the street up the flight onto the platform. Tests: a lift 30 m short of a joint carries
+on across it (no step); the lab's platforms level, its ways under; the city loop's joints >= 45 m from a crossing and
+every station held over its way.

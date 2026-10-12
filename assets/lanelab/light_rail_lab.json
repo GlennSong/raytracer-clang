@@ -1,6 +1,6 @@
 {
  "name": "light_rail_lab",
- "_note": "LIGHT RAIL LAB (Glenn, 2026-10-12: 'How about other trains'): a 600 m square town on a 150 m grid, a light-rail loop 14 m inside the ring of streets at +-150 -- beside them all the way round, over the two arterials -- two stations.",
+ "_note": "LIGHT RAIL LAB (Glenn, 2026-10-12: 'How about other trains'): a 600 m square town on a 150 m grid, a light-rail loop 18 m inside the ring of streets at +-150 -- beside them all the way round, over the two arterials -- two stations. Each station's way in passes under the line (held up over its streets), a flight up to each platform.",
  "terrain": {
   "type": "procedural",
   "bounds": [
@@ -202,23 +202,31 @@
     "type": "polyline",
     "points": [
      [
-      -106,
-      -136
+      -102,
+      -132
      ],
      [
-      106,
-      -136
+      102,
+      -132
      ]
     ]
    },
    "platforms": [
     {
      "name": "Market Street",
-     "s0": 66,
-     "s1": 146,
+     "s0": 62,
+     "s1": 142,
      "side": "both",
      "w": 4.0
     }
+   ],
+   "floor": [
+    [
+     0,
+     -132,
+     -1000.0,
+     45.0
+    ]
    ]
   },
   {
@@ -227,8 +235,8 @@
    "path": {
     "type": "arc",
     "center": [
-     106,
-     -106
+     102,
+     -102
     ],
     "r": 30,
     "a0": -90,
@@ -242,12 +250,12 @@
     "type": "polyline",
     "points": [
      [
-      136,
-      -106
+      132,
+      -102
      ],
      [
-      136,
-      106
+      132,
+      102
      ]
     ]
    }
@@ -258,8 +266,8 @@
    "path": {
     "type": "arc",
     "center": [
-     106,
-     106
+     102,
+     102
     ],
     "r": 30,
     "a0": 0,
@@ -273,23 +281,31 @@
     "type": "polyline",
     "points": [
      [
-      106,
-      136
+      102,
+      132
      ],
      [
-      -106,
-      136
+      -102,
+      132
      ]
     ]
    },
    "platforms": [
     {
      "name": "Town Hall",
-     "s0": 66,
-     "s1": 146,
+     "s0": 62,
+     "s1": 142,
      "side": "both",
      "w": 4.0
     }
+   ],
+   "floor": [
+    [
+     0,
+     132,
+     -1000.0,
+     45.0
+    ]
    ]
   },
   {
@@ -298,8 +314,8 @@
    "path": {
     "type": "arc",
     "center": [
-     -106,
-     106
+     -102,
+     102
     ],
     "r": 30,
     "a0": 90,
@@ -313,12 +329,12 @@
     "type": "polyline",
     "points": [
      [
-      -136,
-      106
+      -132,
+      102
      ],
      [
-      -136,
-      -106
+      -132,
+      -102
      ]
     ]
    }
@@ -329,12 +345,46 @@
    "path": {
     "type": "arc",
     "center": [
-     -106,
-     -106
+     -102,
+     -102
     ],
     "r": 30,
     "a0": 180,
     "a1": 270
+   }
+  },
+  {
+   "id": "lr_way_s",
+   "class": "footway",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -30,
+      -145.5
+     ],
+     [
+      -30,
+      -120
+     ]
+    ]
+   }
+  },
+  {
+   "id": "lr_way_n",
+   "class": "footway",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      30,
+      145.5
+     ],
+     [
+      30,
+      120
+     ]
+    ]
    }
   }
  ]

@@ -79,7 +79,8 @@ bool segCross(Vec2 p1, Vec2 p2, Vec2 p3, Vec2 p4, Vec2* at) {
 
 // A street's half width to its kerb (the lanes builder's hw): its class's lanes, from the graph's class table
 double streetHalfWidth(const json& graph, const std::string& cls) {
-    double w = 3.5, fwd = 1, back = 1, gap = 0;
+    // (a class the graph does not define is the builder's built-in: road_graph_spec.cpp)
+    double w = cls == "arterial" ? 3.0 : 3.5, fwd = cls == "arterial" ? 2 : 1, back = fwd, gap = 0;
     if (graph.contains("classes") && graph["classes"].contains(cls)) {
         const json& c = graph["classes"][cls];
         w = c.value("w", w); fwd = c.value("fwd", fwd); back = c.value("back", back); gap = c.value("gap", gap);
@@ -87,6 +88,17 @@ double streetHalfWidth(const json& graph, const std::string& cls) {
     // laneSlots: travel bands side by side, the median gap between directions; the outermost lane's edge
     return (back > 0 && fwd > 0) ? std::max(fwd, back) * w + gap / 2 : 0.5 * (fwd + back) * w;
 }
+
+// ...and its sidewalk beyond the kerb
+double streetSidewalk(const json& graph, const std::string& cls) {
+    const double builtIn = cls == "arterial" ? 2.6 : cls == "local" ? 1.8 : 2.0;
+    if (graph.contains("classes") && graph["classes"].contains(cls)) return graph["classes"][cls].value("sidewalk", builtIn);
+    return builtIn;
+}
+
+// from a light-rail pair's centreline to the outside of a station's flights (the pair 1.8 m either side, the platform
+// gap and a 4 m platform, the 1.9 m flight behind it): the line must keep this clear of a street's sidewalk
+constexpr double kCityStationBack = 1.8 + 1.55 + 4.0 + 2.1;
 
 void wayIn(const json& graph, const IslandRailOptions& o, IslandRailResult& r, const std::function<Vec2(double)>& at) {
     // the streets a way may leave from, and every centreline it must not cross
@@ -100,11 +112,14 @@ void wayIn(const json& graph, const IslandRailOptions& o, IslandRailResult& r, c
         all.push_back(l);
     }
     for (const json& e : r.edges) all.push_back({e["id"].get<std::string>(), e.value("class", "rail"), pointsOf(e)});
-    auto crossesAny = [&](Vec2 a, Vec2 b, const std::string& except) {
-        for (const Line& l : all) {
-            if (l.id == except) continue;
-            for (std::size_t j = 0; j + 1 < l.p.size(); ++j) if (segCross(a, b, l.p[j], l.p[j + 1], nullptr)) return true;
-        }
+    // A crossing of the street the way leaves from counts too, but where it leaves (within a metre of `from`): a
+    // street bending round a station was recrossed 31 m on, and the way lifted over it at 49 %.
+    auto crossesAny = [&](Vec2 a, Vec2 b, const std::string& own, Vec2 from) {
+        for (const Line& l : all)
+            for (std::size_t j = 0; j + 1 < l.p.size(); ++j) {
+                Vec2 x;
+                if (segCross(a, b, l.p[j], l.p[j + 1], &x) && !(l.id == own && dist(x, from) < 1.0)) return true;
+            }
         return false;
     };
     for (std::size_t si = 0; si < r.stations.size(); ++si) {
@@ -114,9 +129,44 @@ void wayIn(const json& graph, const IslandRailOptions& o, IslandRailResult& r, c
         // per side and direction along the track, the leg's far end B, and the nearest street point to it that a
         // straight path reaches without crossing anything
         struct Pick { double d = 1e30; int side = 0, dir = 0; Vec2 a, b; std::string id, cls; } best;
+        // the way past B: along the track to the line's crossing, over (or under) it to beyond the far platform
+        auto legOf = [&](int side, int dir) {
+            const Vec2 corner = m + n * (side * o.wayOffset);
+            std::vector<Vec2> pts{m + t * (dir * o.wayLeg) + n * (side * o.wayOffset)};
+            for (double s = o.wayLeg - 10; s > 4; s -= 10) pts.push_back(corner + t * (dir * s));
+            pts.push_back(corner + t * (dir * 3.0));
+            pts.push_back(corner - n * (side * 3.0));   // a 3 m chamfer round the corner
+            pts.push_back(m - n * (side * o.wayReach));   // (straight across the line, square to it)
+            return pts;
+        };
+        // UNDER: no height to gain, so no leg along the track -- from the nearest street on either side straight to
+        // just outside the flights behind the platform, then square across under the line. (With the leg, a way set
+        // out clear of the flights ran along the sidewalk of the street the line is set in beside.)
+        if (o.wayUnder)
+            for (int side = -1; side <= 1; side += 2) {
+                const Vec2 c = m + n * (side * o.wayOffset);
+                // the way under clear of everything but the line (the track pair is within 3 m of its centreline)
+                if (crossesAny(c, m + n * (side * 3.0), "", Vec2(0, 0)) || crossesAny(m - n * (side * 3.0), m - n * (side * o.wayReach), "", Vec2(0, 0))) continue;
+                for (const Line& l : streets)
+                    for (std::size_t j = 0; j + 1 < l.p.size(); ++j) {
+                        const Vec2 u = l.p[j], v = l.p[j + 1], uv = v - u;
+                        const double k = std::clamp(((c - u).x * uv.x + (c - u).y * uv.y) / std::max(1e-9, uv.x * uv.x + uv.y * uv.y), 0.0, 1.0);
+                        const Vec2 q = u + uv * k; const double d = dist(q, c);
+                        if (d >= best.d || d > o.wayMaxStreet || d < streetHalfWidth(graph, l.cls) + 2.0) continue;
+                        if (((q - m).x * n.x + (q - m).y * n.y) * side < o.wayOffset) continue;   // beyond the flights, on its side
+                        if (crossesAny(q, c, l.id, q)) continue;
+                        best = {d, side, 0, q, c, l.id, l.cls};
+                    }
+            }
+        else
         for (int side = -1; side <= 1; side += 2)
             for (int dir = -1; dir <= 1; dir += 2) {
-                const Vec2 b = m + t * (dir * o.wayLeg) + n * (side * o.wayOffset);
+                const std::vector<Vec2> leg = legOf(side, dir);
+                bool legClear = true;
+                for (std::size_t i = 0; i + 2 < leg.size() && legClear; ++i)   // (the last piece crosses the line)
+                    if (crossesAny(leg[i], leg[i + 1], "", Vec2(0, 0))) legClear = false;
+                if (!legClear) continue;
+                const Vec2 b = leg.front();
                 for (const Line& l : streets)
                     for (std::size_t j = 0; j + 1 < l.p.size(); ++j) {
                         const Vec2 u = l.p[j], v = l.p[j + 1], uv = v - u;
@@ -124,7 +174,7 @@ void wayIn(const json& graph, const IslandRailOptions& o, IslandRailResult& r, c
                         const Vec2 q = u + uv * k; const double d = dist(q, b);
                         if (d >= best.d || d > o.wayMaxStreet) continue;
                         if (((q - m).x * n.x + (q - m).y * n.y) * side < o.wayOffset) continue;   // behind the leg, on its side
-                        if (crossesAny(q, b, l.id)) continue;
+                        if (crossesAny(q, b, l.id, q)) continue;
                         best = {d, side, dir, q, b, l.id, l.cls};
                     }
             }
@@ -133,21 +183,33 @@ void wayIn(const json& graph, const IslandRailOptions& o, IslandRailResult& r, c
         // street), to B, along the track to the line's crossing, over it to beyond the far platform
         const Vec2 toB = (best.b - best.a) * (1.0 / std::max(1e-9, dist(best.b, best.a)));
         const Vec2 a = best.a + toB * (streetHalfWidth(graph, best.cls) + 1.0);
-        const Vec2 corner = m + n * (best.side * o.wayOffset);
-        std::vector<Vec2> pts{a, best.b};
-        for (double s = o.wayLeg - 10; s > 4; s -= 10) pts.push_back(corner + t * (best.dir * s));
-        pts.push_back(corner + t * (best.dir * 3.0));
-        pts.push_back(corner - n * (best.side * 3.0));   // a 3 m chamfer round the corner
-        pts.push_back(m - n * (best.side * o.wayReach));   // (straight over the line, square to it)
+        std::vector<Vec2> pts{a};
+        if (o.wayUnder) { pts.push_back(best.b); pts.push_back(m - n * (best.side * o.wayReach)); }
+        else for (const Vec2& q : legOf(best.side, best.dir)) pts.push_back(q);
         json path = json::array();
         double len = 0;
         for (std::size_t i = 0; i < pts.size(); ++i) {
             path.push_back({std::round(pts[i].x * 100) / 100, std::round(pts[i].y * 100) / 100});
             if (i) len += dist(pts[i], pts[i - 1]);
         }
-        // the hold over the line: the builder sets its height (the footway goes OVER the track), this its reach
-        json e = {{"id", o.idPrefix + "_way_" + std::to_string(si)}, {"class", "footway"}, {"path", {{"points", path}}},
-                  {"floor", json::array({json::array({m.x, m.y, -1000.0, o.wayHold})})}};
+        // the hold over the line: the builder sets its height (the footway goes OVER the track), this its reach --
+        // or, under, the hold is the track's: level along its platforms, as high as the way under it needs
+        json e = {{"id", o.idPrefix + "_way_" + std::to_string(si)}, {"class", "footway"}, {"path", {{"points", path}}}};
+        if (!o.wayUnder) e["floor"] = json::array({json::array({m.x, m.y, -1000.0, o.wayHold})});
+        else
+            for (json& t : r.edges) {
+                const std::vector<Vec2> tp = pointsOf(t);
+                bool on = false;
+                for (std::size_t j = 0; j + 1 < tp.size() && !on; ++j) {
+                    const Vec2 u = tp[j], v = tp[j + 1], uv = v - u;
+                    const double k = std::clamp(((m - u).x * uv.x + (m - u).y * uv.y) / std::max(1e-9, uv.x * uv.x + uv.y * uv.y), 0.0, 1.0);
+                    on = dist(u + uv * k, m) < 0.5;
+                }
+                if (!on) continue;
+                if (!t.contains("floor")) t["floor"] = json::array();
+                t["floor"].push_back(json::array({std::round(m.x * 100) / 100, std::round(m.y * 100) / 100, -1000.0, o.platformHalf}));
+                break;
+            }
         r.ways.push_back(e);
         sn.street = best.id;
         sn.way = len;
@@ -264,7 +326,7 @@ IslandRailResult islandRailLoop(const json& graph, const std::vector<RailTown>& 
             r.skipped.push_back(why);
             continue;
         }
-        r.stations.push_back({t.name, at(bestS), bestS, bestD});
+        r.stations.push_back({t.name, at(bestS), bestS, bestD, "", 0});
     }
     std::sort(r.stations.begin(), r.stations.end(), [](const IslandRailStation& a, const IslandRailStation& b) { return a.station < b.station; });
 
@@ -519,8 +581,16 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
         for (std::size_t i = 0; i + 1 < open.size(); ++i) if (keep[i]) s2.push_back(open[i]);
         st = s2;
     }
-    // set in from the streets, corners rounded, resampled
-    std::vector<Vec2> inset = insetClosed(st, o.setIn);
+    // set in from the streets, corners rounded, resampled. The set-in, unless given: the widest of the streets it follows
+    // to the back of its sidewalk, the station behind the platform and a metre (island 8's arterials are 3+3 lanes and
+    // a 5 m sidewalk: 16 m to the back; a fixed 21 m ran the deck edge over their sidewalks)
+    double setIn = o.setIn;
+    if (setIn <= 0) {
+        double widest = 0;
+        for (const char* cls : {"arterial", "collector"}) widest = std::max(widest, streetHalfWidth(graph, cls) + streetSidewalk(graph, cls));
+        setIn = widest + kCityStationBack + 1.0;
+    }
+    std::vector<Vec2> inset = insetClosed(st, setIn);
     // no cusps: where the set-in line turns back sharply (an inset corner the untie left a spike at), cut the corner
     // twice (Chaikin) before rounding -- a 40 m fillet shrinks to nothing on legs a few metres long
     for (int pass = 0; pass < 3; ++pass) {
@@ -540,13 +610,13 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
     // NO CURVE TIGHTER THAN A TRAM TAKES: where the circle through a point and its neighbours two either side is
     // under the minimum, relax the point toward its neighbours' middle, until none is (the fillet cannot round a
     // corner whose legs are a few metres long)
-    {
-        const double rMin = 0.6 * o.radius;
-        auto radiusAt = [](Vec2 a, Vec2 b, Vec2 c) {
-            const double ab = dist(a, b), bc = dist(b, c), ca = dist(c, a);
-            const double cr = std::fabs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
-            return cr < 1e-9 ? 1e9 : ab * bc * ca / (2 * cr);
-        };
+    const double rMin = 0.6 * o.radius;
+    auto radiusAt = [](Vec2 a, Vec2 b, Vec2 c) {
+        const double ab = dist(a, b), bc = dist(b, c), ca = dist(c, a);
+        const double cr = std::fabs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+        return cr < 1e-9 ? 1e9 : ab * bc * ca / (2 * cr);
+    };
+    auto relax = [&]() {
         for (int it = 0; it < 400; ++it) {
             const std::size_t m = line0.size();
             bool tight = false;
@@ -564,6 +634,46 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
             if (!tight) break;
         }
         line0 = resampleClosed(line0, o.spacing);
+    };
+    relax();
+    // KEEP CLEAR OF THE STREETS IT RUNS BESIDE: rounding and relaxing pull a set-in line back toward the street on the
+    // inside of a bend (Weyby's came to 13 m of a 16 m arterial's centreline, its deck over the sidewalk). Where the
+    // line runs along a street (within 30 degrees of it) nearer than the street's back of sidewalk and the pair's own
+    // half width, push it out, and relax again. Crossing a street square is what it should do and is left alone.
+    {
+        struct Seg { Vec2 a, b; double need; };
+        std::vector<Seg> segs;
+        for (const json& e : graph["edges"]) {
+            const std::string cls = e.value("class", "");
+            if (cls == "footway" || cls == "rail" || cls == "light_rail") continue;
+            const std::vector<Vec2> p = pointsOf(e);
+            const double need = streetHalfWidth(graph, cls) + streetSidewalk(graph, cls) + 3.6 + 1.0;
+            for (std::size_t j = 0; j + 1 < p.size(); ++j) segs.push_back({p[j], p[j + 1], need});
+        }
+        for (int round = 0; round < 6; ++round) {
+            const std::size_t m = line0.size();
+            std::vector<Vec2> push(m, Vec2(0, 0));
+            int pushed = 0;
+            for (std::size_t i = 0; i < m; ++i) {
+                const Vec2 p = line0[i], tl = line0[(i + 1) % m] - line0[(i + m - 1) % m];
+                const double tll = std::max(1e-9, tl.length());
+                for (const Seg& sg : segs) {
+                    const Vec2 uv = sg.b - sg.a; const double L2 = uv.x * uv.x + uv.y * uv.y; if (L2 < 1e-9) continue;
+                    const double k = std::clamp(((p - sg.a).x * uv.x + (p - sg.a).y * uv.y) / L2, 0.0, 1.0);
+                    const Vec2 q = sg.a + uv * k; const double d = dist(p, q);
+                    if (d >= sg.need || d < 0.5) continue;
+                    if (std::fabs((tl.x * uv.x + tl.y * uv.y) / (tll * std::sqrt(L2))) < 0.866) continue;   // across it, not along
+                    const Vec2 away = (p - q) * (1.0 / d);
+                    const double want = sg.need - d;
+                    if (want > push[i].length()) push[i] = away * want;
+                }
+                if (push[i].length() > 0.05) ++pushed;
+            }
+            if (!pushed) break;
+            for (std::size_t i = 0; i < m; ++i) line0[i] = line0[i] + push[i];
+            relax();
+            if (std::getenv("RT_CITY_RAIL_DEBUG")) std::fprintf(stderr, "[city rail] %s: keep-clear round %d pushed %d of %zu points\n", city.name.c_str(), round, pushed, m);
+        }
     }
     if (std::getenv("RT_CITY_RAIL_DEBUG")) {
         auto len = [](const std::vector<Vec2>& p) { double L = 0; for (std::size_t i = 0; i < p.size(); ++i) L += dist(p[i], p[(i + 1) % p.size()]); return L; };
@@ -590,14 +700,25 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
         const double t = seg > 1e-9 ? (s - sAt[i]) / seg : 0.0;
         return line[i % n] + (line[(i + 1) % n] - line[i % n]) * t;
     };
-    // crossings (each a lift over a street)
+    // crossings (each a lift over a street), and where along the loop
+    std::vector<double> crossAt;
     for (const json& e : graph["edges"]) {
         const std::string cls = e.value("class", "");
         if (cls == "footway") continue;
         const std::vector<Vec2> p = pointsOf(e);
         for (std::size_t j = 0; j + 1 < p.size(); ++j)
-            for (std::size_t i = 0; i < n; ++i) if (segCross(line[i], line[(i + 1) % n], p[j], p[j + 1], nullptr)) ++r.crossings;
+            for (std::size_t i = 0; i < n; ++i) {
+                Vec2 x;
+                if (!segCross(line[i], line[(i + 1) % n], p[j], p[j + 1], &x)) continue;
+                ++r.crossings;
+                crossAt.push_back(sAt[i] + dist(line[i], x));
+            }
     }
+    auto clearOfCrossings = [&](double s) {
+        double d = 1e30;
+        for (double c : crossAt) { const double a = std::fabs(std::fmod(s - c + 2 * r.length, r.length)); d = std::min(d, std::min(a, r.length - a)); }
+        return d;
+    };
     // STATIONS: at the interchange, then the most built-up straight 550-900 m on, round to the start
     const double half = 0.5 * o.platformLength;
     auto straight = [&](double s) {
@@ -609,7 +730,8 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
     auto stationNear = [&](double s0, double s1) {
         double best = -1e30, bs = -1;
         for (double s = s0; s <= s1; s += 10.0) {
-            if (!straight(s)) continue;
+            // no street under the platforms (its flights would land on it; Saltwood 3 stood over a bending arterial)
+            if (!straight(s) || clearOfCrossings(s) < half + o.platformClear) continue;
             const double sc = density(at(s), 300.0);
             if (sc > best) { best = sc; bs = s; }
         }
@@ -617,9 +739,10 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
     };
     {
         double s0 = -1;
-        for (double s = 0; s < 400.0 && s0 < 0; s += 10.0) { if (straight(s)) s0 = s; if (s0 < 0 && straight(r.length - s)) s0 = r.length - s; }
+        auto ok = [&](double s) { return straight(s) && clearOfCrossings(s) >= half + o.platformClear; };
+        for (double s = 0; s < 400.0 && s0 < 0; s += 10.0) { if (ok(s)) s0 = s; if (s0 < 0 && ok(r.length - s)) s0 = r.length - s; }
         if (s0 < 0) s0 = stationNear(0, 400);
-        if (s0 >= 0) r.stations.push_back({city.name + " Central", at(s0), s0, dist(at(s0), city.at)});
+        if (s0 >= 0) r.stations.push_back({city.name + " Central", at(s0), s0, dist(at(s0), city.at), "", 0});
         double cur = s0 < 0 ? 0 : s0;
         int k = 1;
         while (true) {
@@ -627,9 +750,10 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
             const double end = (first <= cur ? first + r.length : first) - o.stopMin;
             const double lo = cur + o.stopMin, hi = std::min(cur + o.stopMax, end);
             if (lo > hi) break;
-            const double s = stationNear(lo, hi);
+            double s = stationNear(lo, hi);
+            if (s < 0) s = stationNear(hi, std::min(hi + 400.0, end));   // (none clear of the streets: a longer run, not a gap)
             if (s < 0) break;
-            r.stations.push_back({city.name + " " + std::to_string(++k), at(s), std::fmod(s, r.length), dist(at(s), city.at)});
+            r.stations.push_back({city.name + " " + std::to_string(++k), at(s), std::fmod(s, r.length), dist(at(s), city.at), "", 0});
             cur = s;
         }
     }
@@ -638,8 +762,17 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
     std::vector<double> cuts;
     if (r.stations.size() >= 2) {
         for (std::size_t i = 0; i < r.stations.size(); ++i) {
-            const double a = r.stations[i].station, b = r.stations[(i + 1) % r.stations.size()].station;
-            cuts.push_back(std::fmod(a + 0.5 * std::fmod(b - a + r.length, r.length), r.length));
+            // A JOINT CLEAR OF THE STREETS: two sections meeting where one is lifted over a street settle at different
+            // heights (Saltwood's joints stepped 1.6-4 m, and a crossing beside one came 2.6 m short of clearance).
+            // The point between the platforms farthest from any crossing, up to o.jointClear, nearest the middle.
+            const double a = r.stations[i].station, gap = std::fmod(r.stations[(i + 1) % r.stations.size()].station - a + r.length, r.length);
+            const double lo = half + 10.0, hi = gap - half - 10.0;
+            double bestS = 0.5 * gap, bestScore = -1e30;
+            for (double u = lo; u <= hi; u += 2.0) {
+                const double score = std::min(o.jointClear, clearOfCrossings(a + u)) * 1000.0 - std::fabs(u - 0.5 * gap);
+                if (score > bestScore) { bestScore = score; bestS = u; }
+            }
+            cuts.push_back(std::fmod(a + bestS, r.length));
         }
     } else {
         cuts = {0, r.length / 3, 2 * r.length / 3};
@@ -666,10 +799,13 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
     // platforms' backs and the street's sidewalk
     IslandRailOptions wo;
     wo.idPrefix = o.idPrefix;
-    wo.wayOffset = 10.5;
+    // (the line is held up over its side streets: the way passes under it, a flight up to each platform beside it)
+    wo.wayUnder = true;
+    wo.platformHalf = half + 5.0;
+    const double back = 1.8 + 1.55 + o.platformWidth;   // half the pair, the platform gap (rail_track.h), the platform
+    wo.wayOffset = back + 2.2 + 1.5 + 1.0;   // the leg clear of the flight behind the platform (deck_mesh.cpp's 1.9 m)
     wo.wayLeg = 30.0;
-    wo.wayHold = 1.8 + 1.55 + o.platformWidth + 0.5;   // half the pair, the platform gap (rail_track.h), the platform
-    wo.wayReach = wo.wayHold;
+    wo.wayReach = wo.wayOffset;              // and on as far beyond the far platform: its flight leaves from the way
     wo.wayMaxStreet = 120.0;
     wayIn(graph, wo, r, at);
     return r;

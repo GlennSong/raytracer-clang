@@ -707,3 +707,39 @@ TEST_CASE(lanes_pads_clip_to_their_blocks_same_as_the_full_union) {
     CHECK(sf == ss);
     CHECK(!fast.empty() && fast.size() < lots.size() * 2);
 }
+
+// A LINE IN SECTIONS: a lift's approach runs on across the joint (chainTrackFloors). Two light-rail sections end to
+// start, a street under the first 30 m short of the joint: the second section takes up the descent where the first
+// leaves it, no step at the joint (Saltwood's joints stepped 4 m).
+TEST_CASE(lanes_a_track_lift_runs_on_across_a_joint_between_sections) {
+    nlohmann::json g;
+    g["name"] = "joint";
+    g["edges"] = nlohmann::json::array({
+        {{"id", "a"}, {"class", "light_rail"}, {"path", {{"type", "polyline"}, {"points", {{-400, 0}, {0, 0}}}}}},
+        {{"id", "b"}, {"class", "light_rail"}, {"path", {{"type", "polyline"}, {"points", {{0, 0}, {400, 0}}}}}},
+        {{"id", "st"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{-30, -150}, {-30, 150}}}}}}});
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+    const EdgeSpec& a = *r->graph.find("a"); const EdgeSpec& b = *r->graph.find("b");
+    const double zA = a.z.back(), zB = b.z.front(), lift = zA - a.t.back();
+    std::printf("    [joint] a ends %.2f m, b starts %.2f m (%.1f m over the ground)\n", zA, zB, lift);
+    CHECK(lift > 3.0);                    // still on its way down from the street when it reaches the joint
+    CHECK(std::fabs(zA - zB) < 0.05);     // and the next section takes it up there
+    checkInvariants(*r);
+}
+
+// THE LIGHT RAIL LAB: held up over its streets, its stations reached from below -- the way passes under the line at
+// the street's level, and each platform stands level along its length.
+TEST_CASE(lanes_light_rail_lab_reaches_its_stations_from_below) {
+    const Result& r = scene("light_rail_lab"); checkInvariants(r);
+    for (const char* id : {"lr_s", "lr_n"}) {
+        const EdgeSpec& e = *r.graph.find(id);
+        double zMin = 1e9, zMax = -1e9;
+        for (std::size_t i = 0; i < e.s.size(); ++i)
+            if (e.s[i] >= 62 && e.s[i] <= 142) { zMin = std::min(zMin, e.z[i]); zMax = std::max(zMax, e.z[i]); }
+        CHECK(zMax - zMin < 0.05);        // level along the platforms
+        const EdgeSpec& w = *r.graph.find(std::string(id) == "lr_s" ? "lr_way_s" : "lr_way_n");
+        double wMax = -1e9;
+        for (double z : w.z) wMax = std::max(wMax, z);
+        CHECK(zMin - wMax > 5.0);         // the way under it, on the street's level
+    }
+}

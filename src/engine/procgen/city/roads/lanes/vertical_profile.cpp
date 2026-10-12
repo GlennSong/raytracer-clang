@@ -64,6 +64,8 @@ void throughProfile(EdgeSpec& e, const HeightField& terrain, const RoadClassSpec
         double sc = project(e.xy, e.s, Vec2(fp[0], fp[1])).station;
         for (size_t i = 0; i < z.size(); ++i) z[i] = std::max(z[i], fp[2] - gd * std::max(0.0, std::fabs(e.s[i] - sc) - fp[3]));
     }
+    for (const auto& cf : e.chainFloors)
+        for (size_t i = 0; i < z.size(); ++i) z[i] = std::max(z[i], cf[1] - gd * std::max(0.0, std::fabs(e.s[i] - cf[0]) - cf[2]));
     e.z = gradeLimit(z, e.s, gd);
     if (c.balance > 0.0) {   // blend toward the CUT envelope: -gradeLimit(-z) never fills
         std::vector<double> neg(z.size());
@@ -74,6 +76,8 @@ void throughProfile(EdgeSpec& e, const HeightField& terrain, const RoadClassSpec
             const double sc = project(e.xy, e.s, Vec2(fp[0], fp[1])).station;
             for (size_t i = 0; i < e.z.size(); ++i) e.z[i] = std::max(e.z[i], fp[2] - gd * std::max(0.0, std::fabs(e.s[i] - sc) - fp[3]));
         }
+        for (const auto& cf : e.chainFloors)
+            for (size_t i = 0; i < e.z.size(); ++i) e.z[i] = std::max(e.z[i], cf[1] - gd * std::max(0.0, std::fabs(e.s[i] - cf[0]) - cf[2]));
         if (e.hasZMin) for (double& v : e.z) v = std::max(v, e.zMin);
     }
     // An open end is pinned to the ground there, and nothing may sit higher than the
@@ -92,10 +96,34 @@ void throughProfile(EdgeSpec& e, const HeightField& terrain, const RoadClassSpec
 }
 
 void applyFloors(EdgeSpec& e, const RoadClassSpec& c) {
-    if (e.floorPts.empty() || e.z.size() != e.s.size()) return; const double gd = kDesignGrade * c.gMax;
+    if ((e.floorPts.empty() && e.chainFloors.empty()) || e.z.size() != e.s.size()) return; const double gd = kDesignGrade * c.gMax;
     for (const auto& fp : e.floorPts) {
         const double sc = project(e.xy, e.s, Vec2(fp[0], fp[1])).station;
         for (size_t i = 0; i < e.z.size(); ++i) e.z[i] = std::max(e.z[i], fp[2] - gd * std::max(0.0, std::fabs(e.s[i] - sc) - fp[3]));
+    }
+    for (const auto& cf : e.chainFloors)
+        for (size_t i = 0; i < e.z.size(); ++i) e.z[i] = std::max(e.z[i], cf[1] - gd * std::max(0.0, std::fabs(e.s[i] - cf[0]) - cf[2]));
+}
+
+void chainTrackFloors(RoadLabGraph& g, double tol) {
+    for (EdgeSpec& b : g.edges) b.chainFloors.clear();
+    for (EdgeSpec& b : g.edges) {
+        if (!g.cls(b).track || b.xy.size() < 2 || b.s.size() != b.xy.size()) continue;
+        for (int kb = 0; kb < 2; ++kb) {
+            const Vec2 P = kb ? b.xy.back() : b.xy.front();
+            for (const EdgeSpec& a : g.edges) {
+                if (&a == &b || !g.cls(a).track || a.cls != b.cls || a.xy.size() < 2 || a.s.size() != a.xy.size()) continue;
+                for (int ka = 0; ka < 2; ++ka) {
+                    if (distance(ka ? a.xy.back() : a.xy.front(), P) > tol) continue;
+                    for (const auto& fp : a.floorPts) {
+                        if (fp[2] < -100.0) continue;   // (a hold placed with no height yet)
+                        const double sa = project(a.xy, a.s, Vec2(fp[0], fp[1])).station;
+                        const double d = ka ? a.s.back() - sa : sa;   // from the hold to the joint, along a
+                        b.chainFloors.push_back({kb ? b.s.back() + d : -d, fp[2], fp[3]});
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -154,6 +182,10 @@ double nodeMismatch(const RoadLabGraph& g, double tol, double maxDz, NodeMismatc
     return worst;
 }
 
+// A road that ENDS under a track (a dead end under a city's light rail) meets it no more than one crossing it: a tee
+// with a track is structure too. (Forced level, Saltwood's p0_s42 held the line 7.3 m off its own profile.)
+bool anyTrack(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b) { return g.cls(a).track || g.cls(b).track; }
+
 bool separates(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b) {
     if (g.cls(a).track || g.cls(b).track) return true;
     return g.rules.freewaySeparates && mustSeparate(a, b);
@@ -206,7 +238,7 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
         }
         for (std::size_t mi = 0; mi < meet.size(); ++mi) {
             const Vec2& p = meet[mi];
-            if (mi < crossed && separates(g, a, b)) continue;   // a freeway (or a track) is never met at grade
+            if ((mi < crossed || anyTrack(g, a, b)) && separates(g, a, b)) continue;   // a freeway (or a track) is never met at grade
             // Only a SHARED node belongs to nodeConsistency — both roads ending here.
             // One road ending mid-span of the other is a T, and nodeConsistency only
             // recognises it within endpointTol (0.5 m) of the centreline; a metre out
@@ -272,7 +304,7 @@ std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g) {
             m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;
             m.ramp = a.isRamp() || b.isRamp();
             m.tee = streets && mi >= crossed;   // an END under the other's band, not a crossing of centrelines
-            m.sep = mi < crossed && separates(g, a, b);
+            m.sep = (mi < crossed || anyTrack(g, a, b)) && separates(g, a, b);
             out.push_back(m);
         }
     }
@@ -287,6 +319,10 @@ double crossingConsistency(RoadLabGraph& g, const std::vector<CrossingMeet>& mee
         if (m.sep) continue;   // a freeway crossing: structure, whatever the heights
         if (!m.tee && std::fabs(dz) >= (m.ramp ? rampMaxDz : maxDz)) continue;   // grade separation (a street's tee never is)
         worst = std::max(worst, std::fabs(dz)); if (std::fabs(dz) < 1e-4) continue;
+        static const bool trace = std::getenv("RT_XC_TRACE") != nullptr;   // which level crossing will not agree
+        if (trace && std::fabs(dz) > 1.0)
+            std::fprintf(stderr, "[xc] %s / %s %s dz %.2f at (%.0f, %.0f)\n", hi.id.c_str(), lo.id.c_str(), m.tee ? "tee" : "crossing", dz,
+                         pointAt(lo.xy, lo.s, m.sLo).x, pointAt(lo.xy, lo.s, m.sLo).y);
         const double R = std::max(radius, 1.5 * std::fabs(dz) / ((1 - kDesignGrade) * g.cls(lo).gMax / 4));   // four passes share the design headroom
         for (size_t k = 0; k < lo.z.size(); ++k) { const double u = std::clamp(1 - std::fabs(lo.s[k] - m.sLo) / R, 0.0, 1.0); lo.z[k] += dz * u * u * (3 - 2 * u); }
     }

@@ -51,6 +51,11 @@ struct IslandRailOptions {
     double wayHold = 11.0;         // the footbridge held flat this far either side of the line (the platforms' backs)
     double wayReach = 10.05;       // the footbridge's far end, past the line (over the far platform's back edge)
     double wayMaxStreet = 400.0;   // no street nearer than this: no way in
+    // UNDER, not over (a city's light rail, held up over its side streets): the way stays on the street's level and
+    // passes under the line, and the builder puts a flight UP to each platform beside it. No hold on the way; the
+    // track's hold is the platform's length, so the station stands level.
+    bool wayUnder = false;
+    double platformHalf = 0;       // wayUnder: the track's hold either side of the way (half the platform and a margin)
 };
 
 struct IslandRailStation {
@@ -85,14 +90,16 @@ IslandRailResult islandRailLoop(const nlohmann::json& graph, const std::vector<R
 // a way in from the street beside it.
 struct CityRailOptions {
     double ringMin = 350.0, ringMax = 950.0;   // the loop's waypoints: this far from the hub
-    double setIn = 21.0;           // street centreline -> the track pair's centreline (a 2-lane arterial, its sidewalk,
-                                   // the way in's leg, a platform and its gap, half the pair)
+    double setIn = 0;              // street centreline -> the track pair's centreline; 0: from the graph's widest arterial or
+                                   // collector -- to the back of its sidewalk, a station's platforms and flights, a metre
     double radius = 40.0;          // corners rounded to this (the tightest a light-rail car takes at speed)
     double spacing = 5.0;
     double platformLength = 80.0;  // a light-rail train is ~45 m
     double platformWidth = 4.0;
     double straightRadius = 250.0;
     double stopMin = 550.0, stopMax = 900.0;   // between stations along the loop
+    double platformClear = 8.0;    // no street crossed within this of a platform's ends
+    double jointClear = 60.0;      // the loop's sections join this far from any street it crosses (as far as the gap allows)
     std::string idPrefix = "city_rail";
 };
 

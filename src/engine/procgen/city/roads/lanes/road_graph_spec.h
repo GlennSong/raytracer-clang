@@ -142,6 +142,9 @@ struct EdgeSpec {
     bool hasZMin = false; double zMin = 0;
     double lotsFrom = -1, lotsTo = -1;   // station range where the city may build lots along this edge (-1: all of it); the rest is right-of-way
     std::vector<std::array<double, 4>> floorPts;   // (x, y, z, half-span): the profile must clear z within half-span of that station, approached at design grade beyond
+    // a TRACK's holds that belong to the section joined to one of its ends (chainTrackFloors): (station, z, half-span)
+    // in this edge's stations -- before 0 or past its end -- so a lift's approach runs on across the joint
+    std::vector<std::array<double, 3>> chainFloors;
     LaneLayout lanes;
     std::vector<PocketSpec> pockets;
     std::vector<PlatformSpec> platforms;   // track classes only

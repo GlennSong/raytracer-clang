@@ -55,6 +55,8 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         }
     }
     for (EdgeSpec& e : g.edges) if (!e.isRamp()) throughProfile(e, terrain, g.cls(e));
+    chainTrackFloors(g, R.endpointTol);   // (needs every edge's stations) a track's holds run on across its joints
+    for (EdgeSpec& e : g.edges) if (!e.chainFloors.empty()) throughProfile(e, terrain, g.cls(e));
     for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // ramps need heights to take part in crossing consistency
     // where the roads meet, found once (only the heights move from here on)
     const std::vector<CrossingMeet> meets = crossingMeets(g);
@@ -74,6 +76,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         std::vector<std::vector<double>> keep;
         for (int it = 0; it < 120; ++it) {
             double mm = nodeConsistency(g, R.endpointTol, R.bridgeH), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz);
+            chainTrackFloors(g, R.endpointTol);
             for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e));   // lifts survive the blends
             for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // hosts moved
             const double cur = std::max(mm, xm);
@@ -134,7 +137,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     // (the island loop's sections lifted each other 7 m at every joint, and rode on viaducts between)
                     if (std::min(distance(a.xy.front(), p), distance(a.xy.back(), p)) < R.endpointTol &&
                         std::min(distance(b.xy.front(), p), distance(b.xy.back(), p)) < R.endpointTol) continue;
-                    const bool sep = mi < crossedAB && separates(g, a, b);   // a freeway (or a track) crossing is structure at any height
+                    const bool sep = (mi < crossedAB || anyTrack(g, a, b)) && separates(g, a, b);   // a freeway (or a track) crossing is structure at any height; a track's tee too
                     const double za = projectZ(a, p), zb = projectZ(b, p); if (!sep && std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
                     // which goes over: the higher; for a forced separation, the one the scene asked to (a floor
                     // point over the crossing), else the freeway
@@ -177,6 +180,28 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     const double need = zLo + R.underClearance + (overTrack ? std::max(g.cls(hi).thick, g.cls(lo).thick) : g.cls(hi).thick) + R.structureDepth;
                     const double sts[3] = {std::max(0.0, sHi - span), sHi, std::min(hi.s.back(), sHi + span)};
                     bool low = false; for (double st : sts) if (interp(hi.s, hi.z, st) < need - 0.02) low = true;
+                    // A STATION OVER ITS WAY IN (a city's light rail: the way passes under, a flight up to each platform):
+                    // the scene's hold on the track over its platforms, covering this crossing, is set LEVEL along its
+                    // reach -- as high as this way needs, or as the track stands anywhere along it (a lift over a street
+                    // beside the station would otherwise tilt its platforms)
+                    if (g.cls(hi).track && g.cls(lo).footway && !hi.platforms.empty()) {
+                        bool held = false;
+                        for (auto& fp : hi.floorPts) {
+                            const double sc = project(hi.xy, hi.s, Vec2(fp[0], fp[1])).station;
+                            if (fp[3] <= span || std::fabs(sHi - sc) > fp[3]) continue;
+                            double zMax = -1e30, zMin = 1e30;
+                            for (int k = -8; k <= 8; ++k) {
+                                const double z = interp(hi.s, hi.z, std::clamp(sc + fp[3] * k / 8.0, 0.0, hi.s.back()));
+                                zMax = std::max(zMax, z); zMin = std::min(zMin, z);
+                            }
+                            held = true;
+                            if (zMax - zMin <= 0.3 && interp(hi.s, hi.z, sHi) >= need - 0.02) continue;
+                            fp[2] = std::max({fp[2], need, zMax});
+                            any = true; ++lifted;
+                            throughProfile(hi, terrain, g.cls(hi));
+                        }
+                        if (held) continue;
+                    }
                     if (!low) continue;
                     static const bool trace = std::getenv("LANELAB_TRACE_CLEARANCE") != nullptr;
                     if (trace) std::fprintf(stderr, "clearance: %s over %s at (%.0f, %.0f) need %.2f, z before %.2f %.2f %.2f (span %.1f)", hi.id.c_str(), lo.id.c_str(), p.x, p.y, need, interp(hi.s, hi.z, sts[0]), interp(hi.s, hi.z, sts[1]), interp(hi.s, hi.z, sts[2]), span);
@@ -194,7 +219,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
         }
         if (lifted) std::fprintf(stderr, "lanelab: %d grade-separated crossings lifted to clear their structure\n", lifted);
     }
-    { NodeMismatchWhere w; const double nm = nodeMismatch(g, R.endpointTol, R.bridgeH, &w), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz); for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e)); r.nodeMismatchAfter = std::max(nm, xm);
+    { NodeMismatchWhere w; const double nm = nodeMismatch(g, R.endpointTol, R.bridgeH, &w), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz); chainTrackFloors(g, R.endpointTol); for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e)); r.nodeMismatchAfter = std::max(nm, xm);
       if (nm >= xm && nm > 0.02) r.nodeMismatchWhere = w.a + (w.atEnd ? " meets " : " ends on ") + w.b + " at (" + std::to_string(static_cast<int>(w.at.x)) + ", " + std::to_string(static_cast<int>(w.at.y)) + ")"; }
     for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);
     for (Lane& l : r.lanes.lanes) if (l.isConnector()) {
