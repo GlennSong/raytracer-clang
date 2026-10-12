@@ -177,7 +177,9 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     // the 0.8 m bed, a link over the island loop, both came up short with the upper's own). Road over road
                     // keeps the upper's: the thicker one lifted the island's diamond ramps over the freeway 0.2 m, steeper.
                     const bool overTrack = g.cls(hi).track || g.cls(lo).track;
-                    const double need = zLo + R.underClearance + (overTrack ? std::max(g.cls(hi).thick, g.cls(lo).thick) : g.cls(hi).thick) + R.structureDepth;
+                    // (and a track 0.2 m more: the street under it settles a few cm after the lift, as the agree passes
+                    // level its junctions -- Weyby's p1_s115 came 9 cm short under the light rail, link35 7 cm under the loop)
+                    const double need = zLo + R.underClearance + (overTrack ? std::max(g.cls(hi).thick, g.cls(lo).thick) + 0.2 : g.cls(hi).thick) + R.structureDepth;
                     const double sts[3] = {std::max(0.0, sHi - span), sHi, std::min(hi.s.back(), sHi + span)};
                     bool low = false; for (double st : sts) if (interp(hi.s, hi.z, st) < need - 0.02) low = true;
                     // A STATION OVER ITS WAY IN (a city's light rail: the way passes under, a flight up to each platform):
