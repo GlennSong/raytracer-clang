@@ -118,6 +118,9 @@ public:
     // How many of the anchors a built route stops at (of how many there were).
     int anchorsServed() const { return anchorsServed_; }
     int anchorCount() const { return anchorCount_; }
+    // Why each anchor is or isn't served: "" served, else a reason (no street near it, a network too small for buses,
+    // not a stop on any route).
+    const std::vector<const char*>& anchorMisses() const { return anchorMisses_; }
 
     // The street network a nav node belongs to (junctions joined by walkable
     // streets; the city is one, each town out along the freeway another), or
@@ -229,6 +232,7 @@ public:
 private:
     void buildRegional(const engine::NavGraph& nav);
     int anchorsServed_ = 0, anchorCount_ = 0;
+    std::vector<const char*> anchorMisses_;
     BusRoute reverseOf(const BusRoute& f, const engine::NavGraph& nav) const;
     std::vector<int> comp_;   // street network per nav node
     std::vector<BusRoute> routes_;

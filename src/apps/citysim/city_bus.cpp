@@ -319,12 +319,17 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
             compStreet[static_cast<std::size_t>(comp[static_cast<std::size_t>(L.from)])] += 0.5 * L.length;
     const int mainComp = static_cast<int>(std::max_element(compSize.begin(), compSize.end()) - compSize.begin());
 
-    // THE ANCHORS' NODES: the nearest street node to each (a walkable street, not a freeway or ramp), within 80 m
+    // THE ANCHORS' NODES: the nearest street node to each (a walkable street, not a freeway or ramp, in a network
+    // big enough for buses), within 80 m
     std::vector<int> anchorNode(anchors.size(), -1);
     for (std::size_t a = 0; a < anchors.size(); ++a) {
         Real bd = 80.0;
         for (const engine::NavLink& L : nav.links) {
             if (!L.walkable || L.klass == engine::RoadClass::Freeway || L.klass == engine::RoadClass::Ramp) continue;
+            // a network buses run in: Coldwell's way in took the node of a scrap of street nearer than the
+            // boulevard it leaves from, and got no bus
+            const int c = comp[static_cast<std::size_t>(L.from)];
+            if (c != mainComp && compStreet[static_cast<std::size_t>(c)] < kMinPlaceStreet) continue;
             const Real d = dist(nav.nodes[static_cast<std::size_t>(L.from)], anchors[a]);
             if (d < bd) { bd = d; anchorNode[a] = L.from; }
         }
@@ -557,10 +562,17 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
         buildLoops(c, want, (seed ? seed : 1u) ^ (static_cast<uint32_t>(c) * 0x9E3779B9u));
     }
     buildRegional(nav);
-    for (const int an : anchorNode) {
+    anchorMisses_.assign(anchorNode.size(), "");
+    for (std::size_t a = 0; a < anchorNode.size(); ++a) {
+        const int an = anchorNode[a];
         bool served = false;
         for (const BusRoute& r : routes_) for (const BusStop& st : r.stops) if (an >= 0 && st.node == an) served = true;
         anchorsServed_ += served ? 1 : 0;
+        if (served) continue;
+        const int c = an < 0 ? -1 : comp[static_cast<std::size_t>(an)];
+        anchorMisses_[a] = an < 0 ? "no walkable street within 80 m"
+                         : (c != mainComp && compStreet[static_cast<std::size_t>(c)] < kMinPlaceStreet) ? "its street network is too small for buses"
+                         : "not a stop on any route";
     }
 
     // BOTH WAYS ROUND (Glenn: "Buses should probably go in both directions"). A one-way loop made the stop just

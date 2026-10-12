@@ -731,7 +731,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
     if (!sim_.busAnchors.empty())
+    {
         LOG_INFO << "[citysim] bus lines stop at " << sim_.buses().anchorsServed() << " of " << sim_.buses().anchorCount() << " stations' ways in";
+        const auto& miss = sim_.buses().anchorMisses();
+        for (std::size_t a = 0; a < miss.size() && a < sim_.busAnchors.size(); ++a)
+            if (*miss[a]) LOG_INFO << "[citysim]   no bus at the way in at (" << sim_.busAnchors[a].x << ", " << sim_.busAnchors[a].y << "): " << miss[a];
+    }
     LOG_INFO << "[citysim] startup: setBuses " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     // THE BUSES' DAY: with a depot to go back to, they run from busServiceStart to busServiceEnd and spend the night in
     // its bays (Glenn: "a dedicated bus depot they return to at end of day"); without one, round the clock as before.

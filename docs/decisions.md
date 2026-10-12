@@ -9449,7 +9449,8 @@ Decision:
 
 Island 8: eight ways in, 106-163 m. Against the rail-only graph the full lanes check fails the same items, link28
 11.26 % (was 10.90); diamonds back to their rail-only grades, node mismatch 0.27 cm.
-Baked and seen from above at Saltwood, Dunwyn Harbor and Weyby: street, ground-level path, walled steps, bridge,
-a stair down onto each platform. Buses stop at 7 of the 8 ways in. The rail lab's `central_way` was walked from
-platform over the bridge and down to the ground. Owed: which station's way in the buses miss and why; a walk test on
-the island (the probe's teleport doesn't settle on a deck); lifts for anyone who can't take stairs.
+Baked and seen from above at all eight: street, ground-level path, walled steps, bridge, a stair down onto each
+platform. Walked at all eight: from the street end 22-24 m up the path, and from the bridge down the steps toward
+town. Buses stop at all eight ways in -- Coldwell's at first took the node of a scrap of street nearer than the
+boulevard it leaves from (a network too small for buses) and got none; anchors now look only in networks buses run
+in, and the log names any way in left without a bus and why. Owed: lifts for anyone who can't take stairs.
