@@ -28,6 +28,11 @@ const std::map<std::string, RoadClassSpec>& defaultClasses() {
         // a parapet where the track stands on structure; nothing at grade (the lab's own fence comes later)
         BarrierSpec wall; wall.kind = BarrierKind::Wall; wall.h = 1.0; wall.set = true;
         m["rail"].edges[3] = wall;   // EdgeRole::Elevated
+        // LIGHT RAIL in a town (Glenn: "Bigger cities: light rail ... a loop (Yamanote). Start simple."): a double track at
+        // 3.6 m centres, a tram's grade (5 %) over a street's window, so it climbs over a cross street and back in a block
+        add("light_rail", 3.6, 1, 1, 0.0, 0.0, 0.0, 2, 0.05, 120.0, 0.7);
+        m["light_rail"].track = true;
+        m["light_rail"].edges[3] = wall;
         // a footway: one 3 m path, a parapet wherever it stands clear of the ground, and STAIRS where it is steep --
         // the island's platforms stand 11-24 m over their streets (the track on the hillside above town): a 12 % ramp
         // would have been 115-250 m long. 60 % is a stair's pitch (the mesher steps whatever is steeper than 15 %).

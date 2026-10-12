@@ -97,3 +97,50 @@ TEST_CASE(island_rail_every_station_gets_a_way_in_from_the_nearest_street_over_t
     CHECK(w["floor"][0][2].get<double>() < -100.0);
     CHECK(w["floor"][0][3].get<double>() >= 10.05);
 }
+
+TEST_CASE(a_city_light_rail_loop_follows_its_streets_set_in_and_smooth) {
+    // a 2 km city on a 200 m grid of arterials, its hub in the middle, the main line's way in off its east edge
+    json g;
+    g["edges"] = json::array();
+    int k = 0;
+    for (double c = -1000; c <= 1000; c += 200)   // each street a block long, junction to junction, as a lanes graph has them
+        for (double u = -1000; u < 1000; u += 200) {
+            g["edges"].push_back({{"id", "ns" + std::to_string(k++)}, {"class", "arterial"}, {"path", {{"points", json::array({json::array({c, u}), json::array({c, u + 200})})}}}});
+            g["edges"].push_back({{"id", "ew" + std::to_string(k++)}, {"class", "arterial"}, {"path", {{"points", json::array({json::array({u, c}), json::array({u + 200, c})})}}}});
+        }
+    const IslandRailResult r = cityRailLoop(g, RailTown{"Gridton", Vec2(0, 0)}, Vec2(1000, 120), CityRailOptions{});
+    for (const std::string& w : r.skipped) std::printf("    [city rail] skipped: %s\n", w.c_str());
+    CHECK(r.length > 3000 && r.length < 8000);
+    CHECK(r.stations.size() >= 3);
+    CHECK(r.crossings > 4);   // over its side streets
+    // the edges join end to start round the loop, all light rail
+    std::vector<Vec2> pts;
+    for (std::size_t i = 0; i < r.edges.size(); ++i) {
+        CHECK(r.edges[i]["class"] == "light_rail");
+        const json& a = r.edges[i]["path"]["points"].back();
+        const json& b = r.edges[(i + 1) % r.edges.size()]["path"]["points"].front();
+        CHECK(std::hypot(a[0].get<double>() - b[0].get<double>(), a[1].get<double>() - b[1].get<double>()) < 1e-6);
+        for (const json& p : r.edges[i]["path"]["points"]) pts.push_back(Vec2(p[0].get<double>(), p[1].get<double>()));
+    }
+    // set in beside its streets: running along an arterial, never on it (between crossings, >= 15 m off any centreline)
+    int along = 0, on = 0;
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        const Vec2 p = pts[i], t = pts[(i + 1) % pts.size()] - pts[(i + pts.size() - 1) % pts.size()];
+        const double gx = std::fabs(std::remainder(p.x, 200.0)), gz = std::fabs(std::remainder(p.y, 200.0));
+        if (std::min(gx, gz) < 30.0) ++along;
+        // ON a street: within 12 m of a centreline and running with it (crossing one square is what it should do)
+        const double tl = std::max(1e-9, t.length());
+        if ((gx < 12.0 && std::fabs(t.y) / tl > 0.9) || (gz < 12.0 && std::fabs(t.x) / tl > 0.9)) ++on;
+    }
+    CHECK(along > static_cast<int>(pts.size()) / 2);
+    CHECK(on < static_cast<int>(pts.size()) / 20);
+    // no curve a tram cannot take
+    double rMin = 1e9;
+    for (std::size_t i = 2; i + 2 < pts.size(); ++i) {
+        const Vec2 a = pts[i - 2], b = pts[i], c = pts[i + 2];
+        const double cr = std::fabs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+        if (cr > 1e-9) rMin = std::min(rMin, (a - b).length() * (b - c).length() * (c - a).length() / (2 * cr));
+    }
+    std::printf("    [city rail] %.0f m, %zu stations, %d crossings, tightest curve %.0f m\n", r.length, r.stations.size(), r.crossings, rMin);
+    CHECK(rMin > 18.0);
+}

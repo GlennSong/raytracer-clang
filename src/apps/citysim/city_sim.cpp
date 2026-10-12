@@ -2677,12 +2677,19 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
             if (!rt) {
                 const int to = chosen >= 0 ? chosen : goalNodeFor(a, s.target);
                 RailTrip t;
-                if (to >= 0 && to < nav_->nodeCount() && to != origin && rail_.networkOf(origin) != rail_.networkOf(to) &&
-                    rail_.plan(origin, nav_->nodes[static_cast<std::size_t>(origin)], to,
-                               nav_->nodes[static_cast<std::size_t>(to)], t)) {
-                    rail_.start(self, t);
-                    ++rail_.stats.planned;
-                    rt = rail_.tripOf(self);
+                Real secs = 0;
+                if (to >= 0 && to < nav_->nodeCount() && to != origin) {
+                    const Vec2 p0 = nav_->nodes[static_cast<std::size_t>(origin)], p1 = nav_->nodes[static_cast<std::size_t>(to)];
+                    const bool across = rail_.networkOf(origin) != rail_.networkOf(to);
+                    // between towns any train beats a walk that cannot be made; within one (a city's light rail) the
+                    // train has to save a real walk -- the bus's rule: a minute and a sixth of the walk at least
+                    const Real walkAll = (p1 - p0).length() * 1.3 / 1.4;
+                    if ((across || walkAll > 900.0) && rail_.plan(origin, p0, to, p1, t, &secs) &&
+                        (across || secs < walkAll - std::max<Real>(60.0, 0.15 * walkAll))) {
+                        rail_.start(self, t);
+                        ++rail_.stats.planned;
+                        rt = rail_.tripOf(self);
+                    }
                 }
             }
             if (rt && rt->phase == RailTrip::Phase::ToStation) {

@@ -77,6 +77,29 @@ struct IslandRailResult {
 // scenes write two: one per carriageway). The line follows the chain farther out.
 IslandRailResult islandRailLoop(const nlohmann::json& graph, const std::vector<RailTown>& towns, const IslandRailOptions& o = {});
 
+// A CITY'S LIGHT RAIL (Glenn, 2026-10-10: "Bigger cities: light rail ... a loop (Yamanote). Start simple."; 2026-10-12:
+// "How about other trains"). A loop that follows the city's arterials and collectors -- through the main-line station
+// and the built-up sectors round its hub -- set in beside the street (the blocks' lots grow round it), its corners
+// rounded to a tram's radius. It crosses every side street it meets; the builder lifts it over each (a track is never
+// met at grade), so in practice it runs elevated. Stations on its straights, the first at the main line, each with
+// a way in from the street beside it.
+struct CityRailOptions {
+    double ringMin = 350.0, ringMax = 950.0;   // the loop's waypoints: this far from the hub
+    double setIn = 21.0;           // street centreline -> the track pair's centreline (a 2-lane arterial, its sidewalk,
+                                   // the way in's leg, a platform and its gap, half the pair)
+    double radius = 40.0;          // corners rounded to this (the tightest a light-rail car takes at speed)
+    double spacing = 5.0;
+    double platformLength = 80.0;  // a light-rail train is ~45 m
+    double platformWidth = 4.0;
+    double straightRadius = 250.0;
+    double stopMin = 550.0, stopMax = 900.0;   // between stations along the loop
+    std::string idPrefix = "city_rail";
+};
+
+// `city`: its name and hub; `interchange`: where the main line's station is reached from the street (its way in's
+// street end) -- the loop passes it, and its first station stands there.
+IslandRailResult cityRailLoop(const nlohmann::json& graph, const RailTown& city, Vec2 interchange, const CityRailOptions& o = {});
+
 }  // namespace engine
 
 #endif

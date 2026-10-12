@@ -48,7 +48,8 @@ static int usage() {
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n"
-                 "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M] [--no-ways] [--way-leg M]   the island loop beside the freeway, a station per town (the level's hubs) and a footway in to each; --write puts it in the graph\n");
+                 "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M] [--no-ways] [--way-leg M]   the island loop beside the freeway, a station per town (the level's hubs) and a footway in to each; --write puts it in the graph\n"
+                 "       city_plan city-rail GRAPH.json LEVEL.json [--write] [--set-in M] [--radius M]   a light-rail loop round each city hub, through its main-line station\n");
     return 2;
 }
 
@@ -416,6 +417,57 @@ int main(int argc, char** argv) {
         for (const nlohmann::json& e : r.ways) kept.push_back(e);
         graph["edges"] = kept;
         graph["classes"]["rail"] = r.railClass;
+        std::ofstream out(argv[2]);
+        out << graph.dump(1) << "\n";
+        std::printf("wrote %s\n", argv[2]);
+        return 0;
+    }
+    if (verb == "city-rail" && argc >= 4) {
+        // THE CITIES' LIGHT RAIL (island_rail.h cityRailLoop): a loop round each city hub (the level's "financial"
+        // hubs), through its main-line station's way in, added to a lanes graph that already has the island loop.
+        nlohmann::json graph, level;
+        { std::ifstream in(argv[2]); if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", argv[2]); return 1; } in >> graph; }
+        { std::ifstream in(argv[3]); if (!in) { std::fprintf(stderr, "city_plan: cannot read %s\n", argv[3]); return 1; } in >> level; }
+        bool write = false;
+        engine::CityRailOptions co;
+        for (int a = 4; a < argc; ++a) {
+            if (std::string(argv[a]) == "--write") write = true;
+            if (std::string(argv[a]) == "--set-in" && a + 1 < argc) co.setIn = std::atof(argv[a + 1]);
+            if (std::string(argv[a]) == "--radius" && a + 1 < argc) co.radius = std::atof(argv[a + 1]);
+        }
+        nlohmann::json kept = nlohmann::json::array();
+        for (const nlohmann::json& e : graph["edges"]) if (e.value("id", "").rfind("city_rail_", 0) != 0) kept.push_back(e);
+        graph["edges"] = kept;
+        nlohmann::json added = nlohmann::json::array();
+        if (level.contains("citysim") && level["citysim"].contains("districts") && level["citysim"]["districts"].contains("hubs"))
+            for (const nlohmann::json& h : level["citysim"]["districts"]["hubs"]) {
+                if (h.value("kind", "") != "financial") continue;
+                const engine::RailTown city{h.value("_place", "city"), engine::Vec2(h["at"][0].get<double>(), h["at"][1].get<double>())};
+                // the interchange: the street end of the main line's way in nearest the hub
+                engine::Vec2 inter = city.at;
+                double best = 1e30;
+                for (const nlohmann::json& e : graph["edges"]) {
+                    if (e.value("class", "") != "footway" || e.value("id", "").rfind("rail_loop_way_", 0) != 0) continue;
+                    const nlohmann::json& p0 = e["path"]["points"][0];
+                    const engine::Vec2 q(p0[0].get<double>(), p0[1].get<double>());
+                    if ((q - city.at).length() < best) { best = (q - city.at).length(); inter = q; }
+                }
+                engine::CityRailOptions o = co;
+                std::string slug;
+                for (char ch : city.name) slug += ch == ' ' ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                o.idPrefix = "city_rail_" + slug;
+                const engine::IslandRailResult r = engine::cityRailLoop(graph, city, inter, o);
+                std::printf("%s light rail: %.0f m, %zu edges, crosses %d streets, %zu stations (interchange %.0f m from the main line's way in)\n",
+                            city.name.c_str(), r.length, r.edges.size(), r.crossings, r.stations.size(), best);
+                for (const auto& sn : r.stations)
+                    std::printf("  %-18s at (%7.0f, %7.0f), %6.0f m along, %4.0f m from the hub; way in %3.0f m from %s\n", sn.name.c_str(), sn.at.x, sn.at.y,
+                                sn.station, sn.fromTown, sn.way, sn.street.empty() ? "(none)" : sn.street.c_str());
+                for (const auto& w : r.skipped) std::printf("  skipped: %s\n", w.c_str());
+                for (const nlohmann::json& e : r.edges) added.push_back(e);
+                for (const nlohmann::json& e : r.ways) added.push_back(e);
+            }
+        if (!write) return 0;
+        for (const nlohmann::json& e : added) graph["edges"].push_back(e);
         std::ofstream out(argv[2]);
         out << graph.dump(1) << "\n";
         std::printf("wrote %s\n", argv[2]);

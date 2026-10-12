@@ -4,7 +4,10 @@
 #include <functional>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <map>
+#include <queue>
 
 namespace engine {
 
@@ -93,10 +96,10 @@ void wayIn(const json& graph, const IslandRailOptions& o, IslandRailResult& r, c
         const std::string cls = e.value("class", "");
         Line l{e.value("id", ""), cls, pointsOf(e)};
         if (l.p.size() < 2 || cls == "footway") continue;
-        if (cls != "freeway" && cls != "ramp" && cls != "rail" && cls != "mountain" && !e.contains("from") && !e.contains("to")) streets.push_back(l);
+        if (cls != "freeway" && cls != "ramp" && cls != "rail" && cls != "light_rail" && cls != "mountain" && !e.contains("from") && !e.contains("to")) streets.push_back(l);
         all.push_back(l);
     }
-    for (const json& e : r.edges) all.push_back({e["id"].get<std::string>(), "rail", pointsOf(e)});
+    for (const json& e : r.edges) all.push_back({e["id"].get<std::string>(), e.value("class", "rail"), pointsOf(e)});
     auto crossesAny = [&](Vec2 a, Vec2 b, const std::string& except) {
         for (const Line& l : all) {
             if (l.id == except) continue;
@@ -304,6 +307,371 @@ IslandRailResult islandRailLoop(const json& graph, const std::vector<RailTown>& 
         r.edges.push_back(e);
     }
     if (o.ways) wayIn(graph, o, r, at);
+    return r;
+}
+
+
+// ---- A CITY'S LIGHT RAIL --------------------------------------------------------------------------------------------
+namespace {
+
+// the street graph the loop follows: arterials and collectors, joined where their points meet
+struct StreetGraph {
+    std::vector<Vec2> nodes;
+    std::vector<std::vector<std::pair<int, double>>> adj;
+    std::map<std::pair<long, long>, int> key;
+    int node(Vec2 p) {
+        const std::pair<long, long> k(std::lround(p.x * 2), std::lround(p.y * 2));
+        auto it = key.find(k);
+        if (it != key.end()) return it->second;
+        nodes.push_back(p);
+        adj.emplace_back();
+        return key[k] = static_cast<int>(nodes.size()) - 1;
+    }
+    int nearest(Vec2 p) const {
+        int b = -1; double bd = 1e30;
+        for (std::size_t i = 0; i < nodes.size(); ++i) if (dist(nodes[i], p) < bd) { bd = dist(nodes[i], p); b = static_cast<int>(i); }
+        return b;
+    }
+    std::vector<Vec2> route(int a, int b) const {
+        std::vector<double> d(nodes.size(), 1e30);
+        std::vector<int> prev(nodes.size(), -1);
+        using Q = std::pair<double, int>;
+        std::priority_queue<Q, std::vector<Q>, std::greater<Q>> pq;
+        d[static_cast<std::size_t>(a)] = 0;
+        pq.push({0, a});
+        while (!pq.empty()) {
+            const auto [du, u] = pq.top(); pq.pop();
+            if (u == b) break;
+            if (du > d[static_cast<std::size_t>(u)]) continue;
+            for (const auto& [v, w] : adj[static_cast<std::size_t>(u)])
+                if (du + w < d[static_cast<std::size_t>(v)]) { d[static_cast<std::size_t>(v)] = du + w; prev[static_cast<std::size_t>(v)] = u; pq.push({du + w, v}); }
+        }
+        if (d[static_cast<std::size_t>(b)] >= 1e29) return {};
+        std::vector<Vec2> out;
+        for (int v = b; v >= 0; v = prev[static_cast<std::size_t>(v)]) out.push_back(nodes[static_cast<std::size_t>(v)]);
+        std::reverse(out.begin(), out.end());
+        return out;
+    }
+};
+
+// Douglas-Peucker on an open polyline
+void simplify(const std::vector<Vec2>& p, std::size_t a, std::size_t b, double tol, std::vector<char>& keep) {
+    if (b <= a + 1) return;
+    double worst = -1; std::size_t at = a;
+    const Vec2 u = p[b] - p[a];
+    const double L = std::max(1e-9, u.length());
+    for (std::size_t i = a + 1; i < b; ++i) {
+        const double d = std::fabs(u.x * (p[i] - p[a]).y - u.y * (p[i] - p[a]).x) / L;
+        if (d > worst) { worst = d; at = i; }
+    }
+    if (worst > tol) { keep[at] = 1; simplify(p, a, at, tol, keep); simplify(p, at, b, tol, keep); }
+}
+
+// a closed polygon offset by `d` toward its inside (mitred, the miter capped), then any loop the offset tied cut out
+std::vector<Vec2> insetClosed(const std::vector<Vec2>& p, double d) {
+    const std::size_t n = p.size();
+    const double sgn = loopArea(p) > 0 ? 1.0 : -1.0;   // ccw: the inside is on the left
+    std::vector<Vec2> out;
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec2 a = p[(i + n - 1) % n], b = p[i], c = p[(i + 1) % n];
+        Vec2 t0 = b - a, t1 = c - b;
+        t0 = t0 * (1.0 / std::max(1e-9, t0.length())); t1 = t1 * (1.0 / std::max(1e-9, t1.length()));
+        const Vec2 n0(-t0.y * sgn, t0.x * sgn), n1(-t1.y * sgn, t1.x * sgn);
+        Vec2 m = n0 + n1;
+        const double ml = m.length();
+        if (ml < 1e-6) { out.push_back(b + n0 * d); continue; }
+        m = m * (1.0 / ml);
+        const double cosHalf = std::max(0.35, m.x * n0.x + m.y * n0.y);   // the miter capped at ~2.9 d
+        out.push_back(b + m * (d / cosHalf));
+    }
+    // untie: where two non-neighbouring segments cross, drop the stretch between them (the shorter way round)
+    for (int guard = 0; guard < 200; ++guard) {
+        const std::size_t m = out.size();
+        bool cut = false;
+        for (std::size_t i = 0; i < m && !cut; ++i)
+            for (std::size_t k = 2; k < m / 2 && !cut; ++k) {
+                const std::size_t j = (i + k) % m;
+                Vec2 x;
+                if (!segCross(out[i], out[(i + 1) % m], out[j], out[(j + 1) % m], &x)) continue;
+                // the two loops the crossing splits it into; the bigger one is the line, the other the knot
+                std::vector<Vec2> a1, a2;
+                for (std::size_t q = (j + 1) % m; q != (i + 1) % m; q = (q + 1) % m) a1.push_back(out[q]);
+                a1.push_back(x);
+                for (std::size_t q = (i + 1) % m; q != (j + 1) % m; q = (q + 1) % m) a2.push_back(out[q]);
+                a2.push_back(x);
+                out = std::fabs(loopArea(a1)) >= std::fabs(loopArea(a2)) ? a1 : a2;
+                cut = true;
+            }
+        if (!cut) break;
+    }
+    return out;
+}
+
+// corners rounded: each vertex replaced by an arc of `radius` (smaller where the legs are short), sampled every few m
+std::vector<Vec2> filletClosed(const std::vector<Vec2>& p, double radius) {
+    const std::size_t n = p.size();
+    std::vector<Vec2> out;
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec2 a = p[(i + n - 1) % n], b = p[i], c = p[(i + 1) % n];
+        const double la = dist(a, b), lc = dist(b, c);
+        Vec2 u = (a - b) * (1.0 / std::max(1e-9, la)), v = (c - b) * (1.0 / std::max(1e-9, lc));
+        const double cosT = std::clamp(u.x * v.x + u.y * v.y, -1.0, 1.0);
+        const double theta = std::acos(cosT);                 // the angle AT the corner (pi: straight on)
+        const double turn = 3.14159265358979 - theta;
+        if (turn < 0.03) { out.push_back(b); continue; }
+        double t = radius / std::tan(theta / 2);              // tangent length
+        t = std::min({t, 0.45 * la, 0.45 * lc});
+        const double r = t * std::tan(theta / 2);
+        const Vec2 p0 = b + u * t, p1 = b + v * t;
+        Vec2 bis = u + v;
+        bis = bis * (1.0 / std::max(1e-9, bis.length()));
+        const Vec2 centre = b + bis * (r / std::sin(theta / 2));
+        const double a0 = std::atan2(p0.y - centre.y, p0.x - centre.x), a1 = std::atan2(p1.y - centre.y, p1.x - centre.x);
+        double sweep = a1 - a0;
+        while (sweep > 3.14159265358979) sweep -= 6.28318530717959;
+        while (sweep < -3.14159265358979) sweep += 6.28318530717959;
+        const int steps = std::max(2, static_cast<int>(std::ceil(std::fabs(sweep) * r / 4.0)));
+        for (int k = 0; k <= steps; ++k) {
+            const double ang = a0 + sweep * k / steps;
+            out.push_back(centre + Vec2(std::cos(ang), std::sin(ang)) * r);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 interchange, const CityRailOptions& o) {
+    IslandRailResult r;
+    // the streets it follows, and the street length round each point (where the city is built up)
+    StreetGraph sg;
+    std::vector<std::pair<Vec2, double>> mids;   // segment midpoints and lengths, for density
+    for (const json& e : graph["edges"]) {
+        const std::string cls = e.value("class", "");
+        const std::vector<Vec2> p = pointsOf(e);
+        for (std::size_t i = 0; i + 1 < p.size(); ++i) mids.push_back({(p[i] + p[i + 1]) * 0.5, dist(p[i], p[i + 1])});
+        if (cls != "arterial" && cls != "collector") continue;
+        for (std::size_t i = 0; i + 1 < p.size(); ++i) {
+            const int a = sg.node(p[i]), b = sg.node(p[i + 1]);
+            const double w = dist(p[i], p[i + 1]);
+            sg.adj[static_cast<std::size_t>(a)].push_back({b, w});
+            sg.adj[static_cast<std::size_t>(b)].push_back({a, w});
+        }
+    }
+    if (sg.nodes.size() < 8) { r.skipped.push_back(city.name + ": no arterials to follow"); return r; }
+    auto density = [&](Vec2 q, double rad) {
+        double s = 0;
+        for (const auto& m : mids) if (dist(m.first, q) < rad) s += m.second;
+        return s;
+    };
+    // WAYPOINTS: the interchange, then in each of eight sectors round the hub the most built-up street node
+    struct Wp { double ang; int node; };
+    std::vector<Wp> wps;
+    const int ia = sg.nearest(interchange);
+    const double angI = std::atan2(sg.nodes[static_cast<std::size_t>(ia)].y - city.at.y, sg.nodes[static_cast<std::size_t>(ia)].x - city.at.x);
+    wps.push_back({angI, ia});
+    auto angGap = [](double a, double b) { return std::fabs(std::remainder(a - b, 6.28318530717959)); };
+    for (int k = 0; k < 8; ++k) {
+        const double ang = k * 3.14159265358979 / 4;
+        double best = -1e30; int bn = -1; double bang = 0;
+        for (std::size_t i = 0; i < sg.nodes.size(); ++i) {
+            const Vec2 q = sg.nodes[i] - city.at;
+            const double rr = q.length();
+            if (rr < o.ringMin || rr > o.ringMax) continue;
+            const double qa = std::atan2(q.y, q.x);
+            if (angGap(qa, ang) > 3.14159265358979 / 8) continue;
+            const double sc = density(sg.nodes[i], 250.0) - std::fabs(rr - 0.5 * (o.ringMin + o.ringMax)) * 2.0;
+            if (sc > best) { best = sc; bn = static_cast<int>(i); bang = qa; }
+        }
+        if (bn >= 0 && angGap(bang, angI) > 3.14159265358979 / 8) wps.push_back({bang, bn});
+    }
+    if (wps.size() < 3) { r.skipped.push_back(city.name + ": too few streets round its hub for a loop"); return r; }
+    std::sort(wps.begin() + 1, wps.end(), [&](const Wp& a, const Wp& b) {
+        return std::fmod(a.ang - angI + 12.566, 6.28318530717959) < std::fmod(b.ang - angI + 12.566, 6.28318530717959);
+    });
+    std::vector<Vec2> ring;
+    for (std::size_t i = 0; i < wps.size(); ++i) {
+        const std::vector<Vec2> seg = sg.route(wps[i].node, wps[(i + 1) % wps.size()].node);
+        if (seg.empty()) { r.skipped.push_back(city.name + ": its streets do not join up round the hub"); return r; }
+        ring.insert(ring.end(), ring.empty() ? seg.begin() : seg.begin() + 1, seg.end());
+    }
+    // no out-and-back spurs: a point that returns to the one before last cuts the spur off
+    std::vector<Vec2> st;
+    for (const Vec2& q : ring) {
+        if (st.size() >= 2 && dist(q, st[st.size() - 2]) < 1.0) { st.pop_back(); continue; }
+        if (!st.empty() && dist(q, st.back()) < 0.5) continue;
+        st.push_back(q);
+    }
+    if (st.size() > 2 && dist(st.front(), st.back()) < 0.5) st.pop_back();
+    if (st.size() < 4) { r.skipped.push_back(city.name + ": the loop folded onto itself"); return r; }
+    {
+        std::vector<Vec2> open = st;
+        open.push_back(st.front());
+        std::vector<char> keep(open.size(), 0);
+        keep.front() = keep.back() = 1;
+        // a closed line's two ends are one point: split it at the point farthest from them, and simplify each half
+        std::size_t far = 1;
+        for (std::size_t i = 1; i + 1 < open.size(); ++i) if (dist(open[i], open[0]) > dist(open[far], open[0])) far = i;
+        keep[far] = 1;
+        simplify(open, 0, far, 4.0, keep);
+        simplify(open, far, open.size() - 1, 4.0, keep);
+        std::vector<Vec2> s2;
+        for (std::size_t i = 0; i + 1 < open.size(); ++i) if (keep[i]) s2.push_back(open[i]);
+        st = s2;
+    }
+    // set in from the streets, corners rounded, resampled
+    std::vector<Vec2> inset = insetClosed(st, o.setIn);
+    // no cusps: where the set-in line turns back sharply (an inset corner the untie left a spike at), cut the corner
+    // twice (Chaikin) before rounding -- a 40 m fillet shrinks to nothing on legs a few metres long
+    for (int pass = 0; pass < 3; ++pass) {
+        const std::size_t m = inset.size();
+        std::vector<Vec2> sm;
+        for (std::size_t i = 0; i < m; ++i) {
+            const Vec2 a = inset[(i + m - 1) % m], b = inset[i], c = inset[(i + 1) % m];
+            Vec2 u = a - b, v = c - b;
+            const double cosT = (u.x * v.x + u.y * v.y) / std::max(1e-9, u.length() * v.length());
+            if (cosT < -0.5) { sm.push_back(b); continue; }   // a gentle corner (over 120 degrees): the fillet's
+            sm.push_back(b + u * 0.25);
+            sm.push_back(b + v * 0.25);
+        }
+        inset = sm;
+    }
+    std::vector<Vec2> line0 = resampleClosed(filletClosed(inset, o.radius), o.spacing);
+    // NO CURVE TIGHTER THAN A TRAM TAKES: where the circle through a point and its neighbours two either side is
+    // under the minimum, relax the point toward its neighbours' middle, until none is (the fillet cannot round a
+    // corner whose legs are a few metres long)
+    {
+        const double rMin = 0.6 * o.radius;
+        auto radiusAt = [](Vec2 a, Vec2 b, Vec2 c) {
+            const double ab = dist(a, b), bc = dist(b, c), ca = dist(c, a);
+            const double cr = std::fabs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+            return cr < 1e-9 ? 1e9 : ab * bc * ca / (2 * cr);
+        };
+        for (int it = 0; it < 400; ++it) {
+            const std::size_t m = line0.size();
+            bool tight = false;
+            std::vector<Vec2> nx = line0;
+            for (std::size_t i = 0; i < m; ++i) {
+                const Vec2 a = line0[(i + m - 2) % m], b = line0[i], c = line0[(i + 2) % m];
+                if (radiusAt(a, b, c) >= rMin) continue;
+                tight = true;
+                for (int k = -2; k <= 2; ++k) {   // the point and its neighbours, each toward its own neighbours' middle
+                    const std::size_t j = (i + m + static_cast<std::size_t>(k + 2) - 2) % m;
+                    nx[j] = line0[j] * 0.5 + (line0[(j + m - 1) % m] + line0[(j + 1) % m]) * 0.25;
+                }
+            }
+            line0 = nx;
+            if (!tight) break;
+        }
+        line0 = resampleClosed(line0, o.spacing);
+    }
+    if (std::getenv("RT_CITY_RAIL_DEBUG")) {
+        auto len = [](const std::vector<Vec2>& p) { double L = 0; for (std::size_t i = 0; i < p.size(); ++i) L += dist(p[i], p[(i + 1) % p.size()]); return L; };
+        std::fprintf(stderr, "[city rail] %s: %zu waypoints, streets %zu pts %.0f m, inset %zu pts %.0f m, line %zu pts\n", city.name.c_str(),
+                     wps.size(), st.size(), len(st), inset.size(), len(inset), line0.size());
+    }
+    if (line0.size() < 20) { r.skipped.push_back(city.name + ": the loop came out too small"); return r; }
+    // run counter-clockwise from the point nearest the interchange (so the first station is there)
+    std::vector<Vec2> line;
+    {
+        std::size_t k0 = 0;
+        for (std::size_t i = 0; i < line0.size(); ++i) if (dist(line0[i], interchange) < dist(line0[k0], interchange)) k0 = i;
+        for (std::size_t i = 0; i < line0.size(); ++i) line.push_back(line0[(k0 + i) % line0.size()]);
+        if (loopArea(line) < 0) std::reverse(line.begin() + 1, line.end());
+    }
+    const std::size_t n = line.size();
+    std::vector<double> sAt(n + 1, 0);
+    for (std::size_t i = 1; i <= n; ++i) sAt[i] = sAt[i - 1] + dist(line[i - 1], line[i % n]);
+    r.length = sAt[n];
+    auto at = [&](double s) {
+        s = std::fmod(std::fmod(s, r.length) + r.length, r.length);
+        const std::size_t i = static_cast<std::size_t>(std::upper_bound(sAt.begin(), sAt.end(), s) - sAt.begin()) - 1;
+        const double seg = sAt[i + 1] - sAt[i];
+        const double t = seg > 1e-9 ? (s - sAt[i]) / seg : 0.0;
+        return line[i % n] + (line[(i + 1) % n] - line[i % n]) * t;
+    };
+    // crossings (each a lift over a street)
+    for (const json& e : graph["edges"]) {
+        const std::string cls = e.value("class", "");
+        if (cls == "footway") continue;
+        const std::vector<Vec2> p = pointsOf(e);
+        for (std::size_t j = 0; j + 1 < p.size(); ++j)
+            for (std::size_t i = 0; i < n; ++i) if (segCross(line[i], line[(i + 1) % n], p[j], p[j + 1], nullptr)) ++r.crossings;
+    }
+    // STATIONS: at the interchange, then the most built-up straight 550-900 m on, round to the start
+    const double half = 0.5 * o.platformLength;
+    auto straight = [&](double s) {
+        const Vec2 a = at(s - half - 20), m = at(s), b = at(s + half + 20);
+        const Vec2 u = m - a, v = b - m;
+        const double ang = std::fabs(std::atan2(u.x * v.y - u.y * v.x, u.x * v.x + u.y * v.y));
+        return ang < 1e-6 || (o.platformLength + 40.0) / ang >= o.straightRadius;
+    };
+    auto stationNear = [&](double s0, double s1) {
+        double best = -1e30, bs = -1;
+        for (double s = s0; s <= s1; s += 10.0) {
+            if (!straight(s)) continue;
+            const double sc = density(at(s), 300.0);
+            if (sc > best) { best = sc; bs = s; }
+        }
+        return bs;
+    };
+    {
+        double s0 = -1;
+        for (double s = 0; s < 400.0 && s0 < 0; s += 10.0) { if (straight(s)) s0 = s; if (s0 < 0 && straight(r.length - s)) s0 = r.length - s; }
+        if (s0 < 0) s0 = stationNear(0, 400);
+        if (s0 >= 0) r.stations.push_back({city.name + " Central", at(s0), s0, dist(at(s0), city.at)});
+        double cur = s0 < 0 ? 0 : s0;
+        int k = 1;
+        while (true) {
+            const double first = r.stations.empty() ? 0 : r.stations.front().station;
+            const double end = (first <= cur ? first + r.length : first) - o.stopMin;
+            const double lo = cur + o.stopMin, hi = std::min(cur + o.stopMax, end);
+            if (lo > hi) break;
+            const double s = stationNear(lo, hi);
+            if (s < 0) break;
+            r.stations.push_back({city.name + " " + std::to_string(++k), at(s), std::fmod(s, r.length), dist(at(s), city.at)});
+            cur = s;
+        }
+    }
+    std::sort(r.stations.begin(), r.stations.end(), [](const IslandRailStation& a, const IslandRailStation& b) { return a.station < b.station; });
+    // THE EDGES: cut half way between stations
+    std::vector<double> cuts;
+    if (r.stations.size() >= 2) {
+        for (std::size_t i = 0; i < r.stations.size(); ++i) {
+            const double a = r.stations[i].station, b = r.stations[(i + 1) % r.stations.size()].station;
+            cuts.push_back(std::fmod(a + 0.5 * std::fmod(b - a + r.length, r.length), r.length));
+        }
+    } else {
+        cuts = {0, r.length / 3, 2 * r.length / 3};
+    }
+    std::sort(cuts.begin(), cuts.end());
+    for (std::size_t c = 0; c < cuts.size(); ++c) {
+        const double s0 = cuts[c], s1 = c + 1 < cuts.size() ? cuts[c + 1] : cuts[0] + r.length;
+        json pts = json::array();
+        auto push = [&](Vec2 p) { pts.push_back({std::round(p.x * 100) / 100, std::round(p.y * 100) / 100}); };
+        push(at(s0));
+        for (double s = std::ceil(s0 / o.spacing) * o.spacing; s < s1 - 0.5 * o.spacing; s += o.spacing) if (s > s0 + 0.5 * o.spacing) push(at(s));
+        push(at(s1));
+        json e = {{"id", o.idPrefix + "_" + std::to_string(c)}, {"class", "light_rail"}, {"path", {{"points", pts}}}};
+        json plats = json::array();
+        for (const IslandRailStation& sn : r.stations) {
+            const double inEdge = std::fmod(sn.station - s0 + 2 * r.length, r.length);
+            if (inEdge - half < 0 || inEdge + half > s1 - s0) continue;
+            plats.push_back({{"name", sn.name}, {"s0", std::round(inEdge - half)}, {"s1", std::round(inEdge + half)}, {"side", "both"}, {"w", o.platformWidth}});
+        }
+        if (!plats.empty()) e["platforms"] = plats;
+        r.edges.push_back(e);
+    }
+    // THE WAYS IN: the main line's, scaled to a light-rail pair (3.6 m centres, 4 m platforms): the leg between the
+    // platforms' backs and the street's sidewalk
+    IslandRailOptions wo;
+    wo.idPrefix = o.idPrefix;
+    wo.wayOffset = 10.5;
+    wo.wayLeg = 30.0;
+    wo.wayHold = 1.8 + 1.55 + o.platformWidth + 0.5;   // half the pair, the platform gap (rail_track.h), the platform
+    wo.wayReach = wo.wayHold;
+    wo.wayMaxStreet = 120.0;
+    wayIn(graph, wo, r, at);
     return r;
 }
 

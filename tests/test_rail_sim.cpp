@@ -105,3 +105,28 @@ TEST_CASE(carriages_couple_end_to_end_on_the_curve) {
     }
     CHECK(worst < 0.35);   // a 24 m car's chord on a 200 m curve: the bodies' ends barely part
 }
+
+TEST_CASE(each_line_runs_the_stock_its_track_class_asks_for) {
+    // the oval as a main line, and a copy of it 1 km off as a city's light rail: two classes, never joined
+    std::vector<RailTrack> tracks = ovalTracks();
+    const std::size_t n = tracks.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        RailTrack t = tracks[i];
+        t.cls = "light_rail";
+        t.edge = "lr_" + t.edge;
+        for (Vec3& p : t.pts) p.z += 1000.0;
+        tracks.push_back(t);
+    }
+    RailSim sim;
+    sim.build(tracks, [](const std::string& cls) { return trainKindNamed(cls == "light_rail" ? "light_rail" : "intercity"); },
+              [](double, const TrainKind& k) { return k.name == "light_rail" ? 3 : 2; });
+    CHECK(sim.lines().size() == 4);   // two classes x two directions
+    int intercity = 0, light = 0;
+    for (const Train& t : sim.trains()) {
+        const RailLine& L = sim.lines()[static_cast<std::size_t>(t.line)];
+        if (L.cls == "light_rail") { CHECK(t.kind.name == "light_rail"); ++light; }
+        else { CHECK(t.kind.name == "intercity"); ++intercity; }
+    }
+    CHECK(intercity == 4);
+    CHECK(light == 6);
+}

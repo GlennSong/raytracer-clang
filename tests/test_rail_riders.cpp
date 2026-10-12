@@ -106,7 +106,7 @@ TEST_CASE(rail_riders_pin_each_station_to_its_town) {
     CHECK(rr.plan(a, nav.nodes[static_cast<std::size_t>(a)], b, nav.nodes[static_cast<std::size_t>(b)], t, &secs));
     CHECK(rr.stations()[static_cast<std::size_t>(t.from)].name == "Central");
     CHECK(rr.stations()[static_cast<std::size_t>(t.to)].name == "Harbour");
-    CHECK(secs > 0 && secs < 600);
+    CHECK(secs > 0 && secs < 1800);   // door to door: the walks at both ends, the ways in and out, the wait, the ride
     // within one town: no train
     CHECK(!rr.plan(a, nav.nodes[static_cast<std::size_t>(a)], c.accessNode, c.access, t));
     // a platform spot stands on the platform: beside the track, at its height

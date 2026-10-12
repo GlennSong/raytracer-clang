@@ -72,6 +72,11 @@ double RailLine::speedLimit(double st) const {
 }
 
 void RailSim::build(const std::vector<engine::RailTrack>& tracks, const TrainKind& kind, int trainsPerLine, double joinTol) {
+    build(tracks, [&](const std::string&) { return kind; }, [&](double, const TrainKind&) { return trainsPerLine; }, joinTol);
+}
+
+void RailSim::build(const std::vector<engine::RailTrack>& tracks, const std::function<TrainKind(const std::string& cls)>& kindOf,
+                    const std::function<int(double length, const TrainKind& kind)>& countOf, double joinTol) {
     lines_.clear();
     trains_.clear();
     const int n = static_cast<int>(tracks.size());
@@ -84,7 +89,7 @@ void RailSim::build(const std::vector<engine::RailTrack>& tracks, const TrainKin
         double best = joinTol;
         for (int j = 0; j < n; ++j) {
             const auto& B = tracks[static_cast<std::size_t>(j)].pts;
-            if (j == i || B.size() < 2) continue;
+            if (j == i || B.size() < 2 || tracks[static_cast<std::size_t>(j)].cls != tracks[static_cast<std::size_t>(i)].cls) continue;   // (a tram never runs on into the main line)
             const double d = dist(A.back(), B.front());
             if (d >= best) continue;
             const Vec3 startDir = flatDir(B[0], B[1]);
@@ -102,7 +107,7 @@ void RailSim::build(const std::vector<engine::RailTrack>& tracks, const TrainKin
         while (t >= 0 && !used[static_cast<std::size_t>(t)]) {
             used[static_cast<std::size_t>(t)] = 1;
             const engine::RailTrack& T = tracks[static_cast<std::size_t>(t)];
-            if (L.name.empty()) L.name = T.edge;
+            if (L.name.empty()) { L.name = T.edge; L.cls = T.cls; }
             std::size_t first = 0;
             if (!L.pts.empty() && dist(L.pts.back(), T.pts.front()) < 0.5) first = 1;
             const double base = L.pts.empty() ? 0.0 : L.s.back() + (first ? 0.0 : dist(L.pts.back(), T.pts.front()));
@@ -127,6 +132,7 @@ void RailSim::build(const std::vector<engine::RailTrack>& tracks, const TrainKin
         std::sort(L.stops.begin(), L.stops.end(), [](const engine::RailStop& a, const engine::RailStop& b) { return a.s0 < b.s0; });
         // THE SPEED THE TRACK ALLOWS: the curve's (v^2 r <= lateral, measured over 10 m either side), then braked
         // for ahead of time -- a train meets a curve already slow enough for it
+        const TrainKind kind = kindOf(L.cls);
         const std::size_t m = L.pts.size();
         L.vlim.assign(m, kind.vmax);
         for (std::size_t i = 0; i < m; ++i) {
@@ -153,7 +159,8 @@ void RailSim::build(const std::vector<engine::RailTrack>& tracks, const TrainKin
     // THE TIMETABLE: evenly spread trains, each heading for the first platform ahead of it
     for (std::size_t li = 0; li < lines_.size(); ++li) {
         const RailLine& L = lines_[li];
-        const int count = L.length > kind.length() * 3 ? std::max(1, trainsPerLine) : 1;
+        const TrainKind kind = kindOf(L.cls);
+        const int count = L.length > kind.length() * 3 ? std::max(1, countOf(L.length, kind)) : 1;
         for (int k = 0; k < count; ++k) {
             Train t;
             t.line = static_cast<int>(li);

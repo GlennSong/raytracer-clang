@@ -59,9 +59,9 @@ public:
     }
     const std::vector<RailStation>& stations() const { return stations_; }
 
-    // A trip from street node `fromNode` to `toNode` by train: the station in each one's network (nearest its
-    // node), and the line with the shorter ride between them. False when either network has no station, both ends
-    // are the same station, or no line stops at both. `seconds`: the wait and the ride (not the street legs).
+    // A trip from street node `fromNode` to `toNode` by train: the pair of stations (one in each end's network) and the
+    // line that make the quickest journey door to door. False when either network has no station or no line joins
+    // them. `seconds`: the whole journey -- the walks at both ends, the ways in and out, the wait and the ride.
     bool plan(int fromNode, engine::Vec2 fromPos, int toNode, engine::Vec2 toPos, RailTrip& out,
               engine::Real* seconds = nullptr) const;
 

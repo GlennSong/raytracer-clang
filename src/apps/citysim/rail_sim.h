@@ -21,6 +21,7 @@
 #include "../../engine/procgen/city/rail_track.h"
 #include "../../rt_math.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,7 @@ TrainKind trainKindNamed(const std::string& name);
 
 struct RailLine {
     std::string name;
+    std::string cls;                  // its track class (rail, light_rail, metro): what stock runs it
     std::vector<engine::Vec3> pts;    // railhead centreline, running order
     std::vector<double> s;            // station of each point
     double length = 0;
@@ -85,6 +87,9 @@ public:
     // continues into it). Every line gets `trainsPerLine` trains of `kind`, evenly spaced.
     void build(const std::vector<engine::RailTrack>& tracks, const TrainKind& kind, int trainsPerLine,
                double joinTol = 3.0);
+    // ...each line with the stock its track class runs (`kindOf`) and as many trains as `countOf` gives for its length
+    void build(const std::vector<engine::RailTrack>& tracks, const std::function<TrainKind(const std::string& cls)>& kindOf,
+               const std::function<int(double length, const TrainKind& kind)>& countOf, double joinTol = 3.0);
     void step(double dt);
 
     const std::vector<RailLine>& lines() const { return lines_; }

@@ -1,0 +1,341 @@
+{
+ "name": "light_rail_lab",
+ "_note": "LIGHT RAIL LAB (Glenn, 2026-10-12: 'How about other trains'): a 600 m square town on a 150 m grid, a light-rail loop 14 m inside the ring of streets at +-150 -- beside them all the way round, over the two arterials -- two stations.",
+ "terrain": {
+  "type": "procedural",
+  "bounds": [
+   -450,
+   450,
+   -450,
+   450
+  ],
+  "res": 4.0,
+  "seed": 5,
+  "octaves": [
+   [
+    1.2,
+    160
+   ]
+  ]
+ },
+ "rules": {
+  "closing": 3.0,
+  "bridge_h": 4.0,
+  "pier_spacing": 20.0,
+  "conform_w": 12.0
+ },
+ "edges": [
+  {
+   "id": "ns0",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -300,
+      -300
+     ],
+     [
+      -300,
+      300
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ew0",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -300,
+      -300
+     ],
+     [
+      300,
+      -300
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ns1",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -150,
+      -300
+     ],
+     [
+      -150,
+      300
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ew1",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -300,
+      -150
+     ],
+     [
+      300,
+      -150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ns2",
+   "class": "arterial",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      0,
+      -300
+     ],
+     [
+      0,
+      300
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ew2",
+   "class": "arterial",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -300,
+      0
+     ],
+     [
+      300,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ns3",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      150,
+      -300
+     ],
+     [
+      150,
+      300
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ew3",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -300,
+      150
+     ],
+     [
+      300,
+      150
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ns4",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      300,
+      -300
+     ],
+     [
+      300,
+      300
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ew4",
+   "class": "local",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -300,
+      300
+     ],
+     [
+      300,
+      300
+     ]
+    ]
+   }
+  },
+  {
+   "id": "lr_s",
+   "class": "light_rail",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -106,
+      -136
+     ],
+     [
+      106,
+      -136
+     ]
+    ]
+   },
+   "platforms": [
+    {
+     "name": "Market Street",
+     "s0": 66,
+     "s1": 146,
+     "side": "both",
+     "w": 4.0
+    }
+   ]
+  },
+  {
+   "id": "lr_se",
+   "class": "light_rail",
+   "path": {
+    "type": "arc",
+    "center": [
+     106,
+     -106
+    ],
+    "r": 30,
+    "a0": -90,
+    "a1": 0
+   }
+  },
+  {
+   "id": "lr_e",
+   "class": "light_rail",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      136,
+      -106
+     ],
+     [
+      136,
+      106
+     ]
+    ]
+   }
+  },
+  {
+   "id": "lr_ne",
+   "class": "light_rail",
+   "path": {
+    "type": "arc",
+    "center": [
+     106,
+     106
+    ],
+    "r": 30,
+    "a0": 0,
+    "a1": 90
+   }
+  },
+  {
+   "id": "lr_n",
+   "class": "light_rail",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      106,
+      136
+     ],
+     [
+      -106,
+      136
+     ]
+    ]
+   },
+   "platforms": [
+    {
+     "name": "Town Hall",
+     "s0": 66,
+     "s1": 146,
+     "side": "both",
+     "w": 4.0
+    }
+   ]
+  },
+  {
+   "id": "lr_nw",
+   "class": "light_rail",
+   "path": {
+    "type": "arc",
+    "center": [
+     -106,
+     106
+    ],
+    "r": 30,
+    "a0": 90,
+    "a1": 180
+   }
+  },
+  {
+   "id": "lr_w",
+   "class": "light_rail",
+   "path": {
+    "type": "polyline",
+    "points": [
+     [
+      -136,
+      106
+     ],
+     [
+      -136,
+      -106
+     ]
+    ]
+   }
+  },
+  {
+   "id": "lr_sw",
+   "class": "light_rail",
+   "path": {
+    "type": "arc",
+    "center": [
+     -106,
+     -106
+    ],
+    "r": 30,
+    "a0": 180,
+    "a1": 270
+   }
+  }
+ ]
+}

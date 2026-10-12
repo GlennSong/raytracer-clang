@@ -9487,3 +9487,33 @@ the train home (48 trips). Island 8 (real time): ~50 commuters choose the train 
 their station (none chose a bus for it); the first reach a platform ~7 min in; with four trains a way, 9 of the first
 20 in had boarded ~20 min in. Owed: seeing a platform crowd and a full coach on the island in pictures; the walk along
 the footway drawn (it is an absence); lifts; trains that are not intercity (light rail, subways).
+
+## ADR-0157 — Light rail: a track class, a city loop generator, stock by class, journeys door to door
+
+Glenn, 2026-10-12: "How about other trains in the meantime" (his 2026-10-10 answers: "Bigger cities: light rail ...
+shuttle back and forth or run a loop (Yamanote). Start simple."; no street running yet).
+
+Decision:
+- **`light_rail`, a built-in track class**: a double track at 3.6 m centres, 5 % over a 120 m window -- it climbs over
+  a cross street and back within a block; every crossing is a grade separation (a track is never met at grade), so in
+  a town it runs elevated.
+- **`cityRailLoop`** (island_rail.h; `city_plan city-rail GRAPH LEVEL [--write]`): round each "financial" hub, a loop
+  along its arterials and collectors -- through the main line's way in and the most built-up street node in each of
+  eight sectors 350-950 m out, shortest paths between, spurs cut -- set in 21 m beside the street (the lots grow
+  round it), corners Chaikin-cut and filleted, then relaxed until no curve is under 24 m; stations on its straights
+  550-900 m apart where the streets are densest, the first at the interchange; cut into edges between stations.
+- **Stock by class**: RailSim lines keep their track class and never join across classes; each line runs its class's
+  stock (rail: intercity, light_rail: light rail, metro: subway) and its own count (an intercity per ~9 km, a city
+  train per ~1.5 km). TrainSystem keeps one model set per kind.
+- **Journeys door to door** (RailRiders::plan): every station pair across the two ends' networks, the walks at both
+  ends and the ways in counted; between towns any train is taken, within a town only when it saves a minute and a
+  sixth of the walk (the bus's rule) on trips over ~900 m.
+- **The lab**: assets/levels/light_rail_lab.json, a 600 m town with a loop beside its ring of streets, two elevated
+  stations over its arterials; every lanes check passes.
+
+On island 8 (written, checked, NOT kept): Saltwood 4.0 km / 5 stations / 32 street crossings, Weyby 4.0 km / 6 / 25.
+The full check failed, for two reasons it named: (1) section joints near street crossings -- the lift's hold belongs to
+one section, joint levelling pulls the other, steps of 1.6-4 m and a crossing 2.6 m short; (2) an elevated line's way
+in is not the main line's: a footbridge OVER a track already ~8 m up came out under it (1.3 m). Owed before the island
+gets its city lines: joints cut clear of crossings, and elevated stations reached from below (a passage under the
+viaduct, flights UP to each platform -- station stairs only build down from a footbridge today).

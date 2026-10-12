@@ -49,19 +49,30 @@ private:
     void build(engine::FrameContext& ctx);
     void sounds(engine::FrameContext& ctx);   // clatter, rumble, horn, door chimes (sfx.h railClack ...)
     void ride(engine::FrameContext& ctx, engine::Real dt);
-    bool walkableAt(int car, const engine::Vec3& local, int doorSide) const;
-    const engine::TrainBodyMesh& model(int car) const { return car == 0 ? loco_ : coach_; }
+    bool walkableAt(int train, int car, const engine::Vec3& local, int doorSide) const;
+    // THE STOCK each train is built from (its kind's locomotive and carriage), by train
+    const engine::TrainBodyMesh& coachOf(int train) const { return stock_[static_cast<std::size_t>(stockOf_[static_cast<std::size_t>(train)])].coach; }
+    const engine::TrainBodyMesh& model(int train, int car) const {
+        const Stock& k = stock_[static_cast<std::size_t>(stockOf_[static_cast<std::size_t>(train)])];
+        return car == 0 ? k.loco : k.coach;
+    }
 
     engine::PhysicsSystem& physics_;
     engine::FlyCameraController& fly_;
     CityRenderSystem* city_ = nullptr;
     bool tried_ = false;
     RailSim sim_;
-    engine::TrainBodyMesh loco_, coach_;
-    // instance groups: locomotive body + glass, carriage body + glass, door leaves
-    engine::Entity locoBody_, locoGlass_, coachBody_, coachGlass_, leaves_;
-    engine::Entity riders_[3];
-    std::vector<engine::Entity> boards_;
+    // one per kind of train running (intercity on the main line, light rail in the cities): its models and instance
+    // groups -- locomotive body + glass, carriage body + glass, door leaves
+    struct Stock {
+        std::string name;
+        engine::TrainBodyMesh loco, coach;
+        engine::Entity locoBody, locoGlass, coachBody, coachGlass, leaves;
+    };
+    std::vector<Stock> stock_;
+    std::vector<int> stockOf_;      // per train
+    engine::Entity riders_[3];      // the city's people in the seats (CitySim's train riders), three outfits
+    std::vector<engine::Entity> boards_;   // the stations' name boards (station_boards.h): frames, then one group per name
     // THE SOUNDS: clips made once; per train its rumble voice and what it has already sounded
     bool audioTried_ = false;
     engine::AudioClipHandle clack_[3], rumble_, horn_, chimeOpen_, chimeShut_;
@@ -72,12 +83,12 @@ private:
         int lastDoor = 0;        // doorSide at the last frame
         bool beeped = false;     // the doors-closing warning, this dwell
     };
-    std::vector<TrainEar> ears_;   // the stations' name boards (station_boards.h): frames, then one lettered group per name   // the city's people in the seats (CitySim's train riders), three outfits
+    std::vector<TrainEar> ears_;
     int tick_ = 0;
     // aboard: which train and car, the floor point in that car's frame
     int train_ = -1, car_ = -1;
     engine::Vec3 local_{0, 0, 0};
-    int seat_ = -1;              // the seat held in car_ (coach_.seats), -1 standing
+    int seat_ = -1;              // the seat held in car_ (its coach's seats), -1 standing
     int sitRequest_ = -2;        // from the broker: a seat to take, -1 stand up, -2 nothing
     bool haveYaw_ = false;
     engine::Real lastYaw_ = 0;

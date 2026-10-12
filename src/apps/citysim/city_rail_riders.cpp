@@ -122,44 +122,47 @@ bool RailRiders::plan(int fromNode, Vec2 fromPos, int toNode, Vec2 toPos, RailTr
     if (!active()) return false;
     const int na = networkOf(fromNode), nb = networkOf(toNode);
     if (na < 0 || nb < 0) return false;
-    // the station in each end's network nearest that end (straight line: the street leg is the sim's to plan)
-    int a = -1, b = -1;
-    Real da = 1e30, db = 1e30;
-    for (std::size_t k = 0; k < stations_.size(); ++k) {
-        const RailStation& S = stations_[k];
-        if (S.accessNode < 0) continue;
-        if (S.network == na && dist(S.access, fromPos) < da) { da = dist(S.access, fromPos); a = static_cast<int>(k); }
-        if (S.network == nb && dist(S.access, toPos) < db) { db = dist(S.access, toPos); b = static_cast<int>(k); }
-    }
-    if (a < 0 || b < 0 || a == b) return false;
-    // the line with the shorter ride from a to b
+    // DOOR TO DOOR: every station in the start's network against every one in the end's, the walk to the first and
+    // from the last (straight line, a street's detour on it) plus the wait and the ride, on the line that takes it
+    // quickest -- a town's light-rail stop round the corner beats its main-line station across town
+    constexpr Real kStreetFactor = 1.3;
     const auto& lines = rail_->lines();
     const auto& trains = rail_->trains();
     Real bestT = 1e30;
     RailTrip best;
-    for (std::size_t li = 0; li < lines.size(); ++li) {
-        const RailLine& L = lines[li];
-        const int sa = stations_[static_cast<std::size_t>(a)].stopOnLine[li];
-        const int sb = stations_[static_cast<std::size_t>(b)].stopOnLine[li];
-        if (sa < 0 || sb < 0) continue;
-        double arc = L.stops[static_cast<std::size_t>(sb)].s1 - L.stops[static_cast<std::size_t>(sa)].s1;
-        if (arc <= 0) {
-            if (!L.loop) continue;   // an open line runs one way
-            arc += L.length;
-        }
-        int between = (sb - sa + static_cast<int>(L.stops.size())) % static_cast<int>(L.stops.size()) - 1;
-        if (!L.loop) between = sb - sa - 1;
-        int count = 0;
-        for (const Train& t : trains) if (t.line == static_cast<int>(li)) ++count;
-        if (count == 0) continue;
-        const Real dwell = trains.empty() ? 30.0 : trains.front().kind.dwell;
-        const Real lap = L.length / kRidePace + dwell * static_cast<Real>(L.stops.size());
-        const Real wait = 0.5 * lap / count;
-        const Real t = wait + arc / kRidePace + dwell * std::max(0, between);
-        if (t < bestT) {
-            bestT = t;
-            best = RailTrip{};
-            best.from = a; best.to = b; best.line = static_cast<int>(li); best.fromStop = sa; best.toStop = sb;
+    for (std::size_t a = 0; a < stations_.size(); ++a) {
+        const RailStation& A = stations_[a];
+        if (A.accessNode < 0 || A.network != na) continue;
+        for (std::size_t b = 0; b < stations_.size(); ++b) {
+            const RailStation& B = stations_[b];
+            if (b == a || B.accessNode < 0 || B.network != nb) continue;
+            const Real walk = (dist(fromPos, A.access) + dist(B.access, toPos)) * kStreetFactor / kWalkPace + A.walkIn + B.walkIn;
+            for (std::size_t li = 0; li < lines.size(); ++li) {
+                const RailLine& L = lines[li];
+                const int sa = A.stopOnLine[li], sb = B.stopOnLine[li];
+                if (sa < 0 || sb < 0) continue;
+                double arc = L.stops[static_cast<std::size_t>(sb)].s1 - L.stops[static_cast<std::size_t>(sa)].s1;
+                if (arc <= 0) {
+                    if (!L.loop) continue;   // an open line runs one way
+                    arc += L.length;
+                }
+                const int nStops = static_cast<int>(L.stops.size());
+                const int between = L.loop ? (sb - sa + nStops) % nStops - 1 : sb - sa - 1;
+                int count = 0;
+                const Train* any = nullptr;
+                for (const Train& t : trains) if (t.line == static_cast<int>(li)) { ++count; any = &t; }
+                if (count == 0) continue;
+                const Real pace = std::min<Real>(kRidePace, 0.75 * any->kind.vmax);   // a tram is no intercity
+                const Real dwell = any->kind.dwell;
+                const Real lap = L.length / pace + dwell * static_cast<Real>(nStops);
+                const Real t = walk + 0.5 * lap / count + arc / pace + dwell * std::max(0, between);
+                if (t < bestT) {
+                    bestT = t;
+                    best = RailTrip{};
+                    best.from = static_cast<int>(a); best.to = static_cast<int>(b);
+                    best.line = static_cast<int>(li); best.fromStop = sa; best.toStop = sb;
+                }
+            }
         }
     }
     if (best.line < 0) return false;
