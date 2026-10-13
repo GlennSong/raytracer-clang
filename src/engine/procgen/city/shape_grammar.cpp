@@ -4504,6 +4504,37 @@ std::vector<ShopRoomRect> shopRoomsOf(const Poly2& planIn, const BuildingParams&
     return out;
 }
 
+// THE DOORS AND WINDOWS OF ONE STOREY'S OUTSIDE WALLS, for the furniture (room_plan.h WallOpening): from the same
+// layout the facade and the inner wall are cut with -- the ground storey's modes as its collider gaps read them, the
+// upper storeys' as the inner wall reads them (the pilaster-less copy), a curtain wall's glass above its spandrel the
+// whole face along. Each span lies on the inner face, `inset` in from the plan edge, where a room's side is.
+std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams& params, int storey, Real y0, Real h,
+                                        std::size_t entranceEdge) {
+    std::vector<WallOpening> out;
+    if (mechanicalStorey(params, storey)) return out;
+    const Real inset = interiorInset(params);
+    BuildingParams upperP = params;
+    upperP.pilasters = false;
+    const FacadeMode upMode = params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
+    for (std::size_t e = 0; e < splan.size(); ++e) {
+        if (storey > 0 && partyEdge(splan, params, e)) continue;
+        const FaceRect fr = planEdgeRect(splan, e, y0, h);
+        if (fr.width < 1e-6) continue;
+        auto at = [&](Real x) { const Vec3 p = fr.at(x, 0) + fr.n * -inset; return Vec2(p.x, p.z); };
+        if (storey > 0 && params.curtainWall) {
+            out.push_back({at(0), at(fr.width), curtainStyleOf(params).spandrelH(h), h, false});
+            continue;
+        }
+        const FacadeLayout L = storey == 0 ? facadeLayout(fr, groundModeFor(splan, params, e, entranceEdge), params)
+                                           : facadeLayout(fr, upMode, upperP);
+        for (const BayOpening& o : L.open) {
+            if (!o.entrance && o.head - o.sill < 1e-3) continue;   // a blank bay: wall
+            out.push_back({at(o.wx0), at(o.wx1), o.sill, o.head, o.entrance});
+        }
+    }
+    return out;
+}
+
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
@@ -4925,7 +4956,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 }
             }
         }
-        if (rp.walls.empty()) continue;
+        // (RT_FURNITURE_BLIND_OPENINGS=1: the A/B -- furnished as before the outside doors and windows were known)
+        static const bool blindOpenings = std::getenv("RT_FURNITURE_BLIND_OPENINGS") != nullptr;
+        if (!blindOpenings) rp.openings = storeyOpenings(spk.plan, params, ki, baseY + spk.y0, spk.h, entranceEdge);
+        if (rp.walls.empty() && rp.rooms.empty()) continue;   // (rooms without walls -- an open office's zones -- are furnished)
         RoomMeshes rm;
         emitRooms(rm, colliderOut, rp, baseY + spk.y0, spk.h, interiorPaintFor(params));
         // A SHOP'S FLOOR AND CEILING in its trade's finish (a checker where it is tiled), just proud of the slab's.

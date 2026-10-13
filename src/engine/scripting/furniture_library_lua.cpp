@@ -221,7 +221,15 @@ bool readStep(lua_State* L, int t, FurnStep& st, const std::string& where, std::
             lua_pop(L, 1);
         }
         lua_pop(L, 1);
-        return st.alternatives.empty() ? fail(err, where + ": an empty one_of") : true;
+        st.choices = st.alternatives.size();
+        lua_getfield(L, t, "fallback");   // { one_of = {...}, fallback = step }: where none of them fits
+        if (lua_istable(L, -1)) {
+            FurnStep fb;
+            if (!readStep(L, lua_gettop(L), fb, where + ".fallback", err)) { lua_pop(L, 1); return false; }
+            st.alternatives.push_back(std::move(fb));
+        }
+        lua_pop(L, 1);
+        return st.choices == 0 ? fail(err, where + ": an empty one_of") : true;
     }
     lua_pop(L, 1);
     const bool counter = [&] { lua_getfield(L, t, "counter"); const bool c = lua_isstring(L, -1); if (c) st.pattern = lua_tostring(L, -1); lua_pop(L, 1); return c; }();
@@ -259,6 +267,7 @@ bool readStep(lua_State* L, int t, FurnStep& st, const std::string& where, std::
     lua_pop(L, 1);
     readPair(L, t, "aisle", st.aisleX, st.aisleZ);
     st.d2 = numField(L, t, "short", 0.0);
+    st.from = numField(L, t, "from", 0.6);
     st.tiers = boolField(L, t, "tiers", false);
     {
         Real rn = 0, cw = 0;

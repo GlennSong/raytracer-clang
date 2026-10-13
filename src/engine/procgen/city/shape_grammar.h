@@ -328,6 +328,12 @@ struct LobbyPiece {
 struct CorePlan;
 std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdge, const CorePlan& core);
 
+struct WallOpening;   // room_plan.h
+// The doors and windows of one storey's outside walls (`splan`, floor at y0, h tall), as the facade cuts them, on the
+// walls' inner face: what the furniture keeps clear of (room_plan.h WallOpening).
+std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams& params, int storey, Real y0, Real h,
+                                        std::size_t entranceEdge);
+
 BuildingMesh growInterior(const Poly2& plan, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut = nullptr,
                           int k0 = 0, int k1 = -1);

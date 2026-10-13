@@ -18,6 +18,8 @@ constexpr Real kFlatDepth = 5.5;
 constexpr Real kOfficeWidth = 4.8;    // target room widths (bays are grouped up to these)
 constexpr Real kFlatWidth = 5.6;
 constexpr Real kMinDepth = 3.0;       // a band shallower than this is not worth a room
+constexpr Real kDeskRowMin = 2.55;    // glass to core: the window gap, a desk and its chair, the walk (desk_row's grid)
+constexpr Real kDeskRowMax = 6.0;
 
 // The facade's bay boundaries along a face of width W — emitCurtainWallRect's
 // 1.6 m bays and facadeLayout's `bayWidth` bays, reproduced so a partition
@@ -174,6 +176,55 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         };
         endWall(startAt, prev.rooms && convexStart ? inset + prev.cornerEnd : inset);
         endWall(endAt, next.rooms && convexEnd ? inset + next.cornerStart : inset);
+    }
+    return rp;
+}
+
+// THE DESK ROW (Glenn, 2026-10-13: "some floors in skyscrapers are still empty"): a setback tier keeps the core it
+// was sized for at the base, so the floor between the core and the glass narrows -- a 15.9 m art deco crown round a
+// 10.5 x 7.2 m core leaves 2-4 m a side, too shallow for the ring's rooms (kMinDepth past a 2.2 m corridor) or the
+// office floor's 4 m bands, and the floor grew empty. Such a floor is an open office: along each edge with the depth
+// for it, a row of desks at the windows, its chairs facing out, the walk to the core behind them. No partitions; the
+// corners stay open (each strip stops short of its neighbours' -- enough at any corner of 90 degrees or more, so a
+// chamfered plate is fine too). A
+// residential tower's such floor is its residents' LOUNGE: sofas along the glass instead (`kind` Lounge).
+static RoomPlan deskRowPlan(const Poly2& planIn, const CorePlan& core, Real inset, int storey, RoomKind kind) {
+    // the window gap, a desk and its chair (a sofa and its table), the walk behind: desk_row's and lounge's grids
+    const Real kRowMin = kind == RoomKind::Lounge ? 2.85 : kDeskRowMin;
+    constexpr Real kRowMax = kDeskRowMax;
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = kind == RoomKind::DeskRow;
+    if (storey < 1 || !core.valid || planIn.size() < 4) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    struct Strip { Vec2 a, d, nOut; Real W = 0, depth = 0; bool row = false; };
+    std::vector<Strip> S(n);
+    for (std::size_t e = 0; e < n; ++e) {
+        Strip& s = S[e];
+        s.a = plan[e];
+        const Vec2 dv = plan[(e + 1) % n] - s.a;
+        s.W = dv.length();
+        if (s.W < 1e-6) continue;
+        s.d = dv * (1.0 / s.W);
+        s.nOut = Vec2(s.d.y, -s.d.x);
+        s.depth = std::min(depthToCore(s.a, s.d, s.W, s.nOut, core) - inset, kRowMax);
+        s.row = s.depth >= kRowMin;
+    }
+    for (std::size_t e = 0; e < n; ++e) {
+        const Strip& s = S[e];
+        if (!s.row) continue;
+        const Strip& prev = S[(e + n - 1) % n];
+        const Strip& next = S[(e + 1) % n];
+        const Real x0 = inset + (prev.row ? prev.depth : 0), x1 = s.W - inset - (next.row ? next.depth : 0);
+        if (x1 - x0 < 2.0) continue;
+        auto P = [&](Real x, Real in) { return s.a + s.d * x - s.nOut * in; };
+        Room r;
+        r.edge = e;
+        r.kind = kind;
+        r.rect = {P(x0, inset), P(x1, inset), P(x1, inset + s.depth), P(x0, inset + s.depth)};
+        rp.rooms.push_back(r);
     }
     return rp;
 }
@@ -1007,6 +1058,28 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
             b.s1 = b.W - inset - (q.rooms ? q.D : 0);
         }
     }
+    // A band too shallow for the office's rooms is a ROW OF DESKS at its windows (deskRowPlan's strip), from the glass
+    // to the core, stopping short of its neighbours' rooms and rows.
+    {
+        std::vector<Real> row(n, 0);
+        for (std::size_t e = 0; e < n; ++e)
+            if (!B[e].rooms && B[e].W > 1e-6) {
+                const Real d = std::min(B[e].D + kCorridor, kDeskRowMax);
+                if (d >= kDeskRowMin) row[e] = d;
+            }
+        for (std::size_t e = 0; e < n; ++e) {
+            if (row[e] <= 0) continue;
+            const Band& b = B[e];
+            const std::size_t pe = (e + n - 1) % n, ne = (e + 1) % n;
+            const Real x0 = inset + (B[pe].rooms ? B[pe].D : row[pe]);
+            const Real x1 = b.W - inset - (B[ne].rooms ? B[ne].D : row[ne]);
+            if (x1 - x0 < 2.0) continue;
+            auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
+            Room rm; rm.edge = e; rm.kind = RoomKind::DeskRow;
+            rm.rect = {P(x0, inset), P(x1, inset), P(x1, inset + row[e]), P(x0, inset + row[e])};
+            rp.rooms.push_back(rm);
+        }
+    }
     // The longest band gets the kitchenette; it and the band opposite get a meeting room each.
     std::size_t longest = 0;
     for (std::size_t e = 0; e < n; ++e)
@@ -1247,6 +1320,10 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         if (walk) return ap;
         RoomPlan rg = ringPlan(planIn, params, core, blankEdge, inset, storey);
         rg.finish = interiorFinishFor(params);
+        if (rg.rooms.empty()) {   // too shallow for flats round the core too: the residents' lounge
+            RoomPlan lg = deskRowPlan(planIn, core, inset, storey, RoomKind::Lounge);
+            if (!lg.rooms.empty()) { lg.finish = rg.finish; return lg; }
+        }
         return rg;
     }
     const OBB2 plateBox = orientedBoundingBox(planIn);
@@ -1281,6 +1358,11 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
                       ? housePlan(planIn, params, stairWell, entranceEdge, inset, storey)
                       : ringPlan(planIn, params, core, blankEdge, inset, storey);
     rp.finish = interiorFinishFor(params);
+    if (topo != PlateTopology::WholeFloor && rp.rooms.empty()) {
+        // too shallow for rooms round the core: a row of desks at the windows, or the residents' lounge
+        RoomPlan dr = deskRowPlan(planIn, core, inset, storey, params.residential ? RoomKind::Lounge : RoomKind::DeskRow);
+        if (!dr.rooms.empty()) { dr.finish = rp.finish; return dr; }
+    }
     if (topo != PlateTopology::WholeFloor) return rp;   // a ring is open by construction
 
     // WALK IT before shipping it. A house is one dwelling, so a single bad

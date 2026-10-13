@@ -9594,3 +9594,43 @@ Tests: on the light-rail lab, the streets under the line answer their own height
 track still keeps out trees; the field round-trips its uses; a footprint the track crosses is kept out and one 20 m off
 is not; every platform has its canopy, frame and lamps and every stop its lights. A board finds its platform (not past
 its back, not under it), lists both lines toward the other station, and its minutes come true within a third.
+
+## ADR-0160 — Furniture keeps out of the outside doors and off the windows; setback floors are furnished
+
+Glenn, 2026-10-13: "some of the interiors have furniture weirdly placed like a tv sitting in front of the front doorway
+or a shelf in a store blocking the front entrance ... some floors in skyscrapers are still empty. They don't have walls
+for full apartments or they don't have furniture for full office floors", then "A picture or mirror shouldn't be placed
+over a window but a desk or sofa could be placed by the window."
+
+Decision:
+- **The room plan carries the outside walls' doors and windows** (`RoomPlan::openings`, `WallOpening`), filled by
+  `storeyOpenings` from the same facade layout the walls are cut with: the ground storey's modes as its collider gaps
+  read them, the upper storeys' as the inner wall reads them, a curtain wall's glass above its spandrel. The furnisher
+  only knew the partitions' doors, so the street door, a shop's door and the back door were plain wall to it. The room
+  planner never makes them; it keeps one source for where a door is.
+- **A door keeps a way in clear**: the leaf plus 0.3 m a side, 1.6 m deep, reserved before anything is placed.
+- **A window takes low furniture only**: nothing may stand in the 0.35 m strip in front of the glass (backed onto it,
+  or against the wall beside it with its side across it) if it rises more than 0.3 m past the sill, a floor-to-ceiling
+  pane counting as a 0.9 m sill. A desk, a sofa, a bed's headboard, a sink go under a window; a TV, a wardrobe, a
+  bookcase, a mirrored vanity, a fridge tower and wall cupboards do not (a counter run keeps its base units and drops
+  the wall cupboard over a window module). What sits on a desk (the monitor) does not count. Nothing hangs over glass.
+  A shop's tall rows start an aisle behind its shopfront strip rather than being dropped, and a shop places its till
+  before its shelving, so the doors' clear ways push shelves along the walls and not onto the till's spot.
+- **Setback floors are furnished**: a tower keeps the core it was sized for at its base, so a setback tier's floor
+  narrows round it below the ring's rooms (3 m past a 2.2 m corridor) and the office floor's 4 m bands, and grew empty
+  -- 62% of tower_on_base's floors and a fifth of the art deco, stepped and sky-exposure towers'. A band 2.55-6 m from
+  glass to core is now a DESK ROW (desks at the windows, chairs facing out, the walk behind), in the office plan beside
+  its rooms or as the whole floor (`deskRowPlan`, any plate of four corners or more); a residential tower's is the
+  residents' LOUNGE (sofas and tables along the glass, from 2.85 m). Rooms with no partitions (an office's open
+  zones) are furnished; a grid step may start `from` its window wall; `one_of` tries the building's other choices,
+  then its `fallback`, where its choice fits nothing (office zones: pods or cubicles, then rows of desks).
+
+Not done: a 14 m crown on a 24 m lot keeps the base's 8 x 8 m core, leaving 2.3-2.5 m a side -- a corridor. The fix is
+the core stepping in as lift banks end, not more furniture rules. The shop rooms' rects start at the wall's outer face,
+not its inner skin (the furnisher matches openings to within 0.9 m to allow for it).
+
+Interiors are grown at run time from the building records, so this needs no re-bake.
+
+Tests: across 30 recipes x 3 seeds x 5 plans, the ground and first floors: 1793 doors and 26735 windows, no piece in a
+door's way in, none tall before a window, none hung over one (before, with RT_FURNITURE_BLIND_OPENINGS=1: 1099, 1554,
+330). Across 11 tower recipes up every other floor: 28 of 1525 bare (the 24 m lots' crowns), no tower kind over 10%.

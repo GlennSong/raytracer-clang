@@ -118,6 +118,7 @@ struct FurnStep {
     // Grid: cells w x d in rows from the window wall, aisles between; d2 > 0 a shorter cell where a full one does
     // not fit, built with style2 (the piece's style bits) -- an office pod of four where six will not go
     Real aisleX = 0, aisleZ = 0, d2 = 0;
+    Real from = 0.6;   // the first row's gap from the window wall
     int style2 = -1;
     // Grid TIERS: each row's style bits its tier counted from the front (the far side from the window wall), so a
     // lecture hall's rows step up toward the back (LectureRow models its own riser)
@@ -128,7 +129,8 @@ struct FurnStep {
     // Counter: a run of 0.6 m modules on the longest wall: the roles' pieces and the pattern placing them
     std::string pattern;                 // "kitchen" | "kitchenette"
     FurnPick base, sink, hob, tallUnit, wallUnit;
-    std::vector<FurnStep> alternatives;  // OneOf: one per building, by its hash
+    std::vector<FurnStep> alternatives;  // OneOf: one per building, by its hash -- the first `choices` of them; the
+    std::size_t choices = 0;             // rest (`fallback`) only where none of those fits
 };
 
 struct RoomProgram {

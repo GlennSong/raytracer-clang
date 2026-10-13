@@ -56,8 +56,10 @@ enum class PlateTopology : uint8_t {
 // 5 pharmacy, 6 bakery).
 // Classroom .. Dorm: the university campus (campusPlan): a classroom, a tiered lecture hall, a teaching lab, the
 // library's reading room and its stacks, a residence hall's two-bed room.
+// DeskRow: an office floor too shallow for rooms (a setback tier round its base's core): desks along the glass.
+// Lounge: the same strip in a residential tower: the residents' lounge, sofas along the glass.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
-                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm };
+                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line
@@ -114,12 +116,24 @@ struct Room {
     uint8_t style = 0;      // a shop's trade
 };
 
+// AN OPENING IN AN OUTSIDE WALL (Glenn, 2026-10-13: "a tv sitting in front of the front doorway ... a shelf in a store
+// blocking the front entrance"; "a picture or mirror shouldn't be placed over a window but a desk or sofa could"): a
+// window or a door the facade cuts, as its span a->b along the inner face of the wall (world XZ) and its sill and head
+// above the storey floor. The facade's own layout fills these in (growInterior), so the furniture sees the same doors
+// and windows the walls are cut with; the room planner never makes them.
+struct WallOpening {
+    Vec2 a, b;
+    Real sill = 0, head = 0;
+    bool door = false;   // the street door, a shop's own door, the back door: kept clear to walk in through
+};
+
 struct RoomPlan {
     PlateTopology topology = PlateTopology::Ring;
     bool office = false;
     WallFinish finish;              // what an accent wall on this storey wears
     std::vector<Room> rooms;
     std::vector<RoomWall> walls;
+    std::vector<WallOpening> openings;   // the outside walls' doors and windows (empty: none known)
 };
 
 // Which topology a plate takes. A plate with a core, or behind a curtain

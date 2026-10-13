@@ -1,7 +1,7 @@
 -- furniture_rooms.lua -- ROOM PROGRAMS (the furniture library, M3b; Glenn, 2026-10-03: "go ahead with the furniture
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
--- bath. Shops are still furnished in code, by their trade.
+-- bath, desk_row, lounge. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -18,11 +18,14 @@
 --   tall              it stands up the wall (no picture over it).   clear  floor kept free in front (metres; a
 --                     described clearance wins).   count  a number, or { per = m, min, max }: one per m of width.
 --   min_w             only in a room wider than this.
---   grid = { w, d }   cells in rows out from the window wall: aisle = { x, z }; short = a shallower cell where a full
---                     one will not fit, built with short_style (the piece's style bits).
+--   grid = { w, d }   cells in rows out from the window wall (the first `from` metres off it, default 0.6):
+--                     aisle = { x, z }; short = a shallower cell where a full one will not fit, built with
+--                     short_style (the piece's style bits).
 --   counter = "kitchen" | "kitchenette"   a run of 0.6 m modules: base, sink, hob, tall_unit, wall_unit picks.
 --   hang = pick       on the first clear wall of `sides`.
---   one_of = { step, step }   one per building (its hash): offices are pods or cubicles, a building at a time.
+--   one_of = { step, step }   one per building (its hash): offices are pods or cubicles, a building at a time -- the
+--                     others in turn where the building's choice fits nothing; `fallback = step` beside it where
+--                     none of them does.
 
 local function office_kind(tags) return { family = "seating", tags = tags } end
 
@@ -93,7 +96,35 @@ furniture_rooms = {
     { one_of = {
         { grid = { 3.1, 4.8 }, aisle = { 1.3, 1.6 }, short = 3.2, short_style = 4, pick = "desk_pod" },
         { grid = { 2.4, 2.4 }, aisle = { 0.2, 1.6 }, pick = "cubicle" },
-    } },
+      },
+      -- a zone too shallow for either: rows of desks at the glass
+      fallback = { grid = { 1.6, 1.6 }, from = 0.15, aisle = { 0.2, 1.2 },
+        set = {
+          { pick = { family = "surface", tags = { "office" } }, x = 0.8 },
+          { pick = "monitor", x = 0.8, z = 0.12, y = 0.75 },
+          { pick = office_kind({ "office" }), x = 0.8, z = 1.55, faces = "wall", fit = { 0.7, 0.7 } },
+        } } },
+  },
+
+  desk_row = {
+    -- an office floor too shallow for rooms (a setback tier round its base's core): a desk at every window, the chair
+    -- on the room side facing out, the walk to the core behind
+    { grid = { 1.6, 1.6 }, from = 0.15, aisle = { 0.2, 9.0 },
+      set = {
+        { pick = { family = "surface", tags = { "office" } }, x = 0.8 },
+        { pick = "monitor", x = 0.8, z = 0.12, y = 0.75 },
+        { pick = office_kind({ "office" }), x = 0.8, z = 1.55, faces = "wall", fit = { 0.7, 0.7 } },
+      } },
+  },
+
+  lounge = {
+    -- a residential tower's floor too shallow for flats: the residents' lounge, a sofa and its table at every few
+    -- windows, facing in, the walk to the core behind
+    { grid = { 2.4, 1.9 }, from = 0.15, aisle = { 1.4, 9.0 },
+      set = {
+        { pick = { family = "seating", tags = { "living" } }, x = 1.2, fit = { 2.16, 1.0 } },
+        { pick = { family = "surface", tags = { "living" } }, x = 1.2, z = 1.15, fit = { 1.2, 0.7 } },
+      } },
   },
 
   meeting = {

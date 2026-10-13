@@ -14,6 +14,7 @@
 #include <string>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 using namespace engine;
 
@@ -1204,4 +1205,138 @@ TEST_CASE(shop_staff_stand_behind_their_own_counter_and_nobody_sits_in_a_closed_
     OccupantPlan shut;
     shut.people = 0; shut.units = &sushi;
     CHECK(planOccupants(set, lib, shut).empty());
+}
+
+// THE OUTSIDE DOORS AND WINDOWS (Glenn, 2026-10-13: "a tv sitting in front of the front doorway or a shelf in a store
+// blocking the front entrance"; "a picture or mirror shouldn't be placed over a window but a desk or sofa could be
+// placed by the window"). Across the city's recipes, every storey grown: no piece stands in the way in through a street,
+// shop or back door, and nothing taller than low furniture stands against a window or hangs over one.
+// (RT_FURNITURE_BLIND_OPENINGS=1 grows them as before, for the counts.)
+TEST_CASE(furniture_keeps_out_of_the_outside_doors_and_off_the_windows) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"cottage", "bungalow", "craftsman_house", "modern_house", "villa", "yard_house",
+                             "oldtown_house", "walkup_homes", "apartments", "terrace_condo", "loft_block", "brick_shop",
+                             "corner_shop", "commercial_block", "office_midrise", "office_slab", "hotel", "condo_tower",
+                             "pencil_tower", "glass_tower", "art_deco_tower", "tower_on_base", "podium_tower",
+                             "industrial_office", "civic_hall", "bank", "cinema", "strip_mall", "supermarket", "glass_slab"};
+    const Real sizes[][2] = {{10, 8}, {14, 11}, {22, 14}, {30, 20}, {40, 26}};
+    long pieces = 0, inDoor = 0, beforeGlass = 0, overGlass = 0, doors = 0, windows = 0;
+    std::map<std::string, int> what;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 3; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.openDoorway = true;
+                const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+                const std::size_t ee = entranceEdgeFor(plan, p);
+                const int top = std::min<int>(static_cast<int>(sps.size()), 4);   // the ground and the first floors
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, top);
+                for (int k = 0; k < top; ++k) {
+                    const StoreyPlan& sp = sps[static_cast<std::size_t>(k)];
+                    const std::vector<WallOpening> ops = storeyOpenings(sp.plan, p, k, sp.y0, sp.h, ee);
+                    for (const WallOpening& o : ops) (o.door ? doors : windows)++;
+                    for (const PlacedPiece& pp : in.furniture) {
+                        const Real y = pp.xform.m[1][3] - sp.y0;
+                        if (y > 0.1 && static_cast<Piece>(pp.piece) != Piece::Picture && static_cast<Piece>(pp.piece) != Piece::Whiteboard)
+                            continue;   // on another piece (a desk's monitor): it stands on what stands on the floor
+                        if (y < -0.05 || y > sp.h - 0.3) continue;   // another storey's
+                        const Piece pc = static_cast<Piece>(pp.piece);
+                        if (pc == Piece::CeilingLight || pc == Piece::Rug || pc == Piece::DanceFloor) continue;
+                        if (FurnitureLibrary::global().find(pc) && FurnitureLibrary::global().find(pc)->family == "goods") continue;
+                        ++pieces;
+                        if (std::getenv("RT_OPENINGS_WHY")) ++what[std::string("all: ") + furniturePieceName(pc)];
+                        const FurniturePiece& kit = furniturePiece(pc, pp.variant);
+                        const Vec2 c(pp.xform.m[0][3], pp.xform.m[2][3]);
+                        const Vec2 X(pp.xform.m[0][0], pp.xform.m[2][0]), Z(pp.xform.m[0][2], pp.xform.m[2][2]);
+                        const Real hw = kit.size.x * 0.5, topY = y + kit.size.y;
+                        for (const WallOpening& o : ops) {
+                            const Vec2 d = normalize(o.b - o.a);
+                            Vec2 in2(-d.y, d.x);   // into the building
+                            if (!pointInPolygon(sp.plan, (o.a + o.b) * 0.5 + in2 * 0.5)) in2 = in2 * -1.0;
+                            const Real len = (o.b - o.a).length();
+                            // the piece's footprint in the opening's frame: along it, and in from the wall's face
+                            Real s0 = 1e9, s1 = -1e9, n0 = 1e9, n1 = -1e9;
+                            for (const Vec2& q : {c - X * hw, c + X * hw, c - X * hw + Z * kit.size.z, c + X * hw + Z * kit.size.z}) {
+                                s0 = std::min(s0, dot(q - o.a, d)); s1 = std::max(s1, dot(q - o.a, d));
+                                n0 = std::min(n0, dot(q - o.a, in2)); n1 = std::max(n1, dot(q - o.a, in2));
+                            }
+                            if (s1 <= 0.1 || s0 >= len - 0.1) continue;   // not across it (flush to its frame is fine)
+                            if (o.door) {
+                                // the leaf and a metre in: the way in
+                                if (n0 < 1.0 && n1 > -0.1 && y < 0.5) { ++inDoor; ++what[std::string("door: ") + furniturePieceName(pc)];
+                                    if (std::getenv("RT_OPENINGS_WHY") && inDoor < 15) std::printf("      DOOR %s %gx%g s%u k%d %s n %.2f..%.2f s %.2f..%.2f len %.2f\n", rn, sz[0], sz[1], seed, k, furniturePieceName(pc), n0, n1, s0, s1, len); }
+                            } else if (n0 < 0.25 && n1 > -0.1 && topY > std::max(o.sill, Real(0.9)) + 0.3) {
+                                const bool hung = pc == Piece::Picture || pc == Piece::Whiteboard;
+                                ++(hung ? overGlass : beforeGlass);
+                                if (std::getenv("RT_OPENINGS_WHY") && beforeGlass < 15 && !hung) std::printf("      GLASS %s %gx%g s%u k%d %s n %.2f..%.2f s %.2f..%.2f len %.2f sill %.2f top %.2f\n", rn, sz[0], sz[1], seed, k, furniturePieceName(pc), n0, n1, s0, s1, len, o.sill, topY);
+                                ++what[std::string(hung ? "over glass: " : "before glass: ") + furniturePieceName(pc)];
+                            }
+                        }
+                    }
+                }
+            }
+    std::printf("    [openings] %ld doors, %ld windows; %ld pieces: %ld in a doorway, %ld tall before a window, %ld hung "
+                "over one\n", doors, windows, pieces, inDoor, beforeGlass, overGlass);
+    for (const auto& [k, n] : what) std::printf("      %4d  %s\n", n, k.c_str());
+    CHECK(doors > 50 && windows > 500 && pieces > 2000);   // (the spread reaches them)
+    CHECK(inDoor == 0);
+    CHECK(beforeGlass == 0);
+    CHECK(overGlass == 0);
+}
+
+// EVERY TOWER FLOOR IS FURNISHED (Glenn, 2026-10-13: "some floors in skyscrapers are still empty"). A setback tier keeps
+// the core sized for its base, so the floor round it narrows past the ring's rooms and the office's bands; those floors
+// grew bare -- 62% of tower_on_base's, a fifth of the art deco, stepped and sky exposure towers'. They are a row of
+// desks at the glass now (room_plan.cpp deskRowPlan), and an office floor's open zones are furnished with or without a
+// partition; a residential tower's is its residents' lounge. What may stay bare: the plant floors, and a crown whose
+// core leaves only a corridor round it -- a 14 m crown on a 24 m lot keeps its base's 8 x 8 m core (2.3-2.5 m a side),
+// until the core steps in as its lift banks end (owed). Measured: 1525 floors here, 28 bare (62% of tower_on_base's
+// floors and a fifth of three other kinds' were bare before).
+TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"glass_tower", "art_deco_tower", "stepped_tower", "drum_tower", "podium_tower",
+                             "pagoda_tower", "condo_tower", "sky_exposure_tower", "tower_on_base",
+                             "tapered_glass_tower", "pencil_tower"};
+    const Real sizes[][2] = {{24, 24}, {30, 30}, {40, 26}, {48, 34}};
+    long allFloors = 0, allBare = 0, deskRows = 0;
+    for (const char* rn : recipes) {
+        int floors = 0, bare = 0;
+        for (uint32_t seed = 1; seed <= 2; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.openDoorway = true;
+                const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+                const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+                for (int k = 1; k < static_cast<int>(sps.size()); k += 2) {   // every other floor, up every tier
+                    if (mechanicalStorey(p, k)) continue;
+                    ++floors;
+                    const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, k, k + 1);
+                    long real = 0;
+                    for (const PlacedPiece& pp : in.furniture) if (pp.piece != static_cast<uint8_t>(Piece::CeilingLight)) ++real;
+                    if (real == 0) ++bare;
+                    const RoomPlan rp = roomPlan(sps[static_cast<std::size_t>(k)].plan, p, core, static_cast<std::size_t>(-1),
+                                                 std::max(p.wallThickness, Real(0.55)), k);   // (interiorInset)
+                    for (const Room& r : rp.rooms) if (r.kind == RoomKind::DeskRow) { ++deskRows; break; }
+                    if (real == 0 && std::getenv("RT_BARE_WHY")) {
+                        const OBB2 ob = orientedBoundingBox(sps[static_cast<std::size_t>(k)].plan);
+                        std::printf("      bare %s %gx%g s%u k%d plate %.1fx%.1f core %d %.1fx%.1f rooms %zu walls %zu topo %d lights %zu\n", rn, sz[0], sz[1], seed, k,
+                                    2 * ob.half[0], 2 * ob.half[1], core.valid, core.length, core.depth, rp.rooms.size(), rp.walls.size(), (int)rp.topology, in.furniture.size());
+                    }
+                }
+            }
+        std::printf("    [towers] %-20s %3d floors, %2d bare\n", rn, floors, bare);
+        CHECK(floors > 0);
+        CHECK(bare * 100 <= floors * 10);   // (the 24 m lots' crowns)
+        allFloors += floors;
+        allBare += bare;
+    }
+    std::printf("    [towers] %ld floors, %ld bare; %ld desk-row floors\n", allFloors, allBare, deskRows);
+    CHECK(allBare * 100 <= allFloors * 3);
+    CHECK(deskRows > 0);
 }
