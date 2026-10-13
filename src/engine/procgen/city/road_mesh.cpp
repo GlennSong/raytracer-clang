@@ -867,6 +867,7 @@ double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
     const Vec2 q(x, z);
     for (const Seg& sg : it->second) {
         const UnionSpine& sp = spines[sg.spine];
+        if (sp.use != UnionSpine::Use::Road) continue;   // the asphalt: not a viaduct's track or a way in
         const Vec2& a = sp.points[sg.i];
         const Vec2& b = sp.points[sg.i + 1];
         const Vec2 ab = b - a;
@@ -886,8 +887,15 @@ double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
     return depth;
 }
 
+bool RoadDeckField::coversAny(double x, double z, double margin) const {
+    bool hit = false;
+    surfacesAt(x, z, margin, [&](double, bool, int, double, double, RoadClass) { hit = true; }, true);
+    return hit;
+}
+
 void RoadDeckField::surfacesAt(double x, double z, double margin,
-                               const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn) const {
+                               const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn,
+                               bool anyUse) const {
     const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
                         (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);
     if (auto pit = padCells_.find(k); pit != padCells_.end()) {
@@ -911,6 +919,7 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
     const Vec2 q(x, z);
     for (const Seg& sg : it->second) {
         const UnionSpine& sp = spines[sg.spine];
+        if (sp.use != UnionSpine::Use::Road && !anyUse) continue;   // nothing on a street stands on a track or a way in
         const Vec2& a = sp.points[sg.i];
         const Vec2& b = sp.points[sg.i + 1];
         const Vec2 ab = b - a;

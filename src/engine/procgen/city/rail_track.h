@@ -31,6 +31,7 @@ struct RailStop {
     // THE WAY IN: where the station's footway leaves the street (plan x, z) -- what a bus line serves
     bool hasAccess = false;
     Vec2 access{0, 0};
+    std::vector<Vec3> lamps;  // its night lights (world), under the canopy's fittings
 };
 
 struct RailTrack {
@@ -49,6 +50,11 @@ inline nlohmann::json railTracksToJson(const std::vector<RailTrack>& tracks) {
         for (const RailStop& s : t.stops) {
             nlohmann::json j = {{"name", s.name}, {"s0", s.s0}, {"s1", s.s1}, {"side", s.side}, {"top", s.top}};
             if (s.hasAccess) j["access"] = {s.access.x, s.access.y};
+            if (!s.lamps.empty()) {
+                nlohmann::json L = nlohmann::json::array();
+                for (const Vec3& p : s.lamps) L.push_back({p.x, p.y, p.z});
+                j["lamps"] = L;
+            }
             stops.push_back(j);
         }
         a.push_back({{"edge", t.edge}, {"cls", t.cls}, {"dir", t.dir}, {"pts", pts}, {"stops", stops}});
@@ -67,8 +73,10 @@ inline std::vector<RailTrack> railTracksFromJson(const nlohmann::json& a) {
         for (const nlohmann::json& p : j.value("pts", nlohmann::json::array()))
             t.pts.push_back(Vec3(p.at(0).get<Real>(), p.at(1).get<Real>(), p.at(2).get<Real>()));
         for (const nlohmann::json& s : j.value("stops", nlohmann::json::array())) {
-            RailStop st{s.value("name", std::string()), s.value("s0", 0.0), s.value("s1", 0.0), s.value("side", 1), s.value("top", 0.0)};
+            RailStop st{s.value("name", std::string()), s.value("s0", 0.0), s.value("s1", 0.0), s.value("side", 1), s.value("top", 0.0), false, Vec2(0, 0), {}};
             if (s.contains("access")) { st.hasAccess = true; st.access = Vec2(s["access"].at(0).get<double>(), s["access"].at(1).get<double>()); }
+            for (const nlohmann::json& p : s.value("lamps", nlohmann::json::array()))
+                st.lamps.push_back(Vec3(p.at(0).get<Real>(), p.at(1).get<Real>(), p.at(2).get<Real>()));
             t.stops.push_back(st);
         }
         out.push_back(std::move(t));

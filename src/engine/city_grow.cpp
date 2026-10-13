@@ -47,6 +47,7 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
         s.lp.smoothGround = in.smoothGround;
         s.lp.streetHeight = in.streetHeight;
         s.lp.nearFreeway = in.nearFreeway;
+        s.lp.trackKeepOut = in.trackKeepOut;
 #ifdef RT_ROADS_LANES
         s.lp.sidewalkRise = roads::lanes::lanesSidewalkRise();   // paving meets the drawn sidewalk (ADR-0086)
         s.lp.padFeatherInside = static_cast<Real>(roads::lanes::lanesPadFalloff(in.citysim.value("sidewalk", 4.0)));

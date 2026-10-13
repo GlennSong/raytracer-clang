@@ -3912,6 +3912,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 if (nearFreeway)
                     for (const Vec2& v : L.footprint)
                         if (nearFreeway(v)) return true;
+                if (p.trackKeepOut && p.trackKeepOut(L.footprint)) return true;
                 return false;
             }), lots.end());
             prj.escaped += static_cast<int>(before - lots.size());
@@ -4008,6 +4009,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // ...clear of any freeway or ramp, as every parcelled lot is
             if (hasStreet && nearFreeway)
                 for (const Vec2& v : foot) if (nearFreeway(v)) { hasStreet = false; break; }
+            if (hasStreet && p.trackKeepOut && p.trackKeepOut(foot)) hasStreet = false;   // nor under the rail
             if (!seatable && viable <= 2 && viableA < Real(0.5) * blockA && blockA >= kWholeBlockMinArea &&
                 dbg->wholeBlocks < 24)
                 LOG_INFO << "[citylots] whole block SKIPPED (relief " << (hi - lo) << " m across its edge) "
@@ -4084,6 +4086,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
 
             for (std::size_t i = 0; i < foot.size() && ok && nearFreeway; ++i) if (nearFreeway(foot[i])) ok = false;
+            if (ok && p.trackKeepOut && p.trackKeepOut(foot)) ok = false;
             {   // inside the block as it came (a vertex ON its line is inside: nudge it toward the middle)
                 const Vec2 fc = centroid(foot);
                 for (const Vec2& v : foot) if (ok && !pointInPolygon(footBeforePush, v + (fc - v) * Real(0.02))) ok = false;
@@ -4163,6 +4166,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             else if (padOnCarriageway(foot)) why = "road";
             for (const Vec2& c : dbg->depotAt) if (!why && (c - fc).length() < 1800) why = "near another";
             for (std::size_t i = 0; i < foot.size() && !why && nearFreeway; ++i) if (nearFreeway(foot[i])) why = "freeway";
+            if (!why && p.trackKeepOut && p.trackKeepOut(foot)) why = "rail";
             for (const Vec2& v : foot) if (!why && !pointInPolygon(footBeforePush, v + (fc - v) * Real(0.02))) why = "pushed";
             if (!why && p.ground) {   // near-flat: the yard is laid on the ground, not graded
                 Real lo = 1e30, hi = -1e30;

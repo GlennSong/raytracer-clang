@@ -176,6 +176,8 @@ struct LotParams {
     // Within the freeway clearance of a freeway or ramp (a lane city's decks: lanesNearFreeway). Set, it replaces
     // the lot graph's own test.
     std::function<bool(Real, Real)> nearFreeway;
+    // Within a rail line's clearance, a whole footprint (lanesTrackKeepOut): no building there, as near a freeway.
+    std::function<bool(const std::vector<Vec2>&)> trackKeepOut;
     Real roadMargin = 11.0;   // inset from the block edge to the buildable interior
                               // (road half-width + sidewalk) — wider = more sidewalk
     Real lotSetback = 1.4;    // building inset from its own lot lines

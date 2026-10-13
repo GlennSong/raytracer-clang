@@ -1,4 +1,5 @@
 #include "../src/apps/citysim/rail_sim.h"
+#include "../src/apps/citysim/rail_board.h"
 #include "test_framework.h"
 
 #include <algorithm>
@@ -31,9 +32,9 @@ std::vector<RailTrack> ovalTracks() {
         const double pi = 3.14159265358979;
         // counter-clockwise for dir +1, clockwise for -1: build ccw and reverse
         std::vector<RailTrack> ring;
-        ring.push_back(piece("south", [&](double u) { return Vec3(-400 + 800 * u, 0, -r); }, 800, {{"Central", 330, 470, -1, 1.05}}));
+        ring.push_back(piece("south", [&](double u) { return Vec3(-400 + 800 * u, 0, -r); }, 800, {{"Central", 330, 470, -1, 1.05, false, {}, {}}}));
         ring.push_back(piece("east", [&](double u) { const double a = -pi / 2 + pi * u; return Vec3(400 + r * std::cos(a), 0, r * std::sin(a)); }, pi * r, {}));
-        ring.push_back(piece("north", [&](double u) { return Vec3(400 - 800 * u, 0, r); }, 800, {{"Harbour", 330, 470, -1, 1.05}}));
+        ring.push_back(piece("north", [&](double u) { return Vec3(400 - 800 * u, 0, r); }, 800, {{"Harbour", 330, 470, -1, 1.05, false, {}, {}}}));
         ring.push_back(piece("west", [&](double u) { const double a = pi / 2 + pi * u; return Vec3(-400 + r * std::cos(a), 0, r * std::sin(a)); }, pi * r, {}));
         if (dir < 0) {
             for (RailTrack& t : ring) {
@@ -129,4 +130,49 @@ TEST_CASE(each_line_runs_the_stock_its_track_class_asks_for) {
     }
     CHECK(intercity == 4);
     CHECK(light == 6);
+}
+
+// THE PLATFORM BOARD (rail_board.h; Glenn, 2026-10-12: "a similar thing to the buses when you're on a station
+// platform"): standing on Central's platform finds it (not beside the track, not under it); the board lists both
+// lines calling there, this platform's first, each toward the other station; and the minutes it gives come true --
+// the next train stands at the platform within a third of the time it said.
+TEST_CASE(a_platform_board_finds_its_platform_and_its_minutes_come_true) {
+    RailSim sim;
+    sim.build(ovalTracks(), trainKindNamed("intercity"), 2);
+    for (int i = 0; i < 30 * 40; ++i) sim.step(1.0 / 30.0);   // trains on their way
+    const RailLine& L = sim.lines()[0];
+    int k = -1;
+    for (std::size_t j = 0; j < L.stops.size(); ++j) if (L.stops[j].name == "Central") k = static_cast<int>(j);
+    CHECK(k >= 0);
+    if (k < 0) return;
+    const RailStop& st = L.stops[static_cast<std::size_t>(k)];
+    // a point on the platform: the middle of its span, 3 m out on its side, a body's height over its top
+    const double sm = 0.5 * (st.s0 + st.s1);
+    const Vec3 a = L.at(sm), b = L.at(sm + 1.0);
+    double fx = b.x - a.x, fz = b.z - a.z; const double fl = std::hypot(fx, fz); fx /= fl; fz /= fl;
+    const Vec3 out(fz * st.side, 0, -fx * st.side);
+    int line = -1, stop = -1;
+    CHECK(platformAt(sim, a + out * (kPlatformGap + 2.0) + Vec3(0, static_cast<Real>(st.top + 0.9), 0), line, stop));
+    CHECK(line == 0 && stop == k);
+    CHECK(!platformAt(sim, a + out * (kPlatformGap + 8.0) + Vec3(0, static_cast<Real>(st.top + 0.9), 0), line, stop));   // past its back
+    CHECK(!platformAt(sim, a + out * (kPlatformGap + 2.0) + Vec3(0, -6, 0), line, stop));            // under it
+    const PlatformBoard board = platformBoard(sim, 0, k);
+    CHECK(board.station == "Central");
+    CHECK(board.departures.size() == 4);   // two lines, two trains each
+    if (board.departures.empty()) return;
+    CHECK(board.departures.front().thisPlatform && board.departures.front().line == 0);
+    for (const PlatformBoard::Departure& d : board.departures) CHECK(d.toward == "Harbour");
+    // the soonest on this platform's line: how long it really takes
+    const PlatformBoard::Departure next = board.departures.front();
+    CHECK(next.eta > 0);
+    double t = 0;
+    while (t < next.eta * 2 + 120) {
+        const Train& T = sim.trains()[static_cast<std::size_t>(next.train)];
+        if (T.dwelling && T.nextStop == k) break;
+        sim.step(1.0 / 30.0);
+        t += 1.0 / 30.0;
+    }
+    std::printf("    [board] said %.0f s, took %.0f s\n", next.eta, t);
+    CHECK(std::fabs(t - next.eta) < next.eta / 3 + 20);
+    CHECK(trainEta(sim, next.train, k) == 0);
 }

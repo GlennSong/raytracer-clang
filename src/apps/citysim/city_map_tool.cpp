@@ -7,6 +7,7 @@
 #include "../../engine/world.h"
 #include "bus_stop_props.h"   // routeColour: the map wears the stop signs' colours
 #include "city_render.h"
+#include "rail_sim.h"
 
 #include <algorithm>
 #include <cmath>
@@ -128,20 +129,9 @@ void CityMapToolSystem::startWorker(engine::FrameContext& ctx) {
         LOG_WARN << "[map] this level has no city map (no roads?)";
         return;
     }
-    // The bus lines, copied on the main thread: the worker never touches the sim.
-    std::vector<TransitLine> lines;
-    if (city_.built()) {
-        const BusNetwork& net = city_.sim().buses();
-        for (int r = 0; r < net.routeCount(); ++r) {
-            TransitLine l;
-            for (const Vec2& p : net.route(r).path) l.path.push_back({p.x, p.y});
-            const engine::Vec3 c = routeColour(net.lineOf(r));
-            l.r = static_cast<float>(c.x);
-            l.g = static_cast<float>(c.y);
-            l.b = static_cast<float>(c.z);
-            lines.push_back(std::move(l));
-        }
-    }
+    // The lines, copied on the main thread: the worker never touches the sim.
+    std::vector<TransitLine> lines = transitLines();
+    railInOverlay_ = city_.built() && city_.sim().railRiders().rail() != nullptr;
     {
         std::lock_guard<std::mutex> lk(mu_);
         quit_ = false;
@@ -176,6 +166,11 @@ void CityMapToolSystem::startWorker(engine::FrameContext& ctx) {
                 std::unique_lock<std::mutex> lk(mu_);
                 cv_.wait(lk, [&] { return quit_ || haveJob_; });
                 if (quit_) return;
+                if (haveLines_) {   // the overlay again (the trains arrived after the map first opened)
+                    raster.loadTransit(transitSvg(newLines_, raster.minX(), raster.minZ(), raster.width(), raster.height()));
+                    newLines_.clear();
+                    haveLines_ = false;
+                }
                 v = job_;
                 haveJob_ = false;
                 rasterBusy_ = true;
@@ -191,6 +186,39 @@ void CityMapToolSystem::startWorker(engine::FrameContext& ctx) {
             }
         }
     });
+}
+
+std::vector<TransitLine> CityMapToolSystem::transitLines() const {
+    std::vector<TransitLine> lines;
+    if (!city_.built()) return lines;
+    // THE RAIL (Glenn, 2026-10-12: "it would be nice to see the trains on the map"): each line a dark casing with its
+    // colour down the middle, every casing first so a double track reads as one line
+    if (const RailSim* rs = city_.sim().railRiders().rail()) {
+        for (int pass = 0; pass < 2; ++pass)
+            for (const RailLine& L : rs->lines()) {
+                TransitLine l;
+                for (std::size_t i = 0; i < L.pts.size(); i += 2) l.path.push_back({L.pts[i].x, L.pts[i].z});
+                if (!L.pts.empty()) l.path.push_back({L.pts.back().x, L.pts.back().z});
+                const engine::Vec3 c = pass == 0 ? engine::Vec3(0.08, 0.08, 0.09) : lineColour(L);
+                l.r = static_cast<float>(c.x);
+                l.g = static_cast<float>(c.y);
+                l.b = static_cast<float>(c.z);
+                l.width = pass == 0 ? 2.2f : 1.3f;
+                l.closed = L.loop;
+                lines.push_back(std::move(l));
+            }
+    }
+    const BusNetwork& net = city_.sim().buses();
+    for (int r = 0; r < net.routeCount(); ++r) {
+        TransitLine l;
+        for (const Vec2& p : net.route(r).path) l.path.push_back({p.x, p.y});
+        const engine::Vec3 c = routeColour(net.lineOf(r));
+        l.r = static_cast<float>(c.x);
+        l.g = static_cast<float>(c.y);
+        l.b = static_cast<float>(c.z);
+        lines.push_back(std::move(l));
+    }
+    return lines;
 }
 
 void CityMapToolSystem::stopWorker() {
@@ -226,6 +254,14 @@ void CityMapToolSystem::update(engine::FrameContext& ctx) {
 
     startWorker(ctx);
     ensureSprites(ctx.renderer);
+    // the trains came after the picture's overlay was drawn: draw it again with the rail
+    bool railNow = false;
+    if (worker_.joinable() && !railInOverlay_ && city_.built() && city_.sim().railRiders().rail()) {
+        std::lock_guard<std::mutex> lk(mu_);
+        newLines_ = transitLines();
+        haveLines_ = true;
+        railInOverlay_ = railNow = true;
+    }
     const Rect p = panel(ctx.framebufferWidth, ctx.framebufferHeight);
     const double pw = p.x1 - p.x0, ph = p.y1 - p.y0;
 
@@ -303,7 +339,7 @@ void CityMapToolSystem::update(engine::FrameContext& ctx) {
         const bool alreadyAsked = askedAny_ &&
             std::fabs(lastAsked_.metresPerPixel / mpp_ - 1.0) < 1e-6 &&
             std::hypot(lastAsked_.cx - cx_, lastAsked_.cz - cz_) / mpp_ < 0.5;
-        if (stale && !alreadyAsked && (settle_ > 0.12 || none || follow_)) {
+        if ((stale && !alreadyAsked && (settle_ > 0.12 || none || follow_)) || railNow) {
             CityMapRaster::View v;
             v.cx = cx_;
             v.cz = cz_;
@@ -413,6 +449,42 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
             q.push_back(tinted(front, col));
         }
     }
+
+    // THE RAIL, live: each station a ringed square, each train its cars, a dot apiece in its line's colour
+    if (city_.built())
+        if (const RailSim* rs = city_.sim().railRiders().rail()) {
+            std::vector<std::pair<std::string, Vec2>> stations;
+            for (const RailLine& L : rs->lines())
+                for (const engine::RailStop& st : L.stops) {
+                    const engine::Vec3 c = L.at(0.5 * (st.s0 + st.s1));
+                    bool seen = false;
+                    for (auto& [name, at] : stations)
+                        if (name == st.name) { at = (at + Vec2(c.x, c.z)) * 0.5; seen = true; }   // the two platforms' middle
+                    if (!seen) stations.push_back({st.name, Vec2(c.x, c.z)});
+                }
+            for (const auto& [name, at] : stations) {
+                const Vec2 s = toPx(at.x, at.y);
+                if (!onPanel(s, -6.0f)) continue;
+                q.push_back(tinted(Quad::rect(static_cast<float>(s.x) - 9, static_cast<float>(s.y) - 9, static_cast<float>(s.x) + 9, static_cast<float>(s.y) + 9), ink));
+                q.push_back(tinted(Quad::rect(static_cast<float>(s.x) - 6.5f, static_cast<float>(s.y) - 6.5f, static_cast<float>(s.x) + 6.5f, static_cast<float>(s.y) + 6.5f), white));
+                q.push_back(tinted(Quad::rect(static_cast<float>(s.x) - 2.5f, static_cast<float>(s.y) - 2.5f, static_cast<float>(s.x) + 2.5f, static_cast<float>(s.y) + 2.5f), ink));
+            }
+            for (int ti = 0; ti < static_cast<int>(rs->trains().size()); ++ti) {
+                const Train& T = rs->trains()[static_cast<std::size_t>(ti)];
+                const engine::Vec3 lc = lineColour(rs->lines()[static_cast<std::size_t>(T.line)]);
+                const float col[4] = {static_cast<float>(lc.x), static_cast<float>(lc.y), static_cast<float>(lc.z), 1.0f};
+                const std::vector<CarPose> cars = rs->carPoses(ti, 1.0);
+                for (int pass = 0; pass < 2; ++pass)
+                    for (const CarPose& cp : cars) {
+                        const engine::Vec3 at = cp.m.transformPoint(engine::Vec3(0, 0, 0));
+                        const Vec2 s = toPx(at.x, at.z);
+                        if (!onPanel(s, -8.0f)) continue;
+                        // a car's length on the map, but never under a few pixels
+                        const float r = std::max(pass == 0 ? 6.5f : 4.5f, static_cast<float>(cp.length * 0.5 / mpp_) + (pass == 0 ? 2.0f : 0.0f));
+                        dot(s, std::min(r, pass == 0 ? 16.0f : 14.0f), pass == 0 ? ink : (cp.loco ? white : col));
+                    }
+            }
+        }
 
     // YOU: the chevron at your position, pointing where you look.
     {

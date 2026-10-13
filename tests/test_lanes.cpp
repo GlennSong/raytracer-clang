@@ -95,6 +95,7 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/procgen/city/polygon.h"
 #include <algorithm>
 #include <cstdio>
+#include <set>
 
 namespace {
 std::map<std::string, std::unique_ptr<Result>>& resultCache() { static std::map<std::string, std::unique_ptr<Result>> c; return c; }
@@ -742,4 +743,76 @@ TEST_CASE(lanes_light_rail_lab_reaches_its_stations_from_below) {
         for (double z : w.z) wMax = std::max(wMax, z);
         CHECK(zMin - wMax > 5.0);         // the way under it, on the street's level
     }
+}
+
+// THE STATION KIT AND WHAT STANDS ON A TRACK (Glenn, 2026-10-12: "cars weirdly stuck in the tracks", the light rail
+// "really close to buildings", stations want lights and canopies with dimension). On the light-rail lab:
+// - a street under the line answers ITS height, not the rail's -- for parked cars (heightAt) and traffic (heightOn);
+//   a tree or a rock still stays off the track (coversAny); the deck field carries the difference through the bundle;
+// - a footprint the track crosses is kept out, even with every corner well off the line; one 20 m off is not;
+// - each platform has a ribbed canopy, a steel frame and lamps, and each stop the night lights under them.
+TEST_CASE(lanes_light_rail_lab_tracks_carry_no_street_and_stations_have_canopies_and_lamps) {
+    const Result& r = scene("light_rail_lab");
+    const CityProducts p = cityProductsFromResult(r, 64.0);
+    int tracks = 0, footways = 0;
+    for (const UnionSpine& sp : p.deck.spines) { tracks += sp.use == UnionSpine::Use::Track; footways += sp.use == UnionSpine::Use::Footway; }
+    CHECK(tracks >= 2 && footways >= 2);
+    // where the line passes over a street
+    int checked = 0;
+    for (const EdgeSpec& t : r.graph.edges) {
+        if (t.cls != "light_rail") continue;
+        for (const EdgeSpec& s : r.graph.edges) {
+            if (s.cls == "light_rail" || s.cls == "footway") continue;
+            for (const Vec2& X : crossings(t.xy, s.xy)) {
+                auto zAt = [&X](const EdgeSpec& e) {
+                    const double st = project(e.xy, e.s, X).station;
+                    const std::size_t j = std::min<std::size_t>(e.s.size() - 1, std::max<std::size_t>(1, static_cast<std::size_t>(std::lower_bound(e.s.begin(), e.s.end(), st) - e.s.begin())));
+                    const double u = std::clamp((st - e.s[j - 1]) / std::max(1e-9, e.s[j] - e.s[j - 1]), 0.0, 1.0);
+                    return e.z[j - 1] + (e.z[j] - e.z[j - 1]) * u;
+                };
+                const double trackZ = zAt(t), streetZ = zAt(s);
+                if (trackZ - streetZ < 4.0) continue;
+                double y = 0;
+                CHECK(p.deck.heightAt(X.x, X.y, 1.0, &y));
+                CHECK(std::fabs(y - streetZ) < 1.0);
+                const RoadClass local = classOf(s);
+                CHECK(p.deck.heightOn(X.x, X.y, 0.5, &local, 0.0, 1e9, &y));
+                CHECK(std::fabs(y - streetZ) < 1.0);
+                CHECK(p.deck.coversAny(X.x, X.y, 0.5));
+                ++checked;
+            }
+        }
+    }
+    std::printf("    [lr] %d crossings under the line checked\n", checked);
+    CHECK(checked >= 2);
+    {   // through the bundle
+        bundle::BinWriter w; bundle::putDeckField(w, p.deck);
+        RoadDeckField back; bundle::BinReader rd(w.bytes.data(), w.bytes.size());
+        CHECK(bundle::getDeckField(rd, back));
+        int t2 = 0; for (const UnionSpine& sp : back.spines) t2 += sp.use == UnionSpine::Use::Track;
+        CHECK(t2 == tracks);
+    }
+    // buildings clear of the line
+    const auto keepOut = lanesTrackKeepOut(p.deck, p.rails);
+    CHECK(static_cast<bool>(keepOut));
+    if (keepOut) {
+        const RailTrack& t = p.rails.front();
+        const Vec3 a = t.pts[t.pts.size() / 4], b = t.pts[t.pts.size() / 4 + 3];
+        Vec2 d(b.x - a.x, b.z - a.z); d = d / d.length(); const Vec2 n(-d.y, d.x), c(a.x, a.z);
+        auto square = [&](Vec2 m, double h) { return std::vector<Vec2>{m + (d + n) * h, m + (n - d) * h, m - (d + n) * h, m + (d - n) * h}; };
+        CHECK(keepOut(square(c, 14.0)));             // the line through its middle, corners ~20 m off
+        CHECK(!keepOut(square(c + n * 40.0, 10.0)));  // 20 m clear of it
+    }
+    // the kit
+    std::set<std::string> names;
+    for (const CityCellMesh& cm : p.cells) names.insert(cm.mesh.name);
+    CHECK(names.count("canopy") && names.count("station_steel") && names.count("station_lamp"));
+    int stops = 0;
+    for (const RailTrack& t : p.rails)
+        for (const RailStop& st : t.stops) {
+            ++stops;
+            CHECK(st.lamps.size() >= 4);
+            for (const Vec3& l : st.lamps) CHECK(l.y > st.top + 2.5 && l.y < st.top + 3.6);
+        }
+    CHECK(stops >= 2);
 }

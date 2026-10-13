@@ -592,6 +592,18 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
     city_.setPlayerRidingAgent(riding_);
     hud_ = Hud{};
     const CitySim& sim = city_.sim();
+    // ON A PLATFORM: its departure board instead of the nearest bus stop
+    if (riding_ < 0 && sim.railRiders().rail()) {
+        const Transform* body = nullptr;
+        ctx.world.each<Transform, engine::CharacterController, engine::ControlledBy>(
+            [&](Entity, Transform& t, engine::CharacterController&, engine::ControlledBy&) { if (!body) body = &t; });
+        int line = -1, stop = -1;
+        if (body && platformAt(*sim.railRiders().rail(), body->position, line, stop)) {
+            hud_.mode = Hud::Mode::Platform;
+            hud_.board = platformBoard(*sim.railRiders().rail(), line, stop);
+            return;
+        }
+    }
     const BusNetwork& net = sim.buses();
     if (net.routeCount() == 0) return;              // no buses on this level
     for (int r = 0; r < net.routeCount(); ++r) {
@@ -756,7 +768,24 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
         ImGui::TextColored(ImVec4(lift(c.x), lift(c.y), lift(c.z), 1.0f),
                            "line %d (%s)%s", line + 1, routeColourName(line), back ? " the other way" : "");   // (numbered from 1, as the bus's sign)
     };
-    if (hud_.mode == Hud::Mode::Riding) {
+    if (hud_.mode == Hud::Mode::Platform) {
+        const RailSim* rs = city_.sim().railRiders().rail();
+        ImGui::Text("%s", hud_.board.station.c_str());
+        bool across = false;
+        for (const PlatformBoard::Departure& d : hud_.board.departures) {
+            if (!d.thisPlatform && !across) { ImGui::TextDisabled("across the tracks"); across = true; }
+            const engine::Vec3 c = rs && d.line >= 0 ? lineColour(rs->lines()[static_cast<std::size_t>(d.line)]) : engine::Vec3(1, 1, 1);
+            auto lift = [](Real v) { return static_cast<float>(v + (1.0 - v) * 0.4); };
+            ImGui::TextColored(ImVec4(lift(c.x), lift(c.y), lift(c.z), 1.0f), "%s",
+                               !rs ? "train" : rs->lines()[static_cast<std::size_t>(d.line)].cls == "light_rail" ? "light rail" : rs->lines()[static_cast<std::size_t>(d.line)].cls == "metro" ? "metro" : "train");
+            ImGui::SameLine();
+            const int mins = static_cast<int>(std::ceil(d.eta / 60.0));
+            if (d.here) ImGui::Text("to %s   at the platform now", d.toward.c_str());
+            else if (d.eta < 45.0) ImGui::Text("to %s   arriving", d.toward.c_str());
+            else ImGui::Text("to %s   %d min", d.toward.c_str(), mins);
+        }
+        if (hud_.board.departures.empty()) ImGui::Text("no trains running");
+    } else if (hud_.mode == Hud::Mode::Riding) {
         if (hud_.ridingRoute >= 0) {
             ImGui::Text("ON THE BUS");
             ImGui::SameLine();

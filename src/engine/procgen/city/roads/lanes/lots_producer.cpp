@@ -128,6 +128,10 @@ public:
         { BinReader r(bytes.data(), bytes.size()); if (!bundle::getDeckField(r, city.deck)) return fail(pre + "roads/deck: unreadable"); }
         if (!out.readBack(pre + "roads/bands", bytes)) return fail(pre + "roads/bands: missing");
         { BinReader r(bytes.data(), bytes.size()); CurbBandAudit b; if (!bundle::getCurbBands(r, b)) return fail(pre + "roads/bands: unreadable"); city.pavedSidewalk = b.sidewalkWidth; }
+        // the rail lines, when the city has any: buildings stand clear of them
+        if (out.readBack(pre + "rail/tracks", bytes)) {
+            try { city.rails = railTracksFromJson(nlohmann::json::parse(bytes.begin(), bytes.end())); } catch (const std::exception&) { return fail(pre + "rail/tracks: malformed"); }
+        }
         if (!report(0.03, "grow", std::to_string(city.holes.size()) + " pavement holes")) return fail("cancelled");
         const auto tg = std::chrono::steady_clock::now();
         nlohmann::json counts;
@@ -218,6 +222,7 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
     gin.pavedSidewalk = city.pavedSidewalk;
     gin.smoothGround = smoothGround;
     if (auto nf = lanesNearFreeway(city.deck, 6.0)) gin.nearFreeway = [nf](Real x, Real z) { return nf(x, z); };
+    gin.trackKeepOut = lanesTrackKeepOut(city.deck, city.rails);
     if (smoothGround) {   // the pads meet the street they face (30 m: across a sidewalk and a front yard)
         auto sh = lanesStreetHeight(city.deck, 30.0);
         if (sh) gin.streetHeight = [sh](Real x, Real z, Real* y) { double d; if (!sh(x, z, &d)) return false; *y = static_cast<Real>(d); return true; };

@@ -56,9 +56,9 @@ std::vector<RailTrack> ovalWithWaysIn(const NavGraph& nav) {
             t.stops = std::move(stops);
             return t;
         };
-        RailStop c{"Central", 330, 470, -1, 1.05};
+        RailStop c{"Central", 330, 470, -1, 1.05, false, {}, {}};
         c.hasAccess = true; c.access = south;
-        RailStop h{"Harbour", 330, 470, -1, 1.05};
+        RailStop h{"Harbour", 330, 470, -1, 1.05, false, {}, {}};
         h.hasAccess = true; h.access = north;
         std::vector<RailTrack> ring;
         ring.push_back(piece("south", [&](double u) { return Vec3(-400 + 800 * u, 0, -r); }, 800, {c}));

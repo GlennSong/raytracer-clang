@@ -47,6 +47,7 @@ struct LotsCityInputs {
     // The drawn road decks: the earthwork field is pinned to them (lanesEarthworkField), so the lots grow
     // on the ground the terrain will show -- the streets setting it, not natural ground under a skirt.
     RoadDeckField deck;
+    std::vector<RailTrack> rails;   // the rail lines (none: no track) -- buildings stand clear of them (lanesTrackKeepOut)
 };
 
 // ONE derivation: what the producer runs, exposed for tests. `report` (optional) receives the counts.

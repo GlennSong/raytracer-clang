@@ -60,6 +60,10 @@ struct RailLine {
     double speedLimit(double st) const;
 };
 
+// A line's colour on the map and the platform board: the main line charcoal, each light-rail or metro RING its own
+// (both ways of a ring share it -- keyed by the ring's first station name in sort order).
+engine::Vec3 lineColour(const RailLine& line);
+
 struct Train {
     int line = -1;
     TrainKind kind;

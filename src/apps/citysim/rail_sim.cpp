@@ -277,6 +277,17 @@ std::vector<CarPose> RailSim::carPoses(int ti, double alpha) const {
     return out;
 }
 
+engine::Vec3 lineColour(const RailLine& line) {
+    if (line.cls == "rail") return engine::Vec3(0.24, 0.24, 0.27);
+    std::string key;
+    for (const engine::RailStop& st : line.stops) if (key.empty() || st.name < key) key = st.name;
+    uint32_t h = 2166136261u;
+    for (char c : key) h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
+    static const engine::Vec3 kPalette[] = {{0.78, 0.18, 0.55}, {0.0, 0.58, 0.60}, {0.93, 0.55, 0.05},
+                                            {0.42, 0.30, 0.75}, {0.15, 0.62, 0.25}, {0.85, 0.15, 0.15}};
+    return kPalette[h % (sizeof(kPalette) / sizeof(kPalette[0]))];
+}
+
 std::string RailSim::describe() const {
     std::string o;
     char b[256];

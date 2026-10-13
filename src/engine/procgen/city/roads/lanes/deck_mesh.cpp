@@ -29,6 +29,7 @@ Vec3 world(const Vec2& p, double h) { return Vec3(static_cast<Real>(p.x), static
 const Vec3 kAsphalt(0.085f, 0.085f, 0.090f), kConcrete(0.80f, 0.79f, 0.75f), kSidewalk(0.62f, 0.60f, 0.55f), kShoulder(0.115f, 0.115f, 0.120f),
            kGuardrail(0.66f, 0.68f, 0.70f),
            kBallast(0.30f, 0.28f, 0.25f), kSleeper(0.55f, 0.53f, 0.49f), kRailSteel(0.42f, 0.40f, 0.38f), kPlatform(0.70f, 0.69f, 0.66f),
+           kCanopySheet(0.60f, 0.62f, 0.64f), kStationSteel(0.20f, 0.27f, 0.29f), kStationLamp(0.92f, 0.94f, 0.95f),
            kMedian(0.22f, 0.34f, 0.14f), kPaintWhite(0.9f, 0.9f, 0.85f), kPaintYellow(0.95f, 0.75f, 0.15f), kGrass(0.20f, 0.30f, 0.13f);
 
 // WELDED, AND NO UNDERSIDE WHERE NOBODY CAN SEE ONE (ADR-0095). Every deck triangle used to be
@@ -501,12 +502,20 @@ void stairKit(RenderMesh& treads, RenderMesh& concrete, const Result& r, const S
     }
 }
 
+// Where a platform's canopy lamps hang: every 6 m down its middle, the first 3 m in. A stop's night lights stand
+// under every other one (railTracks: RailStop::lamps).
+std::vector<double> canopyLampStations(double s0, double s1) {
+    std::vector<double> out;
+    for (double st = s0 + 3.0; st <= s1 - 2.0; st += 6.0) out.push_back(st);
+    return out;
+}
+
 // A STATION PLATFORM: a slab from the ground up to `h` over the railhead, its edge kPlatformGap off the outer
 // track, `w` wide, with a canopy down its middle (posts every 12 m, a roof 3.4 m over the platform) -- stopped
 // under a footbridge and over its stair, which `stairs` holds.
 // HELD UP (a light rail's, over its streets): an underside, a railing along its back edge -- open beside the top of a
 // flight up to it -- and columns under its middle every 12 m, clear of the footway under it and any street.
-void platformKit(RenderMesh& plat, RenderMesh& concrete, const Result& r, const EdgeSpec& e, int ei, const PlatformSpec& P,
+void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, RenderMesh& steel, RenderMesh& lamp, const Result& r, const EdgeSpec& e, int ei, const PlatformSpec& P,
                  const std::vector<StationStair>& stairs, const std::function<double(const Vec2&)>& groundUnder,
                  const std::function<bool(const Vec2&)>& pavedAt) {
     for (int side = -1; side <= 1; side += 2) {
@@ -582,23 +591,84 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, const Result& r, const 
                 trackBox(concrete, c, t, 0.3, 0.3, groundUnder(c) - 0.5, y, kConcrete);
             }
         }
-        // the canopy
+        // THE CANOPY (Glenn, 2026-10-12: "the overhangs are thin and need dimension. Maybe they should be the
+        // corrugated metal?"): a ribbed steel sheet falling 8 % away from the track, on a steel frame -- a post down
+        // the middle every 12 m carrying a beam across, a deep fascia along both edges -- and a lamp every 6 m under it.
         const double mid = (inner + outer) / 2, roofHalf = std::max(1.0, P.w / 2 - 0.4);
+        constexpr double kRoof = 3.3, kFall = 0.08, kBeam = 0.3, kRib = 0.2, kRibH = 0.04;
+        auto platTop = [&](double st) { const Vec2 q = pointAt(e.xy, e.s, st); return r.heights->deck(li, q + perp(tangentAtStation(e.xy, e.s, st)) * off) + kRailHeadAbove + P.h; };
+        // a point under the roof: station st, `u` across from the middle (- toward the track), height over the beams' foot
+        auto roofPt = [&](double st, double u, double dy) {
+            const Vec2 q = pointAt(e.xy, e.s, st), nr = perp(tangentAtStation(e.xy, e.s, st));
+            return world(q + nr * (mid + side * u), platTop(st) + kRoof - kFall * u + dy);
+        };
+        auto quad3 = [](RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& col, bool flip) {
+            Vec3 n = cross(b - a, d - a); const Real l = n.length(); if (l < 1e-12) return;
+            n = n * (1 / l);
+            if (flip) MeshBuilder::emitQuad(m, a, d, c, b, n * Real(-1), col); else MeshBuilder::emitQuad(m, a, b, c, d, n, col);
+        };
+        // a box from four corners at its foot and four at its head (a, b, c, d round the foot)
+        auto box8 = [&](RenderMesh& m, const Vec3 (&lo)[4], const Vec3 (&hi)[4], const Vec3& col) {
+            Vec3 c0(0, 0, 0); for (int i = 0; i < 4; ++i) c0 = c0 + lo[i] + hi[i]; c0 = c0 * Real(0.125);
+            auto face = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
+                Vec3 n = cross(b - a, d - a); const Vec3 fc = (a + b + c + d) * Real(0.25);
+                quad3(m, a, b, c, d, col, dot(n, fc - c0) < 0);
+            };
+            face(hi[0], hi[1], hi[2], hi[3]); face(lo[0], lo[3], lo[2], lo[1]);
+            for (int i = 0; i < 4; ++i) { const int j = (i + 1) % 4; face(lo[i], lo[j], hi[j], hi[i]); }
+        };
+        const double ss0 = s0 + 0.3, ss1 = s1 - 0.3;
+        // posts and beams
         for (double st = s0 + 6; st <= s1 - 6; st += 12) {
             if (inGap(st - 0.3, st + 0.3)) continue;
             const Vec2 q = pointAt(e.xy, e.s, st), t = tangentAtStation(e.xy, e.s, st), nr = perp(t);
-            const double y = r.heights->deck(li, q + nr * off) + kRailHeadAbove + P.h;
-            trackBox(concrete, q + nr * mid, t, 0.12, 0.12, y, y + 3.4, kConcrete);
+            const double y = platTop(st);
+            trackBox(steel, q + nr * mid, t, 0.11, 0.11, y, y + kRoof + 0.05, kStationSteel);
+            const Vec3 lo[4] = {roofPt(st - 0.08, -roofHalf, 0), roofPt(st + 0.08, -roofHalf, 0), roofPt(st + 0.08, roofHalf, 0), roofPt(st - 0.08, roofHalf, 0)};
+            const Vec3 hi[4] = {roofPt(st - 0.08, -roofHalf, kBeam), roofPt(st + 0.08, -roofHalf, kBeam), roofPt(st + 0.08, roofHalf, kBeam), roofPt(st - 0.08, roofHalf, kBeam)};
+            // the beam tapers to its tips: deep over the post, a third of it at the edges
+            Vec3 lo2[4]; for (int i = 0; i < 4; ++i) lo2[i] = lo[i] + Vec3(0, static_cast<Real>(kBeam * 0.65), 0);
+            const Vec3 midLo[4] = {roofPt(st - 0.08, -0.15, 0), roofPt(st + 0.08, -0.15, 0), roofPt(st + 0.08, 0.15, 0), roofPt(st - 0.08, 0.15, 0)};
+            const Vec3 midHi[4] = {roofPt(st - 0.08, -0.15, kBeam), roofPt(st + 0.08, -0.15, kBeam), roofPt(st + 0.08, 0.15, kBeam), roofPt(st - 0.08, 0.15, kBeam)};
+            box8(steel, midLo, midHi, kStationSteel);
+            const Vec3 aLo[4] = {lo2[0], lo2[1], midLo[1], midLo[0]}, aHi[4] = {hi[0], hi[1], midHi[1], midHi[0]};
+            const Vec3 bLo[4] = {midLo[3], midLo[2], lo2[2], lo2[3]}, bHi[4] = {midHi[3], midHi[2], hi[2], hi[3]};
+            box8(steel, aLo, aHi, kStationSteel); box8(steel, bLo, bHi, kStationSteel);
         }
+        // the sheet: ribs across the roof (they run the way it drains), a trapezoid every kRib along the platform,
+        // seen from above and below
+        const double prof[5][2] = {{0.0, 0.0}, {0.3, 0.0}, {0.4, kRibH}, {0.9, kRibH}, {1.0, 0.0}};
+        for (double st = ss0; st + kRib <= ss1 + 1e-6; st += kRib) {
+            if (inGap(st, st + kRib)) continue;
+            for (int k = 0; k < 4; ++k) {
+                const double a = st + prof[k][0] * kRib, b = st + prof[k + 1][0] * kRib;
+                const double ya = kBeam + prof[k][1], yb = kBeam + prof[k + 1][1];
+                const Vec3 A = roofPt(a, -roofHalf - 0.15, ya), B = roofPt(b, -roofHalf - 0.15, yb), C = roofPt(b, roofHalf + 0.15, yb), D = roofPt(a, roofHalf + 0.15, ya);
+                const bool up = cross(B - A, D - A).y > 0;
+                quad3(canopy, A, B, C, D, kCanopySheet, !up);     // the top
+                quad3(canopy, A, B, C, D, kCanopySheet, up);      // and its underside
+            }
+        }
+        // the fascias, 0.4 deep, hiding the sheet's ribbed edge; and the lamps
         for (int k = 0; k + 1 < n; ++k) {
-            const size_t i = static_cast<size_t>(k), j = i + 1;
-            const double st0 = s0 + (s1 - s0) * k / (n - 1), st1 = s0 + (s1 - s0) * (k + 1) / (n - 1);
-            if (inGap(st0, st1)) continue;
-            const Vec2 q0 = pointAt(e.xy, e.s, st0), q1 = pointAt(e.xy, e.s, st1), n0 = perp(tangentAtStation(e.xy, e.s, st0)), n1 = perp(tangentAtStation(e.xy, e.s, st1));
-            const Vec2 c0 = q0 + n0 * (mid - roofHalf), d0 = q0 + n0 * (mid + roofHalf), c1 = q1 + n1 * (mid - roofHalf), d1 = q1 + n1 * (mid + roofHalf);
-            const double y0 = top[i] + 3.4, y1 = top[j] + 3.4;
-            MeshBuilder::emitQuad(concrete, world(c0, y0 + 0.2), world(c1, y1 + 0.2), world(d1, y1 + 0.2), world(d0, y0 + 0.2), Vec3(0, 1, 0), kConcrete);
-            MeshBuilder::emitQuad(concrete, world(c0, y0), world(c1, y1), world(d1, y1), world(d0, y0), Vec3(0, -1, 0), kConcrete);
+            const double st0 = std::max(ss0, s0 + (s1 - s0) * k / (n - 1)), st1 = std::min(ss1, s0 + (s1 - s0) * (k + 1) / (n - 1));
+            if (st1 - st0 < 0.05 || inGap(st0, st1)) continue;
+            for (int edge = -1; edge <= 1; edge += 2) {
+                const double u0 = edge * (roofHalf + 0.15), u1 = u0 + edge * 0.05;
+                const Vec3 lo[4] = {roofPt(st0, u0, kBeam - 0.3), roofPt(st1, u0, kBeam - 0.3), roofPt(st1, u1, kBeam - 0.3), roofPt(st0, u1, kBeam - 0.3)};
+                const Vec3 hi[4] = {roofPt(st0, u0, kBeam + 0.1), roofPt(st1, u0, kBeam + 0.1), roofPt(st1, u1, kBeam + 0.1), roofPt(st0, u1, kBeam + 0.1)};
+                box8(steel, lo, hi, kStationSteel);
+            }
+        }
+        for (double st : canopyLampStations(s0, s1)) {
+            if (inGap(st - 0.7, st + 0.7)) continue;
+            // a linear fitting under the sheet between the beams: its housing, and the diffuser under it that lights
+            const Vec3 hLo[4] = {roofPt(st - 0.6, -0.08, kBeam - 0.08), roofPt(st + 0.6, -0.08, kBeam - 0.08), roofPt(st + 0.6, 0.08, kBeam - 0.08), roofPt(st - 0.6, 0.08, kBeam - 0.08)};
+            const Vec3 hHi[4] = {roofPt(st - 0.6, -0.08, kBeam), roofPt(st + 0.6, -0.08, kBeam), roofPt(st + 0.6, 0.08, kBeam), roofPt(st - 0.6, 0.08, kBeam)};
+            box8(steel, hLo, hHi, kStationSteel);
+            const Vec3 dLo[4] = {roofPt(st - 0.57, -0.06, kBeam - 0.12), roofPt(st + 0.57, -0.06, kBeam - 0.12), roofPt(st + 0.57, 0.06, kBeam - 0.12), roofPt(st - 0.57, 0.06, kBeam - 0.12)};
+            const Vec3 dHi[4] = {roofPt(st - 0.57, -0.06, kBeam - 0.08), roofPt(st + 0.57, -0.06, kBeam - 0.08), roofPt(st + 0.57, 0.06, kBeam - 0.08), roofPt(st - 0.57, 0.06, kBeam - 0.08)};
+            box8(lamp, dLo, dHi, kStationLamp);
         }
     }
 }
@@ -634,6 +704,16 @@ std::vector<RailTrack> railTracks(const Result& r) {
                 // (Glenn, 2026-10-10: "the doors did not slide open for me ... It may have opened on the wrong side").
                 st.side = -side * t.dir;
                 st.top = r.heights->deck(static_cast<int>(li), pointAt(l.xy, l.s, project(l.xy, l.s, q).station)) + kRailHeadAbove + P.h;
+                // its night lights: under every other canopy lamp, a little below the fitting
+                {
+                    double off = 0; outerTrack(r, l.parent, side, &off);
+                    const double midLat = off + side * (kPlatformGap + P.w / 2);
+                    const std::vector<double> ls = canopyLampStations(std::max(0.0, P.s0), std::min(e.s.back(), P.s1));
+                    for (std::size_t k = 0; k < ls.size(); k += 2) {
+                        const Vec2 pq = pointAt(e.xy, e.s, ls[k]), nr = perp(tangentAtStation(e.xy, e.s, ls[k]));
+                        st.lamps.push_back(world(pq + nr * midLat, r.heights->deck(static_cast<int>(li), pq + nr * off) + kRailHeadAbove + P.h + 3.1));
+                    }
+                }
                 // the way in: a footway over this platform, at its end away from the line
                 for (const EdgeSpec& f : r.graph.edges) {
                     if (!footwayClass(r.graph, f.cls) || f.xy.size() < 2) continue;
@@ -653,6 +733,7 @@ std::vector<RailTrack> railTracks(const Result& r) {
 std::vector<NamedMesh> buildMeshes(const Result& r) {
     const RoadLabGraph& g = r.graph; const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
     RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail, ballast, sleepers, rails, platform;
+    RenderMesh canopy, stationSteel, stationLamp;
     // The ground under a deck, for the underside rule (slab): the conformed grid, or 0 on a flat level.
     const std::function<double(const Vec2&)> groundUnder = [&r](const Vec2& q) {
         return r.hasTerrain ? r.terrain.sample(q.x, q.y) : 0.0;
@@ -798,7 +879,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     };
     for (size_t ei = 0; ei < g.edges.size(); ++ei)
         if (trackClass(g, g.edges[ei].cls))
-            for (const PlatformSpec& P : g.edges[ei].platforms) platformKit(platform, concrete, r, g.edges[ei], static_cast<int>(ei), P, stairs, groundUnder, anyPavedAt);
+            for (const PlatformSpec& P : g.edges[ei].platforms) platformKit(platform, concrete, canopy, stationSteel, stationLamp, r, g.edges[ei], static_cast<int>(ei), P, stairs, groundUnder, anyPavedAt);
     if (deckStats) {
         std::string o;
         for (std::size_t k = 1; k < concreteBy.size(); ++k)
@@ -1017,6 +1098,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     add("asphalt", asphalt, kAsphalt); add("concrete", concrete, kConcrete); add("guardrail", guardrail, kGuardrail); add("sidewalk", sidewalk, kSidewalk); add("shoulder", shoulder, kShoulder); add("median", median, kMedian);
     add("paint_white", paintW, kPaintWhite); add("paint_yellow", paintY, kPaintYellow); add("terrain", terrain, kGrass);
     add("ballast", ballast, kBallast); add("sleeper", sleepers, kSleeper); add("rail", rails, kRailSteel); add("platform", platform, kPlatform);
+    add("canopy", canopy, kCanopySheet); add("station_steel", stationSteel, kStationSteel); add("station_lamp", stationLamp, kStationLamp);
     return out;
 }
 

@@ -62,6 +62,7 @@ public:
             m.albedo = Vec3(pm.albedo[0], pm.albedo[1], pm.albedo[2]);
             m.roughness = pm.roughness;
             if (pm.name == "guardrail") m.metallic = 0.18f;   // weathered galvanising, not a mirror
+            if (pm.name == "canopy") m.metallic = 0.3f;       // a station's ribbed steel roof, galvanised
             m.collidable = !pm.paint() && pm.collidable();
             m.friction = pm.friction;
             m.cx = c.cx; m.cz = c.cz;

@@ -192,11 +192,75 @@ std::function<bool(double, double)> lanesNearFreeway(const RoadDeckField& deck, 
     };
 }
 
+std::function<bool(const std::vector<Vec2>&)> lanesTrackKeepOut(const RoadDeckField& deck, const std::vector<RailTrack>& tracks) {
+    struct Cap { Vec2 a, b; double r; };
+    auto caps = std::make_shared<std::vector<Cap>>();
+    for (const RailTrack& t : tracks) {
+        if (t.pts.size() < 2) continue;
+        double s = 0;
+        for (std::size_t i = 0; i + 1 < t.pts.size(); ++i) {
+            const Vec2 a(t.pts[i].x, t.pts[i].z), b(t.pts[i + 1].x, t.pts[i + 1].z);
+            const double l = (b - a).length();
+            bool atStop = false;   // either side: the line's other track stands its own stop opposite
+            for (const RailStop& st : t.stops) atStop = atStop || (s + l >= st.s0 - 5.0 && s <= st.s1 + 5.0);
+            caps->push_back({a, b, atStop ? kStationClear : kTrackClear});
+            s += l;
+        }
+    }
+    for (const UnionSpine& sp : deck.spines) {
+        if (sp.use != UnionSpine::Use::Footway) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+            caps->push_back({sp.points[i], sp.points[i + 1], (i < sp.hw.size() ? sp.hw[i] : sp.halfWidth) + kFootwayClear});
+    }
+    if (caps->empty()) return {};
+    constexpr double kCell = 32;
+    auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+    auto grid = std::make_shared<std::unordered_map<long long, std::vector<int>>>();
+    for (std::size_t k = 0; k < caps->size(); ++k) {
+        const Cap& c = (*caps)[k];
+        for (int cx = static_cast<int>(std::floor((std::min(c.a.x, c.b.x) - c.r) / kCell)); cx <= static_cast<int>(std::floor((std::max(c.a.x, c.b.x) + c.r) / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor((std::min(c.a.y, c.b.y) - c.r) / kCell)); cz <= static_cast<int>(std::floor((std::max(c.a.y, c.b.y) + c.r) / kCell)); ++cz)
+                (*grid)[key(cx, cz)].push_back(static_cast<int>(k));
+    }
+    auto ptSeg = [](Vec2 q, Vec2 a, Vec2 b) {
+        const Vec2 ab = b - a; const double l2 = dot(ab, ab);
+        double t = l2 > 1e-12 ? dot(q - a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
+        return (q - (a + ab * t)).length();
+    };
+    auto cross2 = [](Vec2 u, Vec2 v) { return u.x * v.y - u.y * v.x; };
+    auto segSeg = [ptSeg, cross2](Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
+        const double d1 = cross2(b - a, c - a), d2 = cross2(b - a, d - a), d3 = cross2(d - c, a - c), d4 = cross2(d - c, b - c);
+        if (((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0))) return 0.0;
+        return std::min({ptSeg(a, c, d), ptSeg(b, c, d), ptSeg(c, a, b), ptSeg(d, a, b)});
+    };
+    return [caps, grid, key, segSeg](const std::vector<Vec2>& foot) {
+        if (foot.size() < 3) return false;
+        double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
+        for (const Vec2& v : foot) { x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); z0 = std::min(z0, v.y); z1 = std::max(z1, v.y); }
+        std::vector<int> seen;
+        for (int cx = static_cast<int>(std::floor(x0 / kCell)); cx <= static_cast<int>(std::floor(x1 / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor(z0 / kCell)); cz <= static_cast<int>(std::floor(z1 / kCell)); ++cz) {
+                auto it = grid->find(key(cx, cz));
+                if (it == grid->end()) continue;
+                for (int k : it->second) {
+                    if (std::find(seen.begin(), seen.end(), k) != seen.end()) continue;
+                    seen.push_back(k);
+                    const Cap& c = (*caps)[static_cast<std::size_t>(k)];
+                    if (pointInPolygon(foot, c.a)) return true;   // inside it altogether
+                    for (std::size_t i = 0; i < foot.size(); ++i)
+                        if (segSeg(c.a, c.b, foot[i], foot[(i + 1) % foot.size()]) < c.r) return true;
+                }
+            }
+        return false;
+    };
+}
+
 std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckField& deck, double reach) {
     struct Seg { Vec2 a, b; double ya, yb, hw; };
     auto segs = std::make_shared<std::vector<Seg>>();
     for (const UnionSpine& sp : deck.spines) {
         if (sp.authoredDeck || sp.layer != 0 || sp.klass == RoadClass::Freeway || sp.klass == RoadClass::Ramp) continue;
+        if (sp.use != UnionSpine::Use::Road) continue;   // a pad faces a street, never the track over it
         if (sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
         for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
             segs->push_back({sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});

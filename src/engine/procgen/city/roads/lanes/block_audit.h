@@ -12,6 +12,7 @@
 #include "engine/procgen/city/city_lots.h"
 #include "engine/procgen/earthwork.h"
 #include "engine/procgen/city/road_mesh.h"   // RoadDeckField
+#include "engine/procgen/city/rail_track.h"
 #include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -136,6 +137,12 @@ std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckFie
 // carry an at-grade ramp's links under the street class it merges into, and its widths run narrower than the
 // asphalt (a shop 0.3 m and an office 1.8 m off island_8_nature's ramps, 2026-09-30).
 std::function<bool(double, double)> lanesNearFreeway(const RoadDeckField& deck, double clear);
+// CLEAR OF THE RAIL (Glenn, 2026-10-12: the light rail "seems to run really close to buildings"): does a footprint
+// come within the line's clearance -- kTrackClear of a railhead, kStationClear beside a stop (the platform and the
+// flight up behind it) -- or within its hw + kFootwayClear of a footway (a station's way in)? A whole footprint, not
+// its corners: a track crosses a big building's middle with every corner metres off. Empty when there is no track.
+constexpr double kTrackClear = 4.5, kStationClear = 10.5, kFootwayClear = 1.5;
+std::function<bool(const std::vector<Vec2>&)> lanesTrackKeepOut(const RoadDeckField& deck, const std::vector<RailTrack>& tracks);
 std::shared_ptr<const std::function<double(double, double)>> lanesEarthworkField(
     const RoadDeckField& deck, double sidewalk, const std::function<double(double, double)>& natural,
     const EarthworkParams& params, double seaLevel, EarthworkStats* stats = nullptr);

@@ -67,6 +67,8 @@ public:
     static const float* frameColour();
 
 private:
+    // What the picture's transit overlay draws: the rail lines (under) and the bus lines. Main thread only.
+    std::vector<TransitLine> transitLines() const;
     void startWorker(engine::FrameContext& ctx);
     void stopWorker();
     void requestRaster(const CityMapRaster::View& v);
@@ -102,6 +104,10 @@ private:
     CityMapRaster::View lastAsked_;
     bool askedAny_ = false;
     double settle_ = 0;               // seconds since the view last changed
+    // The trains start a few frames after the city: the overlay is redrawn once the rail is there.
+    bool railInOverlay_ = false;
+    bool haveLines_ = false;          // newLines_ waiting for the worker
+    std::vector<TransitLine> newLines_;
 };
 
 }  // namespace citysim

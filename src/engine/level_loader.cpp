@@ -567,7 +567,7 @@ static ColliderSurface colliderSurfaceForRoadMaterial(const std::string& name) {
     if (name == "asphalt" || name == "shoulder") return ColliderSurface::Asphalt;
     if (name == "concrete" || name == "sidewalk") return ColliderSurface::Concrete;
     if (name == "terrain") return ColliderSurface::Terrain;
-    if (name == "guardrail") return ColliderSurface::Metal;
+    if (name == "guardrail" || name == "station_steel") return ColliderSurface::Metal;
     if (name == "ballast") return ColliderSurface::Rock;
     if (name == "platform") return ColliderSurface::Concrete;
     if (name.find("median") != std::string::npos || name.find("grass") != std::string::npos) return ColliderSurface::Grass;
@@ -651,7 +651,11 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         if (rm.markings) mr.material.setSurface(RenderMaterial::Surface::RoadMarkings);
         else mr.material.setSurface(surfaceForRoadMaterial(rm.name));
         mr.mesh = assets.acquireMesh(rm.mesh, tag + ":" + rm.name + ":" + std::to_string(mi));
+        // a station's lamps: dark by day, lit on the dusk ramp with the street lamps (their light: RailStop::lamps)
+        const bool nightLamp = rm.name == "station_lamp";
+        if (nightLamp) mr.material.emission = Vec3(0, 0, 0);
         world.add<Renderable>(me, mr);
+        if (nightLamp) world.add<engine::NightGlow>(me, engine::NightGlow{Vec3(0.95, 0.97, 1.0) * 5.0});
         if (!rm.collidable) continue;
         MeshCollider mc;
         mc.vertices.reserve(rm.mesh.vertices.size());
@@ -2003,7 +2007,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         if (terrain.hydro && terrain.hydro->isWet(x, z, 2.0)) return true;
         if (onSealedLot(x, z)) return true;
         if (trails && trails->distance(x, z, 3.0) < 2.5) return true;   // the trails stay open (ADR-0134)
-        for (const RoadDeckField* d : decks) { double y = 0; if (d->heightAt(x, z, margin, &y)) return true; }
+        for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
         if (drawnRoad.near(x, z, margin)) return true;
         return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
     };
@@ -2119,7 +2123,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         if (terrain.hydro) shoreAt = [h = terrain.hydro](double x, double z, double y) { return h->isWet(x, z, 0.0) ? 0.0 : h->shore(x, z, y); };
         auto excludeDry = [&](double x, double z) {
             if (trails && trails->distance(x, z, 3.0) < 1.5) return true;
-            for (const RoadDeckField* d : decks) { double yy = 0; if (d->heightAt(x, z, margin, &yy)) return true; }
+            for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
             if (drawnRoad.near(x, z, margin)) return true;
             return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
         };
@@ -2671,20 +2675,16 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     auto drawnRoad = std::make_shared<engine::DrawnRoad>(engine::gatherDrawnRoad(world));
     auto onRoad = [footway, drawnRoad](const std::vector<const RoadDeckField*>& ds, double x, double z) {
         if (drawnRoad->covers(x, z)) return true;
-        for (const RoadDeckField* d : ds) {
-            double y = 0;
-            if (d->heightAt(x, z, footway, &y)) return true;
-        }
+        for (const RoadDeckField* d : ds)
+            if (d->coversAny(x, z, footway)) return true;
         return false;
     };
     if (!terrain.flatten.empty() || !decks->empty() || !drawnRoad->empty()) {
         if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
         const TerrainParams& tp = terrain;
         scatter.exclude = [&tp, &keepOut, margin, decks, drawnRoad](double x, double z) {
-            for (const RoadDeckField* d : *decks) {
-                double y = 0;
-                if (d->heightAt(x, z, margin, &y)) return true;
-            }
+            for (const RoadDeckField* d : *decks)
+                if (d->coversAny(x, z, margin)) return true;
             if (drawnRoad->near(x, z, margin)) return true;
             return !tp.flatten.empty() && flattenCovers(keepOut, tp.flatten, x, z, margin);
         };

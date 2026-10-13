@@ -109,22 +109,36 @@ void RenderSystem::render(FrameContext& ctx) {
                 lampRadius = std::max(Real(10), Real(c.lampLightRadius));
                 lampRange = std::max(Real(2), Real(c.lampLightRange));
             });
+            // the candidates: every street lamp's bulb (the first StreetFurniture's), and every station's canopy
+            // lights (RailStop::lamps -- cooler, a shorter pool under a roof)
+            struct Bulb { Real d2; Vec3 at; bool station; };
+            std::vector<Bulb> nearBulbs;
+            const Vec3 eye = ctx.view.camera.position;
+            const Real maxDist2 = lampRadius * lampRadius;   // beyond this a bulb is the sprite tier's
+            bool streetSeen = false;
             ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
-                if (f.lampHeads.empty() || lit) return;
-                const Vec3 eye = ctx.view.camera.position;
-                const Real maxDist2 = lampRadius * lampRadius;   // beyond this a bulb is the sprite tier's
-                std::vector<std::pair<Real, const Vec3*>> nearBulbs;
+                if (f.lampHeads.empty() || streetSeen) return;
+                streetSeen = true;
                 for (const Vec3& h : f.lampHeads) {
                     const Real d2 = (h - eye).lengthSquared();
-                    if (d2 < maxDist2) nearBulbs.emplace_back(d2, &h);
+                    if (d2 < maxDist2) nearBulbs.push_back({d2, h, false});
                 }
-                if (nearBulbs.empty()) return;
+            });
+            ctx.world.each<RailTracks>([&](Entity, RailTracks& rt) {
+                for (const RailTrack& t : rt.tracks)
+                    for (const RailStop& st : t.stops)
+                        for (const Vec3& h : st.lamps) {
+                            const Real d2 = (h - eye).lengthSquared();
+                            if (d2 < maxDist2) nearBulbs.push_back({d2, h, true});
+                        }
+            });
+            if (!nearBulbs.empty()) {
                 if (static_cast<int>(nearBulbs.size()) > kMaxLampLights) {
                     std::nth_element(nearBulbs.begin(),
                                      nearBulbs.begin() + kMaxLampLights,
                                      nearBulbs.end(),
-                                     [](const auto& a, const auto& b) {
-                                         return a.first < b.first;
+                                     [](const Bulb& a, const Bulb& b) {
+                                         return a.d2 < b.d2;
                                      });
                     nearBulbs.resize(kMaxLampLights);
                 }
@@ -139,8 +153,8 @@ void RenderSystem::render(FrameContext& ctx) {
                 Real cutoff = lampRadius;
                 if (static_cast<int>(nearBulbs.size()) >= kMaxLampLights) {
                     Real farthest = 0;
-                    for (const auto& [d2, h] : nearBulbs)
-                        farthest = std::max(farthest, d2);
+                    for (const Bulb& bl : nearBulbs)
+                        farthest = std::max(farthest, bl.d2);
                     cutoff = std::min(cutoff, std::sqrt(farthest));
                 }
                 withLamps = ctx.view.lighting;
@@ -148,23 +162,29 @@ void RenderSystem::render(FrameContext& ctx) {
                 // at 30/34 they fell short and the pavement went dark between
                 // every pair of lamps. Intensity rides the dusk ramp so lamps
                 // warm up through twilight instead of popping.
-                for (const auto& [d2, h] : nearBulbs) {
+                for (const Bulb& bl : nearBulbs) {
                     // 1 at the near end, easing to 0 across the last quarter
                     // of the reach, so a lamp joins and leaves the set
                     // invisibly instead of popping.
-                    const Real d = std::sqrt(d2);
+                    const Real d = std::sqrt(bl.d2);
                     const Real edge = std::max(Real(1), cutoff);
                     Real fade = (edge - d) / (0.25 * edge);
                     fade = std::min(Real(1), std::max(Real(0), fade));
                     fade = fade * fade * (3.0 - 2.0 * fade);   // smoothstep
-                    PointLight lamp(*h - Vec3(0, 0.35, 0),
+                    if (bl.station) {   // a canopy fitting: cool white, a pool down the platform (12 m apart)
+                        PointLight lamp(bl.at, Vec3(0.92, 0.96, 1.0), 26.0f * static_cast<float>(dusk * fade));
+                        lamp.range = 16.0f;
+                        withLamps.pointLights.push_back(lamp);
+                        continue;
+                    }
+                    PointLight lamp(bl.at - Vec3(0, 0.35, 0),
                                     Vec3(1.0, 0.82, 0.55),
                                     48.0f * static_cast<float>(dusk * fade));
                     lamp.range = static_cast<float>(lampRange);
                     withLamps.pointLights.push_back(lamp);
                 }
                 lit = true;
-            });
+            }
         }
         if (!coneSpots.empty()) {
             if (!lit) { withLamps = ctx.view.lighting; lit = true; }

@@ -9553,3 +9553,44 @@ The light-rail lab: its loop moved 18 m inside the streets (14 m left a flight o
 station; the player walks from the street up the flight onto the platform. Tests: a lift 30 m short of a joint carries
 on across it (no step); the lab's platforms level, its ways under; the city loop's joints >= 45 m from a crossing and
 every station held over its way.
+
+## ADR-0159 — What stands on a track, buildings clear of the line, station canopies and lamps, rail on the map and the platform board
+
+Glenn, 2026-10-12, after the island's light rail: "It seems to run really close to buildings and there are cars weirdly
+stuck in the tracks LOL. It would be nice if the stations had lights and also the overhangs are thin and need dimension.
+Maybe they should be the corrugated metal?", then "it would be nice to see the trains on the map and have a similar
+thing to the buses when you're on a station platform".
+
+Decision:
+- **A deck spine says what runs on it** (`UnionSpine::use`: Road, Track, Footway; deck codec v2, v1 still read as all
+  roads). Tracks and footways went into the deck field as `Local` streets, so a street car under a viaduct, closer to
+  the track's centreline than its own street's, took the rail's height (`heightOn`), and a parked car or a walker
+  could too (`heightAt`). `heightAt`, `heightOn` and `depthInside` answer for things on a street and now skip tracks and
+  footways; `coversAny` sees every deck and is what trees, rocks and the scatter stay off. The earthwork still rides
+  every spine (a track is structure), and a building's pad never takes a track's height (`lanesStreetHeight`).
+- **Buildings stand clear of the line** (`lanesTrackKeepOut`, LotParams::trackKeepOut): no footprint within 4.5 m of a
+  railhead, 10.5 m beside a stop (platform and the flight up behind it), or a footway's half-width + 1.5 m. A whole
+  footprint, not its corners -- a track crosses a big building's middle with every corner metres off. Lots, whole-block
+  landmarks, big boxes and depots all ask it; a lot that fails is open ground, as near a freeway. Set only where the
+  city has a track, so road-only levels grow as before.
+- **A platform's canopy has depth**: a ribbed steel sheet (trapezoidal ribs every 0.2 m, running the way it drains,
+  falling 8 % away from the track; drawn above and below) on a steel frame -- a post down the middle every 12 m carrying
+  a tapered beam across, a 0.4 m fascia along both edges -- and a linear lamp every 6 m under it. New meshes `canopy`,
+  `station_steel`, `station_lamp` (sheet and lamps not collidable). Geometry, not the CorrugatedMetal surface: that
+  one is world-planar and its stripes would run across a curved platform.
+- **Stations light up at night**: `station_lamp` glows on the dusk ramp (NightGlow, as street lamps' heads), and every
+  other fitting is a point light (`RailStop::lamps`, carried in `rail/tracks`) that joins the street lamps' nearest-N
+  pool -- cool white, range 16 m -- so a station never takes more light slots than the lamps already had.
+- **The map shows the rail**: each line a dark casing with its colour inside, drawn under the bus lines in the
+  picture's overlay (`TransitLine::width`, `closed`), redrawn once the trains exist if the map opened first; stations
+  as ringed squares, live trains as a dot per car (the locomotive white). `lineColour`: the main line charcoal, each
+  ring its own colour.
+- **The platform board** (`rail_board.h`): standing on a platform, the transit HUD names the station and lists every
+  line calling there -- this platform's first, the rest "across the tracks" -- each with the next two trains, the
+  station they run toward and the minutes until they stand there. Minutes, not stops, because a train runs on its own
+  track: the distance along the line at an average pace (min(25, 0.75 vmax) m/s) plus a dwell for each stop between.
+
+Tests: on the light-rail lab, the streets under the line answer their own height to parked cars and traffic while the
+track still keeps out trees; the field round-trips its uses; a footprint the track crosses is kept out and one 20 m off
+is not; every platform has its canopy, frame and lamps and every stop its lights. A board finds its platform (not past
+its back, not under it), lists both lines toward the other station, and its minutes come true within a third.

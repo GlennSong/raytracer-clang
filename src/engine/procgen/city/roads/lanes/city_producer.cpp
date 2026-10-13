@@ -20,7 +20,7 @@
 namespace engine {
 namespace roads::lanes {
 
-const char* const kRailBuildTag = "2026-10-12.4";   // 10-12.4: a track lifts 0.2 m over the clearance; 10-12.3: a track's holds run on across its joints; a road ending under a track is structure; 10-12.2: the flight up walled at its landing's end; 10-12.1: a way under a held-up track, a flight up to each platform, railings and columns under held-up platforms; 10-11.7: .7: footways step where steep (60 % class); .6: only a footway end is held up by its floor; .5: only a heightless hold merges at 2 m; .4: thicker slab only over a track; .3: a stop names its way in (the bus line serves it); .2: a footbridge walled over the tracks it crosses; 10-11.1: footways (station ways in), footbridge stairs onto the platforms, piers off the platforms; .2: a stop's side is the body's +x; .1: ballast, sleepers, rails, platforms; tracks out of the twin
+const char* const kRailBuildTag = "2026-10-12.5";   // 10-12.5: ribbed steel canopies on a steel frame, lamps and their night lights; deck spines say what runs on them (a track is no street); buildings clear of the line; 10-12.4: a track lifts 0.2 m over the clearance; 10-12.3: a track's holds run on across its joints; a road ending under a track is structure; 10-12.2: the flight up walled at its landing's end; 10-12.1: a way under a held-up track, a flight up to each platform, railings and columns under held-up platforms; 10-11.7: .7: footways step where steep (60 % class); .6: only a footway end is held up by its floor; .5: only a heightless hold merges at 2 m; .4: thicker slab only over a track; .3: a stop names its way in (the bus line serves it); .2: a footbridge walled over the tracks it crosses; 10-11.1: footways (station ways in), footbridge stairs onto the platforms, piers off the platforms; .2: a stop's side is the body's +x; .1: ballast, sleepers, rails, platforms; tracks out of the twin
 const char* const kLanesBuildTag = "2026-10-02.2";   // .2: a street bridging a street is not a junction in the twin   // 2026-10-02.1: the seam pull stands down across a bridge (pass8 over Third and Dogwood)  //   // 2026-09-30.2: deck undersides in the concrete mesh (#97)   // .3: balanced mountain profiles, authored-class guardrails with min_drop, girders under their bridges
 //   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
 //   // .1: the nav twin carries travel-lane widths (cars in the lane centre)
@@ -229,6 +229,7 @@ static RoadDeckField deckFromResult(const Result& r) {
             s.yAbs.push_back(r.heights ? r.heights->deckRoad(static_cast<int>(ei), e.xy[k]) : e.z[k]);
         s.halfWidth = lanes * 0.5 + shoulder;
         s.klass = classOf(e);
+        if (it != r.graph.classes.end()) s.use = it->second.track ? UnionSpine::Use::Track : it->second.footway ? UnionSpine::Use::Footway : UnionSpine::Use::Road;
         s.authoredDeck = e.isRamp() || s.klass == RoadClass::Freeway;
         // A road that bridges is a LAYER above the one it crosses, which is how a 2-D height
         // query tells them apart (RoadDeckField::heightAt). The build already measured it.
@@ -302,14 +303,15 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
         const bool paint = nm.name.rfind("paint", 0) == 0; const bool terrain = nm.name == "terrain";
         // sleepers and rails are drawn, never stood on: the ballast under them is the floor (a capsule snagging on
         // every sleeper edge, and tens of thousands of boxes in the physics mesh, for nothing)
-        const bool trackKitMesh = nm.name == "sleeper" || nm.name == "rail";
+        // (nor the canopy's ribbed sheet and its lamps, out of reach overhead)
+        const bool trackKitMesh = nm.name == "sleeper" || nm.name == "rail" || nm.name == "canopy" || nm.name == "station_lamp";
         const uint32_t flags = paint ? bundle::PackedMesh::kPaint : trackKitMesh ? 0u : bundle::PackedMesh::kCollidable;
         std::vector<MeshBuilder::CellChunk> chunks = MeshBuilder::chunkByCell(nm.mesh, renderCell);
         std::sort(chunks.begin(), chunks.end(), [](const MeshBuilder::CellChunk& a, const MeshBuilder::CellChunk& b) { return a.cx != b.cx ? a.cx < b.cx : a.cz < b.cz; });
         size_t matTris = 0;
         for (MeshBuilder::CellChunk& c : chunks) {
             CityCellMesh cm; cm.cx = c.cx; cm.cz = c.cz;
-            const bool steel = nm.name == "guardrail" || nm.name == "rail";   // galvanised: smoother than concrete, still matte
+            const bool steel = nm.name == "guardrail" || nm.name == "rail" || nm.name == "canopy" || nm.name == "station_steel";   // galvanised: smoother than concrete, still matte
             cm.mesh = bundle::packMesh(c.mesh, nm.name, nm.color, flags, paint ? 0.7f : steel ? 0.42f : 0.93f, terrain ? 0.7 : 0.85);
             matTris += cm.mesh.triangleCount(); bytes += cm.mesh.bytes(); p.cells.push_back(std::move(cm));
         }

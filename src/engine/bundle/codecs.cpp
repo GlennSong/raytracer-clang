@@ -9,7 +9,7 @@ namespace bundle {
 
 namespace {
 constexpr uint32_t kMeshVersion = 1, kGridVersion = 1, kRoadGraphVersion = 1, kRoadEntityVersion = 1, kRingsVersion = 1;
-constexpr uint32_t kDeckVersion = 1, kBandVersion = 1;
+constexpr uint32_t kDeckVersion = 2, kBandVersion = 1;
 inline float f(double v) { return static_cast<float>(v); }
 }  // namespace
 
@@ -212,6 +212,7 @@ void putDeckField(BinWriter& w, const RoadDeckField& d) {
         w.put<uint8_t>(s.accessBack);
         w.put<uint8_t>(static_cast<uint8_t>(s.authoredDeck));
         w.put<int32_t>(static_cast<int32_t>(s.layer));
+        w.put<uint8_t>(static_cast<uint8_t>(s.use));   // v2
     }
     w.put<uint32_t>(static_cast<uint32_t>(d.pads.size()));
     for (const RoadDeckField::Tri& t : d.pads) {
@@ -221,7 +222,7 @@ void putDeckField(BinWriter& w, const RoadDeckField& d) {
 }
 
 bool getDeckField(BinReader& r, RoadDeckField& d) {
-    uint32_t v = 0; if (!r.magic("DECK", &v) || v != kDeckVersion) return false;
+    uint32_t v = 0; if (!r.magic("DECK", &v) || v < 1 || v > kDeckVersion) return false;   // v1: every spine a road
     uint32_t n = 0; if (!r.get(n)) return false; d.spines.assign(n, UnionSpine{});
     for (UnionSpine& s : d.spines) {
         if (!getVec2s(r, s.points) || !getDoubles(r, s.yAbs) || !getDoubles(r, s.hw) ||
@@ -238,6 +239,11 @@ bool getDeckField(BinReader& r, RoadDeckField& d) {
         s.accessBack = accessBack;
         s.authoredDeck = authored != 0;
         s.layer = layer;
+        if (v >= 2) {
+            uint8_t use = 0;
+            if (!r.get(use) || use > 2) return false;
+            s.use = static_cast<UnionSpine::Use>(use);
+        }
     }
     if (!r.get(n)) return false; d.pads.assign(n, RoadDeckField::Tri{});
     for (RoadDeckField::Tri& t : d.pads) {

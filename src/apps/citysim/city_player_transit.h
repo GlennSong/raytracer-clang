@@ -20,6 +20,7 @@
 // which vehicle is chosen, so the seat is one mechanism and the choosing is a
 // policy on top.
 
+#include "rail_board.h"
 #include "../../engine/system.h"
 #include "../../rt_math.h"   // engine::Vec3
 
@@ -65,7 +66,8 @@ public:
     // around for a while"). What the on-screen line says, refreshed every
     // frame. Public so a test can read it without drawing anything.
     struct Hud {
-        enum class Mode { None, OnFoot, Riding } mode = Mode::None;
+        enum class Mode { None, OnFoot, Riding, Platform } mode = Mode::None;
+        PlatformBoard board;             // Platform: the departure board of the one you stand on (rail_board.h)
         engine::Real stopDistance = 0;   // to the nearest stop
         const char* stopDirection = "";  // relative to where you are looking
         // stopsAway -1 = no bus on the route. 0 = this is the bus's NEXT stop,
