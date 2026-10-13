@@ -170,6 +170,11 @@ const char* architectRecipeName(int index);   // nullptr out of range
 bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness, Real shortSide, Real area,
                            BuildingRecipe& out);
 
+// Whether a recipe's upper floors are offices (BuildingParams::officeUse): a workplace, civic or commercial building
+// that is not a home, and not one with rooms of its own kind -- a hotel, a hospital, a school, a library, a museum, a
+// university, a church.
+bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential);
+
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no
 // tower on a cottage lot). `coreness` is how deep into the city centre the

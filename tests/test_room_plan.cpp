@@ -35,8 +35,9 @@ TEST_CASE(rooms_ring_the_plate_and_keep_the_core_clear) {
     CHECK(rp.office);
     // THE OFFICE FLOOR (buildings C): open-plan zones window to corridor, glass corner offices, a meeting room and
     // a kitchenette against the corridor. Every room inside the plan and outside the core.
-    int open = 0, corner = 0, meeting = 0, kitchenette = 0;
+    int open = 0, corner = 0, meeting = 0, kitchenette = 0, reception = 0;
     for (const Room& r : rp.rooms) {
+        if (r.kind == RoomKind::Reception) ++reception;
         if (r.kind == RoomKind::OpenPlan) ++open;
         if (r.kind == RoomKind::Office) ++corner;
         if (r.kind == RoomKind::Meeting) ++meeting;
@@ -52,14 +53,15 @@ TEST_CASE(rooms_ring_the_plate_and_keep_the_core_clear) {
             CHECK(pointInPolygon(plan, c + (centroid(r.rect) - c) * 0.01));
             CHECK(!pointInPolygon(ring, c));
         }
-    // Every wall is glass, and every enclosed room (a corner office, a meeting room) has a door.
+    // Every wall is glass, and every enclosed room (a corner office, a meeting room, the reception's screen) has a door.
     int doors = 0;
     for (const RoomWall& w : rp.walls) {
         CHECK(w.glass);
         if (w.doorAt >= 0) ++doors;
         CHECK(segLen(w) > 0.3);
     }
-    CHECK(doors == corner + meeting);
+    CHECK(reception == 1);   // facing the lifts (2026-10-13), its screen with a door for the staff
+    CHECK(doors == corner + meeting + reception);
     // The lobby gets none.
     CHECK(roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 0).rooms.empty());
 }

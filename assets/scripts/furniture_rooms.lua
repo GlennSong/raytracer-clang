@@ -1,7 +1,7 @@
 -- furniture_rooms.lua -- ROOM PROGRAMS (the furniture library, M3b; Glenn, 2026-10-03: "go ahead with the furniture
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
--- bath, desk_row, lounge. Shops are still furnished in code, by their trade.
+-- bath, desk_row, lounge, reception. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -127,6 +127,19 @@ furniture_rooms = {
         { pick = { family = "seating", tags = { "living" } }, x = 1.2, fit = { 2.16, 1.0 } },
         { pick = { family = "surface", tags = { "living" } }, x = 1.2, z = 1.15, fit = { 1.2, 0.7 } },
       } },
+  },
+
+  reception = {
+    -- an office floor's front desk, its back to the screen, facing the lifts across the corridor: the receptionist's
+    -- chair behind it; a chair for visitors at each end of the room, a plant
+    { wall = { 2.4, 1.6 }, sides = { 0 },
+      set = {
+        { pick = "office_chair", x = 1.2, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = "reception_desk", x = 1.2, z = 0.75 },
+      } },
+    { wall = { 0.84, 0.84 }, sides = { 1 }, pick = "lounge_chair" },
+    { wall = { 0.84, 0.84 }, sides = { 3 }, pick = "lounge_chair" },
+    { wall = { 0.9, 0.9 }, sides = { 3, 1 }, pick = { family = "decor", tags = { "plant" } } },
   },
 
   meeting = {

@@ -1200,6 +1200,21 @@ FurniturePiece build(Piece p, uint32_t variant) {
             }
             break;
         }
+        case Piece::ReceptionDesk: {
+            // A RECEPTION DESK, 2.4 m: the worktop at desk height on the staff's side (-z, toward the screen behind),
+            // a panelled front standing to 1.08 m on the visitors' side (+z) with a ledge on top to sign in at, the
+            // monitor turned to the staff.
+            k.out.size = {2.4, 1.10, 0.80};
+            k.box(F::Wood, {0, 0.725, 0.32}, {2.36, 0.03, 0.60}, 0.006, wood, 1);              // the worktop
+            k.box(F::Hard, {0, 0.54, 0.74}, {2.40, 1.08, 0.08}, 0.01, kWhite, 1);              // the front
+            for (double x : {-1.16, 1.16}) k.box(F::Hard, {x, 0.54, 0.40}, {0.08, 1.08, 0.72}, 0.01, kWhite, 1);   // ends
+            k.box(F::Wood, {0, 1.085, 0.66}, {2.44, 0.03, 0.28}, 0.006, wood * 1.05, 1);       // the ledge
+            k.box(F::Hard, {0.75, 0.33, 0.30}, {0.42, 0.62, 0.50}, 0.004, kSteel * 0.85, 1);   // a pedestal
+            k.box(F::Hard, {-0.4, 0.76, 0.42}, {0.22, 0.012, 0.16}, 0.004, kBlack, 1);         // the monitor's foot
+            k.box(F::Hard, {-0.4, 0.92, 0.44}, {0.04, 0.30, 0.02}, 0.004, kBlack, 1);
+            k.box(F::Hard, {-0.4, 1.02, 0.41}, {0.58, 0.32, 0.022}, 0.004, kBlack, 1);         // its screen, facing -z
+            break;
+        }
         case Piece::Lectern: {
             k.out.size = {0.70, 1.15, 0.55};
             k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
@@ -1311,7 +1326,7 @@ const char* const kPieceNames[kPieceCount] = {
     "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug",
     "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step", "bleacher",
     "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
-    "desk_screen"};
+    "desk_screen", "reception_desk"};
 
 }  // namespace
 

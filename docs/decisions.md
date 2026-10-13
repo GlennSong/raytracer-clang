@@ -9670,3 +9670,42 @@ Tests: tower floors (11 recipes, every other floor): desk rows deep enough for o
 256. Residential tower floors (pencil + condo, 6 seeds x 5 plans, every floor): lounge floors 109 -> 0, floors with
 office rooms 28 -> 0; 2302 floors, every apartment floor walkable with a kitchen and a bath. Upper tower floors keep
 ADR-0160's window rule (65285 pieces, none tall before glass).
+
+## ADR-0162 — Workplaces are office floors: perimeter offices, reception, meeting rooms, kitchenette, lounge
+
+Glenn, 2026-10-13: "Yeah we should fill that space too. Offices can have meeting rooms, small kitchens, lounge space,
+reception desk, offices and cubes and open floor plans."
+
+The empty middle was a symptom. Only a CURTAIN WALL marked a floor as offices (ringPlan's `office = curtainWall`), so
+every masonry workplace -- the art deco, stepped and sky-exposure towers, office slabs and midrises, banks, civic halls,
+courthouses, the floors over a commercial block -- was a ring of studio flats round an empty middle: a bed, two
+nightstands and a sofa in every room. Measured on 177 such buildings (852 upper floors): 7690 beds.
+
+- **`BuildingParams::officeUse`**, RUNTIME ONLY: the architect sets it from the recipe and its place type
+  (`officeUseFor`: office, civic, shop or park, not a home, and not a hotel, hospital, school, library, museum,
+  university or church, which have rooms of their own kind), and the interior system sets it again from the building
+  record's recipe and type, because the lot cache does not carry it. An island baked before this needs no re-bake.
+  `RT_NO_OFFICE_FLOORS=1` is the A/B switch.
+- **Workplaces take the office floor** (`officePlan`), masonry or glass. A building with only a stair lays it round the
+  stair's well, which stands in for the core (no lifts, no reception); the plan must leave the well clear and walk
+  from the stair's foot, else a ring of offices. A ring in a workplace names its rooms offices (glass fronts only
+  behind a curtain wall), and a workplace never takes a house plan.
+- **What the floor holds**: a masonry office (and a third of the glass ones, by the building's seed) lines its windows
+  with PRIVATE OFFICES (`officeRowAt`, 3.2 m deep, about two bays wide) off a 1.6 m aisle, the open plan inside; a glass
+  one keeps the windows for the open plan and puts glass-fronted offices in the corners. Each band's strip against the
+  corridor (3.2-4 m deep, keeping a row of desks in front) holds the shared rooms, packed out from the band's middle
+  while they fit: on the band the lifts face, a RECEPTION centred on the core (a new `reception_desk` piece, the
+  receptionist's chair, chairs for visitors, a glass screen behind with a staff door) with glass MEETING rooms either
+  side; on the band opposite, the KITCHENETTE, a breakout LOUNGE and the big meeting room; on the others a lounge and a
+  small meeting room. The open plan is pods or cubicles, a building at a time, as before.
+
+Not done: a CHAMFERED glass plate (eight corners: the tapered glass tower's upper floors, 105 of 488 floors under 60%
+covered) is still a ring of offices round an open middle -- officePlan is rectangles only. Schools, libraries,
+museums and universities outside the campus still grow the ring of studios (beds), and want plans of their own.
+
+Interiors grow at run time: no re-bake.
+
+Tests: `workplaces_are_furnished_as_offices` (every recipe with officeUse, 3 plans x 2 seeds, up to 8 upper floors):
+beds 7690 -> 0, desks 4595 -> 16775, meeting tables 142 -> 1024, reception desks 32 -> 213, the hotel keeps its 592
+beds. Rooms cover ~92% of a cored masonry office floor (was ~73%). Window rule (ADR-0160) holds: 83321 pieces on office
+floors, none tall before glass.

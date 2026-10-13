@@ -362,6 +362,7 @@ const char* programFor(RoomKind kind) {
         case RoomKind::Dorm: return "dorm";
         case RoomKind::DeskRow: return "desk_row";
         case RoomKind::Lounge: return "lounge";
+        case RoomKind::Reception: return "reception";
         default: return "";
     }
 }
@@ -845,6 +846,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
             };
             const bool working = room.kind == RoomKind::Office || room.kind == RoomKind::OpenPlan || room.kind == RoomKind::DeskRow ||
                                  room.kind == RoomKind::Meeting || room.kind == RoomKind::Kitchenette ||
+                                 room.kind == RoomKind::Reception ||
                                  room.kind == RoomKind::Shop;
             // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
             const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;

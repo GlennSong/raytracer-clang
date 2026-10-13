@@ -95,13 +95,14 @@ TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {
     std::vector<PlacedPiece> placed;
     RenderMesh col;
     emitFurniture(placed, &col, rp, 25.0, p.seed);
-    int desks = 0, chairs = 0, seats = 0;
+    int desks = 0, chairs = 0, seats = 0, receptions = 0;
     std::vector<Vec2> doors;
     for (const RoomWall& w : rp.walls)
         if (w.doorAt >= 0) doors.push_back(w.a + (w.b - w.a) * w.doorAt);
     for (const PlacedPiece& pp : placed) {
         if (pp.piece == static_cast<uint8_t>(Piece::Desk)) { ++desks; ++seats; }
         if (pp.piece == static_cast<uint8_t>(Piece::OfficeChair)) ++chairs;
+        if (pp.piece == static_cast<uint8_t>(Piece::ReceptionDesk)) ++receptions;
         if (pp.piece == static_cast<uint8_t>(Piece::DeskPod)) seats += ((pp.variant >> 5) & 4u) ? 4 : 6;      // the open plan (buildings C)
         if (pp.piece == static_cast<uint8_t>(Piece::Cubicle)) seats += 1;
         const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
@@ -110,7 +111,8 @@ TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {
         for (const Vec2& d : doors) CHECK((at - d).length() > 0.45);
     }
     CHECK(seats >= 28);   // a 40 x 30 m office floor seats a team (~30 cubicles, ~90 at benches), not a desk a room
-    CHECK(chairs == desks);
+    CHECK(receptions == 1);
+    CHECK(chairs == desks + receptions);   // a chair at every desk, and the receptionist's
     CHECK(col.indices.size() > 0);   // the desks and cabinets are solid
     std::printf("    [furnish] %zu rooms: %zu pieces, %d workstations\n", rp.rooms.size(), placed.size(), seats);
 }
@@ -351,7 +353,7 @@ TEST_CASE(room_programs_furnish_every_home_and_office_room) {
                      Piece::Toilet, Piece::Bathtub, Piece::MeetingTable})
         CHECK(n(with, pc) > 0);
     CHECK(n(with, Piece::Nightstand) == 2 * n(with, Piece::Bed));       // a nightstand each side of every bed
-    CHECK(n(with, Piece::OfficeChair) == n(with, Piece::Desk));         // a chair at every desk
+    CHECK(n(with, Piece::OfficeChair) == n(with, Piece::Desk) + n(with, Piece::ReceptionDesk));   // a chair at every desk
     CHECK(n(with, Piece::DeskPod) + n(with, Piece::Cubicle) > 0);
     for (Piece pc : {Piece::Desk, Piece::Bed, Piece::Sofa, Piece::Toilet, Piece::DeskPod, Piece::Cubicle})
         CHECK(n(bare, pc) == 0);                                          // the furniture is data
@@ -1409,4 +1411,56 @@ TEST_CASE(slim_residential_crowns_are_flats_round_the_core) {
     CHECK(noKitchen == 0);
     CHECK(noBath == 0);
     CHECK(blocked == 0);
+}
+
+// WORKPLACES ARE OFFICES (Glenn, 2026-10-13: "offices can have meeting rooms, small kitchens, lounge space, reception
+// desk, offices and cubes and open floor plans"). A masonry office tower, a bank, a civic hall, the floors over a
+// commercial block were furnished as rings of studio flats -- a bed, two nightstands and a sofa in every room, an empty
+// middle -- because only a curtain wall marked a floor as offices (room_plan.cpp). They are the office floor now
+// (BuildingParams::officeUse): private offices along the windows or corner offices, cubicles or pods inside, and
+// against the corridor a reception facing the lifts, meeting rooms, a kitchenette and a breakout lounge. A building
+// with only a stair lays it round the stair. A hotel and a hospital keep their rooms. Measured on these 177 workplaces'
+// 852 upper floors (officeUse forced off for the before): beds 7690 -> 0, desks 4595 -> 16775, meeting tables 142 ->
+// 1024, reception desks 32 -> 213 (the glass towers had the office floor already, without its reception).
+TEST_CASE(workplaces_are_furnished_as_offices) {
+    UseShippedFurniture shipped;
+    const Real sizes[][2] = {{48, 34}, {36, 24}, {30, 20}};
+    std::array<int, kPieceCount> n{};
+    int workplaces = 0, floors = 0, hotelBeds = 0;
+    for (int ri = 0; ri < architectRecipeCount(); ++ri) {
+        const std::string rn = architectRecipeName(ri);
+        for (uint32_t seed = 1; seed <= 2; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.openDoorway = true;
+                const bool hotel = rn == "hotel";
+                if (!p.officeUse && !hotel) continue;
+                const int top = std::min(p.floors + 1, 9);
+                if (top < 2) continue;
+                ++workplaces;
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 1, top);
+                floors += top - 1;
+                for (const PlacedPiece& pp : in.furniture) {
+                    if (hotel) { if (pp.piece == static_cast<uint8_t>(Piece::Bed)) ++hotelBeds; continue; }
+                    ++n[pp.piece];
+                }
+            }
+    }
+    auto c = [&](Piece pc) { return n[static_cast<std::size_t>(pc)]; };
+    std::printf("    [workplaces] %d buildings, %d upper floors: beds %d, nightstands %d, desks %d, cubicles %d, pods %d, "
+                "meeting tables %d, kitchenette sinks %d, reception desks %d, sofas %d; the hotel's beds %d\n", workplaces,
+                floors, c(Piece::Bed), c(Piece::Nightstand), c(Piece::Desk), c(Piece::Cubicle), c(Piece::DeskPod),
+                c(Piece::MeetingTable), c(Piece::KitchenSink), c(Piece::ReceptionDesk), c(Piece::Sofa), hotelBeds);
+    CHECK(workplaces > 40);
+    CHECK(c(Piece::Bed) == 0);
+    CHECK(c(Piece::Nightstand) == 0);
+    CHECK(c(Piece::Desk) > 300);
+    CHECK(c(Piece::Cubicle) + c(Piece::DeskPod) > 300);
+    CHECK(c(Piece::MeetingTable) > 50);
+    CHECK(c(Piece::KitchenSink) > 20);
+    CHECK(c(Piece::ReceptionDesk) > 20);
+    CHECK(hotelBeds > 100);
 }

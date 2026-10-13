@@ -533,6 +533,12 @@ struct BuildingParams {
     // WHAT IT IS FOR (buildings B): a residential building's typical floors are whole apartments off a corridor
     // (room_plan.h, PlateTopology::Apartments); anything else keeps its office ring. Set from the recipe's use.
     bool  residential = false;
+    // OFFICES INSIDE (Glenn, 2026-10-13: "offices can have meeting rooms, small kitchens, lounge space, reception desk,
+    // offices and cubes and open floor plans"): a workplace's upper floors are the office floor (room_plan.cpp
+    // officePlan), masonry or glass, core or stair -- not the ring of studios a hotel keeps. RUNTIME ONLY, never in the
+    // lot cache: set from the recipe and its use (architect.h officeUseFor) by the architect and again by the interior
+    // system from the building record, so an island baked before it still gets it without a re-bake.
+    bool  officeUse = false;
     // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each other ...
     // windows aren't made on the sides and we have back doors and different ways up to the second floor"). Up to
     // two PARTY WALLS, each the world line it stands on: outward normal (x, z) and offset dot(normal, point). A

@@ -57,9 +57,11 @@ enum class PlateTopology : uint8_t {
 // Classroom .. Dorm: the university campus (campusPlan): a classroom, a tiered lecture hall, a teaching lab, the
 // library's reading room and its stacks, a residence hall's two-bed room.
 // DeskRow: an office floor too shallow for rooms (a setback tier round its base's core): desks along the glass.
-// Lounge: the same strip in a residential tower: the residents' lounge, sofas along the glass.
+// Lounge: the same strip in a residential tower: the residents' lounge, sofas along the glass; on an office floor, its
+// breakout space against the corridor.
+// Reception: an office floor's front desk, facing the lifts across the corridor, a screen behind it.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
-                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge };
+                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

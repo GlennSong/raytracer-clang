@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "architect.h"
 
 #include <algorithm>
@@ -152,12 +153,26 @@ void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
         std::max(1, static_cast<int>(shortSide * slender / fh) - 1);
     p.floors = std::min(p.floors, maxFloors);
 }
+}  // namespace (reopened below)
+
+bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential) {
+    static const bool off = std::getenv("RT_NO_OFFICE_FLOORS") != nullptr;   // A/B: workplaces as before
+    if (off || residential || placeType == "home" || placeType == "depot") return false;
+    static const char* kOwnRooms[] = {"hotel", "hospital", "school", "library", "museum", "university", "church",
+                                      "teaching_hall", "campus_library", "residence_hall"};
+    for (const char* n : kOwnRooms) if (recipe == n) return false;
+    return placeType == "office" || placeType == "civic" || placeType == "shop" || placeType == "park";
+}
+
+namespace {
+
 void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
     // Homes, and the buildings that are flats over a shop (their upper floors are apartments). A hotel keeps its
     // ring of rooms -- that is a hotel.
     static const char* kFlatsOverShops[] = {"mixed_use", "oldtown_house", "oldtown_grand", "brick_shop", "corner_shop"};
     out.params.residential = out.placeType == "home";
     for (const char* n : kFlatsOverShops) if (out.name == n) out.params.residential = true;
+    out.params.officeUse = officeUseFor(out.name, out.placeType, out.params.residential);
     storeyHeightsByUse(out);
     capFloors(out.params, shortSide, slender);
     if (out.params.floors < 15) out.params.top = 0;   // a top is a tower's: the short ones keep the penthouse
