@@ -1,7 +1,7 @@
 -- furniture_rooms.lua -- ROOM PROGRAMS (the furniture library, M3b; Glenn, 2026-10-03: "go ahead with the furniture
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
--- bath (restroom outside a home), desk_row, lounge, reception, gallery. Shops are still furnished in code, by their trade.
+-- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -152,6 +152,58 @@ furniture_rooms = {
     { hang = "picture", sides = { 1, 3, 2, 0 } },
     { hang = "picture", sides = { 3, 1, 2, 0 } },
     { hang = "picture", sides = { 2, 0, 1, 3 } },
+  },
+
+  -- THE HOSPITAL (hospitalPlan, room_plan.cpp)
+  ward = {
+    -- a patients' room: a hospital bed head to a side wall with its bedside cabinet, a second across from it in a room
+    -- wide enough; a chair for visitors by the window
+    { wall = { 1.6, 2.3 }, sides = { 1, 3 }, clear = 0.8,
+      set = {
+        { pick = "hospital_bed", x = 0.55 },
+        { pick = "nightstand", x = 1.33, fit = { 0.5, 0.5 } },
+      } },
+    { wall = { 1.6, 2.3 }, sides = "opposite", clear = 0.8, min_w = 4.4,
+      set = {
+        { pick = "hospital_bed", x = 0.55 },
+        { pick = "nightstand", x = 1.33, fit = { 0.5, 0.5 } },
+      } },
+    { wall = { 0.84, 0.84 }, sides = { 0, 2 }, pick = "lounge_chair" },
+  },
+
+  exam = {
+    -- an examination room: the couch along a side wall, the doctor's desk at the window, a basin by the door
+    { wall = { 2.0, 0.8 }, sides = { 1, 3 }, clear = 0.7, pick = "exam_couch" },
+    { wall = { 1.6, 1.6 }, sides = { 0, 2 },
+      set = {
+        { pick = { family = "surface", tags = { "office" } }, x = 0.8 },
+        { pick = "monitor", x = 0.8, z = 0.12, y = 0.75 },
+        { pick = office_kind({ "office" }), x = 0.8, z = 1.55, faces = "wall", fit = { 0.7, 0.7 } },
+      } },
+    { wall = { 0.8, 0.5 }, sides = { 2, 3, 1 }, clear = 0.6, pick = "vanity" },
+  },
+
+  nurses_station = {
+    -- the counter facing the ward corridor, two nurses' chairs behind it, the records cabinets on the end walls
+    { wall = { 2.4, 1.6 }, sides = { 2 },
+      set = {
+        { pick = "office_chair", x = 0.6, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = "office_chair", x = 1.8, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = "reception_desk", x = 1.2, z = 0.75 },
+      } },
+    { wall = { 0.46, 0.6 }, sides = { 1, 3 }, tall = true, clear = 0.6, pick = { family = "storage", tags = { "office" } } },
+  },
+
+  waiting = {
+    -- the entrance lobby: the information desk facing the doors, rows of waiting seats between, plants
+    { wall = { 2.4, 1.6 }, sides = { 2 },
+      set = {
+        { pick = "office_chair", x = 1.2, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = "reception_desk", x = 1.2, z = 0.75 },
+      } },
+    { grid = { 2.4, 0.8 }, from = 3.0, aisle = { 1.4, 1.0 }, pick = "waiting_seats" },
+    { wall = { 0.9, 0.9 }, sides = { 1, 3 }, pick = { family = "decor", tags = { "plant" } } },
+    { wall = { 0.9, 0.9 }, sides = { 3, 1 }, pick = { family = "decor", tags = { "plant" } } },
   },
 
   meeting = {

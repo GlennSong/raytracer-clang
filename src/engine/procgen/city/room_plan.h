@@ -61,8 +61,11 @@ enum class PlateTopology : uint8_t {
 // breakout space against the corridor.
 // Reception: an office floor's front desk, facing the lifts across the corridor, a screen behind it.
 // Gallery: a museum's room: pictures round its walls, display cases down the middle, a bench.
+// Ward .. Waiting: the hospital (hospitalPlan): a patients' room (one bed or two), an examination room, the nurses'
+// station facing the lifts, the entrance lobby's waiting area with its information desk.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
-                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception, Gallery };
+                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception, Gallery,
+                                Ward, Exam, NurseStation, Waiting };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

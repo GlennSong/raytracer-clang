@@ -9743,3 +9743,32 @@ the diagonal glass. A corner office short of the exterior closes its outer side 
 
 Tests `chamfered_office_floors_take_the_office_floor`: 164 of 181 chamfered office floors laid as the office floor
 (none before), no room corner outside its plate; the tapered tower's floors under 60% covered 105 -> 21. No re-bake.
+
+## ADR-0165 — The hospital: wards, a nurses' station, the lobby and examination rooms
+
+Glenn, 2026-10-13: "Do hospitals. I didn't even know we had them."
+
+The hospital is a landmark (one a city with six commercial blocks or more), four to six storeys round a core. Its
+upper floors were a ring of studio flats -- across 12 in the test spread, 1050 double beds and 987 sofas -- over an
+empty ground floor. `civicRooms` 6 routes it to `hospitalPlan`, on the office floor's bands (chamfered plates too):
+
+- **Upper floors (a ward)**: patients' rooms along the windows, about 4 m wide and 5 m deep, off a 2.4 m ward corridor
+  (`officeRowAt` with the Ward kind): a hospital bed head to a side wall with its bedside cabinet, a second in a room
+  4.4 m wide or more, a visitor's chair by the window. Behind the corridor, against the core's, the SUPPORT STRIP: the
+  NURSES' STATION on the band the lifts face (a counter open to the ward corridor, two nurses' chairs, records
+  cabinets) between a supply room and the utility room; opposite it the staff room (a kitchenette), a restroom and a
+  supply room; restrooms and stores on the other bands. The strip's ends stay open, so the ward corridor meets the
+  core's round every band's ends. Where a floor has no room for the strip, the station takes the middle of the ward
+  row on the lifts' side.
+- **The ground floor**: the entrance band is the LOBBY (an information desk facing the doors, rows of waiting seats
+  behind the doors' clear way, plants); the other bands EXAMINATION rooms (a couch, the doctor's desk, a basin) off a
+  corridor, restrooms and a supply room in their strip.
+- New pieces: `hospital_bed` (castors, raised head, rails), `exam_couch`, `waiting_seats` (four on a beam).
+- A hospital floor the plan cannot lay (or walk from the lifts) falls through to the ring, its rooms named wards.
+
+Interiors grow at run time: no re-bake. `RT_NO_CIVIC_ROOMS=1` is the A/B switch (with ADR-0163's).
+
+Test `the_hospital_has_wards_a_lobby_and_examination_rooms` (12 hospitals): every one a lobby, every ward floor (63) a
+nurses' station, every floor walkable; 1617 hospital beds, 198 examination couches, 476 waiting seats; no double bed,
+sofa or bathtub (before: 1050 beds, 987 sofas, no lobby). Window rule (ADR-0160) on every civic and office floor:
+346204 pieces, none tall before glass.

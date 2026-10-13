@@ -191,22 +191,24 @@ constexpr Real kStripOfficeMax = 4.0;
 constexpr Real kStripOfficeW = 3.2;
 }  // namespace
 // The row itself, `od` deep from the wall's inner face (an office floor's band lays its perimeter offices with it too).
+// (A hospital's wards and examination rooms are the same row: `kind`, about `wantW` wide.)
 static void officeRowAt(RoomPlan& rp, const BuildingParams& params, std::size_t e, Real W,
-                        const std::function<Vec2(Real, Real)>& P, Real x0, Real x1, Real inset, Real od) {
+                        const std::function<Vec2(Real, Real)>& P, Real x0, Real x1, Real inset, Real od,
+                        RoomKind kind = RoomKind::Office, Real wantW = kStripOfficeW) {
     std::vector<Real> cuts{x0};
     Real last = x0;
     for (Real xb : bayBoundaries(W, params)) {
         if (xb <= x0 + 1.0 || xb >= x1 - 1.0) continue;
-        if (xb - last >= kStripOfficeW * 0.85) { cuts.push_back(xb); last = xb; }
+        if (xb - last >= wantW * 0.85) { cuts.push_back(xb); last = xb; }
     }
-    if (x1 - last < kStripOfficeW * 0.6 && cuts.size() > 1) cuts.pop_back();   // a sliver joins its neighbour
+    if (x1 - last < wantW * 0.6 && cuts.size() > 1) cuts.pop_back();   // a sliver joins its neighbour
     cuts.push_back(x1);
     const Real vIn = inset, vF = inset + od;
     for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
         const Real a = cuts[i], b = cuts[i + 1];
         Room r;
         r.edge = e;
-        r.kind = RoomKind::Office;
+        r.kind = kind;
         r.rect = {P(a, vIn), P(b, vIn), P(b, vF), P(a, vF)};
         rp.rooms.push_back(r);
         RoomWall front;
@@ -1514,6 +1516,153 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
     return rp;
 }
 
+// ------------------------------------------------------------- the hospital
+// THE HOSPITAL (Glenn, 2026-10-13: "Do hospitals. I didn't even know we had them"): one a city (a landmark), four to
+// six storeys round a core, and it was a ring of studio flats over an empty ground floor. Its floors now:
+//
+//   UPPER FLOORS, a ward    patients' rooms along the windows (one bed, or two in a room 4.4 m wide or more), each
+//                           with its door on the ward corridor; behind the corridor, against the core's, the support
+//                           strip: the NURSES' STATION facing the lifts (between a supply room and the utility room),
+//                           opposite it the staff room, a restroom and a supply room, a restroom and stores elsewhere.
+//   THE GROUND FLOOR        the entrance band is the LOBBY -- an information desk facing the doors, rows of waiting
+//                           seats -- and the other bands EXAMINATION rooms along the windows off a corridor, a
+//                           restroom and a supply room in their strip.
+//
+// The bands are the office floor's (even bands own the corners; a chamfered plate laid in its rectangle). The strip's
+// ends stay open, so the ward corridor meets the core's corridor round both ends of every band.
+static RoomPlan hospitalPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
+                             int storey, std::size_t entranceEdge) {
+    constexpr Real kWardD = 5.0, kWardW = 4.0, kExamD = 4.0, kExamW = 3.4, kWardCorr = 2.4, kStripMin = 3.0;
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = true;   // (its bath rooms are restrooms; it is lit as a workplace)
+    Real cutS[4] = {0, 0, 0, 0}, cutE[4] = {0, 0, 0, 0};
+    Poly2 plan = planIn;
+    if (!core.valid) return rp;
+    if (planIn.size() != 4 && !chamferedRect(planIn, plan, cutS, cutE)) return rp;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    const Poly2 coreR = core.rect();
+    auto from = [&](std::size_t e) { return cutS[e] > 0 ? cutS[e] + inset * 1.5 : inset; };
+    auto upto = [&](std::size_t e, Real W) { return cutE[e] > 0 ? W - cutE[e] - inset * 1.5 : W - inset; };
+    struct Band { Vec2 a, d, nOut; Real W = 0, D = 0; bool rooms = false; Real s0 = 0, s1 = 0; };
+    std::vector<Band> B(n);
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        b.a = plan[e];
+        const Vec2 dv = plan[(e + 1) % n] - b.a;
+        b.W = dv.length();
+        if (b.W < 1e-6) continue;
+        b.d = dv * (1.0 / b.W);
+        b.nOut = Vec2(b.d.y, -b.d.x);
+        Real toCore = 1e9;
+        for (const Vec2& c : coreR) toCore = std::min(toCore, dot(b.a - c, b.nOut));
+        b.D = std::min(toCore - kCorridor - inset, Real(16.0));
+        b.rooms = b.D >= (storey == 0 ? kExamD : kWardD) - 0.6;
+    }
+    for (std::size_t e = 0; e < n; ++e) {
+        Band& b = B[e];
+        if (!b.rooms) continue;
+        if (e % 2 == 0) { b.s0 = from(e); b.s1 = upto(e, b.W); }
+        else {
+            const Band& p = B[(e + n - 1) % n];
+            const Band& q = B[(e + 1) % n];
+            b.s0 = std::max(inset + (p.rooms ? p.D : 0), from(e));
+            b.s1 = std::min(b.W - inset - (q.rooms ? q.D : 0), upto(e, b.W));
+        }
+    }
+    // The band the lifts face (the nurses' station's), the one opposite; the entrance's (the lobby, on the ground).
+    std::size_t front = n, entrance = n;
+    for (std::size_t e = 0; e < n; ++e)
+        if (B[e].W > 1e-6 && dot(B[e].nOut, core.frame.v) < -0.9) front = e;
+    if (entranceEdge < planIn.size()) {
+        const Vec2 m = (planIn[entranceEdge] + planIn[(entranceEdge + 1) % planIn.size()]) * 0.5;
+        Real best = 1e9;
+        for (std::size_t e = 0; e < n; ++e) {
+            if (B[e].W < 1e-6) continue;
+            const Real off = std::fabs(dot(m - B[e].a, B[e].nOut));
+            if (off < best) { best = off; entrance = e; }
+        }
+        if (best > 1.0) entrance = n;
+    }
+    const std::size_t opposite = ((front < n ? front : 0) + 2) % n;
+    for (std::size_t e = 0; e < n; ++e) {
+        const Band& b = B[e];
+        if (!b.rooms || b.s1 - b.s0 < 6.0) continue;
+        auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
+        const Real vIn = inset, vFront = inset + b.D;
+        auto room = [&](Real x0, Real x1, Real v0, Real v1, RoomKind kind) {
+            Room rm; rm.edge = e; rm.kind = kind;
+            rm.rect = {P(x0, v0), P(x1, v0), P(x1, v1), P(x0, v1)};
+            rp.rooms.push_back(rm);
+        };
+        auto wall = [&](Real x0, Real v0, Real x1, Real v1, Real doorAt) {
+            RoomWall w; w.a = P(x0, v0); w.b = P(x1, v1); w.doorAt = doorAt;
+            rp.walls.push_back(w);
+        };
+        // THE LOBBY: the whole entrance band, open to the doors and the lifts.
+        if (storey == 0 && e == entrance) {
+            room(b.s0, b.s1, vIn, vFront, RoomKind::Waiting);
+            continue;
+        }
+        // THE WINDOWS: wards upstairs, examination rooms on the ground, off the corridor behind them.
+        const Real rd = std::min(storey == 0 ? kExamD : kWardD, b.D);
+        const Real v0 = vIn + rd + kWardCorr;
+        const bool strip = vFront - v0 >= kStripMin;
+        Real c0 = 1e9, c1 = -1e9;   // the core's span along the band
+        for (const Vec2& c : coreR) { const Real t = dot(c - b.a, b.d); c0 = std::min(c0, t); c1 = std::max(c1, t); }
+        if (storey > 0 && e == front && !strip) {
+            // NO STRIP for the station: it takes the ward row's middle instead, facing the lifts across the corridor
+            // (its side 0 the corridor's, so the nurses sit with their backs to the window).
+            const Real m = std::clamp((c0 + c1) * 0.5, b.s0 + 3.0 + kWardW, b.s1 - 3.0 - kWardW);
+            if (m - 3.0 - b.s0 >= kWardW * 0.6) officeRowAt(rp, params, e, b.W, P, b.s0, m - 3.0, inset, rd, RoomKind::Ward, kWardW);
+            if (b.s1 - m - 3.0 >= kWardW * 0.6) officeRowAt(rp, params, e, b.W, P, m + 3.0, b.s1, inset, rd, RoomKind::Ward, kWardW);
+            Room st; st.edge = e; st.kind = RoomKind::NurseStation;
+            st.rect = {P(m + 3.0, vIn + rd), P(m - 3.0, vIn + rd), P(m - 3.0, vIn), P(m + 3.0, vIn)};
+            rp.rooms.push_back(st);
+            continue;
+        }
+        officeRowAt(rp, params, e, b.W, P, b.s0, b.s1, inset, rd, storey == 0 ? RoomKind::Exam : RoomKind::Ward,
+                    storey == 0 ? kExamW : kWardW);
+        // THE SUPPORT STRIP behind the corridor, packed out from the band's middle (the nurses' station centred on
+        // the core's doors), its ends left open.
+        if (!strip) continue;
+        struct Item { RoomKind kind; Real w; };
+        std::vector<Item> items;
+        if (storey == 0) items = {{RoomKind::Bath, 3.6}, {RoomKind::Closet, 3.0}};
+        else if (e == front) items = {{RoomKind::Closet, 3.0}, {RoomKind::NurseStation, 6.0}, {RoomKind::Closet, 3.0}};
+        else if (e == opposite) items = {{RoomKind::Kitchenette, 5.0}, {RoomKind::Bath, 3.6}, {RoomKind::Closet, 3.0}};
+        else items = {{RoomKind::Bath, 3.6}, {RoomKind::Closet, 3.0}};
+        const Real lo = b.s0 + 2.4, hi = b.s1 - 2.4;
+        Real mid = (lo + hi) * 0.5;
+        if (e == front && storey > 0) mid = (c0 + c1) * 0.5;
+        auto total = [&]() { Real t = 0; for (const Item& it : items) t += it.w; return t; };
+        while (!items.empty() && total() > hi - lo) {
+            std::size_t drop = items.size() - 1;   // the last that is not the nurses' station
+            while (drop > 0 && items[drop].kind == RoomKind::NurseStation) --drop;
+            items.erase(items.begin() + static_cast<std::ptrdiff_t>(drop));
+        }
+        if (items.empty()) continue;
+        Real x = std::clamp(mid - total() * 0.5, lo, hi - total());
+        const Real x0run = x;
+        for (const Item& it : items) {
+            const Real x0 = x, x1 = x + it.w;
+            room(x0, x1, v0, vFront, it.kind);
+            // a station is a counter open to the corridor; every other room a door onto the ward corridor
+            if (it.kind != RoomKind::NurseStation) wall(x0, v0, x1, v0, 0.5);
+            x = x1;
+        }
+        // the run's partitions (between rooms, and at its ends) and its back against the core's corridor
+        for (std::size_t i = 0; i <= items.size(); ++i) {
+            Real xi = x0run;
+            for (std::size_t j = 0; j < i; ++j) xi += items[j].w;
+            wall(xi, v0, xi, vFront, -1);
+        }
+        wall(x0run, vFront, x, vFront, -1);
+    }
+    return rp;
+}
+
 PlateTopology plateTopologyFor(const Poly2& plan, const BuildingParams& params, const CorePlan& core) {
     // A RESIDENTIAL tower with a core and a rectangular plate is APARTMENTS, glass or masonry; offices keep the ring.
     if (core.valid && params.residential && plan.size() == 4) return PlateTopology::Apartments;
@@ -1726,7 +1875,18 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     const OBB2 plateBox = orientedBoundingBox(planIn);
     const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
     const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
-    if ((params.campus || params.civicRooms) && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
+    if (params.civicRooms == 6 && core.valid && officePlanFits(planIn)) {
+        // THE HOSPITAL: wards upstairs, the lobby and examination rooms on the ground. Walked from the lifts (and on
+        // the ground from the doors too); a floor it cannot lay falls through to the ring.
+        RoomPlan hp = hospitalPlan(planIn, params, core, inset, storey, entranceEdge);
+        hp.finish = interiorFinishFor(params);
+        const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
+        if (!hp.rooms.empty() && floorIsWalkable(hp, planIn, entry)) return hp;
+        if (std::getenv("RT_HOSPITAL_DEBUG"))
+            std::fprintf(stderr, "[hospital] storey %d: %zu rooms -- not walkable, falls through\n", storey, hp.rooms.size());
+    }
+    if ((params.campus || (params.civicRooms && params.civicRooms != 6)) && !core.valid && planIn.size() >= 4 &&
+        stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
         RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey, stairFoot, entranceEdge);
@@ -1788,6 +1948,8 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
                       ? housePlan(planIn, params, stairWell, entranceEdge, inset, storey)
                       : ringPlan(planIn, params, core, blankEdge, inset, storey);
     rp.finish = interiorFinishFor(params);
+    if (params.civicRooms == 6)   // a hospital that fell through to the ring: its rooms are still wards
+        for (Room& r : rp.rooms) if (r.kind == RoomKind::Flat) r.kind = RoomKind::Ward;
     if (topo != PlateTopology::WholeFloor && rp.rooms.empty()) {
         // too shallow for rooms round the core: a row of desks at the windows, or the residents' lounge
         RoomPlan dr = deskRowPlan(planIn, params, core, inset, storey,

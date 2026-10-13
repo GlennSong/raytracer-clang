@@ -1215,6 +1215,53 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Hard, {-0.4, 1.02, 0.41}, {0.58, 0.32, 0.022}, 0.004, kBlack, 1);         // its screen, facing -z
             break;
         }
+        case Piece::HospitalBed: {
+            // A HOSPITAL BED (Glenn, 2026-10-13: "do hospitals"): a steel frame on four castors, the mattress at 0.6 m
+            // with its head section raised, a sheet and a pillow, a plastic head- and footboard, folding side rails.
+            // The head at z = 0, against the wall.
+            k.out.size = {1.00, 1.00, 2.20};
+            for (double x : {-0.40, 0.40})
+                for (double z : {0.15, 2.05}) {
+                    k.rod(F::Metal, {x, 0.10, z}, {x, 0.42, z}, 0.025, kSteel, 8);
+                    k.turned(F::Hard, {x, 0, z}, {{0.0, 0.0}, {0.05, 0.0}, {0.05, 0.10}, {0.0, 0.10}}, kBlack, 1.0, 10);   // castor
+                }
+            k.box(F::Metal, {0, 0.44, 1.10}, {0.90, 0.06, 2.00}, 0.01, kSteel, 1);              // the frame
+            k.box(F::Fabric, {0, 0.55, 1.35}, {0.88, 0.16, 1.40}, 0.04, kLinen);                // the mattress, flat part
+            k.boxTilted(F::Fabric, {0, 0.68, 0.40}, {0.88, 0.14, 0.72}, 0.04, 0.45, kLinen);   // its raised head section
+            k.box(F::Fabric, {0, 0.84, 0.24}, {0.60, 0.10, 0.32}, 0.04, kLinen * 1.03);         // the pillow
+            k.box(F::Fabric, {0, 0.64, 1.50}, {0.92, 0.04, 1.10}, 0.02, fabric * 0.9 + Vec3(0.1, 0.1, 0.1));   // blanket
+            k.box(F::Hard, {0, 0.66, 0.03}, {0.98, 0.62, 0.05}, 0.02, kWhite);                   // headboard
+            k.box(F::Hard, {0, 0.58, 2.17}, {0.98, 0.42, 0.05}, 0.02, kWhite);                   // footboard
+            for (double x : {-0.47, 0.47}) {
+                k.box(F::Metal, {x, 0.78, 0.75}, {0.03, 0.03, 0.80}, 0.0, kChrome, 1);         // the side rails
+                k.box(F::Metal, {x, 0.62, 0.75}, {0.02, 0.32, 0.02}, 0.0, kChrome, 1);
+            }
+            break;
+        }
+        case Piece::ExamCouch: {
+            // An EXAMINATION COUCH: a padded top on a steel base, the head end raised, a paper roll across it.
+            k.out.size = {0.70, 0.90, 1.90};
+            k.box(F::Metal, {0, 0.30, 0.95}, {0.50, 0.60, 1.40}, 0.01, kSteel * 0.85, 1);
+            k.box(F::Fabric, {0, 0.66, 1.20}, {0.68, 0.10, 1.36}, 0.03, Vec3(0.30, 0.45, 0.55));
+            k.boxTilted(F::Fabric, {0, 0.76, 0.30}, {0.68, 0.10, 0.56}, 0.03, 0.35, Vec3(0.30, 0.45, 0.55));
+            k.box(F::Fabric, {0, 0.72, 1.20}, {0.50, 0.01, 1.30}, 0.0, kLinen, 1);              // the paper
+            break;
+        }
+        case Piece::WaitingSeats: {
+            // WAITING SEATS: four moulded seats on one steel beam, two legs.
+            k.out.size = {2.20, 0.82, 0.62};
+            k.box(F::Metal, {0, 0.38, 0.32}, {2.10, 0.05, 0.06}, 0.0, kSteel, 1);               // the beam
+            for (double x : {-0.85, 0.85}) {
+                k.box(F::Metal, {x, 0.19, 0.32}, {0.05, 0.38, 0.05}, 0.0, kSteel, 1);
+                k.box(F::Metal, {x, 0.01, 0.32}, {0.06, 0.02, 0.56}, 0.0, kSteel, 1);           // the foot
+            }
+            for (int i = 0; i < 4; ++i) {
+                const double x = -0.79 + i * 0.527;
+                k.box(F::Hard, {x, 0.45, 0.34}, {0.48, 0.05, 0.46}, 0.02, fabric * 0.8);        // the seat
+                k.boxTilted(F::Hard, {x, 0.66, 0.08}, {0.48, 0.40, 0.04}, 0.02, -0.12, fabric * 0.8);   // its back
+            }
+            break;
+        }
         case Piece::Lectern: {
             k.out.size = {0.70, 1.15, 0.55};
             k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
@@ -1326,7 +1373,7 @@ const char* const kPieceNames[kPieceCount] = {
     "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug",
     "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step", "bleacher",
     "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
-    "desk_screen", "reception_desk"};
+    "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats"};
 
 }  // namespace
 

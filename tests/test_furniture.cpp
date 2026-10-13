@@ -1541,3 +1541,55 @@ TEST_CASE(chamfered_office_floors_take_the_office_floor) {
     CHECK(officeFloor * 100 >= chamfered * 90);
     CHECK(outside == 0);
 }
+
+// THE HOSPITAL (Glenn, 2026-10-13: "Do hospitals. I didn't even know we had them"): a city's one hospital was a ring of
+// studio flats (a double bed, two nightstands, a sofa in each room) over an empty ground floor. Its floors are
+// hospitalPlan's now: upstairs, wards along the windows with hospital beds, a nurses' station on every ward floor, a
+// staff room, restrooms and stores; on the ground, the lobby (an information desk, waiting seats) and examination rooms.
+TEST_CASE(the_hospital_has_wards_a_lobby_and_examination_rooms) {
+    UseShippedFurniture shipped;
+    const Real sizes[][2] = {{48, 34}, {40, 28}, {36, 24}};
+    std::array<int, kPieceCount> n{};
+    int hospitals = 0, wardFloors = 0, stations = 0, lobbies = 0, blocked = 0;
+    for (uint32_t seed = 1; seed <= 4; ++seed)
+        for (const auto& sz : sizes) {
+            const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+            BuildingRecipe rc;
+            if (!architectRecipeByName("hospital", seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+            BuildingParams p = rc.params;
+            p.openDoorway = true;
+            const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+            const std::size_t ee = entranceEdgeFor(plan, p);
+            const CorePlan core = coreFor(plan, p, ee);
+            if (!core.valid) continue;
+            ++hospitals;
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, p.floors + 1);
+            for (const PlacedPiece& pp : in.furniture) ++n[pp.piece];
+            for (int k = 0; k < static_cast<int>(sps.size()); ++k) {
+                if (mechanicalStorey(p, k)) continue;
+                const RoomPlan rp = roomPlan(sps[static_cast<std::size_t>(k)].plan, p, core, static_cast<std::size_t>(-1),
+                                             std::max(p.wallThickness, Real(0.55)), k, Poly2{}, ee);
+                bool station = false, lobby = false, ward = false;
+                for (const Room& r : rp.rooms) {
+                    station = station || r.kind == RoomKind::NurseStation;
+                    lobby = lobby || r.kind == RoomKind::Waiting;
+                    ward = ward || r.kind == RoomKind::Ward;
+                }
+                if (k == 0) lobbies += lobby;
+                else { wardFloors += ward; stations += station; }
+                if (!floorIsWalkable(rp, sps[static_cast<std::size_t>(k)].plan, core.frame.toWorld({core.length * 0.5, -1.1}))) ++blocked;
+            }
+        }
+    auto c = [&](Piece pc) { return n[static_cast<std::size_t>(pc)]; };
+    std::printf("    [hospital] %d hospitals: %d lobbies, %d ward floors, %d nurses' stations, %d floors not walkable; "
+                "hospital beds %d, beds %d, sofas %d, exam couches %d, waiting seats %d, toilets %d, bathtubs %d\n",
+                hospitals, lobbies, wardFloors, stations, blocked, c(Piece::HospitalBed), c(Piece::Bed), c(Piece::Sofa),
+                c(Piece::ExamCouch), c(Piece::WaitingSeats), c(Piece::Toilet), c(Piece::Bathtub));
+    CHECK(hospitals >= 8);
+    CHECK(lobbies == hospitals);
+    CHECK(wardFloors > 0 && stations == wardFloors);
+    CHECK(blocked == 0);
+    CHECK(c(Piece::HospitalBed) > 300);
+    CHECK(c(Piece::Bed) == 0 && c(Piece::Sofa) == 0 && c(Piece::Bathtub) == 0);
+    CHECK(c(Piece::ExamCouch) > 50 && c(Piece::WaitingSeats) > 50 && c(Piece::Toilet) > 0);
+}
