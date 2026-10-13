@@ -1073,9 +1073,10 @@ static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, co
 //   RESIDENCE HALL (3)         two-bed DORM rooms (3.6 m), a shared bath every eighth, a lounge by the stair.
 static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
                            int storey, const Vec2& stairFoot, std::size_t entranceEdge) {
+    const int use = params.campus ? params.campus : params.civicRooms;   // the campus's halls, or a civic building's
     RoomPlan rp;
     rp.topology = PlateTopology::Apartments;
-    rp.office = params.campus != 3;
+    rp.office = use != 3;
     if (planIn.size() < 4 || well.size() < 3) return rp;
     const OBB2 ob = orientedBoundingBox(planIn);
     const int la = ob.longAxis();
@@ -1220,16 +1221,20 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
             // RESTROOMS beside the stair: a teaching hall's 3.6 m room carved off the run's end by the stair hall --
             // never a whole room turned into one (it took a 15 m lecture hall: a toilet and a vanity in a hall)
             const bool byStair = stairHere && runs.size() == 2;
-            const bool restroom = byStair && ri == 0 && params.campus == 1 && r1 - r0 >= 3.6 + 6.5;
+            const bool restroom = byStair && ri == 0 && (use == 1 || use == 4 || use == 5) && r1 - r0 >= 3.6 + 6.5;
             const Real len = r1 - r0 - (restroom ? 3.6 : 0.0);
             auto fill = [&](Real target, Real minW, RoomKind kind) {
                 int n = std::max(1, static_cast<int>(len / target));
                 while (n > 1 && len / n < minW) --n;
                 for (int k = 0; k < n; ++k) want.push_back({len / n, kind});
             };
-            switch (params.campus) {
+            switch (use) {
+                case 4:   // a museum: galleries, ~10 m a room, every floor
+                    fill(10.0, 6.0, RoomKind::Gallery);
+                    break;
                 case 1:   // teaching hall
-                    if (storey == 0 && !lectureDone && D >= 6.5 && len >= 10.5) {   // 6.5 deep: the stage and three tiers
+                case 5:   // a school: classrooms and labs, no lecture hall
+                    if (use == 1 && storey == 0 && !lectureDone && D >= 6.5 && len >= 10.5) {   // 6.5 deep: the stage and three tiers
                         fill(13.0 + 3.0 * rnd(), 10.0, RoomKind::Lecture);
                         lectureDone = true;
                     } else {
@@ -1256,7 +1261,7 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
             if (restroom) want.push_back({3.6, RoomKind::Bath});
             if (std::getenv("RT_CAMPUS_DEBUG") && storey == 0)
                 std::fprintf(stderr, "[campus plan] campus %d band %zu run %zu: D %.1f len %.1f stair %d -> %zu rooms, first kind %d\n",
-                             params.campus, bi, ri, D, len, stairHere ? 1 : 0, want.size(), want.empty() ? -1 : static_cast<int>(want[0].kind));
+                             use, bi, ri, D, len, stairHere ? 1 : 0, want.size(), want.empty() ? -1 : static_cast<int>(want[0].kind));
             roomNo += static_cast<int>(want.size());
             Real x = r0;
             for (std::size_t k = 0; k < want.size(); ++k) {
@@ -1677,7 +1682,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     const OBB2 plateBox = orientedBoundingBox(planIn);
     const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
     const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
-    if (params.campus && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
+    if ((params.campus || params.civicRooms) && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
         RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey, stairFoot, entranceEdge);

@@ -60,8 +60,9 @@ enum class PlateTopology : uint8_t {
 // Lounge: the same strip in a residential tower: the residents' lounge, sofas along the glass; on an office floor, its
 // breakout space against the corridor.
 // Reception: an office floor's front desk, facing the lifts across the corridor, a screen behind it.
+// Gallery: a museum's room: pictures round its walls, display cases down the middle, a bench.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
-                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception };
+                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception, Gallery };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

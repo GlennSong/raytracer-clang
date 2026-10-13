@@ -164,6 +164,16 @@ bool officeUseFor(const std::string& recipe, const std::string& placeType, bool 
     return placeType == "office" || placeType == "civic" || placeType == "shop" || placeType == "park";
 }
 
+uint8_t civicRoomsFor(const std::string& recipe) {
+    static const bool off = std::getenv("RT_NO_CIVIC_ROOMS") != nullptr;   // A/B: the ring of studios as before
+    if (off) return 0;
+    if (recipe == "university") return 1;
+    if (recipe == "library") return 2;
+    if (recipe == "museum") return 4;
+    if (recipe == "school") return 5;
+    return 0;
+}
+
 namespace {
 
 void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
@@ -173,6 +183,7 @@ void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
     out.params.residential = out.placeType == "home";
     for (const char* n : kFlatsOverShops) if (out.name == n) out.params.residential = true;
     out.params.officeUse = officeUseFor(out.name, out.placeType, out.params.residential);
+    out.params.civicRooms = civicRoomsFor(out.name);
     storeyHeightsByUse(out);
     capFloors(out.params, shortSide, slender);
     if (out.params.floors < 15) out.params.top = 0;   // a top is a tower's: the short ones keep the penthouse

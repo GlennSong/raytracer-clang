@@ -262,6 +262,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     // officeUse is runtime only (not in the lot cache): from the record's recipe and use
     BuildingParams params = r.params;
     params.officeUse = officeUseFor(r.recipe, r.type, params.residential);
+    params.civicRooms = civicRoomsFor(r.recipe);
     BuildingMesh bm = growInterior(r.plan, params, r.baseY, &collider, k0, k1);
     const double growMs = msSince(t0);
 

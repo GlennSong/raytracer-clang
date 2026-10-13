@@ -4929,7 +4929,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         RoomPlan rp = params.bigBox == 6 && ki <= 1 ? mallLevel(plan, params, ki).rp
                     : ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
                     : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
-                    : ki == 0 && !params.campus ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
+                    : ki == 0 && !params.campus && !params.civicRooms ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
                                              il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
                                              il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30))
                               : RoomPlan{};

@@ -1464,3 +1464,43 @@ TEST_CASE(workplaces_are_furnished_as_offices) {
     CHECK(c(Piece::ReceptionDesk) > 20);
     CHECK(hotelBeds > 100);
 }
+
+// CIVIC BUILDINGS HAVE THEIR OWN ROOMS (Glenn, 2026-10-13: "keep going"). Off the campus, a school, a library, a museum
+// and a university were rings of studio flats too -- a bed, two nightstands and a sofa in every room. They are
+// campusPlan's corridor floors now (BuildingParams::civicRooms): classrooms and labs (and the university's lecture
+// hall), the library's reading room and stacks, the museum's galleries (display cases, pictures, a bench); their bath
+// rooms are restrooms, toilets and basins, not a bathtub.
+TEST_CASE(civic_buildings_have_their_own_rooms) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"school", "library", "museum", "university"};
+    const Real sizes[][2] = {{36, 24}, {30, 20}, {48, 30}};
+    std::map<std::string, std::array<int, kPieceCount>> by;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 3; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.openDoorway = true;
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, p.floors + 1);
+                auto& n = by[rn];
+                for (const PlacedPiece& pp : in.furniture) ++n[pp.piece];
+            }
+    auto c = [&](const char* rn, Piece pc) { return by[rn][static_cast<std::size_t>(pc)]; };
+    for (const char* rn : recipes)
+        std::printf("    [civic] %-10s beds %d, nightstands %d, bathtubs %d; school desks %d, lab benches %d, lecture rows %d, "
+                    "reading tables %d, bookcases %d, display cases %d, pictures %d, toilets %d\n", rn, c(rn, Piece::Bed),
+                    c(rn, Piece::Nightstand), c(rn, Piece::Bathtub), c(rn, Piece::SchoolDesk), c(rn, Piece::LabBench),
+                    c(rn, Piece::LectureRow), c(rn, Piece::ReadingTable), c(rn, Piece::Bookcase), c(rn, Piece::DisplayCase),
+                    c(rn, Piece::Picture), c(rn, Piece::Toilet));
+    for (const char* rn : recipes) {
+        CHECK(c(rn, Piece::Bed) == 0);
+        CHECK(c(rn, Piece::Nightstand) == 0);
+        CHECK(c(rn, Piece::Bathtub) == 0);
+    }
+    CHECK(c("school", Piece::SchoolDesk) > 200 && c("school", Piece::LabBench) > 0);
+    CHECK(c("university", Piece::LectureRow) > 0 && c("university", Piece::SchoolDesk) > 200);
+    CHECK(c("library", Piece::Bookcase) > 100 && c("library", Piece::ReadingTable) > 20);
+    CHECK(c("museum", Piece::DisplayCase) > 50 && c("museum", Piece::Picture) > 50);
+}

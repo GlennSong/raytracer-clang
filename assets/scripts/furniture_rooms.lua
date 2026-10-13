@@ -1,7 +1,7 @@
 -- furniture_rooms.lua -- ROOM PROGRAMS (the furniture library, M3b; Glenn, 2026-10-03: "go ahead with the furniture
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
--- bath, desk_row, lounge, reception. Shops are still furnished in code, by their trade.
+-- bath (restroom outside a home), desk_row, lounge, reception, gallery. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -142,6 +142,18 @@ furniture_rooms = {
     { wall = { 0.9, 0.9 }, sides = { 3, 1 }, pick = { family = "decor", tags = { "plant" } } },
   },
 
+  gallery = {
+    -- a museum's room: pictures round the walls (never over a window), glass display cases down the middle, a bench
+    { grid = { 1.6, 0.7 }, from = 2.2, aisle = { 1.8, 2.0 }, pick = "display_case" },
+    { wall = { 1.8, 0.6 }, sides = { 2, 1, 3 }, clear = 1.0, pick = "bench" },
+    { hang = "picture", sides = { 1, 3, 2, 0 } },
+    { hang = "picture", sides = { 3, 1, 2, 0 } },
+    { hang = "picture", sides = { 2, 1, 3, 0 } },
+    { hang = "picture", sides = { 1, 3, 2, 0 } },
+    { hang = "picture", sides = { 3, 1, 2, 0 } },
+    { hang = "picture", sides = { 2, 0, 1, 3 } },
+  },
+
   meeting = {
     { wall = { 3.0, 2.4 }, sides = { 0, 2 }, pick = { family = "surface", tags = { "meeting" } } },
     { hang = "whiteboard", sides = { 1, 3 } },
@@ -160,6 +172,12 @@ furniture_rooms = {
 
   closet = {
     { wall = { 1.2, 0.5 }, sides = "long", tall = true, pick = { family = "storage", tags = { "closet" } } },
+  },
+
+  restroom = {
+    -- a bath room in a school, a museum, an office: a row of toilets down a long wall, basins across from them
+    { wall = { 0.9, 0.7 }, sides = "long", clear = 0.6, count = { per = 1.0, min = 2, max = 5 }, pick = "toilet" },
+    { wall = { 0.9, 0.5 }, sides = "opposite", clear = 0.6, count = { per = 1.2, min = 1, max = 3 }, pick = "vanity" },
   },
 
   bath = {

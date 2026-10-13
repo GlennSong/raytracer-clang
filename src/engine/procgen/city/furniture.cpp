@@ -363,6 +363,7 @@ const char* programFor(RoomKind kind) {
         case RoomKind::DeskRow: return "desk_row";
         case RoomKind::Lounge: return "lounge";
         case RoomKind::Reception: return "reception";
+        case RoomKind::Gallery: return "gallery";
         default: return "";
     }
 }
@@ -578,7 +579,9 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         const bool ring = rp.topology == PlateTopology::Ring;
         const std::vector<int> longFirst = F.f.W >= F.f.D ? std::vector<int>{0, 2, 1, 3} : std::vector<int>{1, 3, 0, 2};
         Placement p;
-        const RoomProgram* prog = FurnitureLibrary::global().program(programFor(room.kind));
+        // a bath room where people do not live (a school's, a museum's, an office's) is a restroom: toilets, basins
+        const bool restroom = room.kind == RoomKind::Bath && rp.office;
+        const RoomProgram* prog = FurnitureLibrary::global().program(restroom ? "restroom" : programFor(room.kind));
         if (prog) {
             ProgramRun run{F, FurnitureLibrary::global(), ring, longFirst, hb, hr};
             for (const FurnStep& st : prog->steps) run.run(st);
@@ -846,7 +849,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
             };
             const bool working = room.kind == RoomKind::Office || room.kind == RoomKind::OpenPlan || room.kind == RoomKind::DeskRow ||
                                  room.kind == RoomKind::Meeting || room.kind == RoomKind::Kitchenette ||
-                                 room.kind == RoomKind::Reception ||
+                                 room.kind == RoomKind::Reception || room.kind == RoomKind::Gallery ||
                                  room.kind == RoomKind::Shop;
             // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
             const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;

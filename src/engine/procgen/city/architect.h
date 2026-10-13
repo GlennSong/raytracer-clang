@@ -174,6 +174,8 @@ bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness
 // that is not a home, and not one with rooms of its own kind -- a hotel, a hospital, a school, a library, a museum, a
 // university, a church.
 bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential);
+// The civic building's own rooms (BuildingParams::civicRooms): university 1, library 2, museum 4, school 5, else 0.
+uint8_t civicRoomsFor(const std::string& recipe);
 
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no

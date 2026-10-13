@@ -9709,3 +9709,25 @@ Tests: `workplaces_are_furnished_as_offices` (every recipe with officeUse, 3 pla
 beds 7690 -> 0, desks 4595 -> 16775, meeting tables 142 -> 1024, reception desks 32 -> 213, the hotel keeps its 592
 beds. Rooms cover ~92% of a cored masonry office floor (was ~73%). Window rule (ADR-0160) holds: 83321 pieces on office
 floors, none tall before glass.
+
+## ADR-0163 — Schools, libraries, museums and universities have their own rooms; restrooms
+
+Glenn, 2026-10-13: "Yeah keep going" (after ADR-0162 left them as studio rings).
+
+Off the campus, a school, a library, a museum and a university were rings of studio flats like the workplaces were:
+1015 beds across 36 of them in the test spread. They are campusPlan's corridor floors now, the campus field's layouts
+reached through a runtime field like officeUse:
+
+- **`BuildingParams::civicRooms`**, RUNTIME ONLY (architect `civicRoomsFor`, set again from the building record by the
+  interior system): university 1 (the teaching hall: lecture hall, classrooms, labs), library 2 (reading room, stacks),
+  museum 4, school 5 (classrooms and labs, no lecture hall). `RT_NO_CIVIC_ROOMS=1` is the A/B switch. Their ground
+  floor is their own rooms, not shopfronts.
+- **GALLERY** (new RoomKind, program `gallery`): ~10 m rooms off the corridor, display cases down the middle, a bench,
+  six pictures round the walls (never over a window, ADR-0160).
+- **RESTROOMS**: a bath room where nobody lives (`RoomPlan::office`: a school, museum, office) runs the `restroom`
+  program -- a row of toilets down a long wall, basins across from them -- instead of the home bath's tub. Campus
+  teaching halls had a bathtub in their restroom since the campus landed.
+
+No re-bake. Test `civic_buildings_have_their_own_rooms`: beds 1015 -> 0, no bathtubs; schools 6229 school desks and
+420 lab benches, the university 159 lecture rows, the library 8514 bookcases and 420 reading tables, the museum 1949
+display cases and 960 pictures.
