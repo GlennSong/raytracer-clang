@@ -1185,6 +1185,21 @@ FurniturePiece build(Piece p, uint32_t variant) {
                          kPorcelain, 1.0, 16);
             break;
         }
+        case Piece::DeskScreen: {
+            // A DESK SCREEN (Glenn, 2026-10-13: "no office partitions in the office?"): a fabric panel between two desks
+            // in a row, running out from the wall (+z) past the desk and the chair, on two steel feet. 1.12 m tall --
+            // desk height and a hand's span over it, so it stands under a window too (furniture.cpp's window rule).
+            k.out.size = {0.05, 1.12, 1.30};
+            k.out.colliderH = 1.12;
+            const Vec3 panel = fabric * 0.6 + Vec3(0.18, 0.18, 0.18);
+            k.box(F::Fabric, {0, 0.61, 0.65}, {0.04, 1.0, 1.26}, 0.012, panel);
+            k.box(F::Metal, {0, 1.115, 0.65}, {0.05, 0.01, 1.28}, 0.0, kSteel, 1);              // the cap rail
+            for (double z : {0.12, 1.18}) {
+                k.box(F::Metal, {0, 0.06, z}, {0.03, 0.12, 0.03}, 0.0, kSteel, 1);              // a leg
+                k.box(F::Metal, {0, 0.008, z}, {0.05, 0.016, 0.24}, 0.0, kSteel * 0.85, 1);     // its foot
+            }
+            break;
+        }
         case Piece::Lectern: {
             k.out.size = {0.70, 1.15, 0.55};
             k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
@@ -1295,7 +1310,8 @@ const char* const kPieceNames[kPieceCount] = {
     "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair", "ceiling_light",
     "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug",
     "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step", "bleacher",
-    "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass"};
+    "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
+    "desk_screen"};
 
 }  // namespace
 

@@ -100,6 +100,7 @@ furniture_rooms = {
       -- a zone too shallow for either: rows of desks at the glass
       fallback = { grid = { 1.6, 1.6 }, from = 0.15, aisle = { 0.2, 1.2 },
         set = {
+          { pick = "desk_screen", x = 0.03 },
           { pick = { family = "surface", tags = { "office" } }, x = 0.8 },
           { pick = "monitor", x = 0.8, z = 0.12, y = 0.75 },
           { pick = office_kind({ "office" }), x = 0.8, z = 1.55, faces = "wall", fit = { 0.7, 0.7 } },
@@ -108,9 +109,10 @@ furniture_rooms = {
 
   desk_row = {
     -- an office floor too shallow for rooms (a setback tier round its base's core): a desk at every window, the chair
-    -- on the room side facing out, the walk to the core behind
+    -- on the room side facing out, the walk to the core behind; a low screen between each desk and the next
     { grid = { 1.6, 1.6 }, from = 0.15, aisle = { 0.2, 9.0 },
       set = {
+        { pick = "desk_screen", x = 0.03 },
         { pick = { family = "surface", tags = { "office" } }, x = 0.8 },
         { pick = "monitor", x = 0.8, z = 0.12, y = 0.75 },
         { pick = office_kind({ "office" }), x = 0.8, z = 1.55, faces = "wall", fit = { 0.7, 0.7 } },

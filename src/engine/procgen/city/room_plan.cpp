@@ -180,15 +180,71 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
     return rp;
 }
 
+// PRIVATE OFFICES ALONG THE GLASS (Glenn, 2026-10-13: "no office partitions in the office?"). A desk-row strip deep
+// enough for an office AND the corridor ring behind it is a row of offices instead of open desks: each about two
+// curtain bays wide (a partition on a mullion), fronted in glass with its door onto the corridor, drywall between.
+// `T` is the strip's depth in from the wall's inner face, `P` maps (along the edge, in from the wall line) to the
+// plan, [x0, x1] the span; a span end short of the exterior gets an end wall. False when too shallow: nothing added.
+namespace {
+constexpr Real kStripOfficeMin = 2.8;   // a desk, its chair, the door swing: about 9 m^2 at two bays wide
+constexpr Real kStripOfficeMax = 4.0;
+constexpr Real kStripOfficeW = 3.2;
+}  // namespace
+static bool officeRow(RoomPlan& rp, const BuildingParams& params, std::size_t e, Real W,
+                      const std::function<Vec2(Real, Real)>& P, Real x0, Real x1, Real inset, Real T) {
+    const Real od = std::min(T - kCorridorRing, kStripOfficeMax);
+    if (od < kStripOfficeMin || x1 - x0 < 2.4) return false;
+    std::vector<Real> cuts{x0};
+    Real last = x0;
+    for (Real xb : bayBoundaries(W, params)) {
+        if (xb <= x0 + 1.0 || xb >= x1 - 1.0) continue;
+        if (xb - last >= kStripOfficeW * 0.85) { cuts.push_back(xb); last = xb; }
+    }
+    if (x1 - last < kStripOfficeW * 0.6 && cuts.size() > 1) cuts.pop_back();   // a sliver joins its neighbour
+    cuts.push_back(x1);
+    const Real vIn = inset, vF = inset + od;
+    for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
+        const Real a = cuts[i], b = cuts[i + 1];
+        Room r;
+        r.edge = e;
+        r.kind = RoomKind::Office;
+        r.rect = {P(a, vIn), P(b, vIn), P(b, vF), P(a, vF)};
+        rp.rooms.push_back(r);
+        RoomWall front;
+        front.a = P(a, vF);
+        front.b = P(b, vF);
+        front.doorAt = (rp.rooms.size() % 2) ? 0.3 : 0.7;
+        front.glass = params.curtainWall;
+        rp.walls.push_back(front);
+        if (i + 2 < cuts.size()) {
+            RoomWall side;
+            side.a = P(b, vIn);
+            side.b = P(b, vF);
+            side.accent = true;
+            rp.walls.push_back(side);
+        }
+    }
+    for (Real x : {x0, x1})
+        if (x > inset + 0.05 && x < W - inset - 0.05) {
+            RoomWall w;
+            w.a = P(x, vIn);
+            w.b = P(x, vF);
+            rp.walls.push_back(w);
+        }
+    return true;
+}
+
 // THE DESK ROW (Glenn, 2026-10-13: "some floors in skyscrapers are still empty"): a setback tier keeps the core it
 // was sized for at the base, so the floor between the core and the glass narrows -- a 15.9 m art deco crown round a
 // 10.5 x 7.2 m core leaves 2-4 m a side, too shallow for the ring's rooms (kMinDepth past a 2.2 m corridor) or the
 // office floor's 4 m bands, and the floor grew empty. Such a floor is an open office: along each edge with the depth
-// for it, a row of desks at the windows, its chairs facing out, the walk to the core behind them. No partitions; the
+// for it, a row of desks at the windows, its chairs facing out, the walk to the core behind them, low screens between
+// the desks -- or, where the strip is deep enough for a room and the corridor, private offices (officeRow). The
 // corners stay open (each strip stops short of its neighbours' -- enough at any corner of 90 degrees or more, so a
 // chamfered plate is fine too). A
 // residential tower's such floor is its residents' LOUNGE: sofas along the glass instead (`kind` Lounge).
-static RoomPlan deskRowPlan(const Poly2& planIn, const CorePlan& core, Real inset, int storey, RoomKind kind) {
+static RoomPlan deskRowPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
+                            int storey, RoomKind kind) {
     // the window gap, a desk and its chair (a sofa and its table), the walk behind: desk_row's and lounge's grids
     const Real kRowMin = kind == RoomKind::Lounge ? 2.85 : kDeskRowMin;
     constexpr Real kRowMax = kDeskRowMax;
@@ -217,9 +273,18 @@ static RoomPlan deskRowPlan(const Poly2& planIn, const CorePlan& core, Real inse
         if (!s.row) continue;
         const Strip& prev = S[(e + n - 1) % n];
         const Strip& next = S[(e + 1) % n];
-        const Real x0 = inset + (prev.row ? prev.depth : 0), x1 = s.W - inset - (next.row ? next.depth : 0);
+        Real x0 = inset + (prev.row ? prev.depth : 0), x1 = s.W - inset - (next.row ? next.depth : 0);
         if (x1 - x0 < 2.0) continue;
         auto P = [&](Real x, Real in) { return s.a + s.d * x - s.nOut * in; };
+        if (kind == RoomKind::DeskRow) {
+            // Offices where the strip is deep enough. An even strip's row runs on into a square corner (the odd
+            // neighbour's strip already stops short of this one's whole depth), so the corner is an office too.
+            const std::size_t pe = (e + n - 1) % n, ne = (e + 1) % n;
+            const bool squareStart = e % 2 == 0 && pe % 2 == 1 && std::fabs(dot(prev.d, s.d)) < 0.1;
+            const bool squareEnd = e % 2 == 0 && ne % 2 == 1 && std::fabs(dot(next.d, s.d)) < 0.1;
+            if (officeRow(rp, params, e, s.W, P, squareStart ? inset : x0, squareEnd ? s.W - inset : x1, inset, s.depth))
+                continue;
+        }
         Room r;
         r.edge = e;
         r.kind = kind;
@@ -691,6 +756,220 @@ static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params,
     return rp;
 }
 
+// FLATS ROUND THE CORE (Glenn, 2026-10-13: "if you're showing me apartments then we need more walls for the separate
+// apartments and then separate rooms"). A residential crown too slim for apartmentPlan's corridor and its 5 m bands --
+// a 14 m pencil crown leaves 2-4 m between the glass and the smallest core there is -- used to be the residents'
+// lounge. The way a slim tower does it: no corridor. The lifts and the stairs open onto a LOBBY (the strip in front of
+// the core's doors), and two flats wrap the rest of the core, each through its own door off the lobby:
+//
+//     +-------+--------------------+-------+       each flat is a CHAIN of rooms down the strip it wraps: the
+//     | bath  |  bed   ||   bed    | bath  |       column beside the core (corners included), then its half of
+//     |-------+--------||----------+-------|       the strip behind -- hall, kitchen and living room open into
+//     |  liv  |                    |  liv  |       each other, then a door to the bedroom, the bath en suite
+//     |  ing  |       CORE         |  ing  |       at the end; partitions run ACROSS the strip, so a 2.5 m
+//     |-------|                    |-------|       strip still makes a room a strip wide. Where the strip
+//     |kitchen|                    |kitchen|       behind is too short for the bedroom and its bath, the
+//     |hall  =|      L O B B Y     |=  hall|       bedroom ends the column and the strip behind is its dressing
+//     +-------+--------------------+-------+       room and bath. Too short for a living room: a studio.
+//
+// Rectangular plates square to the core only; empty when it does not fit, and roomPlan falls back as before.
+static RoomPlan wrapFlatsPlan(const Poly2& planIn, const CorePlan& core, Real inset, int storey) {
+    constexpr Real kMinStrip = 2.4, kPassMin = 1.3, kHallLen = 2.0, kKitchenLen = 2.4, kLivingMin = 3.0, kBedLen = 3.0, kBedMax = 4.0,
+                   kBathLen = 1.8, kClosetMin = 1.2, kStudioMin = 3.4;
+    RoomPlan rp;
+    rp.topology = PlateTopology::Apartments;
+    rp.office = false;
+    if (storey < 1 || !core.valid || planIn.size() != 4) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    struct Band { Vec2 a, d, nOut; Real W = 0, T = 0, t0 = 0, t1 = 0; };
+    Band B[4];
+    int front = -1, back = -1, side[2] = {-1, -1};   // side 0: the core's u = 0 end, side 1: its u = length end
+    for (int e = 0; e < 4; ++e) {
+        Band& b = B[e];
+        b.a = plan[static_cast<std::size_t>(e)];
+        const Vec2 dv = plan[static_cast<std::size_t>((e + 1) % 4)] - b.a;
+        b.W = dv.length();
+        if (b.W < 1e-6) return rp;
+        b.d = dv * (1.0 / b.W);
+        b.nOut = Vec2(b.d.y, -b.d.x);
+        Real toCore = 1e9;
+        b.t0 = 1e9; b.t1 = -1e9;
+        for (const Vec2& c : core.rect()) {
+            toCore = std::min(toCore, dot(b.a - c, b.nOut));
+            const Real t = dot(c - b.a, b.d);
+            b.t0 = std::min(b.t0, t); b.t1 = std::max(b.t1, t);
+        }
+        b.T = toCore - inset;
+        if (dot(b.nOut, core.frame.v) < -0.99) front = e;
+        else if (dot(b.nOut, core.frame.v) > 0.99) back = e;
+        else if (dot(b.nOut, core.frame.u) < -0.99) side[0] = e;
+        else if (dot(b.nOut, core.frame.u) > 0.99) side[1] = e;
+        else return rp;   // not square to the core
+    }
+    if (front < 0 || back < 0 || side[0] < 0 || side[1] < 0) return rp;
+    if (B[front].T < kRoomDoorW + 0.5) return rp;   // a lobby to stand in
+    const bool armed = B[back].T >= kMinStrip;      // the strip behind the core is part of the flats
+
+    struct Cell { Real s0, s1; RoomKind kind; bool arm; };
+    std::vector<Cell> flats[2];
+    for (int f = 0; f < 2; ++f) {
+        const Band& col = B[side[f]];
+        // A column too narrow for rooms is still a passage: the flat's own entrance hall, to its rooms behind.
+        const bool passage = col.T < kMinStrip;
+        if (passage && (col.T < kPassMin || !armed)) return RoomPlan{};
+        // The column runs from the front corner to the back: s along it, x = xs + dir * s.
+        const Vec2 frontMid = (B[front].a + B[front].a + B[front].d * B[front].W) * 0.5;
+        const int dir = dot(frontMid - col.a, col.d) < col.W * 0.5 ? 1 : -1;
+        const Real xs = dir > 0 ? inset : col.W - inset;
+        const Real S1 = col.W - 2 * inset;
+        const Real sc0 = (dir > 0 ? col.t0 : col.t1) - xs, sc1 = (dir > 0 ? col.t1 : col.t0) - xs;
+        const Real c0 = std::fabs(sc0), c1 = std::fabs(sc1);   // the core's front and back faces along the column
+        // Its half of the strip behind: from the column's inner face to the party wall at the middle.
+        const Real S2 = armed ? (B[back].t1 - B[back].t0) * 0.5 : 0.0;
+        // From the far end back: the bath, then the bedroom (in the strip behind if it fits beside the bath, else at
+        // the column's end with a dressing room behind it), then the living room, the kitchen and the hall.
+        std::vector<Cell>& cells = flats[f];
+        std::vector<Cell> arm, colCells;
+        if (passage) {
+            // The hall up the column to the core's back face, a galley kitchen in the corner behind; the strip behind
+            // holds the living room, the bedroom and the bath, or a studio and its bath.
+            const bool galley = S1 - c1 >= 1.8;
+            cells.push_back({0, galley ? c1 : S1, RoomKind::Hall, false});
+            if (galley) cells.push_back({c1, S1, RoomKind::Kitchen, false});
+            const Real kitIn = galley ? 0 : kKitchenLen;
+            if (S2 - kitIn - kBathLen - kBedLen >= kLivingMin) {
+                const Real bed = std::min(S2 - kitIn - kBathLen - kLivingMin, kBedMax);
+                if (!galley) cells.push_back({0, kitIn, RoomKind::Kitchen, true});
+                cells.push_back({kitIn, S2 - kBathLen - bed, RoomKind::Living, true});
+                cells.push_back({S2 - kBathLen - bed, S2 - kBathLen, RoomKind::Bed, true});
+            } else if (S2 - kitIn - kBathLen >= kStudioMin) {
+                if (!galley) cells.push_back({0, kitIn, RoomKind::Kitchen, true});
+                cells.push_back({kitIn, S2 - kBathLen, RoomKind::Flat, true});
+            } else {
+                return RoomPlan{};
+            }
+            cells.push_back({S2 - kBathLen, S2, RoomKind::Bath, true});
+        }
+        Real bedFrom = S1;   // where the bedroom starts in the column (s), or S1 when it is in the arm
+        if (passage) {
+        } else if (S2 >= kBathLen + kBedLen) {
+            Real bed = std::min(S2 - kBathLen, kBedMax);
+            if (S2 - kBathLen - bed < 2.0) bed = S2 - kBathLen;   // a sliver of living room joins the bedroom
+            if (S2 - kBathLen - bed > 0.05) arm.push_back({0, S2 - kBathLen - bed, RoomKind::Living, true});
+            arm.push_back({S2 - kBathLen - bed, S2 - kBathLen, RoomKind::Bed, true});
+            arm.push_back({S2 - kBathLen, S2, RoomKind::Bath, true});
+            bedFrom = S1;
+        } else {
+            if (S2 >= kBathLen + kClosetMin) {
+                arm.push_back({0, S2 - kBathLen, RoomKind::Closet, true});
+                arm.push_back({S2 - kBathLen, S2, RoomKind::Bath, true});
+            } else if (S2 >= kBathLen) {
+                arm.push_back({0, S2, RoomKind::Bath, true});
+            }
+            // the bedroom ends the column; with no room behind it, the bath does
+            const Real bathIn = arm.empty() ? kBathLen : 0;
+            bedFrom = std::min(S1 - bathIn - kBedLen, c1);   // never a cut beside the strip behind (rects only)
+            if (bathIn > 0) colCells.push_back({S1 - bathIn, S1, RoomKind::Bath, false});
+            colCells.insert(colCells.begin(), {bedFrom, S1 - bathIn, RoomKind::Bed, false});
+        }
+        // The hall at the door (inside the front corner), the kitchen, the living room to the bedroom.
+        const Real hall = passage ? std::min(c1, S1) : std::min(kHallLen, c0);
+        // a long column: the kitchen takes a dining table rather than the living room running on past 7 m
+        const Real kit = hall + std::clamp(bedFrom - hall - 7.0, kKitchenLen, Real(4.0));
+        std::vector<Cell> head;
+        if (passage) {
+        } else if (bedFrom - kit >= kLivingMin) {
+            head = {{0, hall, RoomKind::Hall, false}, {hall, kit, RoomKind::Kitchen, false},
+                    {kit, bedFrom, RoomKind::Living, false}};
+        } else {
+            // A STUDIO: the bed comes into the living room; the hall, the kitchen, the room, the bath at the end.
+            const Real roomTo = arm.empty() ? S1 - kBathLen : S1;
+            if (roomTo - kit < kStudioMin) return RoomPlan{};
+            colCells.clear();
+            arm.clear();
+            if (S2 >= kBathLen) arm.push_back({0, S2, RoomKind::Bath, true});
+            else colCells.push_back({S1 - kBathLen, S1, RoomKind::Bath, false});
+            head = {{0, hall, RoomKind::Hall, false}, {hall, kit, RoomKind::Kitchen, false},
+                    {kit, arm.empty() ? S1 - kBathLen : S1, RoomKind::Flat, false}};
+        }
+        if (!passage) {
+            cells = head;
+            cells.insert(cells.end(), colCells.begin(), colCells.end());
+            cells.insert(cells.end(), arm.begin(), arm.end());
+        }
+
+        // Emit. The column's cells across its strip; the arm's across the strip behind, from this column's side.
+        auto Pc = [&](Real s, Real v) { return col.a + col.d * (xs + dir * s) - col.nOut * v; };
+        const Band& bk = B[back];
+        const Vec2 colOnBack = col.a + col.d * (xs + dir * S1);   // the column's back corner, on the back band's line
+        const int adir = dot(colOnBack - bk.a, bk.d) < bk.W * 0.5 ? 1 : -1;
+        const Real ax = adir > 0 ? bk.t0 : bk.t1;
+        auto Pa = [&](Real s, Real v) { return bk.a + bk.d * (ax + adir * s) - bk.nOut * v; };
+        for (const Cell& c : cells) {
+            Room r;
+            r.edge = static_cast<std::size_t>(c.arm ? back : side[f]);
+            r.kind = c.kind;
+            // the window wall first (furniture's side 0), counter-clockwise like every other planner's rooms
+            const auto& P = c.arm ? std::function<Vec2(Real, Real)>(Pa) : std::function<Vec2(Real, Real)>(Pc);
+            const Real T = c.arm ? bk.T : col.T;
+            const int sd = c.arm ? adir : dir;
+            const Real lo = sd > 0 ? c.s0 : c.s1, hi = sd > 0 ? c.s1 : c.s0;
+            r.rect = {P(lo, inset), P(hi, inset), P(hi, inset + T), P(lo, inset + T)};
+            rp.rooms.push_back(r);
+        }
+        auto open = [](RoomKind a, RoomKind b) {
+            auto pub = [](RoomKind k) { return k == RoomKind::Hall || k == RoomKind::Kitchen || k == RoomKind::Living; };
+            return pub(a) && pub(b);
+        };
+        // The partitions between consecutive cells: across the strip within it; where the column meets the strip
+        // behind, the column's inner face from the core's back face to the back wall.
+        for (std::size_t i = 0; i + 1 < cells.size(); ++i) {
+            const Cell& a = cells[i];
+            const Cell& b = cells[i + 1];
+            if (open(a.kind, b.kind)) continue;
+            RoomWall w;
+            if (a.arm == b.arm) {
+                const auto& P = a.arm ? std::function<Vec2(Real, Real)>(Pa) : std::function<Vec2(Real, Real)>(Pc);
+                const Real T = a.arm ? bk.T : col.T;
+                w.a = P(a.s1, inset);
+                w.b = P(a.s1, inset + T);
+                w.doorAt = 0.7;   // near the core side: the glass side stays for the bed and the bath's fittings
+            } else {
+                w.a = Pc(c1, inset + col.T);
+                w.b = Pc(S1, inset + col.T);
+                w.doorAt = 0.5;
+            }
+            rp.walls.push_back(w);
+        }
+        // The front door: the column's inner face across the front corner, onto the lobby, in the hall.
+        {
+            RoomWall w;
+            w.a = Pc(0, inset + col.T);
+            w.b = Pc(c0, inset + col.T);
+            w.doorAt = std::clamp(std::min(hall, c0) * 0.5 / c0, Real(0.0), Real(1.0));
+            rp.walls.push_back(w);
+        }
+        // No strip behind: the column's inner face there closes it off (a riser space behind the core).
+        if (!armed) {
+            RoomWall w;
+            w.a = Pc(c1, inset + col.T);
+            w.b = Pc(S1, inset + col.T);
+            rp.walls.push_back(w);
+        }
+    }
+    // The party wall between the two flats, across the strip behind at its middle.
+    if (armed) {
+        const Band& bk = B[back];
+        const Real xm = (bk.t0 + bk.t1) * 0.5;
+        RoomWall w;
+        w.a = bk.a + bk.d * xm - bk.nOut * inset;
+        w.b = bk.a + bk.d * xm - bk.nOut * (inset + bk.T);
+        rp.walls.push_back(w);
+    }
+    return rp;
+}
+
 // THE WALK-UP (Glenn, 2026-10-01: "I didn't see the apartments ... some of them look like dorms"): a residential
 // building without a lift core. A corridor runs the long axis from the stair, apartments either side of it
 // (double-loaded) -- or, on a plate too narrow for two, one row off a corridor along the back facade. The stair's
@@ -1075,6 +1354,10 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
             const Real x1 = b.W - inset - (B[ne].rooms ? B[ne].D : row[ne]);
             if (x1 - x0 < 2.0) continue;
             auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
+            // Private offices where it is deep enough (deskRowPlan's rule: an even row takes a corner no band owns).
+            if (officeRow(rp, params, e, b.W, P, e % 2 == 0 && !B[pe].rooms ? inset : x0,
+                          e % 2 == 0 && !B[ne].rooms ? b.W - inset : x1, inset, row[e]))
+                continue;
             Room rm; rm.edge = e; rm.kind = RoomKind::DeskRow;
             rm.rect = {P(x0, inset), P(x1, inset), P(x1, inset + row[e]), P(x0, inset + row[e])};
             rp.rooms.push_back(rm);
@@ -1318,10 +1601,24 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
             std::fprintf(stderr, "[apts] storey %d: %zu rooms %zu walls, walkable %d\n", storey, ap.rooms.size(),
                          ap.walls.size(), walk ? 1 : 0);
         if (walk) return ap;
+        // Too slim for a corridor: two flats round the core, off the lift lobby.
+        static const bool noWrap = std::getenv("RT_NO_WRAP_FLATS") != nullptr;   // A/B: the old fallbacks
+        if (!noWrap) {
+            RoomPlan wf = wrapFlatsPlan(planIn, core, inset, storey);
+            wf.finish = ap.finish;
+            const bool wwalk = !wf.rooms.empty() && floorIsWalkable(wf, planIn, entry);
+            if (std::getenv("RT_APT_DEBUG"))
+                std::fprintf(stderr, "[apts] storey %d: wrap %zu rooms, walkable %d\n", storey, wf.rooms.size(), wwalk ? 1 : 0);
+            if (wwalk) return wf;
+        }
         RoomPlan rg = ringPlan(planIn, params, core, blankEdge, inset, storey);
         rg.finish = interiorFinishFor(params);
+        // ringPlan names a glass tower's rooms offices; a residential tower's are studios behind drywall
+        rg.office = false;
+        for (Room& r : rg.rooms) if (r.kind == RoomKind::Office) r.kind = RoomKind::Flat;
+        for (RoomWall& w : rg.walls) w.glass = false;
         if (rg.rooms.empty()) {   // too shallow for flats round the core too: the residents' lounge
-            RoomPlan lg = deskRowPlan(planIn, core, inset, storey, RoomKind::Lounge);
+            RoomPlan lg = deskRowPlan(planIn, params, core, inset, storey, RoomKind::Lounge);
             if (!lg.rooms.empty()) { lg.finish = rg.finish; return lg; }
         }
         return rg;
@@ -1360,7 +1657,8 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     rp.finish = interiorFinishFor(params);
     if (topo != PlateTopology::WholeFloor && rp.rooms.empty()) {
         // too shallow for rooms round the core: a row of desks at the windows, or the residents' lounge
-        RoomPlan dr = deskRowPlan(planIn, core, inset, storey, params.residential ? RoomKind::Lounge : RoomKind::DeskRow);
+        RoomPlan dr = deskRowPlan(planIn, params, core, inset, storey,
+                                  params.residential ? RoomKind::Lounge : RoomKind::DeskRow);
         if (!dr.rooms.empty()) { dr.finish = rp.finish; return dr; }
     }
     if (topo != PlateTopology::WholeFloor) return rp;   // a ring is open by construction

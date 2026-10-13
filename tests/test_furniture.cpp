@@ -1292,16 +1292,18 @@ TEST_CASE(furniture_keeps_out_of_the_outside_doors_and_off_the_windows) {
 // grew bare -- 62% of tower_on_base's, a fifth of the art deco, stepped and sky exposure towers'. They are a row of
 // desks at the glass now (room_plan.cpp deskRowPlan), and an office floor's open zones are furnished with or without a
 // partition; a residential tower's is its residents' lounge. What may stay bare: the plant floors, and a crown whose
-// core leaves only a corridor round it -- a 14 m crown on a 24 m lot keeps its base's 8 x 8 m core (2.3-2.5 m a side),
-// until the core steps in as its lift banks end (owed). Measured: 1525 floors here, 28 bare (62% of tower_on_base's
-// floors and a fifth of three other kinds' were bare before).
+// core leaves only a corridor round it -- a 14 m crown on a 24 m lot round the smallest core there is (one lift, two
+// stairs: 2.3-2.5 m a side). Measured: 1525 floors here, 28 bare (62% of tower_on_base's floors and a fifth of three
+// other kinds' were bare before).
+// PARTITIONS (Glenn, the same day: "no office partitions in the office?"): a strip deep enough for an office and the
+// corridor behind it is a row of glass-fronted private offices (officeRow), so no desk row is that deep any more.
 TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
     UseShippedFurniture shipped;
     const char* recipes[] = {"glass_tower", "art_deco_tower", "stepped_tower", "drum_tower", "podium_tower",
                              "pagoda_tower", "condo_tower", "sky_exposure_tower", "tower_on_base",
                              "tapered_glass_tower", "pencil_tower"};
     const Real sizes[][2] = {{24, 24}, {30, 30}, {40, 26}, {48, 34}};
-    long allFloors = 0, allBare = 0, deskRows = 0;
+    long allFloors = 0, allBare = 0, deskRows = 0, deepRows = 0;
     for (const char* rn : recipes) {
         int floors = 0, bare = 0;
         for (uint32_t seed = 1; seed <= 2; ++seed)
@@ -1323,6 +1325,10 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
                     const RoomPlan rp = roomPlan(sps[static_cast<std::size_t>(k)].plan, p, core, static_cast<std::size_t>(-1),
                                                  std::max(p.wallThickness, Real(0.55)), k);   // (interiorInset)
                     for (const Room& r : rp.rooms) if (r.kind == RoomKind::DeskRow) { ++deskRows; break; }
+                    for (const Room& r : rp.rooms)
+                        if (r.kind == RoomKind::DeskRow && r.rect.size() == 4 && (r.rect[3] - r.rect[0]).length() >= 5.0 &&
+                            (r.rect[1] - r.rect[0]).length() >= 2.4)
+                            ++deepRows;   // deep enough for offices (kCorridorRing + an office's 2.8 m)
                     if (real == 0 && std::getenv("RT_BARE_WHY")) {
                         const OBB2 ob = orientedBoundingBox(sps[static_cast<std::size_t>(k)].plan);
                         std::printf("      bare %s %gx%g s%u k%d plate %.1fx%.1f core %d %.1fx%.1f rooms %zu walls %zu topo %d lights %zu\n", rn, sz[0], sz[1], seed, k,
@@ -1336,7 +1342,71 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
         allFloors += floors;
         allBare += bare;
     }
-    std::printf("    [towers] %ld floors, %ld bare; %ld desk-row floors\n", allFloors, allBare, deskRows);
+    std::printf("    [towers] %ld floors, %ld bare; %ld desk-row floors; %ld desk rows deep enough for offices\n", allFloors,
+                allBare, deskRows, deepRows);
     CHECK(allBare * 100 <= allFloors * 3);
     CHECK(deskRows > 0);
+    CHECK(deepRows == 0);
+}
+
+// FLATS ROUND THE CORE (Glenn, 2026-10-13: "if you're showing me apartments then we need more walls for the separate
+// apartments and then separate rooms"). A residential crown too slim for apartmentPlan's corridor and bands was the
+// residents' lounge (14 pencil-tower floors in this spread) or a ring of rooms -- named offices behind a glass tower's
+// curtain wall (6). It is two flats off the lift lobby now (room_plan.cpp wrapFlatsPlan), each a hall, a kitchen, a
+// living room, a bedroom and its bath, or a studio. Every residential tower floor here is flats: walkable from the
+// lobby, every one with its kitchen and its bath, and no lounge and no office anywhere.
+TEST_CASE(slim_residential_crowns_are_flats_round_the_core) {
+    const char* recipes[] = {"pencil_tower", "condo_tower"};
+    const Real sizes[][2] = {{24, 24}, {30, 30}, {40, 26}, {48, 34}, {36, 20}};
+    long floors = 0, wrapped = 0, lounge = 0, offices = 0, noKitchen = 0, noBath = 0, blocked = 0;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 6; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                const BuildingParams& p = rc.params;
+                if (!p.residential) continue;
+                const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+                const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+                if (!core.valid) continue;
+                for (int k = 1; k < static_cast<int>(sps.size()); ++k) {
+                    if (mechanicalStorey(p, k)) continue;
+                    const Poly2& sp = sps[static_cast<std::size_t>(k)].plan;
+                    const RoomPlan rp = roomPlan(sp, p, core, static_cast<std::size_t>(-1), std::max(p.wallThickness, Real(0.55)), k);
+                    ++floors;
+                    int kitchens = 0, baths = 0, halls = 0, bathRooms = 0;
+                    bool hasLounge = false, hasOffice = false;
+                    for (const Room& r : rp.rooms) {
+                        hasLounge = hasLounge || r.kind == RoomKind::Lounge;
+                        hasOffice = hasOffice || r.kind == RoomKind::Office;
+                        if (r.kind == RoomKind::Kitchen || r.kind == RoomKind::Flat) ++kitchens;
+                        if (r.kind == RoomKind::Bath || r.kind == RoomKind::Flat) ++baths;
+                        if (r.kind == RoomKind::Hall) ++halls;
+                        if (r.kind == RoomKind::Bath) ++bathRooms;
+                    }
+                    lounge += hasLounge;
+                    offices += hasOffice;
+                    if (std::getenv("RT_CROWN_WHY") && !rp.rooms.empty() && (rp.rooms[0].kind == RoomKind::Lounge || rp.rooms[0].kind == RoomKind::Office)) {
+                        const OBB2 ob = orientedBoundingBox(sp);
+                        std::printf("      %s %gx%g s%u k%d: plate n%zu %.1fx%.1f, core %.1fx%.1f, topo %d, first room %d\n", rn, sz[0], sz[1], seed, k,
+                                    sp.size(), 2 * ob.half[0], 2 * ob.half[1], core.length, core.depth, (int)rp.topology, (int)rp.rooms[0].kind);
+                    }
+                    if (rp.topology != PlateTopology::Apartments) continue;
+                    if (halls == 2 && bathRooms == 2) ++wrapped;   // (apartmentPlan's floors carry more than two)
+                    if (kitchens == 0) ++noKitchen;
+                    if (baths == 0) ++noBath;
+                    if (!floorIsWalkable(rp, sp, core.frame.toWorld({core.length * 0.5, -1.1}))) ++blocked;
+                }
+            }
+    std::printf("    [crowns] %ld residential tower floors: %ld wrapped round the core; %ld lounge floors, %ld with offices; "
+                "%ld without a kitchen, %ld without a bath, %ld not walkable\n", floors, wrapped, lounge, offices,
+                noKitchen, noBath, blocked);
+    CHECK(floors > 1000);
+    CHECK(wrapped >= 15);
+    CHECK(lounge == 0);
+    CHECK(offices == 0);
+    CHECK(noKitchen == 0);
+    CHECK(noBath == 0);
+    CHECK(blocked == 0);
 }

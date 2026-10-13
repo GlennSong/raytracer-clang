@@ -9634,3 +9634,39 @@ Interiors are grown at run time from the building records, so this needs no re-b
 Tests: across 30 recipes x 3 seeds x 5 plans, the ground and first floors: 1793 doors and 26735 windows, no piece in a
 door's way in, none tall before a window, none hung over one (before, with RT_FURNITURE_BLIND_OPENINGS=1: 1099, 1554,
 330). Across 11 tower recipes up every other floor: 28 of 1525 bare (the 24 m lots' crowns), no tower kind over 10%.
+
+## ADR-0161 — Offices along the glass get partitions; slim residential crowns are flats round the core
+
+Glenn, 2026-10-13, on ADR-0160's setback floors: "No office partitions in the office? If you're showing me apartments
+then we need more walls for the separate apartments and then separate rooms."
+
+Measured first: desk rows were on 22% of tower floors (2306 of 10546 in an 11-recipe spread), their strips 2.5-6 m from
+glass to core, a third of them 5 m or deeper. Residential towers were already apartments on 1865 of 1890 floors; the
+lounge was a crown fallback. ADR-0160's "the core should step in up the tower" was wrong: the core is already sized to
+the TOP tier (`corePlan` fits it inside the smallest plan with its corridor), and on a slim crown it is the smallest
+core there is (one lift, two stairs). Nothing to shrink.
+
+- **Private offices along the glass** (`officeRow`): a desk-row strip deep enough for a 2.8 m office AND the 2.2 m
+  corridor ring behind it is a row of offices about two curtain bays wide (3.2 m, partitions on mullions), glass
+  fronts with a door onto the corridor, drywall between, end walls where the row stops short of the exterior. An even
+  strip's row runs on into a square corner no band owns, so the corner is an office too (ringPlan's corner rule).
+  Both the office floor's thin bands and `deskRowPlan`'s whole-floor strips use it.
+- **Desk screens**: the rows that stay rows (strips under 5 m, the open plan's fallback rows) carry a low fabric
+  screen between desks -- a new piece, `desk_screen`, 1.12 m tall so it stands under a window by ADR-0160's rule.
+- **Flats round the core** (`wrapFlatsPlan`): a residential plate too slim for apartmentPlan's corridor and 5 m bands
+  has no corridor. The lift lobby is the strip in front of the core's doors; two flats wrap the rest, each a CHAIN of
+  rooms with partitions running ACROSS its strip -- the column beside the core (corners included), then its half of
+  the strip behind, a party wall between. Hall at the front door, kitchen, living room (open into each other), then a
+  door to the bedroom and the bath en suite at the end. Where the strip behind is too short for bed and bath, the
+  bedroom ends the column and the strip behind is its dressing room and bath; too short for a living room, a studio.
+  A column narrower than a room (1.3-2.4 m) is the flat's own entrance hall to its rooms behind the core. Rooms are
+  rectangles, so no cut falls beside the strip behind. Walked from the lobby like apartmentPlan; roomPlan tries it
+  before the ring and the lounge. `RT_NO_WRAP_FLATS=1` is the A/B switch.
+- A residential tower's fallback ring named its rooms offices behind a curtain wall; they are studios behind drywall.
+
+Interiors are grown at run time, so no re-bake.
+
+Tests: tower floors (11 recipes, every other floor): desk rows deep enough for offices 174 -> 0, desk-row floors 328 ->
+256. Residential tower floors (pencil + condo, 6 seeds x 5 plans, every floor): lounge floors 109 -> 0, floors with
+office rooms 28 -> 0; 2302 floors, every apartment floor walkable with a kitchen and a bath. Upper tower floors keep
+ADR-0160's window rule (65285 pieces, none tall before glass).
