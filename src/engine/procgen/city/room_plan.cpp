@@ -1300,6 +1300,40 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
     return rp;
 }
 
+// A CHAMFERED RECTANGLE (the tapered glass tower's upper plates: eight corners, each corner cut on the diagonal): the
+// rectangle its four long walls stand on (CCW), and per edge of it how far the cut corners take off its start and its
+// end. False for anything else.
+static bool chamferedRect(const Poly2& planIn, Poly2& rect, Real cutS[4], Real cutE[4]) {
+    if (planIn.size() <= 4 || planIn.size() > 8) return false;
+    const OBB2 ob = orientedBoundingBox(planIn);
+    const Vec2 u = ob.axis[0] * ob.half[0], v = ob.axis[1] * ob.half[1];
+    rect = {ob.center - u - v, ob.center + u - v, ob.center + u + v, ob.center - u + v};
+    ensureCCW(rect);
+    std::vector<bool> on(planIn.size(), false);
+    for (int e = 0; e < 4; ++e) {
+        const Vec2 a = rect[static_cast<std::size_t>(e)], dv = rect[static_cast<std::size_t>((e + 1) % 4)] - a;
+        const Real W = dv.length();
+        const Vec2 d = dv * (1.0 / W), nOut(d.y, -d.x);
+        Real t0 = 1e9, t1 = -1e9;
+        for (std::size_t i = 0; i < planIn.size(); ++i)
+            if (std::fabs(dot(planIn[i] - a, nOut)) < 0.05) {
+                const Real t = dot(planIn[i] - a, d);
+                t0 = std::min(t0, t); t1 = std::max(t1, t);
+                on[i] = true;
+            }
+        if (t1 - t0 < W * 0.34) return false;   // a long wall, cut at most a third at each end
+        cutS[e] = std::max(Real(0), t0);
+        cutE[e] = std::max(Real(0), W - t1);
+    }
+    for (bool b : on) if (!b) return false;   // every corner of the plate on one of the four walls
+    return true;
+}
+static bool officePlanFits(const Poly2& plan) {
+    if (plan.size() == 4) return true;
+    Poly2 r; Real a[4], b[4];
+    return chamferedRect(plan, r, a, b);
+}
+
 // ------------------------------------------------------------- the office floor
 // THE OFFICE FLOOR (Glenn, 2026-09-30: "the wider floors seem to have a lot of floorspace which in an office would
 // be good for cubicles or open floorplans"). A glass tower's typical floor, rectangular with a core:
@@ -1316,11 +1350,18 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
     RoomPlan rp;
     rp.topology = PlateTopology::Ring;
     rp.office = true;
-    if (storey < 1 || !core.valid || planIn.size() != 4) return rp;
+    // A CHAMFERED plate is laid in the rectangle its long walls stand on, every band kept clear of the cut corners
+    // (each its corner's nook of open floor at the diagonal glass).
+    Real cutS[4] = {0, 0, 0, 0}, cutE[4] = {0, 0, 0, 0};
     Poly2 plan = planIn;
+    if (storey < 1 || !core.valid) return rp;
+    if (planIn.size() != 4 && !chamferedRect(planIn, plan, cutS, cutE)) return rp;
     ensureCCW(plan);
     const std::size_t n = plan.size();
     const Poly2 coreR = core.rect();
+    // where a band may start and end along its edge: past its cut corners, and the chamfer's wall
+    auto from = [&](std::size_t e) { return cutS[e] > 0 ? cutS[e] + inset * 1.5 : inset; };
+    auto upto = [&](std::size_t e, Real W) { return cutE[e] > 0 ? W - cutE[e] - inset * 1.5 : W - inset; };
     struct Band { Vec2 a, d, nOut; Real W = 0, D = 0; bool rooms = false; Real s0 = 0, s1 = 0; };
     std::vector<Band> B(n);
     for (std::size_t e = 0; e < n; ++e) {
@@ -1339,12 +1380,12 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
     for (std::size_t e = 0; e < n; ++e) {
         Band& b = B[e];
         if (!b.rooms) continue;
-        if (e % 2 == 0) { b.s0 = inset; b.s1 = b.W - inset; }
+        if (e % 2 == 0) { b.s0 = from(e); b.s1 = upto(e, b.W); }
         else {
             const Band& p = B[(e + n - 1) % n];
             const Band& q = B[(e + 1) % n];
-            b.s0 = inset + (p.rooms ? p.D : 0);
-            b.s1 = b.W - inset - (q.rooms ? q.D : 0);
+            b.s0 = std::max(inset + (p.rooms ? p.D : 0), from(e));
+            b.s1 = std::min(b.W - inset - (q.rooms ? q.D : 0), upto(e, b.W));
         }
     }
     // A band too shallow for the office's rooms is a ROW OF DESKS at its windows (deskRowPlan's strip), from the glass
@@ -1360,13 +1401,13 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
             if (row[e] <= 0) continue;
             const Band& b = B[e];
             const std::size_t pe = (e + n - 1) % n, ne = (e + 1) % n;
-            const Real x0 = inset + (B[pe].rooms ? B[pe].D : row[pe]);
-            const Real x1 = b.W - inset - (B[ne].rooms ? B[ne].D : row[ne]);
+            const Real x0 = std::max(inset + (B[pe].rooms ? B[pe].D : row[pe]), from(e));
+            const Real x1 = std::min(b.W - inset - (B[ne].rooms ? B[ne].D : row[ne]), upto(e, b.W));
             if (x1 - x0 < 2.0) continue;
             auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
             // Private offices where it is deep enough (deskRowPlan's rule: an even row takes a corner no band owns).
-            if (officeRow(rp, params, e, b.W, P, e % 2 == 0 && !B[pe].rooms ? inset : x0,
-                          e % 2 == 0 && !B[ne].rooms ? b.W - inset : x1, inset, row[e]))
+            if (officeRow(rp, params, e, b.W, P, e % 2 == 0 && !B[pe].rooms ? from(e) : x0,
+                          e % 2 == 0 && !B[ne].rooms ? upto(e, b.W) : x1, inset, row[e]))
                 continue;
             Room rm; rm.edge = e; rm.kind = RoomKind::DeskRow;
             rm.rect = {P(x0, inset), P(x1, inset), P(x1, inset + row[e]), P(x0, inset + row[e])};
@@ -1419,6 +1460,9 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
                 glassWall(P(a0, vIn + cd), P(a1, vIn + cd), side == 0 ? 0.75 : 0.25);
                 const Real xs = side == 0 ? a1 : a0;
                 glassWall(P(xs, vIn), P(xs, vIn + cd), -1);
+                // short of the exterior (a chamfered corner's nook beyond it): close the outer side too
+                const Real xo = side == 0 ? a0 : a1;
+                if (xo > inset + 0.05 && xo < b.W - inset - 0.05) glassWall(P(xo, vIn), P(xo, vIn + cd), -1);
             }
         }
         // THE CORRIDOR SIDE: the shared rooms, centred on the band (the reception on the core's middle), packed out
@@ -1707,7 +1751,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         RoomPlan of = officePlan(planIn, params, core, inset, storey);
         if (!of.rooms.empty()) { of.finish = interiorFinishFor(params); return of; }
     }
-    if (params.officeUse && !params.residential && planIn.size() == 4 && storey >= 1) {
+    if (params.officeUse && !params.residential && officePlanFits(planIn) && storey >= 1) {
         // A WORKPLACE's floor, masonry or glass (Glenn, 2026-10-13): the office floor round its core -- or, in a
         // building with only a stair, round the stair's well, which stands in for the core (no lifts: no reception).
         // Walked from the lifts' lobby or the stair; a floor it cannot lay falls through to a ring of offices.

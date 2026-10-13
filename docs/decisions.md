@@ -9731,3 +9731,15 @@ reached through a runtime field like officeUse:
 No re-bake. Test `civic_buildings_have_their_own_rooms`: beds 1015 -> 0, no bathtubs; schools 6229 school desks and
 420 lab benches, the university 159 lecture rows, the library 8514 bookcases and 420 reading tables, the museum 1949
 display cases and 960 pictures.
+
+## ADR-0164 — Chamfered office plates take the office floor
+
+ADR-0162's leftover: the tapered glass tower's upper plates cut their corners on the diagonal (eight corners), and
+officePlan was rectangles only, so they were a ring of offices round an empty middle (105 of 488 floors under 60%
+covered). `chamferedRect` recognises a plate whose every corner lies on the four long walls of its bounding rectangle
+(each cut at most a third of its wall); officePlan lays the floor in that rectangle with every band, desk row and
+private-office row starting past its cut corners (and the chamfer's wall), so each corner is a nook of open floor at
+the diagonal glass. A corner office short of the exterior closes its outer side in glass.
+
+Tests `chamfered_office_floors_take_the_office_floor`: 164 of 181 chamfered office floors laid as the office floor
+(none before), no room corner outside its plate; the tapered tower's floors under 60% covered 105 -> 21. No re-bake.

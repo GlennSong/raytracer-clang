@@ -1504,3 +1504,40 @@ TEST_CASE(civic_buildings_have_their_own_rooms) {
     CHECK(c("library", Piece::Bookcase) > 100 && c("library", Piece::ReadingTable) > 20);
     CHECK(c("museum", Piece::DisplayCase) > 50 && c("museum", Piece::Picture) > 50);
 }
+
+// CHAMFERED OFFICE FLOORS (the same day): the tapered glass tower's upper plates cut their corners on the diagonal --
+// eight corners -- and the office floor was rectangles only, so they fell to a ring of offices round an empty middle
+// (105 of 488 floors under 60% covered). The office floor lays them in the rectangle the long walls stand on, its
+// bands kept clear of the cut corners: every chamfered office floor here is the office floor, and every room stands
+// inside its plate.
+TEST_CASE(chamfered_office_floors_take_the_office_floor) {
+    const Real sizes[][2] = {{24, 24}, {30, 30}, {40, 26}, {48, 34}};
+    int chamfered = 0, officeFloor = 0, outside = 0;
+    for (uint32_t seed = 1; seed <= 3; ++seed)
+        for (const auto& sz : sizes) {
+            const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+            BuildingRecipe rc;
+            if (!architectRecipeByName("tapered_glass_tower", seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+            const BuildingParams& p = rc.params;
+            const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+            const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+            if (!core.valid) continue;
+            for (int k = 1; k < static_cast<int>(sps.size()); k += 2) {
+                const Poly2& sp = sps[static_cast<std::size_t>(k)].plan;
+                if (sp.size() <= 4 || mechanicalStorey(p, k)) continue;
+                ++chamfered;
+                const RoomPlan rp = roomPlan(sp, p, core, static_cast<std::size_t>(-1), std::max(p.wallThickness, Real(0.55)), k);
+                bool laid = false;
+                for (const Room& r : rp.rooms) {
+                    laid = laid || r.kind == RoomKind::OpenPlan || r.kind == RoomKind::DeskRow;
+                    for (const Vec2& c : r.rect) if (!pointInPolygon(sp, c + (centroid(r.rect) - c) * 0.01)) ++outside;
+                }
+                officeFloor += laid;
+            }
+        }
+    std::printf("    [chamfered] %d chamfered office floors: %d laid as the office floor; %d room corners outside\n",
+                chamfered, officeFloor, outside);
+    CHECK(chamfered > 50);
+    CHECK(officeFloor * 100 >= chamfered * 90);
+    CHECK(outside == 0);
+}
