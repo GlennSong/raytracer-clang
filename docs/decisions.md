@@ -10029,8 +10029,10 @@ to access it ... other c++ mesh builders would then call into the common library
   Scope::inFrame (a box at a frame point), Scope::standing (a box centred on a plan point, turned along a direction)
   and emitPlanRect. The change was proved byte-identical first (rt_bake --sections on river_town and
   island_8_saltwood: 2 depot yards, 108 playgrounds, 201 gardens, ~930 parks), then the two behaviour fixes went in:
-  the drape's pieces fan through triFacing (the 22 no-area triangles the island bake audit found in the lot parts),
-  and a utility lot's cabinets, its posts and the fence/shed colliders are closed blocks. Of the three exceptions
+  the drape's pieces fan through triFacing, and a utility lot's cabinets, its posts and the fence/shed colliders are
+  closed blocks. (The 22 no-area triangles the island audit found in the lot parts were NOT the drape: the rebake kept
+  every one. Each had two equal corners -- a sub-millimetre edge 4.6 km out, sound in double, collapsed by float32
+  storage. packMesh now drops a triangle with no area in float, for every baked mesh; lanes 10-14.3, lots 10-14.2.) Of the three exceptions
   above, only the SDF mesher's is left; the drape and that collider now go through the library. Lots 2026-10-14.1.
 
 Tags: lanes + rail 2026-10-13.2, lots 2026-10-13.6 (a re-bake). Tests: mesh_library_solids_are_clean_and_closed

@@ -1,6 +1,7 @@
 #include "engine/bundle/codecs.h"
 
 #include "engine/procgen/city/road_spec.h"
+#include "engine/mesh_builder.h"
 
 #include <cmath>
 
@@ -32,7 +33,17 @@ PackedMesh packMesh(const RenderMesh& m, const std::string& name, const Vec3& al
     p.flags = (flags & ~static_cast<uint32_t>(PackedMesh::kColorUniform)) | (uniform ? PackedMesh::kColorUniform : 0u);
     if (uniform) { p.vertexColor[0] = f(c0.x); p.vertexColor[1] = f(c0.y); p.vertexColor[2] = f(c0.z); }
     else { p.col.resize(3 * n); for (size_t i = 0; i < n; ++i) { const Vec3& c = m.vertices[i].color; p.col[3 * i] = f(c.x); p.col[3 * i + 1] = f(c.y); p.col[3 * i + 2] = f(c.z); } }
-    p.idx = m.indices;
+    // A triangle with no area IN FLOAT is dropped (MeshBuilder::kNoArea2, the rule triFacing builds by): built in
+    // double, a sub-millimetre edge kilometres from the origin passes triFacing and then collapses to two equal
+    // corners when stored -- 22 such in the island's lot parts (2026-10-14), past every builder at once.
+    p.idx.reserve(m.indices.size());
+    for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const uint32_t ia = m.indices[t], ib = m.indices[t + 1], ic = m.indices[t + 2];
+        auto at = [&](uint32_t i) { return Vec3(p.pos[3 * i], p.pos[3 * i + 1], p.pos[3 * i + 2]); };
+        const Vec3 a = at(ia), b = at(ib), c = at(ic);
+        if (cross(c - a, b - a).lengthSquared() < MeshBuilder::kNoArea2) continue;
+        p.idx.insert(p.idx.end(), {ia, ib, ic});
+    }
     return p;
 }
 

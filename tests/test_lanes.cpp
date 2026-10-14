@@ -531,8 +531,8 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
 // EVERY LOT MESH THROUGH THE MESH AUDIT (Glenn, 2026-10-14: "city lots should be reworked"): the grown lots of a lab
 // city -- buildings, parks, gardens, playgrounds, car parks, yards, walks, the draped pads -- part by part, no triangle
 // wound against its normals (bar float slivers), none without area, nothing non-finite. Before this only the bake
-// audit (rt_bake --audit) looked at a lot's open ground, where the drape's hand fan left 22 zero-area triangles on the
-// island (none in this lab: the island bake audit is what proves that one).
+// audit (rt_bake --audit) looked at a lot's open ground. (Its 22 zero-area triangles on the island were float32
+// storage collapsing sub-millimetre edges far from the origin -- packMesh drops those now; this lab is near the origin.)
 TEST_CASE(lanes_every_lot_mesh_passes_the_mesh_audit) {
     using namespace engine::bundle; using namespace engine::lotcache;
     registerCityProducer(); registerLotsProducer();
