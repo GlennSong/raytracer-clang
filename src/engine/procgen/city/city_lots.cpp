@@ -508,8 +508,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
     };
     auto disc = [&](const Vec2& o, Real r, Real y, const Vec3& col, bool seal) { discInto(m, o, r, y, col, seal); };
     auto box = [&](const Vec2& at, Real y, const Vec2& along, const Vec3& size, PartId part, const Vec3& col) {
-        const Vec3 t(along.x, 0, along.y), n(-along.y, 0, along.x);
-        emitBox(kit, Scope{Vec3(at.x, y, at.y) - t * (size.x * 0.5) - n * (size.z * 0.5), {t, up, n}, size}, part, col);
+        emitBox(kit, Scope::standing(at, y, along, size), part, col);
     };
 
     // THE ROUND and its FOUNTAIN
@@ -692,8 +691,7 @@ static void sculptPaseo(LotBuilding& g, const Poly2& poly, uint32_t seed, std::v
     auto Q = [&](Real u, Real v) { return c + ua * u + va * v; };
     const Real segLen = std::min(Real(3.0), std::max(Real(1.2), meshCell * Real(0.75)));
     auto box = [&](const Vec2& at, Real y, const Vec2& along, const Vec3& size, PartId part, const Vec3& col) {
-        const Vec3 t(along.x, 0, along.y), n(-along.y, 0, along.x);
-        emitBox(kit, Scope{Vec3(at.x, y, at.y) - t * (size.x * 0.5) - n * (size.z * 0.5), {t, up, n}, size}, part, col);
+        emitBox(kit, Scope::standing(at, y, along, size), part, col);
     };
     // THE PAVING: bands across the walk -- two stones, a dark course every fourth -- jointed a terrain cell at a
     // time along the bands (it is draped), a darker border along each row's shopfronts
@@ -1075,7 +1073,8 @@ static bool sculptBusDepot(LotBuilding& g, const Poly2& poly, Vec2 frontage, uin
     const Vec2 c = centroid(poly);
     const Poly2 inner = inset(poly, 1.2);
     if (inner.size() < 3) return false;
-    auto W2 = [&](Real x, Real y) { return c + u * x + v * y; };
+    const SiteFrame yard{c, u, v};
+    auto W2 = [&](Real x, Real y) { return yard.W(x, y); };
     // THE YARD: the largest rectangle square to the gate inside the block -- the block rasterised on a 1 m grid in the
     // frame (a cell is in when its centre is 0.5 m inside the inset outline), then the largest all-in rectangle by the
     // histogram method, row by row
@@ -1161,11 +1160,9 @@ static bool sculptBusDepot(LotBuilding& g, const Poly2& poly, Vec2 frontage, uin
     const Real sya = backShed ? y1 - 1.0 - shedD : y0 + aisle, syb = y1 - 1.0;
 
     const Vec3 up(0, 1, 0), u3(u.x, 0, u.y), v3(v.x, 0, v.y);
-    auto P = [&](Real x, Real y, Real h) { const Vec2 w = W2(x, y); return Vec3(w.x, h, w.y); };
+    auto P = [&](Real x, Real y, Real h) { return yard.P(x, y, h); };
     RenderMesh m;   // the yard's surface and paint (ground-relative, vertex colours)
-    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) {
-        MeshBuilder::emitQuad(m, P(a0, b0, h), P(a0, b1, h), P(a1, b1, h), P(a1, b0, h), up, col);
-    };
+    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) { emitPlanRect(m, yard, a0, b0, a1, b1, h, col); };
     const Vec3 asphalt(0.07, 0.07, 0.075), white(0.90, 0.90, 0.87), yellow(0.90, 0.76, 0.16);   // (linear: the drawn lot reads dark)
     quad(x0, y0, x1, y1, 0.05, asphalt);
     // the drive out of the gate to the block's edge (the pavement beyond)
@@ -1227,14 +1224,14 @@ static bool sculptBusDepot(LotBuilding& g, const Poly2& poly, Vec2 frontage, uin
         fence({x1, y1}, {x0, y1});
         fence({x0, y1}, {x0, y0});
         for (Real gx : {cx - 8.0, cx + 8.0})   // the gate's posts
-            emitBox(kit, Scope{P(gx - 0.15, y0 - 0.15, 0), {u3, up, v3}, Vec3(0.3, 2.6, 0.3)}, PartId::Metal, Vec3(0.30, 0.32, 0.34));
+            emitBox(kit, Scope::inFrame(yard, gx - 0.15, y0 - 0.15, 0, Vec3(0.3, 2.6, 0.3)), PartId::Metal, Vec3(0.30, 0.32, 0.34));
     }
     // LAMP POLES at the rows' ends (their lamps glow at night)
     RenderMesh lamps;
     const Vec3 lampCol(1.0, 0.92, 0.75), poleCol(0.38, 0.39, 0.41);
     auto lampPole = [&](Real xs, Real ys) {
-        emitBox(kit, Scope{P(xs - 0.12, ys - 0.12, 0), {u3, up, v3}, Vec3(0.24, 10.0, 0.24)}, PartId::Metal, poleCol);
-        emitBox(kit, Scope{P(xs - 0.3, ys - 1.4, 10.0), {u3, up, v3}, Vec3(0.6, 0.25, 2.8)}, PartId::Metal, poleCol);
+        emitBox(kit, Scope::inFrame(yard, xs - 0.12, ys - 0.12, 0, Vec3(0.24, 10.0, 0.24)), PartId::Metal, poleCol);
+        emitBox(kit, Scope::inFrame(yard, xs - 0.3, ys - 1.4, 10.0, Vec3(0.6, 0.25, 2.8)), PartId::Metal, poleCol);
         for (Real dy : {Real(-1.25), Real(0.55)})
             MeshBuilder::emitQuad(lamps, P(xs - 0.25, ys + dy, 9.99), P(xs + 0.25, ys + dy, 9.99), P(xs + 0.25, ys + dy + 0.7, 9.99),
                                   P(xs - 0.25, ys + dy + 0.7, 9.99), up * -1.0, lampCol);
@@ -1248,11 +1245,11 @@ static bool sculptBusDepot(LotBuilding& g, const Poly2& poly, Vec2 frontage, uin
     if (shed) {
         const Real sw = sxb - sxa, sd = syb - sya;
         constexpr Real eave = 7.5, ridge = 9.3, t = 0.25;
-        emitBox(kit, Scope{P(sxa, sya, 0), {u3, up, v3}, Vec3(sw, eave, t)}, PartId::Metal, clad);              // front
-        emitBox(kit, Scope{P(sxa, syb - t, 0), {u3, up, v3}, Vec3(sw, eave, t)}, PartId::Metal, clad);          // back
-        emitBox(kit, Scope{P(sxa, sya, 0), {u3, up, v3}, Vec3(t, eave, sd)}, PartId::Metal, clad);           // ends
-        emitBox(kit, Scope{P(sxa + sw - t, sya, 0), {u3, up, v3}, Vec3(t, eave, sd)}, PartId::Metal, clad);
-        emitBox(kit, Scope{P(sxa - 0.1, sya - 0.1, eave - 0.6), {u3, up, v3}, Vec3(sw + 0.2, 0.6, 0.12)}, PartId::Trim, trim);   // fascia
+        emitBox(kit, Scope::inFrame(yard, sxa, sya, 0, Vec3(sw, eave, t)), PartId::Metal, clad);              // front
+        emitBox(kit, Scope::inFrame(yard, sxa, syb - t, 0, Vec3(sw, eave, t)), PartId::Metal, clad);          // back
+        emitBox(kit, Scope::inFrame(yard, sxa, sya, 0, Vec3(t, eave, sd)), PartId::Metal, clad);           // ends
+        emitBox(kit, Scope::inFrame(yard, sxa + sw - t, sya, 0, Vec3(t, eave, sd)), PartId::Metal, clad);
+        emitBox(kit, Scope::inFrame(yard, sxa - 0.1, sya - 0.1, eave - 0.6, Vec3(sw + 0.2, 0.6, 0.12)), PartId::Trim, trim);   // fascia
         // the roof: two slopes to a ridge along the shed, the gables closed
         RenderMesh roof, gable, lit;
         const Real ym = (sya + syb) * 0.5;
@@ -1270,13 +1267,13 @@ static bool sculptBusDepot(LotBuilding& g, const Poly2& poly, Vec2 frontage, uin
         const int nDoor = std::max(2, static_cast<int>(sw / 9.0));
         for (int k = 0; k < nDoor; ++k) {
             const Real dc = sxa + sw * (k + 0.5) / nDoor;
-            emitBox(kit, Scope{P(dc - 2.6, sya - 0.12, 0), {u3, up, v3}, Vec3(5.2, 5.4, 0.12)}, PartId::Metal, doorCol);
+            emitBox(kit, Scope::inFrame(yard, dc - 2.6, sya - 0.12, 0, Vec3(5.2, 5.4, 0.12)), PartId::Metal, doorCol);
             for (int s = 1; s < 9; ++s)   // its slats
-                emitBox(kit, Scope{P(dc - 2.6, sya - 0.16, s * 0.6), {u3, up, v3}, Vec3(5.2, 0.04, 0.04)}, PartId::Metal,
+                emitBox(kit, Scope::inFrame(yard, dc - 2.6, sya - 0.16, s * 0.6, Vec3(5.2, 0.04, 0.04)), PartId::Metal,
                         doorCol * 0.8);
-            emitBox(kit, Scope{P(dc - 2.8, sya - 0.18, 5.4), {u3, up, v3}, Vec3(5.6, 0.3, 0.2)}, PartId::Trim, trim);   // the head
-            emitBox(kit, Scope{P(dc - 2.8, sya - 0.18, 0), {u3, up, v3}, Vec3(0.2, 5.4, 0.2)}, PartId::Trim, trim);
-            emitBox(kit, Scope{P(dc + 2.6, sya - 0.18, 0), {u3, up, v3}, Vec3(0.2, 5.4, 0.2)}, PartId::Trim, trim);
+            emitBox(kit, Scope::inFrame(yard, dc - 2.8, sya - 0.18, 5.4, Vec3(5.6, 0.3, 0.2)), PartId::Trim, trim);   // the head
+            emitBox(kit, Scope::inFrame(yard, dc - 2.8, sya - 0.18, 0, Vec3(0.2, 5.4, 0.2)), PartId::Trim, trim);
+            emitBox(kit, Scope::inFrame(yard, dc + 2.6, sya - 0.18, 0, Vec3(0.2, 5.4, 0.2)), PartId::Trim, trim);
         }
         MeshBuilder::emitQuad(lit, P(sxa + 0.5, sya - 0.02, 6.0), P(sxa + sw - 0.5, sya - 0.02, 6.0), P(sxa + sw - 0.5, sya - 0.02, 6.7),
                               P(sxa + 0.5, sya - 0.02, 6.7), v3 * -1.0, Vec3(1.0, 0.95, 0.82));
@@ -1293,8 +1290,8 @@ static bool sculptBusDepot(LotBuilding& g, const Poly2& poly, Vec2 frontage, uin
         g.areas.push_back(ar);
     } else {
         const Real ax = x1 - 9.0, ay = y1 - 4.5;
-        emitBox(kit, Scope{P(ax, ay, 0), {u3, up, v3}, Vec3(7.0, 3.0, 3.5)}, PartId::Metal, clad);
-        emitBox(kit, Scope{P(ax - 0.2, ay - 0.2, 3.0), {u3, up, v3}, Vec3(7.4, 0.2, 3.9)}, PartId::Trim, trim);
+        emitBox(kit, Scope::inFrame(yard, ax, ay, 0, Vec3(7.0, 3.0, 3.5)), PartId::Metal, clad);
+        emitBox(kit, Scope::inFrame(yard, ax - 0.2, ay - 0.2, 3.0, Vec3(7.4, 0.2, 3.9)), PartId::Trim, trim);
         RenderMesh lit;
         MeshBuilder::emitQuad(lit, P(ax + 1.0, ay - 0.02, 1.2), P(ax + 4.0, ay - 0.02, 1.2), P(ax + 4.0, ay - 0.02, 2.2),
                               P(ax + 1.0, ay - 0.02, 2.2), v3 * -1.0, Vec3(1.0, 0.95, 0.82));
@@ -1359,11 +1356,9 @@ static bool largestFrameRect(const Poly2& inner, Vec2 c, Vec2 u, Vec2 v, Real st
 }
 
 // The lot's street frame: v in from the street (against the lot's frontage), u along it.
-struct OpenFrame {
-    Vec2 c, u, v, fo;
+struct OpenFrame : SiteFrame {   // the lot's plan frame (origin at its centroid), and the rectangle found in it
+    Vec2 fo;
     Real x0 = 0, x1 = 0, y0 = 0, y1 = 0;
-    Vec2 W(Real x, Real y) const { return c + u * x + v * y; }
-    Vec3 P(Real x, Real y, Real h) const { const Vec2 w = W(x, y); return Vec3(w.x, h, w.y); }
 };
 static bool openFrameOf(const Poly2& poly, Vec2 frontage, Real inset0, Real minW, Real minD, OpenFrame& f) {
     if (poly.size() < 3 || frontage.length() < 1e-6) return false;
@@ -1386,13 +1381,13 @@ static bool openFrameOf(const Poly2& poly, Vec2 frontage, Real inset0, Real minW
     }
     f.v = f.fo * -1.0;
     f.u = Vec2(f.v.y, -f.v.x);
-    f.c = centroid(poly);
+    f.origin = centroid(poly);
     Poly2 inner = inset(poly, inset0);
     if (inner.size() < 3) return false;
-    const bool ok = largestFrameRect(inner, f.c, f.u, f.v, 0.5, minW, minD, f.x0, f.x1, f.y0, f.y1);
+    const bool ok = largestFrameRect(inner, f.origin, f.u, f.v, 0.5, minW, minD, f.x0, f.x1, f.y0, f.y1);
     if (!ok && std::getenv("RT_OPENLOT_DEBUG")) {
         Real a0 = 1e30, a1 = -1e30, b0 = 1e30, b1 = -1e30;
-        for (const Vec2& w : inner) { a0 = std::min(a0, dot(w - f.c, f.u)); a1 = std::max(a1, dot(w - f.c, f.u)); b0 = std::min(b0, dot(w - f.c, f.v)); b1 = std::max(b1, dot(w - f.c, f.v)); }
+        for (const Vec2& w : inner) { a0 = std::min(a0, dot(w - f.origin, f.u)); a1 = std::max(a1, dot(w - f.origin, f.u)); b0 = std::min(b0, dot(w - f.origin, f.v)); b1 = std::max(b1, dot(w - f.origin, f.v)); }
         std::printf("[openlot]   no %.1f x %.1f rect in a %.1f x %.1f frame box (%zu verts, frontage %.2f %.2f)\n", minW, minD, a1 - a0, b1 - b0, inner.size(), f.fo.x, f.fo.y);
     }
     return ok;
@@ -1484,9 +1479,7 @@ static bool sculptCarPark(LotBuilding& g, const Poly2& poly, Vec2 frontage, uint
     const Vec3 up(0, 1, 0);
     const Vec3 asphalt(0.075, 0.075, 0.08), white(0.90, 0.90, 0.87);
     RenderMesh m;
-    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) {
-        MeshBuilder::emitQuad(m, f.P(a0, b0, h), f.P(a0, b1, h), f.P(a1, b1, h), f.P(a1, b0, h), up, col);
-    };
+    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) { emitPlanRect(m, f, a0, b0, a1, b1, h, col); };
     const Real ax0 = mx0 - 0.3, ax1 = mx0 + nMod * module + 0.3;
     quad(ax0, f.y0 + verge, ax1, sy0 + nAlong * stallW + 0.3, 0.05, asphalt);
     const Real gx = (ax0 + ax1) * 0.5;
@@ -1537,7 +1530,7 @@ static bool sculptCarPark(LotBuilding& g, const Poly2& poly, Vec2 frontage, uint
     auto hedgeRun = [&](Real a0, Real b0, Real a1, Real b1) {   // frame rect of the hedge
         if (a1 - a0 < 0.6 || b1 - b0 < 0.4) return;
         const Vec3 u3(f.u.x, 0, f.u.y), v3(f.v.x, 0, f.v.y);
-        emitSoftBox(kit, Scope{f.P(a0, b0, 0), {u3, up, v3}, Vec3(a1 - a0, 0.9, b1 - b0)}, PartId::Foliage, hedge, 0u);
+        emitSoftBox(kit, Scope::inFrame(f, a0, b0, 0, Vec3(a1 - a0, 0.9, b1 - b0)), PartId::Foliage, hedge, 0u);
     };
     const Real hy0 = f.y0 + 0.25, hy1 = f.y0 + verge - 0.25;
     hedgeRun(f.x0 + 0.3, hy0, gx - 4.0, hy1);
@@ -1551,23 +1544,23 @@ static bool sculptCarPark(LotBuilding& g, const Poly2& poly, Vec2 frontage, uint
     for (int k = 0; k < nMod; ++k) {
         const Real xs = single ? mx0 + aisleW * 0.5 : mx0 + k * module + module * 0.5, ys = sy0 + nAlong * stallW + 0.05;
         if (ys + 0.4 > f.y1) continue;
-        emitBox(kit, Scope{f.P(xs - 0.1, ys, 0), {u3, up, v3}, Vec3(0.2, 7.5, 0.2)}, PartId::Metal, poleCol);
-        emitBox(kit, Scope{f.P(xs - 0.25, ys - 1.6, 7.5), {u3, up, v3}, Vec3(0.5, 0.2, 1.8)}, PartId::Metal, poleCol);
+        emitBox(kit, Scope::inFrame(f, xs - 0.1, ys, 0, Vec3(0.2, 7.5, 0.2)), PartId::Metal, poleCol);
+        emitBox(kit, Scope::inFrame(f, xs - 0.25, ys - 1.6, 7.5, Vec3(0.5, 0.2, 1.8)), PartId::Metal, poleCol);
         MeshBuilder::emitQuad(lamps, f.P(xs - 0.2, ys - 1.5, 7.49), f.P(xs + 0.2, ys - 1.5, 7.49), f.P(xs + 0.2, ys - 0.9, 7.49),
                               f.P(xs - 0.2, ys - 0.9, 7.49), up * -1.0, lampCol);
     }
     MeshBuilder::append((*outParts)[drapedSlot(PartId::LitBand)], lamps);
     {   // the pay machine by the gate, and a P sign on a post at the street
         const Real px = gx + 3.6, py = f.y0 + verge + 0.6;
-        emitBox(kit, Scope{f.P(px, py, 0), {u3, up, v3}, Vec3(0.6, 1.6, 0.45)}, PartId::Metal, Vec3(0.20, 0.32, 0.52));
-        emitBox(kit, Scope{f.P(px + 0.1, py - 0.02, 1.0), {u3, up, v3}, Vec3(0.4, 0.3, 0.02)}, PartId::Trim, Vec3(0.10, 0.12, 0.14));
+        emitBox(kit, Scope::inFrame(f, px, py, 0, Vec3(0.6, 1.6, 0.45)), PartId::Metal, Vec3(0.20, 0.32, 0.52));
+        emitBox(kit, Scope::inFrame(f, px + 0.1, py - 0.02, 1.0, Vec3(0.4, 0.3, 0.02)), PartId::Trim, Vec3(0.10, 0.12, 0.14));
         const Real sx = gx - 4.2, sy = f.y0 + 0.4;
-        emitBox(kit, Scope{f.P(sx, sy, 0), {u3, up, v3}, Vec3(0.1, 2.6, 0.1)}, PartId::Metal, poleCol);
-        emitBox(kit, Scope{f.P(sx - 0.35, sy - 0.03, 2.6), {u3, up, v3}, Vec3(0.8, 0.8, 0.06)}, PartId::Trim, Vec3(0.10, 0.25, 0.62));
-        emitBox(kit, Scope{f.P(sx - 0.12, sy - 0.05, 2.75), {u3, up, v3}, Vec3(0.08, 0.5, 0.02)}, PartId::Trim, Vec3(0.95, 0.95, 0.95));
-        emitBox(kit, Scope{f.P(sx - 0.12, sy - 0.05, 3.1), {u3, up, v3}, Vec3(0.3, 0.08, 0.02)}, PartId::Trim, Vec3(0.95, 0.95, 0.95));
-        emitBox(kit, Scope{f.P(sx - 0.12, sy - 0.05, 2.92), {u3, up, v3}, Vec3(0.3, 0.08, 0.02)}, PartId::Trim, Vec3(0.95, 0.95, 0.95));
-        emitBox(kit, Scope{f.P(sx + 0.13, sy - 0.05, 2.92), {u3, up, v3}, Vec3(0.08, 0.26, 0.02)}, PartId::Trim, Vec3(0.95, 0.95, 0.95));
+        emitBox(kit, Scope::inFrame(f, sx, sy, 0, Vec3(0.1, 2.6, 0.1)), PartId::Metal, poleCol);
+        emitBox(kit, Scope::inFrame(f, sx - 0.35, sy - 0.03, 2.6, Vec3(0.8, 0.8, 0.06)), PartId::Trim, Vec3(0.10, 0.25, 0.62));
+        emitBox(kit, Scope::inFrame(f, sx - 0.12, sy - 0.05, 2.75, Vec3(0.08, 0.5, 0.02)), PartId::Trim, Vec3(0.95, 0.95, 0.95));
+        emitBox(kit, Scope::inFrame(f, sx - 0.12, sy - 0.05, 3.1, Vec3(0.3, 0.08, 0.02)), PartId::Trim, Vec3(0.95, 0.95, 0.95));
+        emitBox(kit, Scope::inFrame(f, sx - 0.12, sy - 0.05, 2.92, Vec3(0.3, 0.08, 0.02)), PartId::Trim, Vec3(0.95, 0.95, 0.95));
+        emitBox(kit, Scope::inFrame(f, sx + 0.13, sy - 0.05, 2.92, Vec3(0.08, 0.26, 0.02)), PartId::Trim, Vec3(0.95, 0.95, 0.95));
     }
     // trees in the corners of the verge, off the asphalt
     for (const Vec2 t : {Vec2(f.x0 + 0.8, f.y1 - 0.8), Vec2(f.x1 - 0.8, f.y1 - 0.8)})
@@ -1576,7 +1569,7 @@ static bool sculptCarPark(LotBuilding& g, const Poly2& poly, Vec2 frontage, uint
     g.padMesh = std::move(m);
     g.color = Vec3(1, 1, 1);
     if (std::getenv("RT_OPENLOT_DEBUG"))
-        std::printf("[openlot] car park %.0f x %.0f at %.0f %.0f: %d aisles, %d stalls\n", W, f.y1 - f.y0, f.c.x, f.c.y, nMod, stalls);
+        std::printf("[openlot] car park %.0f x %.0f at %.0f %.0f: %d aisles, %d stalls\n", W, f.y1 - f.y0, f.origin.x, f.origin.y, nMod, stalls);
     return true;
 }
 
@@ -1596,11 +1589,9 @@ static bool sculptPlayground(LotBuilding& g, const Poly2& poly, Vec2 frontage, u
         f.y1 = f.y0 + D;
     }
     const Real W = f.x1 - f.x0, D = f.y1 - f.y0;
-    const Vec3 up(0, 1, 0), u3(f.u.x, 0, f.u.y), v3(f.v.x, 0, f.v.y);
+    const Vec3 up(0, 1, 0), u3(f.u.x, 0, f.u.y);
     RenderMesh m;
-    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) {
-        MeshBuilder::emitQuad(m, f.P(a0, b0, h), f.P(a0, b1, h), f.P(a1, b1, h), f.P(a1, b0, h), up, col);
-    };
+    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) { emitPlanRect(m, f, a0, b0, a1, b1, h, col); };
     const Vec3 rubber = rng.unit() < 0.5 ? Vec3(0.42, 0.13, 0.09) : Vec3(0.10, 0.22, 0.38);
     const Vec3 rubber2 = rng.unit() < 0.5 ? Vec3(0.12, 0.30, 0.14) : Vec3(0.55, 0.40, 0.08);
     quad(f.x0 + 0.3, f.y0 + 0.3, f.x1 - 0.3, f.y1 - 0.3, 0.04, rubber);
@@ -1618,7 +1609,7 @@ static bool sculptPlayground(LotBuilding& g, const Poly2& poly, Vec2 frontage, u
     const Vec3 paint[4] = {{0.80, 0.18, 0.12}, {0.95, 0.72, 0.10}, {0.12, 0.40, 0.75}, {0.15, 0.55, 0.25}};
     const Vec3 steel(0.55, 0.57, 0.60), timber(0.42, 0.30, 0.18);
     auto box = [&](Real x, Real y, Real h, Real sx, Real sy, Real sh, PartId part, const Vec3& col) {
-        emitBox(kit, Scope{f.P(x, y, h), {u3, up, v3}, Vec3(sx, sh, sy)}, part, col);
+        emitBox(kit, Scope::inFrame(f, x, y, h, Vec3(sx, sh, sy)), part, col);
     };
     // a bar between two frame points at heights (the swing's A-frame legs, the slide's chute)
     auto bar = [&](Real xa, Real ya, Real ha, Real xb, Real yb, Real hb, Real t, PartId part, const Vec3& col) {
@@ -1731,7 +1722,7 @@ static bool sculptPlayground(LotBuilding& g, const Poly2& poly, Vec2 frontage, u
     g.padMesh = std::move(m);
     g.color = Vec3(1, 1, 1);
     if (std::getenv("RT_OPENLOT_DEBUG"))
-        std::printf("[openlot] playground %.0f x %.0f at %.0f %.0f: %d pieces\n", W, D, f.c.x, f.c.y, placed);
+        std::printf("[openlot] playground %.0f x %.0f at %.0f %.0f: %d pieces\n", W, D, f.origin.x, f.origin.y, placed);
     return true;
 }
 
@@ -1744,11 +1735,9 @@ static bool sculptCommunityGarden(LotBuilding& g, const Poly2& poly, Vec2 fronta
     if (!openFrameOf(poly, frontage, 1.0, 9.0, 7.5, f)) return false;
     Hash rng(mix(seed, 0x6A2DE1u));
     const Real W = f.x1 - f.x0, D = f.y1 - f.y0;
-    const Vec3 up(0, 1, 0), u3(f.u.x, 0, f.u.y), v3(f.v.x, 0, f.v.y);
+    const Vec3 up(0, 1, 0);
     RenderMesh m;
-    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) {
-        MeshBuilder::emitQuad(m, f.P(a0, b0, h), f.P(a0, b1, h), f.P(a1, b1, h), f.P(a1, b0, h), up, col);
-    };
+    auto quad = [&](Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) { emitPlanRect(m, f, a0, b0, a1, b1, h, col); };
     const Vec3 gravel(0.30, 0.27, 0.22), soil(0.17, 0.12, 0.08), timber(0.40, 0.29, 0.18);   // (linear: a pale gravel read white)
     quad(f.x0 + 0.2, f.y0 + 0.2, f.x1 - 0.2, f.y1 - 0.2, 0.03, gravel);
     {
@@ -1761,7 +1750,7 @@ static bool sculptCommunityGarden(LotBuilding& g, const Poly2& poly, Vec2 fronta
     BuildingMesh kit;
     openFence(g, kit, f, gx, 1.4, 1);
     auto box = [&](Real x, Real y, Real h, Real sx, Real sy, Real sh, PartId part, const Vec3& col) {
-        emitBox(kit, Scope{f.P(x, y, h), {u3, up, v3}, Vec3(sx, sh, sy)}, part, col);
+        emitBox(kit, Scope::inFrame(f, x, y, h, Vec3(sx, sh, sy)), part, col);
     };
     // the shed's corner is kept clear of beds
     const bool shedLeft = rng.unit() < 0.5;
@@ -1794,14 +1783,14 @@ static bool sculptCommunityGarden(LotBuilding& g, const Poly2& poly, Vec2 fronta
                         const Vec3 s = normalize(cross(d, up)), n = cross(s, d);
                         emitBox(kit, Scope{A - s * 0.015 - n * 0.015, {d, n, s}, Vec3(L, 0.03, 0.03)}, PartId::Wood, Vec3(0.55, 0.45, 0.30));
                     }
-                    emitSoftBox(kit, Scope{f.P(cx - 0.4, cy - 0.4, 0.36), {u3, up, v3}, Vec3(0.8, 0.9, 0.8)}, PartId::Foliage, crops[1], 0u);
+                    emitSoftBox(kit, Scope::inFrame(f, cx - 0.4, cy - 0.4, 0.36, Vec3(0.8, 0.9, 0.8)), PartId::Foliage, crops[1], 0u);
                 }
             } else {   // ROWS of a crop across the bed (flowers and squash in fewer, fuller clumps)
                 const int n = crop >= 3 && crop <= 4 ? 3 : 5;
                 const Real hgt = crop == 5 ? 0.55 : crop >= 3 ? 0.45 : rng.range(0.22, 0.38);
                 for (int k = 0; k < n; ++k) {
                     const Real cy = y + 0.15 + (bedL - 0.3) * (k + 0.5) / n;
-                    emitSoftBox(kit, Scope{f.P(x + 0.12, cy - 0.18, 0.36), {u3, up, v3}, Vec3(bedW - 0.24, hgt, 0.36)},
+                    emitSoftBox(kit, Scope::inFrame(f, x + 0.12, cy - 0.18, 0.36, Vec3(bedW - 0.24, hgt, 0.36)),
                                 PartId::Foliage, crops[crop], 0u);
                 }
             }
@@ -1846,7 +1835,7 @@ static bool sculptCommunityGarden(LotBuilding& g, const Poly2& poly, Vec2 fronta
     g.padMesh = std::move(m);
     g.color = Vec3(1, 1, 1);
     if (std::getenv("RT_OPENLOT_DEBUG"))
-        std::printf("[openlot] garden %.0f x %.0f at %.0f %.0f: %d beds\n", W, D, f.c.x, f.c.y, beds);
+        std::printf("[openlot] garden %.0f x %.0f at %.0f %.0f: %d beds\n", W, D, f.origin.x, f.origin.y, beds);
     return true;
 }
 
@@ -1886,20 +1875,14 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
     const OBB2 ob = orientedBoundingBox(pad);
     const Vec2 ax = ob.axis[0], ay = ob.axis[1], ctr = ob.center;
     const Real hx = ob.half[0], hy = ob.half[1];
+    // a cabinet or a fence post: a closed block on the ground (it was a top and four sides, open underneath)
     auto emitBoxRM = [&](const Vec2& p, Real bw, Real bd, Real bh, const Vec3& col) {
         const Vec2 cs[4] = { p - ax * bw - ay * bd, p + ax * bw - ay * bd,
                              p + ax * bw + ay * bd, p - ax * bw + ay * bd };
         const Real g0 = gy(p), top = g0 + bh;
-        MeshBuilder::emitQuad(m, Vec3(cs[0].x, top, cs[0].y), Vec3(cs[1].x, top, cs[1].y),
-                              Vec3(cs[2].x, top, cs[2].y), Vec3(cs[3].x, top, cs[3].y),
-                              Vec3(0, 1, 0), col);
-        for (int k = 0; k < 4; ++k) {
-            const Vec2& a = cs[k]; const Vec2& b = cs[(k + 1) % 4];
-            Vec2 n2 = normalize(Vec2(b.y - a.y, a.x - b.x));
-            MeshBuilder::emitQuad(m, Vec3(a.x, g0, a.y), Vec3(b.x, g0, b.y),
-                                  Vec3(b.x, top, b.y), Vec3(a.x, top, a.y),
-                                  Vec3(n2.x, 0, n2.y), col);
-        }
+        const Vec3 foot[4] = {Vec3(cs[0].x, g0, cs[0].y), Vec3(cs[1].x, g0, cs[1].y), Vec3(cs[2].x, g0, cs[2].y), Vec3(cs[3].x, g0, cs[3].y)};
+        const Vec3 head[4] = {Vec3(cs[0].x, top, cs[0].y), Vec3(cs[1].x, top, cs[1].y), Vec3(cs[2].x, top, cs[2].y), Vec3(cs[3].x, top, cs[3].y)};
+        MeshBuilder::emitBlock(m, foot, head, col);
     };
     if (utility) {
         const int nb = 2 + static_cast<int>(rng.unit() * 3);          // cabinets
@@ -2398,7 +2381,7 @@ void sculptParking(LotBuilding& b, const Poly2& lotP, const SiteFrame& f, Real y
     const Vec3 white(0.92, 0.92, 0.90), curb(0.62, 0.61, 0.58), soil(0.24, 0.30, 0.16);
     for (const LotPlan::Rect& r : L.stripes) flat(paint, r.x0, r.y0, r.x1, r.y1, 0.04, white);
     for (const LotPlan::Rect& r : L.islands) {   // a curb, planted
-        emitBox(kit, Scope{at(r.x0, r.y0), {u3, up, v3}, Vec3(r.x1 - r.x0, 0.15, r.y1 - r.y0)}, PartId::Concrete, curb);
+        emitBox(kit, Scope::inFrame(f, r.x0, r.y0, y, Vec3(r.x1 - r.x0, 0.15, r.y1 - r.y0)), PartId::Concrete, curb);
         flat(paint, r.x0 + 0.15, r.y0 + 0.15, r.x1 - 0.15, r.y1 - 0.15, 0.16, soil);
     }
     for (const Vec2& t : L.trees) {
@@ -2421,8 +2404,8 @@ void sculptParking(LotBuilding& b, const Poly2& lotP, const SiteFrame& f, Real y
     const Vec3 pole(0.38, 0.39, 0.41);
     for (const Vec2& pp : L.poles) {
         const Real xs = pp.x, vs = pp.y;
-        emitBox(kit, Scope{at(xs - 0.12, vs - 0.12), {u3, up, v3}, Vec3(0.24, 9.0, 0.24)}, PartId::Metal, pole);
-        emitBox(kit, Scope{at(xs - 1.4, vs - 0.3, 9.0), {u3, up, v3}, Vec3(2.8, 0.25, 0.6)}, PartId::Metal, pole);
+        emitBox(kit, Scope::inFrame(f, xs - 0.12, vs - 0.12, y, Vec3(0.24, 9.0, 0.24)), PartId::Metal, pole);
+        emitBox(kit, Scope::inFrame(f, xs - 1.4, vs - 0.3, y + 9.0, Vec3(2.8, 0.25, 0.6)), PartId::Metal, pole);
         RenderMesh lamp;   // the lenses, facing down
         for (Real dx : {Real(-1.25), Real(0.55)})
             MeshBuilder::emitQuad(lamp, at(xs + dx, vs - 0.25, 8.99), at(xs + dx + 0.7, vs - 0.25, 8.99),
@@ -2434,10 +2417,10 @@ void sculptParking(LotBuilding& b, const Poly2& lotP, const SiteFrame& f, Real y
     {
         const Real px = x1 - 6.0, pv = y0 + 1.0;
         const Vec3 brand = bp.trimColor;
-        emitBox(kit, Scope{at(px - 0.6, pv - 0.4), {u3, up, v3}, Vec3(1.2, 9.0, 0.8)}, PartId::Trim, Vec3(0.30, 0.30, 0.32));
-        emitBox(kit, Scope{at(px - 2.4, pv - 0.5, 9.0), {u3, up, v3}, Vec3(4.8, 3.2, 1.0)}, PartId::Trim, Vec3(0.12, 0.12, 0.13));
+        emitBox(kit, Scope::inFrame(f, px - 0.6, pv - 0.4, y, Vec3(1.2, 9.0, 0.8)), PartId::Trim, Vec3(0.30, 0.30, 0.32));
+        emitBox(kit, Scope::inFrame(f, px - 2.4, pv - 0.5, y + 9.0, Vec3(4.8, 3.2, 1.0)), PartId::Trim, Vec3(0.12, 0.12, 0.13));
         // the panel in the chain's colour, a lit strip of name across each face (it glows at night)
-        emitBox(kit, Scope{at(px - 2.25, pv - 0.53, 9.15), {u3, up, v3}, Vec3(4.5, 2.9, 1.06)}, PartId::Trim, brand);
+        emitBox(kit, Scope::inFrame(f, px - 2.25, pv - 0.53, y + 9.15, Vec3(4.5, 2.9, 1.06)), PartId::Trim, brand);
         RenderMesh lit;
         for (int face = 0; face < 2; ++face) {
             const Real fv = face == 0 ? pv - 0.55 : pv + 0.55;
@@ -2862,6 +2845,7 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
         while (!work.empty()) {
             std::array<Vertex, 3> tri = work.back();
             work.pop_back();
+            const Vec3 facing = cross(tri[2].position - tri[0].position, tri[1].position - tri[0].position);   // its front (mesh_builder.h)
             auto len2 = [&](int u, int w) {
                 const Real dx = tri[u].position.x - tri[w].position.x, dz = tri[u].position.z - tri[w].position.z;
                 return dx * dx + dz * dz;
@@ -2920,10 +2904,12 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
                     cut([&, k](const Vertex& v) { return gzOf(v) - Real(k); });
                 for (long k = static_cast<long>(std::floor(mnd)) + 1; k < mxd; ++k)
                     cut([&, k](const Vertex& v) { return gxOf(v) - gzOf(v) - Real(k); });
+                // each piece is convex (a triangle cut by lines): a fan, wound the way the source triangle faced, and
+                // a piece with no area (three cut points on one line) dropped -- triFacing
                 for (const std::vector<Vertex>& poly : polys) {
                     const uint32_t base = static_cast<uint32_t>(out.vertices.size());
                     for (const Vertex& v : poly) out.vertices.push_back(v);
-                    for (uint32_t k = 1; k + 1 < poly.size(); ++k) out.indices.insert(out.indices.end(), {base, base + k, base + k + 1});
+                    for (uint32_t k = 1; k + 1 < poly.size(); ++k) MeshBuilder::triFacing(out, base, base + k, base + k + 1, facing);
                 }
                 continue;
             }
@@ -2932,7 +2918,7 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
             if (keep) {
                 const uint32_t base = static_cast<uint32_t>(out.vertices.size());
                 for (const Vertex& v : tri) out.vertices.push_back(v);
-                out.indices.insert(out.indices.end(), {base, base + 1, base + 2});
+                MeshBuilder::triFacing(out, base, base + 1, base + 2, facing);
                 continue;
             }
             const int e1 = (e + 1) % 3, o = (e + 2) % 3;
@@ -6472,14 +6458,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const Vec3 up(0, 1, 0);
                 auto onPaving = [&](const Vec2& q) { return pointInPolygon(b.pavedLot, q) && clearOfRoads(q); };
                 auto boxAt = [&](const Vec2& c, const Vec2& d, const Vec2& n, Real w, Real dep, Real y0, Real h, PartId part, const Vec3& col) {
-                    const Vec3 u3(d.x, 0, d.y), n3(n.x, 0, n.y);
-                    const Vec3 o = Vec3(c.x, b.paveY + y0, c.y) - u3 * (w * 0.5) - n3 * (dep * 0.5);
-                    emitBox(kit, Scope{o, {u3, up, n3}, Vec3(w, h, dep)}, part, col);
+                    emitBox(kit, Scope::standing(c, b.paveY + y0, d, n, Vec3(w, h, dep)), part, col);
                 };
                 auto softAt = [&](const Vec2& c, const Vec2& d, const Vec2& n, Real w, Real dep, Real y0, Real h, const Vec3& col) {
-                    const Vec3 u3(d.x, 0, d.y), n3(n.x, 0, n.y);
-                    const Vec3 o = Vec3(c.x, b.paveY + y0, c.y) - u3 * (w * 0.5) - n3 * (dep * 0.5);
-                    emitSoftBox(kit, Scope{o, {u3, up, n3}, Vec3(w, h, dep)}, PartId::Foliage, col, 0u);
+                    emitSoftBox(kit, Scope::standing(c, b.paveY + y0, d, n, Vec3(w, h, dep)), PartId::Foliage, col, 0u);
                 };
                 // an A-frame board: two leaning panels, its face toward the passers-by along the street
                 auto aFrame = [&](const Vec2& c, const Vec2& d, const Vec3& face) {

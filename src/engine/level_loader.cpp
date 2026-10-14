@@ -5942,23 +5942,23 @@ bool LevelLoader::load(const std::string& path,
                     const engine::Vec2 n2(-d2.y, d2.x);
                     const double y0 =
                         (entityGround ? entityGround(a2.x, a2.y) : 0.0) - 0.3;
+                    // a closed block from the mesh library (it was four hand-indexed sides), its triangles into
+                    // the collider
+                    const engine::Vec2 c2[4] = {a2 + n2 * (thick * 0.5), a2 - n2 * (thick * 0.5),
+                                                b2 - n2 * (thick * 0.5), b2 + n2 * (thick * 0.5)};
+                    Vec3 foot[4], head[4];
+                    for (int c4 = 0; c4 < 4; ++c4) {
+                        foot[c4] = Vec3(c2[c4].x, y0, c2[c4].y);
+                        head[c4] = Vec3(c2[c4].x, y0 + 0.3 + h2, c2[c4].y);
+                    }
+                    engine::RenderMesh blockMesh;
+                    engine::MeshBuilder::emitBlock(blockMesh, foot, head, Vec3(1, 1, 1));
                     const uint32_t s0 =
                         static_cast<uint32_t>(buildingsMc.vertices.size());
-                    for (int c4 = 0; c4 < 4; ++c4) {
-                        const engine::Vec2 p2 =
-                            (c4 < 2 ? a2 : b2) +
-                            n2 * ((c4 % 2 == 0 ? 1.0 : -1.0) * thick * 0.5);
-                        buildingsMc.vertices.push_back(Vec3(p2.x, y0, p2.y));
-                        buildingsMc.vertices.push_back(
-                            Vec3(p2.x, y0 + 0.3 + h2, p2.y));
-                    }
-                    const uint32_t q[4] = { s0, s0 + 2, s0 + 6, s0 + 4 };
-                    for (int f2 = 0; f2 < 4; ++f2) {
-                        const uint32_t A2 = q[f2], B2 = q[(f2 + 1) % 4];
-                        buildingsMc.indices.insert(buildingsMc.indices.end(),
-                                                   { A2, B2, B2 + 1, A2, B2 + 1,
-                                                     A2 + 1 });
-                    }
+                    for (const engine::Vertex& vx : blockMesh.vertices)
+                        buildingsMc.vertices.push_back(vx.position);
+                    for (uint32_t ix : blockMesh.indices)
+                        buildingsMc.indices.push_back(s0 + ix);
                 };
                 for (const auto& fs : lb.fenceSegs)
                     wall(fs.first, fs.second, 0.95, 0.14);

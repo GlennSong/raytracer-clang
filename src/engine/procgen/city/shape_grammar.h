@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_SHAPE_GRAMMAR_H
 
 #include "polygon.h"
+#include "site_plan.h"
 #include "../../mesh_builder.h"
 #include "../../../renderer/renderer.h"   // RenderMesh, RenderMaterial
 #include <cstdint>
@@ -178,7 +179,27 @@ struct Scope {
         f.o = origin; f.x = axis[0] * size.x; f.y = axis[1] * size.y; f.z = axis[2] * size.z;
         return f;
     }
+    // A BOX IN A PLAN FRAME: its corner at (x, y) in `f` at height h, `size` along the frame's u, up, along its v (a
+    // depot's shed wall, a playground's post, a car park's lamp)
+    static Scope inFrame(const SiteFrame& f, Real x, Real y, Real h, const Vec3& size) {
+        return Scope{f.P(x, y, h), {Vec3(f.u.x, 0, f.u.y), Vec3(0, 1, 0), Vec3(f.v.x, 0, f.v.y)}, size};
+    }
+    // A BOX STANDING at plan point `at` on height y, centred there: `size` its length along the unit plan direction
+    // `along`, its height, its depth along `across` (default: `along` turned left) -- a basin's rim stone, an A-board
+    static Scope standing(const Vec2& at, Real y, const Vec2& along, const Vec2& across, const Vec3& size) {
+        const Vec3 t(along.x, 0, along.y), n(across.x, 0, across.y);
+        return Scope{Vec3(at.x, y, at.y) - t * (size.x * 0.5) - n * (size.z * 0.5), {t, Vec3(0, 1, 0), n}, size};
+    }
+    static Scope standing(const Vec2& at, Real y, const Vec2& along, const Vec3& size) {
+        return standing(at, y, along, Vec2(-along.y, along.x), size);
+    }
 };
+
+// A FLAT RECTANGLE IN A PLAN FRAME: [a0, a1] x [b0, b1] in `f`, at height h, facing up (a yard's asphalt, a
+// playground's rubber, a garden's gravel)
+inline void emitPlanRect(RenderMesh& m, const SiteFrame& f, Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) {
+    MeshBuilder::emitQuad(m, f.P(a0, b0, h), f.P(a0, b1, h), f.P(a1, b1, h), f.P(a1, b0, h), Vec3(0, 1, 0), col);
+}
 
 // Build a ground-plane scope from a footprint polygon: its oriented bounding box
 // becomes the box footprint, raised to `height` along +Y, sitting at ground
