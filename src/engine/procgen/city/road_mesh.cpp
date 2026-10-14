@@ -195,61 +195,8 @@ std::vector<TerrainFlatten> roadConformRegions(const std::vector<Vec2>& centerli
 }
 
 std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly) {
-    std::vector<std::array<int, 3>> tris;
-    int n = static_cast<int>(poly.size());
-    if (n < 3) return tris;
-    // Drop consecutive duplicate vertices (incl. the wrap): coincident mouths at a sharp
-    // junction give the ring degenerate zero-length edges that would stall ear finding.
-    std::vector<int> v;
-    for (int i = 0; i < n; ++i)
-        if (v.empty() || (poly[i] - poly[v.back()]).length() > 1e-6) v.push_back(i);
-    while (v.size() >= 2 && (poly[v.front()] - poly[v.back()]).length() < 1e-6) v.pop_back();
-    if (v.size() < 3) return tris;
-    double area2 = 0.0;                                  // signed area of the cleaned ring
-    for (std::size_t i = 0; i < v.size(); ++i)
-        area2 += cross(poly[v[i]], poly[v[(i + 1) % v.size()]]);
-    if (area2 < 0.0) std::reverse(v.begin(), v.end());   // work CCW
-    int guard = 3 * n;                           // bound the search so a bad ring can't spin
-    while (static_cast<int>(v.size()) > 2 && guard-- > 0) {
-        int m = static_cast<int>(v.size());
-        bool clipped = false;
-        for (int i = 0; i < m; ++i) {
-            int ia = v[(i + m - 1) % m], ib = v[i], ic = v[(i + 1) % m];
-            const Vec2 &a = poly[ia], &b = poly[ib], &c = poly[ic];
-            if (cross(b - a, c - a) <= 1e-12) continue;   // reflex or collinear: not an ear
-            bool ear = true;                              // no other vertex inside the ear
-            for (int j = 0; j < m && ear; ++j) {
-                int ij = v[j];
-                if (ij == ia || ij == ib || ij == ic) continue;
-                const Vec2& q = poly[ij];                 // a zero-width hole bridge revisits a
-                if ((q - a).length() < 1e-6 ||            // corner under a different index; that
-                    (q - b).length() < 1e-6 ||            // coincident vertex isn't really "inside"
-                    (q - c).length() < 1e-6) continue;
-                if (pointInTriangle(q, a, b, c)) ear = false;
-            }
-            if (!ear) continue;
-            tris.push_back({ia, ib, ic});
-            v.erase(v.begin() + i);
-            clipped = true;
-            break;
-        }
-        if (!clipped) {
-            // No ear found (a near-degenerate ring from many bridged holes can stall the strict
-            // test). Rather than break and leave the rest of the deck as a hole, force-clip the
-            // sharpest convex corner to make progress — a tiny overlap beats a missing patch.
-            int best = -1; double bestCross = 1e-9; int mm = static_cast<int>(v.size());
-            for (int i = 0; i < mm; ++i) {
-                const Vec2 &a = poly[v[(i + mm - 1) % mm]], &b = poly[v[i]], &c = poly[v[(i + 1) % mm]];
-                double cr = cross(b - a, c - a);
-                if (cr > bestCross) { bestCross = cr; best = i; }
-            }
-            if (best < 0) break;                 // truly degenerate: nothing convex left
-            int i = best, mm2 = static_cast<int>(v.size());
-            tris.push_back({v[(i + mm2 - 1) % mm2], v[i], v[(i + 1) % mm2]});
-            v.erase(v.begin() + i);
-        }
-    }
-    return tris;
+    // the engine's one triangulator (triangulate.h); this was a second ear-clipper of its own
+    return triangulateIndices(poly, {});
 }
 
 namespace {

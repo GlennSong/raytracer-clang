@@ -532,3 +532,78 @@ TEST_CASE(mesh_audit_shape_kit_and_small_producers) {
     CHECK(total.tris > 1000);
     CHECK(total.clean());
 }
+
+// THE MESH LIBRARY'S SOLIDS AND FILLS (mesh_builder.h): every one clean by the audit, every solid CLOSED (each edge
+// in exactly two triangles), whatever way round its corners come -- a box on a sheared frame, a block given its
+// corners clockwise, a prism with a hole and its outline either winding, a cylinder faceted and smooth, a polygon in
+// a tilted plane with a hole.
+TEST_CASE(mesh_library_solids_are_clean_and_closed) {
+    auto check = [](const char* what, const RenderMesh& m, bool closed) {
+        const Audit a = audit(m);
+        const size_t open = openEdges(m);
+        if (!a.clean() || (closed && open)) {
+            printAudit(what, a);
+            std::printf("    %s: %zu open edges\n", what, open);
+        }
+        CHECK(a.tris > 0);
+        CHECK(a.clean());
+        if (closed) CHECK(open == 0);
+    };
+    {
+        RenderMesh m;
+        MeshBuilder::emitBox(m, Vec3(-1, 0, -2), Vec3(1, 3, 2), Vec3(1, 1, 1));
+        check("emitBox aabb", m, true);
+    }
+    {
+        RenderMesh m;
+        MeshFrame f;
+        f.o = Vec3(2, 1, 0); f.x = Vec3(1.0, 0.0, 0.3); f.y = Vec3(0.1, 2.0, 0.0); f.z = Vec3(-0.2, 0.0, 1.5);
+        MeshBuilder::emitBox(m, f, Vec3(1, 1, 1));
+        check("emitBox sheared", m, true);
+        RenderMesh mirrored;
+        f.x = f.x * -1.0;   // a left-handed frame: the faces must still face out
+        MeshBuilder::emitBox(mirrored, f, Vec3(1, 1, 1));
+        check("emitBox left-handed", mirrored, true);
+    }
+    {
+        RenderMesh m;
+        const Vec3 foot[4] = {{0, 0, 0}, {0, 0, 2}, {3, 0, 2.5}, {3.2, 0, -0.4}};   // clockwise round
+        const Vec3 head[4] = {{0.2, 2, 0.1}, {0.2, 2.2, 1.8}, {2.8, 1.6, 2.3}, {3.0, 1.5, -0.2}};
+        MeshBuilder::emitBlock(m, foot, head, Vec3(1, 1, 1));
+        check("emitBlock", m, true);
+    }
+    for (bool reverse : {false, true}) {
+        std::vector<Vec2> outline = {{-5, -4}, {5, -4}, {5, 0}, {1, 0}, {1, 4}, {-5, 4}};
+        std::vector<Vec2> hole = {{-3, -2}, {-1, -2}, {-1, 2}, {-3, 2}};
+        if (reverse) { std::reverse(outline.begin(), outline.end()); }
+        else std::reverse(hole.begin(), hole.end());
+        RenderMesh m;
+        MeshBuilder::emitPlanPrism(m, outline, {hole}, 1.0, 1.3, Vec3(1, 1, 1));
+        check(reverse ? "emitPlanPrism (cw outline)" : "emitPlanPrism (ccw outline)", m, true);
+    }
+    for (bool faceted : {true, false}) {
+        RenderMesh m;
+        MeshBuilder::emitCylinder(m, Vec3(1, 0, 1), 0.4, 2.0, 12, Vec3(1, 1, 1), faceted);
+        check(faceted ? "emitCylinder faceted" : "emitCylinder smooth", m, !faceted ? false : true);
+    }
+    {
+        RenderMesh m;
+        const Vec3 n = normalize(Vec3(0.3, 1, -0.2));
+        const Vec3 u = normalize(cross(Vec3(0, 0, 1), n)), v = cross(n, u);
+        std::vector<Vec3> ring, hole;
+        for (int i = 0; i < 7; ++i) {
+            const double a = 6.283185307179586 * i / 7, r = i % 2 ? 2.0 : 3.0;
+            ring.push_back(u * (r * std::cos(a)) + v * (r * std::sin(a)));
+            hole.push_back(u * (0.5 * std::cos(-a)) + v * (0.5 * std::sin(-a)));
+        }
+        MeshBuilder::emitPolygon(m, ring, {hole}, n, Vec3(1, 1, 1));
+        check("emitPolygon tilted, holed", m, false);
+    }
+    for (bool faceted : {true, false}) {
+        LatheStyle st;
+        st.faceted = faceted;
+        st.centre = Vec3(3, 0, -2);
+        check(faceted ? "lathe faceted" : "lathe smooth",
+              MeshBuilder::lathe({{0.0, 0.0}, {0.3, 0.0}, {0.35, 0.5}, {0.2, 0.9}, {0.25, 1.0}, {0.0, 1.0}}, 14, st), false);
+    }
+}

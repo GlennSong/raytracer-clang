@@ -348,4 +348,36 @@ RenderMesh MeshBuilder::lathe(const std::vector<std::pair<double, double>>& prof
     return m;
 }
 
+RenderMesh MeshBuilder::lathe(const std::vector<std::pair<double, double>>& prof, int segs, const LatheStyle& st) {
+    if (!st.faceted) {
+        RenderMesh m = lathe(prof, segs);
+        for (Vertex& v : m.vertices) { v.position = v.position + st.centre; v.color = st.color; }
+        return m;
+    }
+    // FACETED: every quad flat, its normal the segment's (r, y) normal turned to the quad's middle angle
+    RenderMesh m;
+    const std::size_t n = prof.size();
+    segs = std::max(3, segs);
+    if (n < 2) return m;
+    double vlen = 0;
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+        const double r0 = prof[i].first, y0 = prof[i].second, r1 = prof[i + 1].first, y1 = prof[i + 1].second;
+        const double dl = std::hypot(r1 - r0, y1 - y0);
+        if (dl < 1e-12) continue;
+        const double nr = (y1 - y0) / dl, ny = -(r1 - r0) / dl;   // the profile runs up the outside: its right is out
+        for (int k = 0; k < segs; ++k) {
+            const double a0 = 6.283185307179586 * k / segs, a1 = 6.283185307179586 * (k + 1) / segs, am = (a0 + a1) / 2;
+            const Vec3 d0(std::cos(a0), 0, std::sin(a0)), d1(std::cos(a1), 0, std::sin(a1));
+            auto P = [&](const Vec3& d, double r, double y) { return st.centre + d * r + Vec3(0, y, 0); };
+            emitQuadUV(m, P(d0, r0, y0), P(d1, r0, y0), P(d1, r1, y1), P(d0, r1, y1), Vec3(std::cos(am) * nr, ny, std::sin(am) * nr),
+                       st.color, static_cast<float>(static_cast<double>(k) / segs), static_cast<float>(vlen),
+                       static_cast<float>(static_cast<double>(k + 1) / segs), static_cast<float>(vlen),
+                       static_cast<float>(static_cast<double>(k + 1) / segs), static_cast<float>(vlen + dl),
+                       static_cast<float>(static_cast<double>(k) / segs), static_cast<float>(vlen + dl));
+        }
+        vlen += dl;
+    }
+    return m;
+}
+
 }  // namespace engine

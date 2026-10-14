@@ -2594,32 +2594,14 @@ void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
 
 RenderMesh latheMesh(const Vec3& c, const std::vector<Vec2>& prof, int segs,
                      const Vec3& col) {
-    RenderMesh m;
-    if (prof.size() < 2 || segs < 3) return m;
-    const Real tau = 6.283185307179586;
-    for (std::size_t i = 0; i + 1 < prof.size(); ++i) {
-        const Real r0 = prof[i].x, y0 = c.y + prof[i].y;
-        const Real r1 = prof[i + 1].x, y1 = c.y + prof[i + 1].y;
-        if (r0 < 1e-5 && r1 < 1e-5) continue;
-        for (int k = 0; k < segs; ++k) {
-            const Real a0 = tau * k / segs, a1 = tau * (k + 1) / segs;
-            const Vec2 d0(std::cos(a0), std::sin(a0)), d1(std::cos(a1), std::sin(a1));
-            Vec3 p00(c.x + d0.x * r0, y0, c.z + d0.y * r0);
-            Vec3 p10(c.x + d1.x * r0, y0, c.z + d1.y * r0);
-            Vec3 p01(c.x + d0.x * r1, y1, c.z + d0.y * r1);
-            Vec3 p11(c.x + d1.x * r1, y1, c.z + d1.y * r1);
-            // Outward facet normal: radial mid-direction tilted by the
-            // profile slope (dr/dy), with pure caps falling back to +/-Y.
-            Vec2 mid = normalize(d0 + d1);
-            Vec3 n(mid.x * (y1 - y0), r0 - r1, mid.y * (y1 - y0));
-            if (n.length() < 1e-9) n = Vec3(mid.x, 0, mid.y);
-            n = normalize(n);
-            if (r0 < 1e-5)      MeshBuilder::emitTri(m, p00, p11, p01, n, col);
-            else if (r1 < 1e-5) MeshBuilder::emitTri(m, p00, p10, p01, n, col);
-            else                emitQuad(m, p00, p10, p11, p01, n, col);
-        }
-    }
-    return m;
+    // the mesh library's lathe, faceted (it was a second lathe of its own here)
+    std::vector<std::pair<double, double>> p;
+    for (const Vec2& q : prof) p.push_back({q.x, q.y});
+    LatheStyle st;
+    st.faceted = true;
+    st.centre = c;
+    st.color = col;
+    return MeshBuilder::lathe(p, segs, st);
 }
 
 namespace {

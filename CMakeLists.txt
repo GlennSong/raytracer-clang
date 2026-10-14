@@ -62,6 +62,7 @@ add_library(engine_core STATIC
     src/engine/states/editor_state.cpp
     src/engine/screenshot.cpp
     src/engine/mesh_shapes.cpp
+    src/engine/mesh_words.cpp
     src/engine/mesh_builder.cpp
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp

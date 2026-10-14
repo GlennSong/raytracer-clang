@@ -272,9 +272,8 @@ struct Earcut {
 
 }  // namespace
 
-std::vector<std::array<Vec2, 3>>
-triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes) {
-    std::vector<std::array<Vec2, 3>> out;
+std::vector<std::array<int, 3>> triangulateIndices(const Poly2& outer, const std::vector<Poly2>& holes) {
+    std::vector<std::array<int, 3>> out;
     if (outer.size() < 3) return out;
 
     Earcut E;
@@ -285,7 +284,7 @@ triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes) {
 
     std::vector<int> holeStarts;
     for (const Poly2& h : holes) {
-        if (h.size() < 3) continue;
+        if (h.size() < 3) { for (std::size_t i = 0; i < h.size(); ++i) pts.push_back(h[i]); continue; }   // indices stay in step
         std::vector<int> ring;
         for (const Vec2& v : h) { ring.push_back(static_cast<int>(pts.size())); pts.push_back(v); }
         holeStarts.push_back(E.linkedList(ring, pts, /*clockwise=*/false));
@@ -301,10 +300,20 @@ triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes) {
     for (const std::array<int, 3>& t : E.tris) {
         // a ZERO-AREA triangle (three points on one line, which a ring with collinear vertices can leave): nothing to
         // draw, and a sliver in the mesh (the mesh audit, test_winding: thousands in building slabs)
-        const Vec2 &a = pts[t[0]], &b = pts[t[1]], &c = pts[t[2]];
+        const Vec2 &a = pts[static_cast<std::size_t>(t[0])], &b = pts[static_cast<std::size_t>(t[1])], &c = pts[static_cast<std::size_t>(t[2])];
         if (std::fabs(cross(b - a, c - a)) < 1e-9) continue;
-        out.push_back({a, b, c});
+        out.push_back(t);
     }
+    return out;
+}
+
+std::vector<std::array<Vec2, 3>>
+triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes) {
+    std::vector<Vec2> pts(outer.begin(), outer.end());
+    for (const Poly2& h : holes) pts.insert(pts.end(), h.begin(), h.end());
+    std::vector<std::array<Vec2, 3>> out;
+    for (const std::array<int, 3>& t : triangulateIndices(outer, holes))
+        out.push_back({pts[static_cast<std::size_t>(t[0])], pts[static_cast<std::size_t>(t[1])], pts[static_cast<std::size_t>(t[2])]});
     return out;
 }
 

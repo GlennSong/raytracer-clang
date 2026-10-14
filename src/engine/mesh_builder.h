@@ -2,6 +2,8 @@
 #define RAYTRACER_ENGINE_MESH_BUILDER_H
 
 #include "../renderer/renderer.h"
+#include "procgen/city/polygon.h"   // Vec2
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -9,6 +11,53 @@
 #include <vector>
 
 namespace engine {
+
+// THE MESH LIBRARY (ADR-0172, Glenn 2026-10-13: "a common library of triangulation techniques ... how to represent
+// triangles in this engine, and then code to handle all the different cases for building vehicles, buildings,
+// furniture, etc. And then lua should be able to access it"). Every procedural mesh in the engine is built from the
+// words below; a producer that needs a shape they lack ADDS a word here rather than a private helper.
+//
+//   THE CONVENTION  A RenderMesh is an indexed triangle list. A triangle (a, b, c) faces the way cross(c - a, b - a)
+//                   points -- CLOCKWISE seen from its front (VK_FRONT_FACE_CLOCKWISE; back faces are culled) -- and
+//                   that way must agree with its vertex normals. Nobody writes index order by hand: every triangle
+//                   goes through triFacing (emitTri, emitQuad, emitBox, emitBlock, emitPolygon, emitPlanPrism,
+//                   emitCylinder and the shape words all do), which winds it to the outward normal it is given and
+//                   drops it when it has no area (kNoArea2).
+//   SOLIDS ARE CLOSED  A box, block or prism has every face unless the caller masks one off because something
+//                   covers it (a sleeper on its ballast): an open bottom is a hole when the solid stands over air.
+//   ONE TRIANGULATOR  Polygons (with holes) fill through triangulate (earcut, procgen/city/triangulate.h).
+//   CHECKED  engine/mesh_audit.h judges any mesh by these rules: the unit tests run it over every producer
+//                   (tests/test_winding.cpp), rt_bake --audit over every bake.
+
+// AN ORIENTED FRAME: a box spans origin + [0,1] x + [0,1] y + [0,1] z -- the axes carry the size and need not be unit
+// or square (a sheared scope, a pitched part). `aabb` / `centred` build the common ones.
+struct MeshFrame {
+    Vec3 o{0, 0, 0}, x{1, 0, 0}, y{0, 1, 0}, z{0, 0, 1};
+    Vec3 at(double u, double v, double w) const { return o + x * u + y * v + z * w; }
+    static MeshFrame aabb(const Vec3& lo, const Vec3& hi) {
+        return {lo, Vec3(hi.x - lo.x, 0, 0), Vec3(0, hi.y - lo.y, 0), Vec3(0, 0, hi.z - lo.z)};
+    }
+    // `size` along unit axes `right`, `up`, `fwd` (default the world's), centred on `c`
+    static MeshFrame centred(const Vec3& c, const Vec3& size, const Vec3& right = Vec3(1, 0, 0), const Vec3& up = Vec3(0, 1, 0),
+                             const Vec3& fwd = Vec3(0, 0, 1)) {
+        const Vec3 X = right * size.x, Y = up * size.y, Z = fwd * size.z;
+        return {c - X * 0.5 - Y * 0.5 - Z * 0.5, X, Y, Z};
+    }
+};
+
+// Which faces of a box (its frame's axes) or a block (foot/head and the sides in ring order) to emit.
+enum MeshFaces : uint8_t {
+    kFaceNegX = 1, kFacePosX = 2, kFaceNegY = 4, kFacePosY = 8, kFaceNegZ = 16, kFacePosZ = 32, kFacesAll = 63,
+    kFaceBottom = kFaceNegY, kFaceTop = kFacePosY, kFaceSides = kFaceNegX | kFacePosX | kFaceNegZ | kFacePosZ,
+};
+
+// A LATHE's look (MeshBuilder::lathe): smooth (normals averaged through gentle bends) or faceted (every quad flat,
+// the shape grammar's columns and finials); turned about +y through `centre`; vertex colour `color`.
+struct LatheStyle {
+    bool faceted = false;
+    Vec3 centre{0, 0, 0};
+    Vec3 color{1, 1, 1};
+};
 
 struct MeshBuilder {
     // Level-format shape names ("box", "sphere", ...) -> mesh, with the same
@@ -207,6 +256,36 @@ struct MeshBuilder {
     // plate's edge), each band wound by its own segment; a point on the axis (r = 0) closes the shape there. u round the turn 0..1, v the profile's
     // length in metres. Lamp bases, gas lifts, basins, bowls, finials.
     static RenderMesh lathe(const std::vector<std::pair<double, double>>& profile, int segs);
+    static RenderMesh lathe(const std::vector<std::pair<double, double>>& profile, int segs, const LatheStyle& style);
+
+    // --- THE SOLIDS AND FILLS (mesh_words.cpp) ---------------------------------------------------------------
+    // A BOX on a frame, every face flat with its own normal, closed unless `faces` masks some off.
+    static void emitBox(RenderMesh& mesh, const MeshFrame& f, const Vec3& color, uint8_t faces = kFacesAll);
+    // An axis-aligned box from its two corners.
+    static void emitBox(RenderMesh& mesh, const Vec3& lo, const Vec3& hi, const Vec3& color, uint8_t faces = kFacesAll);
+    // A BLOCK: any six-sided solid from its foot ring a, b, c, d and the head ring over it (head[k] above foot[k]).
+    // Faces: kFaceBottom the foot, kFaceTop the head; the side from corner k to k+1 is bit kFaceNegZ (k = 0),
+    // kFacePosX (1), kFacePosZ (2), kFaceNegX (3) -- a box's own faces when the foot runs (x0 z0, x1 z0, x1 z1, x0 z1).
+    // Each face faces away from the block's centre, whichever way round the corners come.
+    static void emitBlock(RenderMesh& mesh, const Vec3 (&foot)[4], const Vec3 (&head)[4], const Vec3& color,
+                          uint8_t faces = kFacesAll);
+    // A PLANAR POLYGON with holes, any plane, any winding: triangulated by the one triangulator in its own plane and
+    // wound to `normal`. `uvPerMetre` > 0 maps uv from the plane in metres.
+    static void emitPolygon(RenderMesh& mesh, const std::vector<Vec3>& ring, const std::vector<std::vector<Vec3>>& holes,
+                            const Vec3& normal, const Vec3& color, double uvPerMetre = 0.0);
+    // A PLAN PRISM: an outline in plan (x, z) with holes, extruded from y0 to y1 -- the top facing up, the bottom
+    // down, a wall along every edge of the outline facing out and of every hole facing into it. A slab, a pad, a
+    // lip, a slab with a stair well. `faces`: kFaceTop, kFaceBottom, kFaceSides.
+    static void emitPlanPrism(RenderMesh& mesh, const std::vector<Vec2>& outline, const std::vector<std::vector<Vec2>>& holes,
+                              double y0, double y1, const Vec3& color, uint8_t faces = kFacesAll);
+    // A CYLINDER standing on `base`: `sides` faces round, flat-faceted or smooth, capped top and bottom by `faces`
+    // (kFaceTop, kFaceBottom; the side always).
+    static void emitCylinder(RenderMesh& mesh, const Vec3& base, double radius, double height, int sides, const Vec3& color,
+                             bool faceted = true, uint8_t faces = kFacesAll);
+    // THE ONE TRIANGULATOR: index triples into the outline's points followed by each hole's, any winding in, the
+    // triples' order unspecified (wind them with triFacing). Earcut (procgen/city/triangulate.h).
+    static std::vector<std::array<int, 3>> triangulate(const std::vector<Vec2>& outline,
+                                                       const std::vector<std::vector<Vec2>>& holes = {});
 };
 
 }  // namespace engine

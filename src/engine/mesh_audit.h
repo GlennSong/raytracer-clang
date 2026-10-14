@@ -12,6 +12,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace engine {
@@ -196,6 +197,25 @@ inline void printColumn(const std::vector<NamedMeshRef>& all, double x, double z
         }
     std::sort(column.rbegin(), column.rend());
     for (const auto& [y, l] : column) std::printf("    [column] %s\n", l.c_str());
+}
+
+// CLOSED? The edges of `m`, welded by position (1 mm), used by other than exactly two triangles -- 0 for a closed
+// solid (a box, a block, a prism, a capped cylinder). The library's solids are closed (mesh_builder.h).
+inline size_t openEdges(const RenderMesh& m) {
+    auto key = [](const Vec3& p) {
+        return std::make_tuple(static_cast<long long>(std::llround(p.x * 1000)), static_cast<long long>(std::llround(p.y * 1000)),
+                               static_cast<long long>(std::llround(p.z * 1000)));
+    };
+    std::map<std::tuple<long long, long long, long long>, int> ids;
+    auto id = [&](const Vec3& p) { return ids.emplace(key(p), static_cast<int>(ids.size())).first->second; };
+    std::map<std::pair<int, int>, int> uses;
+    for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const int v[3] = {id(m.vertices[m.indices[t]].position), id(m.vertices[m.indices[t + 1]].position), id(m.vertices[m.indices[t + 2]].position)};
+        for (int k = 0; k < 3; ++k) ++uses[{std::min(v[k], v[(k + 1) % 3]), std::max(v[k], v[(k + 1) % 3])}];
+    }
+    size_t open = 0;
+    for (const auto& [e, n] : uses) if (n != 2) ++open;
+    return open;
 }
 
 }  // namespace engine
