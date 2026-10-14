@@ -38,7 +38,9 @@ RenderMesh grassClump(uint32_t seed, const GrassClumpParams& p) {
         const uint32_t r0 = vertex(base - across * (w * 0.5), 0.0), r1 = vertex(base + across * (w * 0.5), 0.0);
         const uint32_t b0 = vertex(bend - across * (w * 0.32), tb), b1 = vertex(bend + across * (w * 0.32), tb);
         const uint32_t t0 = vertex(tip, 1.0);
-        m.indices.insert(m.indices.end(), {r0, r1, b1, r0, b1, b0, b0, b1, t0});
+        const Vec3 bladeN = m.vertices[r0].normal;   // a blade is seen from both sides; wound to its normal
+        MeshBuilder::quadFacing(m, r0, r1, b1, b0, bladeN);
+        MeshBuilder::triFacing(m, b0, b1, t0, bladeN);
     }
     // FLOWERS: stems (thin blades, taller, upright) each carrying a head at its tip -- petals round a
     // centre, the head tilted a little toward the stem's lean, facing mostly up to the sun
@@ -52,7 +54,7 @@ RenderMesh grassClump(uint32_t seed, const GrassClumpParams& p) {
         const Vec3 tip = base + Vec3(0, h, 0) + out * (0.08 * h * rng.next());
         const double w = p.width * 0.35;
         const uint32_t s0 = vertex(base - across * w, 0.0), s1 = vertex(base + across * w, 0.0), s2 = vertex(tip, 1.0);
-        m.indices.insert(m.indices.end(), {s0, s1, s2});
+        MeshBuilder::triFacing(m, s0, s1, s2, m.vertices[s0].normal);
         // the head: a centre and `petals` petal tips, each petal a triangle pair (centre, two sides, tip)
         const double size = p.flowerSize * (0.75 + 0.5 * rng.next());
         const Vec3 tilt = normalize(Vec3(0, 1, 0) + out * 0.35);
@@ -74,7 +76,8 @@ RenderMesh grassClump(uint32_t seed, const GrassClumpParams& p) {
             const Vec3 dm = u * std::cos(a0) + v * std::sin(a0);
             const uint32_t q0 = head(tip + d0 * (size * 0.3), petal), q1 = head(tip + d1 * (size * 0.3), petal),
                            q2 = head(tip + dm * size - tilt * (0.15 * size), petal);
-            m.indices.insert(m.indices.end(), {c, q0, q2, c, q2, q1});
+            MeshBuilder::triFacing(m, c, q0, q2, tilt);
+            MeshBuilder::triFacing(m, c, q2, q1, tilt);
         }
     }
     return m;

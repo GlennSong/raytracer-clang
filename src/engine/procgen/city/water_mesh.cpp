@@ -1,4 +1,5 @@
 #include "water_mesh.h"
+#include "../../mesh_builder.h"
 
 #include <cmath>
 #include <cstdint>
@@ -74,8 +75,7 @@ RenderMesh buildWaterMesh(const HeightSampler& floor, const WaterMeshParams& p) 
             const double x0 = p.lo.x + i * p.cell, z0 = p.lo.y + j * p.cell;
             if (!seaCell(p.extent ? p.extent : floor, p, x0, z0)) continue;  // all land: skip
             const uint32_t a00 = corner(i, j), a10 = corner(i + 1, j), a11 = corner(i + 1, j + 1), a01 = corner(i, j + 1);
-            // wound to face up, as emitTriUV winds them
-            mesh.indices.insert(mesh.indices.end(), {a00, a10, a11, a00, a11, a01});
+            MeshBuilder::gridCell(mesh, a00, a10, a11, a01);
         }
     return mesh;
 }

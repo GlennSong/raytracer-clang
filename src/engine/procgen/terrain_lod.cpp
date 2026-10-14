@@ -290,16 +290,7 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
     }
 
     mesh.indices.reserve(static_cast<size_t>(res) * res * 6);
-    for (int j = 0; j < res; j++) {
-        for (int i = 0; i < res; i++) {
-            uint32_t a = static_cast<uint32_t>(j * n + i);
-            uint32_t b = a + 1;
-            uint32_t c = a + static_cast<uint32_t>(n);
-            uint32_t d = c + 1;
-            // Clockwise-front winding (top faces up), matching generateTerrainChunks.
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
-    }
+    MeshBuilder::gridIndices(mesh, n, n);   // clockwise-front, top up, the CDLOD diagonal
 
     out.boundsMin = Vec3(node.minX, minY, node.minZ);
     out.boundsMax = Vec3(node.minX + node.size, maxY, node.minZ + node.size);
@@ -342,7 +333,13 @@ void addSkirts(RenderMesh& mesh, int n, double depth) {
     const uint32_t m = static_cast<uint32_t>(ring.size());
     for (uint32_t k = 0; k < m; ++k) {
         const uint32_t a = ring[k], b = ring[(k + 1) % m], a2 = base + k, b2 = base + (k + 1) % m;
-        mesh.indices.insert(mesh.indices.end(), {a, b, b2, a, b2, a2, a, b2, b, a, a2, b2});
+        // a skirt is seen from both sides (a crack opens either way): each quad twice, facing out and in
+        const Vec3 e = mesh.vertices[b].position - mesh.vertices[a].position;
+        const Vec3 out = normalize(Vec3(e.z, 0, -e.x));
+        for (const Vec3& f : {out, out * -1.0}) {
+            MeshBuilder::triFacing(mesh, a, b, b2, f);
+            MeshBuilder::triFacing(mesh, a, b2, a2, f);
+        }
     }
 }
 }  // namespace
@@ -394,11 +391,7 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
             v.tangent = Vec3(v.position.x, my, v.position.z);
         }
     mesh.indices.reserve(static_cast<std::size_t>(res) * res * 6 + 12 * 4 * n);
-    for (int j = 0; j < res; ++j)
-        for (int i = 0; i < res; ++i) {
-            const uint32_t a = static_cast<uint32_t>(j * n + i), b = a + 1, c = a + static_cast<uint32_t>(n), d = c + 1;
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
+    MeshBuilder::gridIndices(mesh, n, n);
     const double skirt = 1.0 + t.error;
     addSkirts(mesh, n, skirt);
     out.boundsMin = Vec3(x0, static_cast<double>(t.minH) - skirt, z0);
@@ -421,11 +414,7 @@ LodNodeMesh generateBakedPatch(const pyramid::Pyramid& p, const LodNode& node) {
             hi = std::max(hi, y);
             mesh.vertices.push_back(Vertex(Vec3(x, y, z), Vec3(0, 1, 0)));
         }
-    for (int j = 0; j < res; ++j)
-        for (int i = 0; i < res; ++i) {
-            const uint32_t a = static_cast<uint32_t>(j * n + i), b = a + 1, c = a + static_cast<uint32_t>(n), d = c + 1;
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
+    MeshBuilder::gridIndices(mesh, n, n);
     out.boundsMin = Vec3(node.minX, lo, node.minZ);
     out.boundsMax = Vec3(node.minX + node.size, hi, node.minZ + node.size);
     return out;

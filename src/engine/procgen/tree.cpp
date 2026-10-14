@@ -1,4 +1,5 @@
 #include "tree.h"
+#include "../mesh_builder.h"
 #include "lsystem.h"
 #include "skeleton.h"
 #include "../../rt_math.h"
@@ -211,11 +212,8 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
             uint32_t cc = a + 1;                           // ring k, vert i+1
             uint32_t b = base + (k + 1) * stride + i;      // ring k+1, vert i
             uint32_t d = b + 1;
-            // Wound so front faces point along the outward radial (= the vertex
-            // normal). The RMF frame has cross(right, up) == +tangent, the
-            // opposite chirality to the old per-segment frame, so the winding is
-            // reversed from a plain cylinder to keep faces facing out.
-            mesh.indices.insert(mesh.indices.end(), {a, b, cc, cc, b, d});
+            // wound so front faces point along the outward radial (the vertex normals)
+            MeshBuilder::quadFacing(mesh, a, b, d, cc, mesh.vertices[a].normal + mesh.vertices[d].normal);
         }
     }
 }
@@ -236,9 +234,8 @@ void addLeafQuad(RenderMesh& mesh, const Vec3& at, const Vec3& forward,
         v.color = color;
         mesh.vertices.push_back(v);
     }
-    mesh.indices.insert(mesh.indices.end(),
-                        {base, base + 1, base + 2, base, base + 2, base + 3,
-                         base, base + 2, base + 1, base, base + 3, base + 2});
+    MeshBuilder::quadFacing(mesh, base, base + 1, base + 2, base + 3, normal);           // double-sided:
+    MeshBuilder::quadFacing(mesh, base, base + 1, base + 2, base + 3, normal * -1.0);    // both windings
 }
 
 // A leaf-cluster card: two perpendicular crossed quads, so a cluster has volume

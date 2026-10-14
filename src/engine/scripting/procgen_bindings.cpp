@@ -1,4 +1,5 @@
 #include "procgen_bindings.h"
+#include "../mesh_audit.h"
 #include "furniture_library_lua.h"
 
 #include "procgen_mesh.h"
@@ -641,7 +642,7 @@ ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
 
 namespace {
 
-// mesh.lathe{profile={{r,y},...}, segments=16} -> mesh : revolve a 2D profile
+// mesh.lathe{profile={{r,y},...}, segments=16, smooth=false} -> mesh : revolve a 2D profile
 // around +Y at the origin. Columns, domes, finials, vases — the op library's
 // Lua face (the C++ grammar composes the same latheMesh).
 int l_mesh_lathe(lua_State* L) {
@@ -664,8 +665,16 @@ int l_mesh_lathe(lua_State* L) {
     lua_pop(L, 1);
     const int segs = static_cast<int>(optField(L, 1, "segments", 16.0));
     if (prof.size() < 2) return luaL_error(L, "mesh.lathe: profile needs >= 2 rows");
-    pushMesh(L, std::make_shared<RenderMesh>(
-                    latheMesh(Vec3(0, 0, 0), prof, segs, Vec3(1, 1, 1))));
+    // faceted (the shape grammar's look, the default) or smooth = true (normals through gentle bends, creased at
+    // sharp corners): the one lathe, MeshBuilder::lathe
+    lua_getfield(L, 1, "smooth");
+    const bool smooth = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    std::vector<std::pair<double, double>> pr;
+    for (const Vec2& q : prof) pr.push_back({q.x, q.y});
+    LatheStyle st;
+    st.faceted = !smooth;
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::lathe(pr, segs, st)));
     return 1;
 }
 int l_mesh_translate(lua_State* L) {
@@ -1616,6 +1625,122 @@ int l_mesh_quad(lua_State* L) {
     auto m = std::make_shared<RenderMesh>();
     MeshBuilder::emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
     pushMesh(L, std::move(m));
+    return 1;
+}
+
+// --- THE MESH LIBRARY's solids and fills (mesh_builder.h), the same words as C++: every face wound by the library,
+// solids closed. Points are {x, y, z}; plan points {x, z}.
+std::vector<Vec3> checkVec3List(lua_State* L, int idx) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<Vec3> out;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, idx)); i <= n; ++i) {
+        lua_rawgeti(L, idx, i); out.push_back(checkVec3(L, -1)); lua_pop(L, 1);
+    }
+    return out;
+}
+std::vector<Vec2> checkPlanList(lua_State* L, int idx) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<Vec2> out;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, idx)); i <= n; ++i) {
+        lua_rawgeti(L, idx, i);
+        lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2);
+        out.push_back(Vec2(luaL_checknumber(L, -2), luaL_checknumber(L, -1)));
+        lua_pop(L, 3);
+    }
+    return out;
+}
+
+// mesh.block({foot a, b, c, d}, {head a, b, c, d}, color) -> mesh : any six-sided solid, closed, faces out
+int l_mesh_block(lua_State* L) {
+    const std::vector<Vec3> f = checkVec3List(L, 1), h = checkVec3List(L, 2);
+    if (f.size() != 4 || h.size() != 4) return luaL_error(L, "mesh.block: foot and head take four corners each");
+    const Vec3 foot[4] = {f[0], f[1], f[2], f[3]}, head[4] = {h[0], h[1], h[2], h[3]};
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitBlock(*m, foot, head, optColor(L, 3));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.box_frame{origin=, x=, y=, z=, color=, open_bottom=} -> mesh : a box spanning origin + [0,1] of each axis vector
+int l_mesh_box_frame(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    MeshFrame f;
+    f.o = optVec3Field(L, 1, "origin", f.o);
+    f.x = optVec3Field(L, 1, "x", f.x);
+    f.y = optVec3Field(L, 1, "y", f.y);
+    f.z = optVec3Field(L, 1, "z", f.z);
+    const Vec3 col = optVec3Field(L, 1, "color", Vec3(0.8, 0.8, 0.8));
+    lua_getfield(L, 1, "open_bottom");
+    const bool open = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitBox(*m, f, col, open ? static_cast<uint8_t>(kFacesAll & ~kFaceBottom) : kFacesAll);
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.polygon({points}, {holes...}, normal, color) -> mesh : a planar polygon with holes, any plane
+int l_mesh_polygon(lua_State* L) {
+    const std::vector<Vec3> ring = checkVec3List(L, 1);
+    std::vector<std::vector<Vec3>> holes;
+    if (lua_istable(L, 2))
+        for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 2)); i <= n; ++i) {
+            lua_rawgeti(L, 2, i); holes.push_back(checkVec3List(L, lua_gettop(L))); lua_pop(L, 1);
+        }
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitPolygon(*m, ring, holes, checkVec3(L, 3), optColor(L, 4));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.prism({{x, z}...}, {holes...}, y0, y1, color) -> mesh : a plan outline extruded, walls round every ring
+int l_mesh_prism(lua_State* L) {
+    const std::vector<Vec2> outline = checkPlanList(L, 1);
+    std::vector<std::vector<Vec2>> holes;
+    if (lua_istable(L, 2))
+        for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 2)); i <= n; ++i) {
+            lua_rawgeti(L, 2, i); holes.push_back(checkPlanList(L, lua_gettop(L))); lua_pop(L, 1);
+        }
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitPlanPrism(*m, outline, holes, luaL_checknumber(L, 3), luaL_checknumber(L, 4), optColor(L, 5));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.column(base, radius, height, sides, color, smooth) -> mesh : a capped cylinder standing on `base`
+int l_mesh_column(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitCylinder(*m, checkVec3(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+                              static_cast<int>(luaL_optinteger(L, 4, 12)), optColor(L, 5), !lua_toboolean(L, 6));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.flat_shade(m) / mesh.autosmooth(m, crease_deg) -> mesh : normals from the faces, flat or creased
+int l_mesh_flat_shade(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::flatShade(*m);
+    pushMesh(L, std::move(m));
+    return 1;
+}
+int l_mesh_autosmooth(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::autosmooth(*m, luaL_optnumber(L, 2, 50.0));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.audit(m) -> {tris, inward, flipped, degenerate, open_edges} : the engine's mesh audit (engine/mesh_audit.h), so
+// a script can check what it built
+int l_mesh_audit(lua_State* L) {
+    const RenderMesh& m = checkMesh(L, 1);
+    const MeshAudit a = auditMesh(m);
+    lua_newtable(L);
+    lua_pushinteger(L, a.tris); lua_setfield(L, -2, "tris");
+    lua_pushinteger(L, a.inward); lua_setfield(L, -2, "inward");
+    lua_pushinteger(L, a.flipped); lua_setfield(L, -2, "flipped");
+    lua_pushinteger(L, a.degenerate); lua_setfield(L, -2, "degenerate");
+    lua_pushinteger(L, static_cast<lua_Integer>(openEdges(m))); lua_setfield(L, -2, "open_edges");
     return 1;
 }
 
@@ -3728,6 +3853,14 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"lean_normals", l_mesh_lean_normals},
         {"color_by", l_mesh_color_by},
         {"tube", l_mesh_tube},
+        {"block", l_mesh_block},
+        {"box_frame", l_mesh_box_frame},
+        {"polygon", l_mesh_polygon},
+        {"prism", l_mesh_prism},
+        {"column", l_mesh_column},
+        {"flat_shade", l_mesh_flat_shade},
+        {"autosmooth", l_mesh_autosmooth},
+        {"audit", l_mesh_audit},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);

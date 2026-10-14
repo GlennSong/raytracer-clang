@@ -129,13 +129,7 @@ engine::RenderMesh ringXZ(Real innerFrac, int segs) {
         Real t1 = (Real(i + 1) / segs) * 6.28318530718;
         Vec3 o0(std::cos(t0), 0, std::sin(t0)), o1(std::cos(t1), 0, std::sin(t1));
         Vec3 i0 = o0 * innerFrac, i1 = o1 * innerFrac;
-        uint32_t b = static_cast<uint32_t>(m.vertices.size());
-        for (const Vec3& p : { o0, o1, i1, i0 }) {
-            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
-            m.vertices.push_back(v);
-        }
-        m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
-        m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 3);
+        addQuadXZ(m, o0, o1, i1, i0);
     }
     return m;
 }
@@ -143,23 +137,9 @@ engine::RenderMesh ringXZ(Real innerFrac, int segs) {
 engine::RenderMesh arrowXZ() {
     engine::RenderMesh m;
     const Vec3 white(1, 1, 1);
-    auto quad = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
-        uint32_t base = static_cast<uint32_t>(m.vertices.size());
-        for (const Vec3& p : { a, b, c, d }) {
-            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
-            m.vertices.push_back(v);
-        }
-        m.indices.push_back(base + 0); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
-        m.indices.push_back(base + 0); m.indices.push_back(base + 2); m.indices.push_back(base + 3);
-    };
-    quad(Vec3(-0.5, 0, 0), Vec3(0.5, 0, 0), Vec3(0.5, 0, 0.7), Vec3(-0.5, 0, 0.7));   // shaft
+    addQuadXZ(m, Vec3(-0.5, 0, 0), Vec3(0.5, 0, 0), Vec3(0.5, 0, 0.7), Vec3(-0.5, 0, 0.7));   // shaft
     // Arrow head (triangle) from z=0.6 to z=1.0.
-    uint32_t b = static_cast<uint32_t>(m.vertices.size());
-    for (const Vec3& p : { Vec3(-1.1, 0, 0.6), Vec3(1.1, 0, 0.6), Vec3(0, 0, 1.0) }) {
-        engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
-        m.vertices.push_back(v);
-    }
-    m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
+    MeshBuilder::emitTri(m, Vec3(-1.1, 0, 0.6), Vec3(1.1, 0, 0.6), Vec3(0, 0, 1.0), Vec3(0, 1, 0), white);
     return m;
 }
 

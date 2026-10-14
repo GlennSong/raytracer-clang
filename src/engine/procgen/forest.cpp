@@ -1,4 +1,5 @@
 #include "forest.h"
+#include "../mesh_builder.h"
 
 #include "ground_cover.h"
 #include "noise.h"
@@ -281,7 +282,7 @@ void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s
             v.color = col;
             mesh.vertices.push_back(v);
         }
-        for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) mesh.indices.push_back(b + i);
+        MeshBuilder::quadFacing(mesh, b, b + 1, b + 2, b + 3, n[0] + n[1] + n[2] + n[3]);
     };
     // the side picture's rows run top (v0) to the foot (v1): image row 0 is the tree's top
     for (int k = 0; k < 2; ++k) {

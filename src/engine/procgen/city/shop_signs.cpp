@@ -425,7 +425,7 @@ ShopSignMeshes buildShopSignMeshes(const std::vector<ShopSign>& signs, const Sho
             vtx(s.centre + s.right * x1 + s.up * hh, u1, b.v0);   // TR
             vtx(s.centre + s.right * x1 - s.up * hh, u1, b.v1);   // BR
             vtx(s.centre + s.right * x0 - s.up * hh, u0, b.v1);   // BL
-            for (uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(base + k);
+            MeshBuilder::quadFacing(m, base, base + 1, base + 2, base + 3, m.vertices[base].normal);
         };
         const float px = 0.5f / 2048.0f;   // half a texel in: the board's edge column, never its neighbour's
         quad(-hwAll, -hwName, b.u0 + px, b.u0 + px);

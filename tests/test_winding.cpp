@@ -607,3 +607,31 @@ TEST_CASE(mesh_library_solids_are_clean_and_closed) {
               MeshBuilder::lathe({{0.0, 0.0}, {0.3, 0.0}, {0.35, 0.5}, {0.2, 0.9}, {0.25, 1.0}, {0.0, 1.0}}, 14, st), false);
     }
 }
+
+// THE LIBRARY FROM LUA (Glenn: "lua should be able to access it"): mesh.block, box_frame, polygon, prism, column,
+// lathe (both looks), flat_shade, autosmooth -- each checked by mesh.audit inside the script, as a script author would.
+TEST_CASE(mesh_library_from_lua_is_clean) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    const char* code = R"LUA(
+        local function ok(name, m, closed)
+            local a = mesh.audit(m)
+            assert(a.tris > 0, name .. ": empty")
+            assert(a.inward == 0 and a.degenerate == 0, name .. ": " .. a.inward .. " inward, " .. a.degenerate .. " degenerate")
+            if closed then assert(a.open_edges == 0, name .. ": " .. a.open_edges .. " open edges") end
+        end
+        ok("block", mesh.block({{0,0,0},{0,0,2},{3,0,2},{3,0,0}}, {{0,2,0},{0,2,2},{3,1.5,2},{3,1.5,0}}, {0.5,0.5,0.5}), true)
+        ok("box_frame", mesh.box_frame{origin={1,0,1}, x={1,0,0.2}, y={0,2,0}, z={-0.1,0,1.5}}, true)
+        ok("polygon", mesh.polygon({{0,0,0},{2,0,0},{2,0,2},{1,0,1},{0,0,2}}, {}, {0,1,0}), false)
+        ok("prism", mesh.prism({{-5,-4},{5,-4},{5,4},{-5,4}}, {{{-1,-1},{1,-1},{1,1},{-1,1}}}, 0, 0.3), true)
+        ok("column", mesh.column({0,0,0}, 0.3, 2, 10), true)
+        ok("lathe faceted", mesh.lathe{profile={{0,0},{0.3,0},{0.35,0.5},{0,1}}, segments=12}, false)
+        ok("lathe smooth", mesh.lathe{profile={{0,0},{0.3,0},{0.35,0.5},{0,1}}, segments=12, smooth=true}, false)
+        ok("flat_shade", mesh.flat_shade(mesh.icosphere(1)), false)
+        ok("autosmooth", mesh.autosmooth(mesh.box({1,1,1}), 40), false)
+    )LUA";
+    std::string err;
+    const bool ran = vm.doString(code, &err);
+    if (!ran) std::printf("    lua: %s\n", err.c_str());
+    CHECK(ran);
+}

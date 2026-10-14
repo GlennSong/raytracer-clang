@@ -126,13 +126,21 @@ RenderMesh buildCarShell(CarShellStyle style, const Vec3& paint, const Vec3& siz
             m.vertices.push_back(v);
         }
     }
+    // OUTWARD from the body's axis at a point (the engine treats cross(c-a, b-a) as the front): every triangle of
+    // the loft and its caps is wound to it as it is emitted
+    auto outwardAt = [&](uint32_t a, uint32_t b, uint32_t c) {
+        const Vec3 centroid = (m.vertices[a].position + m.vertices[b].position + m.vertices[c].position) / 3.0;
+        const Vec3 out = centroid - Vec3(0, centroid.y * 0.2, centroid.z);   // from a point on the body axis
+        return out.lengthSquared() < 1e-9 ? Vec3(0, 1, 0) : out;
+    };
+    auto tri = [&](uint32_t a, uint32_t b, uint32_t c) { MeshBuilder::triFacing(m, a, b, c, outwardAt(a, b, c)); };
     // Quads between adjacent rings.
     for (int si = 0; si + 1 < S; ++si)
         for (int j = 0; j < K; ++j) {
             uint32_t a = si * K + j, b = si * K + (j + 1) % K;
             uint32_t c = (si + 1) * K + (j + 1) % K, d = (si + 1) * K + j;
-            m.indices.push_back(a); m.indices.push_back(b); m.indices.push_back(c);
-            m.indices.push_back(a); m.indices.push_back(c); m.indices.push_back(d);
+            tri(a, b, c);
+            tri(a, c, d);
         }
     // End caps: fans to a centre point at each end ring.
     auto cap = [&](int si, Real zNudge) {
@@ -144,28 +152,11 @@ RenderMesh buildCarShell(CarShellStyle style, const Vec3& paint, const Vec3& siz
         ctr.color = paint;
         uint32_t ci = static_cast<uint32_t>(m.vertices.size());
         m.vertices.push_back(ctr);
-        for (int j = 0; j < K; ++j) {
-            m.indices.push_back(ci);
-            m.indices.push_back(si * K + j);
-            m.indices.push_back(si * K + (j + 1) % K);
-        }
+        for (int j = 0; j < K; ++j) tri(ci, si * K + j, si * K + (j + 1) % K);
     };
     cap(0, 0.01);
     cap(S - 1, -0.01);
 
-    // Fix winding OUTWARD (the engine treats cross(c-a, b-a) as the front-face
-    // normal): flip any triangle whose geometric normal points into the body.
-    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
-        const Vec3& a = m.vertices[m.indices[t]].position;
-        const Vec3& b = m.vertices[m.indices[t + 1]].position;
-        const Vec3& c = m.vertices[m.indices[t + 2]].position;
-        Vec3 centroid = (a + b + c) / 3.0;
-        Vec3 axis(0, centroid.y * 0.2, centroid.z);       // point on the body axis
-        Vec3 outward = centroid - axis;
-        if (outward.lengthSquared() < 1e-9) outward = Vec3(0, 1, 0);
-        Vec3 gn = cross(c - a, b - a);
-        if (dot(gn, outward) < 0) std::swap(m.indices[t + 1], m.indices[t + 2]);
-    }
     MeshBuilder::autosmooth(m);   // shared loft verts -> SMOOTH shading, hard where the loft folds
 
     // --- trim: lights + wheels -------------------------------------------------

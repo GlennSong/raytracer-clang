@@ -1,4 +1,5 @@
 #include "beacon_light_system.h"
+#include "../mesh_builder.h"
 
 #include "../components.h"
 #include "../vehicle_lamps.h"   // duskRamp, beaconBlinkGate, beaconCellPhase
@@ -53,7 +54,7 @@ void BeaconLightSystem::ensureGroup(FrameContext& ctx) {
         q.vertices.push_back(vt);
     };
     vtx(-0.5, -0.5, 0, 0); vtx(0.5, -0.5, 1, 0); vtx(0.5, 0.5, 1, 1); vtx(-0.5, 0.5, 0, 1);
-    q.indices = {0, 1, 2, 0, 2, 3};
+    MeshBuilder::quadFacing(q, 0, 1, 2, 3, Vec3(0, 0, 1));
     quad_ = ctx.assets.acquireMesh(q, "beacon:sprite");
     const std::vector<unsigned char> px = bakeGlow(GLOW_TEX);
     glow_ = ctx.renderer.uploadTexture(GLOW_TEX, GLOW_TEX, 4, px.data());

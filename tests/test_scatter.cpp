@@ -453,7 +453,10 @@ TEST_CASE(quay_wall_has_a_top_and_a_back_and_faces_the_way_it_is_wound) {
         const engine::Vertex& A = q.vertices[q.indices[i]];
         const engine::Vertex& B = q.vertices[q.indices[i + 1]];
         const engine::Vertex& C = q.vertices[q.indices[i + 2]];
-        const engine::Vec3 w = engine::cross(B.position - A.position, C.position - A.position);
+        // the ENGINE's front: cross(c - a, b - a) along the normal (clockwise seen from the front; mesh_builder.h). This
+        // test once counted the counter-clockwise rule, and the quay was wound to match it -- every face inside out
+        // to the renderer, until the quay moved onto MeshBuilder::quadFacing.
+        const engine::Vec3 w = engine::cross(C.position - A.position, B.position - A.position);
         if (w.length() < 1e-9) continue;
         ++tris;
         if (engine::dot(w, A.normal) <= 0) ++misWound;

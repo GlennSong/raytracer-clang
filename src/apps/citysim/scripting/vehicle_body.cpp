@@ -25,9 +25,7 @@ bool fail(std::string* err, const std::string& msg) {
 
 // Concatenate `src` onto `dst`, rebasing indices.
 void appendMesh(RenderMesh& dst, const RenderMesh& src) {
-    const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
-    dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
-    for (uint32_t i : src.indices) dst.indices.push_back(base + i);
+    MeshBuilder::append(dst, src);
 }
 
 // Read an optional Mesh-valued field into `out`; false only when the field is

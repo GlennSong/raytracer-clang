@@ -60,8 +60,7 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
         const uint32_t b = vertexFor(vi[1], P[1], u[2], u[3], normal, tan, face);
         const uint32_t c = vertexFor(vi[2], P[2], u[4], u[5], normal, tan, face);
         // the front face points the way the shading normal does (as MeshBuilder::emitTri)
-        if (dot(cross(P[2] - P[0], P[1] - P[0]), normal) >= 0) top.indices.insert(top.indices.end(), {a, b, c});
-        else top.indices.insert(top.indices.end(), {a, c, b});
+        MeshBuilder::triFacing(top, a, b, c, normal);
     };
     static const float kNoUV[6] = {0, 0, 0, 0, 0, 0};
     for (size_t ti = 0; ti < tris.size(); ++ti) {
@@ -86,8 +85,7 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
             const uint32_t base = static_cast<uint32_t>(side.vertices.size());
             const Vec3 down(0, -1, 0), tan = normalize(Q[1] - Q[0]).lengthSquared() > 0 ? normalize(Q[1] - Q[0]) : Vec3(1, 0, 0);
             for (const Vec3& q : Q) { Vertex vx(q, down, tan, 0.0f, 0.0f); vx.color = sideColor; side.vertices.push_back(vx); }
-            if (dot(cross(Q[2] - Q[0], Q[1] - Q[0]), down) >= 0) side.indices.insert(side.indices.end(), {base, base + 1, base + 2});
-            else side.indices.insert(side.indices.end(), {base, base + 2, base + 1});
+            MeshBuilder::triFacing(side, base, base + 1, base + 2, down);
         }
     }
     // THE SIDE ONLY WHERE IT SHOWS (ADR-0095). A side is dropped where the surface beyond the edge
@@ -292,14 +290,14 @@ double laneOffset(const Result& r, const Lane& l) {
 // A box on the track's frame, closed: a stair's block, a column, a railing -- each may stand over air (rt_bake --audit,
 // undersides). `bottom` false only where it lies on something (a sleeper on its ballast).
 void trackBox(RenderMesh& m, const Vec2& c, const Vec2& t, double hx, double ht, double y0, double y1, const Vec3& color, bool bottom = true) {
-    const Vec2 n = perp(t), a = c - n * hx - t * ht, b = c + n * hx - t * ht, cc = c + n * hx + t * ht, d = c - n * hx + t * ht;
-    MeshBuilder::emitQuad(m, world(a, y1), world(b, y1), world(cc, y1), world(d, y1), Vec3(0, 1, 0), color);
-    if (bottom) MeshBuilder::emitQuad(m, world(a, y0), world(d, y0), world(cc, y0), world(b, y0), Vec3(0, -1, 0), color);
-    const Vec3 tn(static_cast<Real>(t.x), 0, static_cast<Real>(t.y)), nn(static_cast<Real>(n.x), 0, static_cast<Real>(n.y));
-    MeshBuilder::emitQuad(m, world(a, y0), world(b, y0), world(b, y1), world(a, y1), tn * Real(-1), color);
-    MeshBuilder::emitQuad(m, world(d, y0), world(cc, y0), world(cc, y1), world(d, y1), tn, color);
-    MeshBuilder::emitQuad(m, world(b, y0), world(cc, y0), world(cc, y1), world(b, y1), nn, color);
-    MeshBuilder::emitQuad(m, world(a, y0), world(d, y0), world(d, y1), world(a, y1), nn * Real(-1), color);
+    // the mesh library's box on the track's frame: across (n), up, along (t)
+    const Vec2 n = perp(t), corner = c - n * hx - t * ht;
+    MeshFrame f;
+    f.o = world(corner, y0);
+    f.x = Vec3(static_cast<Real>(n.x * 2 * hx), 0, static_cast<Real>(n.y * 2 * hx));
+    f.y = Vec3(0, static_cast<Real>(y1 - y0), 0);
+    f.z = Vec3(static_cast<Real>(t.x * 2 * ht), 0, static_cast<Real>(t.y * 2 * ht));
+    MeshBuilder::emitBox(m, f, color, bottom ? kFacesAll : static_cast<uint8_t>(kFacesAll & ~kFaceBottom));
 }
 
 // THE TRACK on one lane: a sleeper every 0.65 m and two rails swept along the lane's centreline at gauge.
@@ -618,21 +616,8 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, Ren
             const Vec2 q = pointAt(e.xy, e.s, st), nr = perp(tangentAtStation(e.xy, e.s, st));
             return world(q + nr * (mid + side * u), platTop(st) + kRoof - kFall * u + dy);
         };
-        auto quad3 = [](RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& col, bool flip) {
-            Vec3 n = cross(b - a, d - a); const Real l = n.length(); if (l < 1e-12) return;
-            n = n * (1 / l);
-            if (flip) MeshBuilder::emitQuad(m, a, d, c, b, n * Real(-1), col); else MeshBuilder::emitQuad(m, a, b, c, d, n, col);
-        };
-        // a box from four corners at its foot and four at its head (a, b, c, d round the foot)
-        auto box8 = [&](RenderMesh& m, const Vec3 (&lo)[4], const Vec3 (&hi)[4], const Vec3& col) {
-            Vec3 c0(0, 0, 0); for (int i = 0; i < 4; ++i) c0 = c0 + lo[i] + hi[i]; c0 = c0 * Real(0.125);
-            auto face = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
-                Vec3 n = cross(b - a, d - a); const Vec3 fc = (a + b + c + d) * Real(0.25);
-                quad3(m, a, b, c, d, col, dot(n, fc - c0) < 0);
-            };
-            face(hi[0], hi[1], hi[2], hi[3]); face(lo[0], lo[3], lo[2], lo[1]);
-            for (int i = 0; i < 4; ++i) { const int j = (i + 1) % 4; face(lo[i], lo[j], hi[j], hi[i]); }
-        };
+        // a box from four corners at its foot and four at its head: the mesh library's block
+        auto box8 = [](RenderMesh& m, const Vec3 (&lo)[4], const Vec3 (&hi)[4], const Vec3& col) { MeshBuilder::emitBlock(m, lo, hi, col); };
         const double ss0 = s0 + 0.3, ss1 = s1 - 0.3;
         // posts and beams
         for (double st = s0 + 6; st <= s1 - 6; st += 12) {
@@ -661,8 +646,9 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, Ren
                 const double ya = kBeam + prof[k][1], yb = kBeam + prof[k + 1][1];
                 const Vec3 A = roofPt(a, -roofHalf - 0.15, ya), B = roofPt(b, -roofHalf - 0.15, yb), C = roofPt(b, roofHalf + 0.15, yb), D = roofPt(a, roofHalf + 0.15, ya);
                 const bool up = cross(B - A, D - A).y > 0;
-                quad3(canopy, A, B, C, D, kCanopySheet, !up);     // the top
-                quad3(canopy, A, B, C, D, kCanopySheet, up);      // and its underside
+                const Vec3 sheetUp = normalize(cross(B - A, D - A)) * (up ? Real(1) : Real(-1));
+                MeshBuilder::emitQuad(canopy, A, B, C, D, sheetUp, kCanopySheet);           // the top
+                MeshBuilder::emitQuad(canopy, A, B, C, D, sheetUp * Real(-1), kCanopySheet);   // and its underside
             }
         }
         // the fascias, 0.4 deep, hiding the sheet's ribbed edge; and the lamps

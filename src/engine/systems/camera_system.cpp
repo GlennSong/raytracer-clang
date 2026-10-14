@@ -314,15 +314,13 @@ static RenderMesh cameraGizmoMesh() {
     RenderMesh body = MeshBuilder::box(Vec3(0.22, 0.28, 0.4));
     RenderMesh snout = MeshBuilder::cone(0.1f, 0.18f);
 
-    const uint32_t base = static_cast<uint32_t>(body.vertices.size());
-    for (Vertex v : snout.vertices) {
+    for (Vertex& v : snout.vertices) {
         // +Y -> -Z is (x, y, z) -> (x, z, -y); base lands at z = -0.2.
         v.position = Vec3(v.position.x, v.position.z, -v.position.y - 0.29);
         v.normal = Vec3(v.normal.x, v.normal.z, -v.normal.y);
         v.tangent = Vec3(v.tangent.x, v.tangent.z, -v.tangent.y);
-        body.vertices.push_back(v);
     }
-    for (uint32_t i : snout.indices) body.indices.push_back(base + i);
+    MeshBuilder::append(body, snout);
     return body;
 }
 

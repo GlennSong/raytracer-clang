@@ -150,6 +150,8 @@ RenderMesh polygonizeSdf(const Sdf& field, const SdfBounds& bounds, int resoluti
                 mesh.vertices.push_back(Vertex(v, sdfGradient(field, v)));   // outward normal
             }
 
+    // THE ONE PLACE A MESH IS NOT WOUND BY triFacing (mesh_builder.h's convention): a dual contour's winding comes
+    // from its topology, as below -- winding each quad to its gradient alone breaks the global consistency.
     // Stitch a quad across every grid edge whose endpoints differ in sign; the
     // four cells around it own the corners. Winding must be GLOBALLY consistent
     // (every shared edge traversed oppositely by its two quads) or adjacent

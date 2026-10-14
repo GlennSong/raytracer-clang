@@ -108,12 +108,6 @@ std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, co
 }
 
 namespace {
-bool pointInTriangle(const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
-    double d1 = cross(b - a, p - a), d2 = cross(c - b, p - b), d3 = cross(a - c, p - c);
-    bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(neg && pos);                        // inside (or on edge) of CCW/CW triangle
-}
 }  // namespace
 
 std::vector<double> roadProfile(const std::vector<double>& ground,
@@ -200,60 +194,6 @@ std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly
 }
 
 namespace {
-// Weld coincident vertices into one shared, indexed mesh: collapse vertices that agree in position
-// (within posTol), normal, colour and UV into a single index, dropping triangles that go degenerate.
-// The independently-emitted ribbons and junction pads meet at the same coordinates but as SEPARATE
-// vertices (float drift -> hairline cracks / z-fight at the seam); welding fuses them into one
-// continuous surface, and turns the non-indexed soup into a compact indexed mesh. Crease edges
-// (different normals) and material seams (different colour) keep their own vertices, so nothing is
-// rounded over or smeared. (road-network-v2-plan T3.1)
-RenderMesh weldMesh(const RenderMesh& in, double posTol = 1e-3) {
-    RenderMesh out;
-    out.vertices.reserve(in.vertices.size());
-    out.indices.reserve(in.indices.size());
-    const double inv = 1.0 / posTol;
-    auto cell = [inv](double x) { return static_cast<long long>(std::floor(x * inv)); };
-    auto hash3 = [](long long x, long long y, long long z) {
-        std::uint64_t h = 1469598103934665603ull;
-        for (long long c : {x, y, z}) h = (h ^ static_cast<std::uint64_t>(c)) * 1099511628211ull;
-        return h;
-    };
-    std::unordered_map<std::uint64_t, std::vector<uint32_t>> grid;   // spatial hash -> welded indices
-    auto match = [posTol](const Vertex& a, const Vertex& b) {
-        auto c = [posTol](double x, double y) { return std::fabs(x - y) <= posTol; };
-        return c(a.position.x, b.position.x) && c(a.position.y, b.position.y) && c(a.position.z, b.position.z)
-            && c(a.normal.x, b.normal.x) && c(a.normal.y, b.normal.y) && c(a.normal.z, b.normal.z)
-            && c(a.color.x, b.color.x) && c(a.color.y, b.color.y) && c(a.color.z, b.color.z)
-            && c(a.u, b.u) && c(a.v, b.v);
-    };
-    std::vector<uint32_t> remap(in.vertices.size());
-    for (uint32_t i = 0; i < in.vertices.size(); ++i) {
-        const Vertex& v = in.vertices[i];
-        long long cx = cell(v.position.x), cy = cell(v.position.y), cz = cell(v.position.z);
-        uint32_t found = UINT32_MAX;
-        for (long long dx = -1; dx <= 1 && found == UINT32_MAX; ++dx)         // search the 27 neighbour
-            for (long long dy = -1; dy <= 1 && found == UINT32_MAX; ++dy)     // cells so a vertex pair
-                for (long long dz = -1; dz <= 1 && found == UINT32_MAX; ++dz) {  // straddling a cell edge
-                    auto it = grid.find(hash3(cx + dx, cy + dy, cz + dz));   // still welds
-                    if (it == grid.end()) continue;
-                    for (uint32_t cand : it->second)
-                        if (match(out.vertices[cand], v)) { found = cand; break; }
-                }
-        if (found == UINT32_MAX) {
-            found = static_cast<uint32_t>(out.vertices.size());
-            out.vertices.push_back(v);
-            grid[hash3(cx, cy, cz)].push_back(found);
-        }
-        remap[i] = found;
-    }
-    for (std::size_t t = 0; t + 2 < in.indices.size(); t += 3) {
-        uint32_t a = remap[in.indices[t]], b = remap[in.indices[t + 1]], c = remap[in.indices[t + 2]];
-        if (a != b && b != c && a != c) {            // drop triangles welding collapsed to a sliver
-            out.indices.push_back(a); out.indices.push_back(b); out.indices.push_back(c);
-        }
-    }
-    return out;
-}
 }  // namespace
 
 

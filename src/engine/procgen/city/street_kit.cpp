@@ -9,23 +9,6 @@ namespace {
 
 // Two-sided quad/tri push matching the city's winding convention (geometric
 // normal opposite the shading normal; ADR engine winding). Flat markings only.
-void pushTri(RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& c,
-             const Vec3& nrm, const Vec3& col) {
-    Vec3 geo = cross(b - a, c - a);
-    uint32_t base = static_cast<uint32_t>(m.vertices.size());
-    auto v = [&](const Vec3& p) { Vertex vt(p, nrm, Vec3(1, 0, 0), 0, 0); vt.color = col; return vt; };
-    if (dot(geo, nrm) <= 0) {
-        m.vertices.push_back(v(a)); m.vertices.push_back(v(b)); m.vertices.push_back(v(c));
-    } else {
-        m.vertices.push_back(v(a)); m.vertices.push_back(v(c)); m.vertices.push_back(v(b));
-    }
-    m.indices.push_back(base); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
-}
-void pushQuad(RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& c,
-              const Vec3& d, const Vec3& nrm, const Vec3& col) {
-    pushTri(m, a, b, c, nrm, col);
-    pushTri(m, a, c, d, nrm, col);
-}
 
 // Colour `m`, place it at `pos` rotated `yaw` about +Y, and merge into `out`.
 void place(RenderMesh& out, RenderMesh m, const Vec3& col, const Vec3& pos, Real yaw) {
@@ -98,7 +81,7 @@ void emitStopBar(RenderMesh& out, const Vec2& center, const Vec2& dir,
     auto P = [&](const Vec2& p, const Vec2& o) {
         Vec2 q = p + o; return Vec3(q.x, y + 0.03, q.y);
     };
-    pushQuad(out, P(inner, back), P(outer, back), P(outer, front), P(inner, front),
+    MeshBuilder::emitQuad(out, P(inner, back), P(outer, back), P(outer, front), P(inner, front),
              nrm, col);
 }
 
@@ -225,12 +208,12 @@ RenderMesh treePitProto() {
     RenderMesh out;
     const Vec3 soil(0.06, 0.045, 0.03), iron(0.10, 0.10, 0.11);
     const Vec3 up(0, 1, 0);
-    pushQuad(out, Vec3(-0.6, 0.02, -0.6), Vec3(0.6, 0.02, -0.6), Vec3(0.6, 0.02, 0.6), Vec3(-0.6, 0.02, 0.6), up, soil);
+    MeshBuilder::emitQuad(out, Vec3(-0.6, 0.02, -0.6), Vec3(0.6, 0.02, -0.6), Vec3(0.6, 0.02, 0.6), Vec3(-0.6, 0.02, 0.6), up, soil);
     for (int s = 0; s < 4; ++s) {   // the grate's frame, a 0.1 m band
         const Real a = s * 1.5707963267948966;
         const Vec3 u(std::cos(a), 0, std::sin(a)), v(-u.z, 0, u.x);
         const Vec3 c0 = u * 0.7 + v * 0.7, c1 = u * 0.7 - v * 0.7, c2 = u * 0.6 - v * 0.6, c3 = u * 0.6 + v * 0.6;
-        pushQuad(out, c0 + up * 0.025, c1 + up * 0.025, c2 + up * 0.025, c3 + up * 0.025, up, iron);
+        MeshBuilder::emitQuad(out, c0 + up * 0.025, c1 + up * 0.025, c2 + up * 0.025, c3 + up * 0.025, up, iron);
     }
     return out;
 }

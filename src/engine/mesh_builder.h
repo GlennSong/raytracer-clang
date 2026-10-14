@@ -130,6 +130,9 @@ struct MeshBuilder {
     // Drop the triangles of no area (a sphere's pole row, a rounded box's collapsed corner): the vertices stay, so
     // indices into them hold. The grid primitives end with it.
     static void dropDegenerate(RenderMesh& mesh);
+    // FLAT SHADING: every triangle its own three vertices, their normal the triangle's own facing (cross(c-a, b-a)),
+    // its winding kept; no-area triangles dropped. Low-poly rocks, faceted gems.
+    static void flatShade(RenderMesh& mesh);
 
     // Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid (cell key = floor(x / cell),
     // floor(z / cell)), in first-seen order; vertices are duplicated per chunk (a vertex is shared by few
@@ -180,6 +183,10 @@ struct MeshBuilder {
     // already pushed row-major: vertex (i,j) lives at `base + j*cols + i`,
     // with +i = +X and +j = +Z. The shared triangulation for terrain grids
     // (heightfield bake + noise terrain), so the top always faces up.
+    // One cell of an up-facing lattice: corners (i, j) a00, (i+1, j) a10, (i+1, j+1) a11, (i, j+1) a01, split on the
+    // a00-a11 diagonal (the CDLOD leaf layout drapeOnGround follows), clockwise-front facing +Y. gridIndices is this
+    // over every cell; a sparse grid (the sea, a ring of terrain) calls it per cell.
+    static void gridCell(RenderMesh& mesh, uint32_t a00, uint32_t a10, uint32_t a11, uint32_t a01);
     static void gridIndices(RenderMesh& mesh, int cols, int rows,
                             uint32_t base = 0);
 
@@ -245,6 +252,11 @@ struct MeshBuilder {
     // Every emitter here (emitTri, emitQuad and their UV forms) winds through triFacing.
     static uint32_t vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, const Vec3& color);
     static void triFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, const Vec3& out);
+    // A quad over four vertices already placed (a b c d round it): two triFacing, split on a-c.
+    static void quadFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, uint32_t d, const Vec3& out) {
+        triFacing(mesh, a, b, c, out);
+        triFacing(mesh, a, c, d, out);
+    }
     // CROSSED CARDS: `planes` vertical quads `width` x `height` through the origin, evenly turned
     // about +y, standing on y = 0. u runs 0..1 across a card, v 0 at the foot .. 1 at the top;
     // every normal is `normal` (straight up for ground cover, so it lights like the ground it

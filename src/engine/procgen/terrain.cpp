@@ -970,11 +970,8 @@ RenderMesh generateTerrainRing(const TerrainParams& params, const Noise& noise,
             if (std::max(std::abs(x0), std::abs(x1)) <= innerHalf &&
                 std::max(std::abs(z0), std::abs(z1)) <= innerHalf)
                 continue;
-            uint32_t a = static_cast<uint32_t>(j * n + i);
-            uint32_t b = a + 1;
-            uint32_t c = a + static_cast<uint32_t>(n);
-            uint32_t d = c + 1;
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+            const uint32_t a = static_cast<uint32_t>(j * n + i), c = a + static_cast<uint32_t>(n);
+            MeshBuilder::gridCell(mesh, a, a + 1, c + 1, c);
         }
     }
 

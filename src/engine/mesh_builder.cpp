@@ -521,6 +521,22 @@ void MeshBuilder::dropDegenerate(RenderMesh& mesh) {
     mesh.indices.resize(w);
 }
 
+void MeshBuilder::flatShade(RenderMesh& mesh) {
+    RenderMesh flat;
+    flat.materialIndex = mesh.materialIndex;
+    flat.tangentIsData = mesh.tangentIsData;
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        Vertex a = mesh.vertices[mesh.indices[i]], b = mesh.vertices[mesh.indices[i + 1]], c = mesh.vertices[mesh.indices[i + 2]];
+        const Vec3 n = cross(c.position - a.position, b.position - a.position);
+        if (n.lengthSquared() < kNoArea2) continue;
+        a.normal = b.normal = c.normal = normalize(n);
+        const uint32_t base = static_cast<uint32_t>(flat.vertices.size());
+        flat.vertices.push_back(a); flat.vertices.push_back(b); flat.vertices.push_back(c);
+        triFacing(flat, base, base + 1, base + 2, a.normal);
+    }
+    mesh = std::move(flat);
+}
+
 void MeshBuilder::autosmooth(RenderMesh& mesh, double creaseDeg) {
     const double cosCrease = std::cos(creaseDeg * 3.141592653589793 / 180.0);
     const std::size_t nt = mesh.indices.size() / 3;
@@ -640,10 +656,15 @@ void MeshBuilder::gridIndices(RenderMesh& mesh, int cols, int rows,
             uint32_t b = a + 1;                              // +x
             uint32_t c = a + static_cast<uint32_t>(cols);    // +z
             uint32_t d = c + 1;                              // +x, +z
-            // Clockwise-front for an up-facing (+Y) surface.
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
+            gridCell(mesh, a, b, d, c);
         }
     }
+}
+
+void MeshBuilder::gridCell(RenderMesh& mesh, uint32_t a00, uint32_t a10, uint32_t a11, uint32_t a01) {
+    // clockwise-front for an up-facing (+Y) surface: (a00, a10, a11) and (a00, a11, a01) seen from above; a lattice
+    // over a height field can never turn a cell over in plan, so the order is the winding
+    mesh.indices.insert(mesh.indices.end(), {a00, a10, a11, a00, a11, a01});
 }
 
 void MeshBuilder::emitLattice(RenderMesh& mesh, const LatticeSpec& spec) {

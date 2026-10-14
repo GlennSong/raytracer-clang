@@ -279,10 +279,9 @@ bool readLotResult(const bundle::Bundle& b, const std::string& prefix, NetLotRes
         RenderMesh chunk; if (!readLotPart(b, cp.section, chunk)) return fail(cp.section.substr(prefix.size()) + ": unreadable");
         std::vector<RenderMesh>& vec = cp.flat ? res.flatParts : res.parts;
         if (cp.part < 0 || static_cast<size_t>(cp.part) >= vec.size()) return fail(cp.section.substr(prefix.size()) + ": part index out of range");
-        RenderMesh& dst = vec[static_cast<size_t>(cp.part)]; const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+        RenderMesh& dst = vec[static_cast<size_t>(cp.part)];
         dst.materialIndex = chunk.materialIndex;
-        dst.vertices.insert(dst.vertices.end(), chunk.vertices.begin(), chunk.vertices.end());
-        dst.indices.reserve(dst.indices.size() + chunk.indices.size()); for (uint32_t i : chunk.indices) dst.indices.push_back(base + i);
+        MeshBuilder::append(dst, chunk);
     }
     return true;
 }

@@ -51,7 +51,7 @@ void card(RenderMesh& m, const Vec3& base, const Vec3& along, const Vec3& side, 
         v.color = col;
         m.vertices.push_back(v);
     }
-    for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) m.indices.push_back(b + i);
+    MeshBuilder::quadFacing(m, b, b + 1, b + 2, b + 3, n);
 }
 
 void tubeInto(RenderMesh& dst, const std::vector<Vec3>& pts, const std::vector<double>& radii, int sides, const std::vector<Vec3>& cols) {
