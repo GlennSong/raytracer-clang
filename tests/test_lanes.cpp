@@ -528,6 +528,38 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     std::printf("    %s; %zu cell parts (grow %.1f s, write %.1f s)\n", rep.reports.at(kLotsProducerName).report.value("summary", std::string()).c_str(), cps.size(), rep.reports.at(kLotsProducerName).timings.at("grow"), rep.reports.at(kLotsProducerName).timings.at("write"));
 }
 
+// EVERY LOT MESH THROUGH THE MESH AUDIT (Glenn, 2026-10-14: "city lots should be reworked"): the grown lots of a lab
+// city -- buildings, parks, gardens, playgrounds, car parks, yards, walks, the draped pads -- part by part, no triangle
+// wound against its normals (bar float slivers), none without area, nothing non-finite. Before this only the bake
+// audit (rt_bake --audit) looked at a lot's open ground, where the drape's hand fan left 22 zero-area triangles on the
+// island (none in this lab: the island bake audit is what proves that one).
+TEST_CASE(lanes_every_lot_mesh_passes_the_mesh_audit) {
+    using namespace engine::bundle; using namespace engine::lotcache;
+    registerCityProducer(); registerLotsProducer();
+    const std::filesystem::path before = std::filesystem::current_path(); std::filesystem::current_path(RT_SOURCE_DIR);
+    struct Restore { std::filesystem::path p; ~Restore() { std::error_code ec; std::filesystem::current_path(p, ec); } } restore{before};
+    LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
+    const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
+    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.lotNav; city.pavedSidewalk = p.bands.sidewalkWidth;
+    city.deck = p.deck;
+    const NetLotResult g = growLotsForLevel(in, city, nullptr);
+    MeshAudit total;
+    auto look = [&](const char* kind, size_t part, const RenderMesh& m) {
+        if (m.indices.empty()) return;
+        const MeshAudit a = auditMesh(m);
+        if (a.inward - a.inwardSliver > 0 || a.degenerate > 0 || a.nonFinite > 0)
+            printMeshAudit((std::string(kind) + " part " + std::to_string(part)).c_str(), a);
+        total.add(a);
+    };
+    for (size_t i = 0; i < g.parts.size(); ++i) look("lot", i, g.parts[i]);
+    for (size_t i = 0; i < g.flatParts.size(); ++i) look("lot flat", i, g.flatParts[i]);
+    printMeshAudit("ALL LOTS (ring_city)", total);
+    CHECK(total.tris > 100000);
+    CHECK(total.inward - total.inwardSliver == 0);
+    CHECK(total.degenerate == 0);
+    CHECK(total.nonFinite == 0);
+}
+
 // ADR-0104: a river through a block leaves TWO blocks, one each side, and none of either is wet.
 TEST_CASE(lanes_blocks_stand_back_from_a_river_through_them) {
     using namespace engine::roads::lanes;
@@ -881,11 +913,13 @@ TEST_CASE(lanes_no_elevated_surface_is_see_through_from_below) {
 // step open (slab()'s side rule hid the whole side behind the neighbour's top).
 TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
     size_t eyes = 0, through = 0;
-    // KNOWN, small, each with its cause (a regression past them fails): a 0.6 m shoulder sliver cut off from its deck at
-    // the interchange's gores keeps one side hidden by a lane footprint that runs on where no deck is drawn (58 looks);
-    // a station canopy's ribs and the light rail's stair walls (6, 2); the valley's ramp ends (10).
-    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 0}, {"light_rail_lab", 2},
-                                                 {"rail_loop", 6}, {"system_interchange", 58}, {"valley_viaduct", 10}};
+    // KNOWN, small (a regression past them fails): 27 at the interchange -- most graze a deck's outer bottom edge and
+    // meet the side face on that edge rather than the soffit beside it (a tie on a shared edge, the hit at the soffit's
+    // own height: from (-103, 25), (-360, -50), (243, -49)), but some meet a side face halfway up its height, a real
+    // gap not yet found (from (-615, -234)); the shoulder sliver a footprint hid is gone now the side rule tests what is
+    // drawn. A light-rail stair wall (1); the valley's ramp ends (10).
+    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 0}, {"light_rail_lab", 1},
+                                                 {"rail_loop", 0}, {"system_interchange", 27}, {"valley_viaduct", 10}};
     for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange", "valley_viaduct"}) {
         const Result& r = scene(scn);
         const std::vector<NamedMesh> meshes = buildMeshes(r);

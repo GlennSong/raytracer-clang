@@ -348,14 +348,19 @@ std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, co
     for (const Polygon2& p : layer) {
         FlatMesh m = triangulatePolygon(p); if (m.tris.empty() || roads.empty()) continue;
         for (DeckVertex& v : m.verts) v.z = H.layerHeight(roads, v.xy);
-        // a triangle steeper than any road can be (rise over its longest edge > 0.35, and more than a metre
-        // of it) joins two levels: drop it and rebuild the boundary so the slab's side faces follow the cut
+        // a triangle steeper than any road can be (its plane's slope over 0.35, and a quarter metre or more of rise)
+        // joins two levels: drop it and rebuild the boundary so the slab's side faces follow the cut. The SLOPE, not
+        // rise over the longest edge: a sliver 10 m long and a centimetre wide climbing 1.2 m across its width read
+        // 12% and stayed -- a fin standing up beside the deck, its 0.3 m underside dropped straight down under it,
+        // so its top 0.3 m showed its back from one side (the island's see-through audit, 2026-10-14).
         std::vector<std::array<int, 3>> keep; keep.reserve(m.tris.size());
         for (const auto& t : m.tris) {
             const DeckVertex& a = m.verts[static_cast<size_t>(t[0])]; const DeckVertex& b = m.verts[static_cast<size_t>(t[1])]; const DeckVertex& c = m.verts[static_cast<size_t>(t[2])];
             const double rise = std::max({a.z, b.z, c.z}) - std::min({a.z, b.z, c.z});
-            const double run = std::max({distance(a.xy, b.xy), distance(b.xy, c.xy), distance(c.xy, a.xy)});
-            if (rise > 1.0 && rise > 0.35 * run) { if (spanning) spanning->push_back((a.xy + b.xy + c.xy) / 3.0); continue; }
+            const Vec2 ab = b.xy - a.xy, ac = c.xy - a.xy;
+            const double plan = std::fabs(cross(ab, ac));   // |n_up|, twice the plan area
+            const double nx = ab.y * (c.z - a.z) - (b.z - a.z) * ac.y, ny = (b.z - a.z) * ac.x - ab.x * (c.z - a.z);
+            if (rise > 0.25 && std::hypot(nx, ny) > 0.35 * plan) { if (spanning) spanning->push_back((a.xy + b.xy + c.xy) / 3.0); continue; }
             keep.push_back(t);
         }
         if (keep.size() != m.tris.size()) {

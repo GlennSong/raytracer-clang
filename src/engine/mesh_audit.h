@@ -265,6 +265,8 @@ struct SeeThroughAudit {
     std::map<std::string, size_t> byHitMesh;          // the mesh whose back the eye saw
     std::vector<std::string> samples;                 // the first few, described
     std::map<std::pair<int, int>, size_t> bySquare;   // floor(x / 100), floor(z / 100)
+    struct Look { Vec3 eye, dir, hit, facing; double deckTop; std::string mesh; };
+    std::vector<Look> all;                            // every see-through look
 };
 inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, const std::function<bool(const std::string&)>& walk,
                                        const std::function<double(double, double)>& ground, double hang = 2.0, double reach = 80.0) {
@@ -326,23 +328,34 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
         // a PERSON standing on the ground under it (eye height 1.7 m): what Glenn looked up from
         const Vec3 eye(c.x, gy + 1.7, c.z);
         if (!seen.emplace(std::make_tuple(std::lround(eye.x / 2), std::lround(eye.y / 2), std::lround(eye.z / 2)), true).second) continue;
-        // an eye INSIDE a solid (a girder hung under the slab, a pier's head) sees every wall from behind: it is not
-        // somewhere anyone stands. Most of eight level looks meeting a back within 3 m says so.
+        // an eye INSIDE a solid (a girder hung under the slab, a pier) sees every wall from behind: it is not somewhere
+        // anyone stands. From inside a closed solid the first face met is a back, at any distance -- so most of eight
+        // level looks meeting a back, or the look straight down meeting one, says so. (A 3 m limit on the level looks
+        // let the eye stand inside a pier longer than that, whose head pokes up through the soffit: the interchange.)
         int enclosed = 0;
         for (int k = 0; k < 8; ++k) {
             const double a = 6.283185307179586 * k / 8;
             const Vec3 d(std::cos(a), 0, std::sin(a));
             double t;
             const Vec3 face = cast(eye, d, t);
-            if (face.lengthSquared() > 0 && t < 3.0 && dot(face, d) > 0) ++enclosed;
+            if (face.lengthSquared() > 0 && dot(face, d) > 0) ++enclosed;
         }
-        if (enclosed >= 5) { ++r.insideSolid; continue; }
-        // ...and one that, looking straight up, does not see the FRONT of a soffit at least half a metre over it is in
-        // a slab or a plinth, or under a deck too low to stand under (a missing soffit overhead is auditUndersides')
+        bool floorBehind = false;
         {
             double t;
-            const Vec3 face = cast(eye, Vec3(0, 1, 0), t);
-            if (face.lengthSquared() == 0 || dot(face, Vec3(0, 1, 0)) > 0 || t < 0.5) { ++r.insideSolid; continue; }
+            const Vec3 face = cast(eye, Vec3(0, -1, 0), t);
+            floorBehind = face.lengthSquared() > 0 && face.y < 0;   // the first face below faces down: inside
+        }
+        if (enclosed >= 5 || floorBehind) { ++r.insideSolid; continue; }
+        // ...and one with no HEADROOM is in a slab or a plinth, or under a deck too low to stand under: straight up from
+        // the ground, the first thing met must be the FRONT of a soffit at least half a metre over the eye (a missing
+        // soffit overhead is auditUndersides'). From the ground, not the eye: a ramp end 1.3 m over the terrain puts
+        // the eye inside its slab, where a ray up a seam can catch the next slab's soffit and pass.
+        {
+            constexpr double kFoot = 0.3;   // off the drawn ground, clear of the terrain mesh's own rounding
+            double t;
+            const Vec3 face = cast(Vec3(c.x, gy + kFoot, c.z), Vec3(0, 1, 0), t);
+            if (face.lengthSquared() == 0 || dot(face, Vec3(0, 1, 0)) > 0 || t < 1.7 + 0.5 - kFoot) { ++r.insideSolid; continue; }
         }
         ++r.eyes;
         for (const Vec3& d : dirs) {
@@ -361,6 +374,7 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
                     r.samples.push_back(buf);
                 }
                 ++r.bySquare[{static_cast<int>(std::floor(eye.x / 100)), static_cast<int>(std::floor(eye.z / 100))}];
+                r.all.push_back({eye, d, eye + d * t, normalize(face), c.y, hitMesh ? *hitMesh : std::string("?")});
             }
         }
     }

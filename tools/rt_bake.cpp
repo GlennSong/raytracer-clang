@@ -28,6 +28,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,7 @@ int usage() {
     std::fprintf(stderr,
         "usage: rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--threads N] [--require]\n"
         "       rt_bake --inspect <bundle-dir>\n"
+        "       rt_bake --sections <bundle-dir>   every section: name, bytes, fnv (diff two bakes section by section)\n"
         "       rt_bake --audit <bundle-dir>   every baked mesh through the mesh audit (inward, degenerate, non-finite)\n"
         "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root; --yes deletes them\n"
         "                    (stale = not the newest for its level path, and not the current bundle of a listed level)\n"
@@ -86,6 +88,19 @@ int inspect(const std::string& dir) {
     for (size_t i = 0; i < secs.size() && i < 8; ++i) std::printf("  %-48s %s\n", secs[i].name.c_str(), humanBytes(secs[i].size).c_str());
     size_t cells = 0; for (const std::string& s : b->sections("")) if (s.find("/cell/") != std::string::npos && s.find("/mesh/") != std::string::npos) ++cells;
     std::printf("%zu cell mesh sections\n", cells);
+    return 0;
+}
+// EVERY SECTION with its size and content hash, sorted by name: `diff` two of these and a refactor that should change
+// nothing is proved to (or the sections it did change are named).
+int sections(const std::string& dir) {
+    std::string err; std::unique_ptr<Bundle> b = Bundle::open(dir + "/" + kBundleFile, &err);
+    if (!b) { std::fprintf(stderr, "rt_bake: %s\n", err.c_str()); return 1; }
+    std::vector<std::string> names = b->sections("");
+    std::sort(names.begin(), names.end());
+    for (const std::string& n : names) {
+        const Bundle::View v = b->section(n);
+        std::printf("%s %zu %016llx\n", n.c_str(), static_cast<size_t>(v.size), static_cast<unsigned long long>(fnv1a(v.data, v.size)));
+    }
     return 0;
 }
 // THE MESH AUDIT over a bake (Glenn, 2026-10-13: "this way we know that every polygon ends up being right"): every
@@ -175,13 +190,23 @@ int audit(const std::string& dir) {
         }
         return std::nan("");
     };
-    double probeX = 0, probeZ = 0;
-    if (std::getenv("RT_AUDIT_PROBE") && std::sscanf(std::getenv("RT_AUDIT_PROBE"), "%lf,%lf", &probeX, &probeZ) == 2)
-        engine::printColumn(refs, probeX, probeZ);
-    double sx0, sz0, sx1, sz1, sstep;   // RT_AUDIT_SECTION="x0,z0,x1,z1,step": what stands over each point of a line
-    if (std::getenv("RT_AUDIT_SECTION") &&
-        std::sscanf(std::getenv("RT_AUDIT_SECTION"), "%lf,%lf,%lf,%lf,%lf", &sx0, &sz0, &sx1, &sz1, &sstep) == 5)
-        engine::printSection(refs, sx0, sz0, sx1, sz1, sstep);
+    // RT_AUDIT_PROBE="x,z[;x,z...]", RT_AUDIT_SECTION="x0,z0,x1,z1,step[;...]": several, ';' between
+    auto each = [](const char* env, const std::function<void(const char*)>& f) {
+        if (const char* v = std::getenv(env))
+            for (std::string all = v; !all.empty();) {
+                const size_t semi = all.find(';');
+                f(all.substr(0, semi).c_str());
+                all = semi == std::string::npos ? std::string() : all.substr(semi + 1);
+            }
+    };
+    each("RT_AUDIT_PROBE", [&](const char* p) {
+        double x, z;
+        if (std::sscanf(p, "%lf,%lf", &x, &z) == 2) { std::printf("    [column] at %.1f %.1f (ground %.2f)\n", x, z, groundAt(x, z)); engine::printColumn(refs, x, z, std::getenv("RT_AUDIT_PROBE_R") ? std::atof(std::getenv("RT_AUDIT_PROBE_R")) : 1.5); }
+    });
+    each("RT_AUDIT_SECTION", [&](const char* p) {   // what stands over each point of a line
+        double sx0, sz0, sx1, sz1, sstep;
+        if (std::sscanf(p, "%lf,%lf,%lf,%lf,%lf", &sx0, &sz0, &sx1, &sz1, &sstep) == 5) engine::printSection(refs, sx0, sz0, sx1, sz1, sstep);
+    });
     const engine::UndersideAudit u = engine::auditUndersides(
         refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform" || n == "concrete"; },
         groundAt);
@@ -200,6 +225,30 @@ int audit(const std::string& dir) {
         for (size_t i = 0; i < w.size() && i < 12; ++i)
             std::printf("    [see-through]   %5zu around x %d, z %d\n", w[i].first, w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
     }
+    // RT_SEE_THROUGH_SAMPLES=N: N looks per mesh seen from behind, and N in each of the worst squares
+    if (const char* ns = std::getenv("RT_SEE_THROUGH_SAMPLES")) {
+        const size_t n = std::strtoul(ns, nullptr, 10);
+        auto show = [](const engine::SeeThroughAudit::Look& l) {
+            std::printf("      eye %.1f %.1f %.1f (deck top %.1f) dir %.2f %.2f %.2f -> back of %s at %.2f %.2f %.2f (%.2f m), facing %.2f %.2f %.2f\n",
+                        l.eye.x, l.eye.y, l.eye.z, l.deckTop, l.dir.x, l.dir.y, l.dir.z, l.mesh.c_str(), l.hit.x, l.hit.y, l.hit.z,
+                        (l.hit - l.eye).length(), l.facing.x, l.facing.y, l.facing.z);
+        };
+        for (const auto& [m, cnt] : st.byHitMesh) {
+            std::printf("    [see-through] samples, backs of %s\n", m.c_str());
+            size_t k = 0, stride = std::max<size_t>(1, cnt / std::max<size_t>(n, 1));
+            for (size_t i = 0, j = 0; i < st.all.size() && k < n; ++i)
+                if (st.all[i].mesh == m && j++ % stride == 0) { show(st.all[i]); ++k; }
+        }
+        std::vector<std::pair<size_t, std::pair<int, int>>> w;
+        for (const auto& [k, c] : st.bySquare) w.push_back({c, k});
+        std::sort(w.rbegin(), w.rend());
+        for (size_t i = 0; i < w.size() && i < 3; ++i) {
+            std::printf("    [see-through] samples around x %d, z %d\n", w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
+            size_t k = 0;
+            for (const auto& l : st.all)
+                if (k < n && static_cast<int>(std::floor(l.eye.x / 100)) == w[i].second.first && static_cast<int>(std::floor(l.eye.z / 100)) == w[i].second.second) { show(l); ++k; }
+        }
+    }
     const size_t open = u.open;
     return total.inward - total.inwardSliver == 0 && total.nonFinite == 0 && open == 0 ? 0 : 2;
 }
@@ -213,6 +262,7 @@ int main(int argc, char** argv) {
     engine::roads::lanes::registerLotsProducer();
 #endif
     if (std::strcmp(argv[1], "--inspect") == 0) { if (argc < 3) return usage(); return inspect(argv[2]); }
+    if (std::strcmp(argv[1], "--sections") == 0) { if (argc < 3) return usage(); return sections(argv[2]); }
     if (std::strcmp(argv[1], "--audit") == 0) { if (argc < 3) return usage(); return audit(argv[2]); }
     if (std::strcmp(argv[1], "--status") == 0) {
         if (argc < 3) return usage();

@@ -778,41 +778,48 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         return sameLevelPavedAt((a + b) * 0.5 + out * 0.35, z);
     };
     const std::function<bool(const Vec2&, const Vec2&, double)> seamFn = internalSeam;
-    // What stands beyond a slab's edge, for slab()'s side rule: a surface whose top at q is at or up to
-    // half a metre above `top` hides the side (asphalt under a sidewalk's edge, a shoulder's edge against
-    // the lane it continues). One much higher is a bridge over it and hides nothing. Each layer is split
-    // into its polygons so a point tests only the few whose box covers it.
-    struct Cover { std::vector<PolySet> polys; std::vector<Box2> box; std::vector<PreparedSet> prep; std::vector<int> roads; double lift; };
-    auto coverOf = [&](const PolySet& set, double lift, bool anyRoad) {
-        Cover c; for (const Polygon2& p : set) c.polys.push_back(PolySet{p});
-        c.box = laneBoxes(c.polys); c.prep = prepareAll(c.polys); c.roads = layerRoads(g, anyRoad); c.lift = lift; return c;
-    };
-    const Cover covers[3] = {coverOf(r.pavement.sidewalk, kSidewalkLift, false), coverOf(r.pavement.shoulder, 0.0, false), coverOf(r.pavement.median, 0.10, true)};
-    const LaneGrid coverGrid[3] = {LaneGrid(covers[0].box, covers[0].polys), LaneGrid(covers[1].box, covers[1].polys), LaneGrid(covers[2].box, covers[2].polys)};
-    // ...and it returns how far down that surface reaches (its underside), NaN when nothing covers: the side is a
-    // face below that. A deck's slab is its surface's thickness (laneThick), a layer's the thickness it is built with.
-    std::vector<double> laneThick(L.lanes.size(), 0.0);
-    for (const Surface& s : r.pavement.decks)
-        for (int o : s.triOwner) if (o >= 0 && static_cast<size_t>(o) < laneThick.size()) laneThick[static_cast<size_t>(o)] = std::max(laneThick[static_cast<size_t>(o)], s.thick);
-    const double coverThick[3] = {kSidewalkThick, kShoulderThick, kMedianThick};
-    const std::function<double(const Vec2&, double)> hiddenFn = [&](const Vec2& q, double top) {
-        auto hides = [&](double z) { return z >= top - 0.02 && z <= top + 0.5; };
-        double under = std::nan("");   // the deepest underside among the surfaces covering the side
-        auto take = [&](double bottom) { if (std::isnan(under) || bottom < under) under = bottom; };
-        for (int li : laneGrid.at(q)) {
-            const Box2& bb = laneBox[static_cast<size_t>(li)];
-            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[static_cast<size_t>(li)].contains(q)) continue;
-            const double z = H.deck(li, q);
-            if (hides(z)) take(z - laneThick[static_cast<size_t>(li)]);
+    // What stands beyond a slab's edge, for slab()'s side rule: a DRAWN surface whose top at q is at or up to half a
+    // metre above `top` hides the side (asphalt under a sidewalk's edge, a shoulder's edge against the lane it
+    // continues). One much higher is a bridge over it and hides nothing. It returns how far down that surface reaches
+    // (its underside), NaN when nothing covers: the side is a face below that.
+    // What is DRAWN, not the footprints: a lane's footprint or a layer's polygon covers ground where no triangle
+    // stands (a layer triangle dropped for joining two levels, a deck split from its shoulder at an interchange), and a
+    // side "hidden" by a surface that is not there left the slab open -- the island's see-through audit, 2026-10-14.
+    const std::vector<int> layerRoadsOf[3] = {layerRoads(g, false), layerRoads(g, false), layerRoads(g, true)};
+    const PolySet* layerSet[3] = {&r.pavement.sidewalk, &r.pavement.shoulder, &r.pavement.median};
+    const double layerLift[3] = {kSidewalkLift, 0.0, 0.10}, layerThick[3] = {kSidewalkThick, kShoulderThick, kMedianThick};
+    std::vector<FlatMesh> layerMesh[3];
+    for (int k = 0; k < 3; ++k) if (!layerRoadsOf[k].empty()) layerMesh[k] = layerMeshes(g, H, *layerSet[k], layerRoadsOf[k]);
+    struct Drawn { Vec2 a, b, c; double za, zb, zc, thick; };
+    std::vector<Drawn> drawn;
+    auto addDrawn = [&](const std::vector<DeckVertex>& v, const std::vector<std::array<int, 3>>& tris, double lift, double thick) {
+        for (const auto& t : tris) {
+            const DeckVertex &A = v[static_cast<size_t>(t[0])], &B = v[static_cast<size_t>(t[1])], &C = v[static_cast<size_t>(t[2])];
+            drawn.push_back({A.xy, B.xy, C.xy, A.z + lift, B.z + lift, C.z + lift, thick});
         }
-        for (int k = 0; k < 3; ++k) {
-            const Cover& c = covers[k];
-            for (int pi : coverGrid[k].at(q)) {
-                const Box2& bb = c.box[static_cast<size_t>(pi)];
-                if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !c.prep[static_cast<size_t>(pi)].contains(q)) continue;
-                const double z = H.layerHeight(c.roads, q) + c.lift;
-                if (hides(z)) take(z - coverThick[k]);
-            }
+    };
+    for (const Surface& s : r.pavement.decks) addDrawn(s.verts, s.tris, 0.0, s.thick);
+    for (int k = 0; k < 3; ++k) for (const FlatMesh& m : layerMesh[k]) addDrawn(m.verts, m.tris, layerLift[k], layerThick[k]);
+    constexpr double kDrawnCell = 4.0;
+    auto drawnKey = [](long i, long j) { return (static_cast<long long>(i) << 32) ^ static_cast<long long>(static_cast<uint32_t>(j)); };
+    std::unordered_map<long long, std::vector<uint32_t>> drawnGrid;
+    for (size_t i = 0; i < drawn.size(); ++i) {
+        const Drawn& d = drawn[i];
+        const long i0 = std::lround(std::floor(std::min({d.a.x, d.b.x, d.c.x}) / kDrawnCell)), i1 = std::lround(std::floor(std::max({d.a.x, d.b.x, d.c.x}) / kDrawnCell));
+        const long j0 = std::lround(std::floor(std::min({d.a.y, d.b.y, d.c.y}) / kDrawnCell)), j1 = std::lround(std::floor(std::max({d.a.y, d.b.y, d.c.y}) / kDrawnCell));
+        for (long ii = i0; ii <= i1; ++ii) for (long jj = j0; jj <= j1; ++jj) drawnGrid[drawnKey(ii, jj)].push_back(static_cast<uint32_t>(i));
+    }
+    const std::function<double(const Vec2&, double)> hiddenFn = [&](const Vec2& q, double top) {
+        double under = std::nan("");   // the deepest underside among the surfaces covering the side
+        auto it = drawnGrid.find(drawnKey(std::lround(std::floor(q.x / kDrawnCell)), std::lround(std::floor(q.y / kDrawnCell))));
+        if (it == drawnGrid.end()) return under;
+        for (uint32_t i : it->second) {
+            const Drawn& d = drawn[i];
+            const double det = cross(d.b - d.a, d.c - d.a); if (std::fabs(det) < 1e-12) continue;
+            const double u = cross(q - d.a, d.c - d.a) / det, v = cross(d.b - d.a, q - d.a) / det;
+            if (u < -1e-9 || v < -1e-9 || u + v > 1 + 1e-9) continue;
+            const double z = d.za + u * (d.zb - d.za) + v * (d.zc - d.za);
+            if (z >= top - 0.02 && z <= top + 0.5 && (std::isnan(under) || z - d.thick < under)) under = z - d.thick;
         }
         return under;
     };
@@ -839,14 +846,13 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         slab(track ? ballast : foot ? sidewalk : asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, track ? kBallast : foot ? kSidewalk : kAsphalt, kConcrete, &uv, &seamFn, &groundUnder, &hiddenFn);
     }
     // layers
-    auto layer = [&](const PolySet& poly, RenderMesh& top, const Vec3& color, double lift, double thick, bool anyRoad) {
-        const std::vector<int> roads = layerRoads(g, anyRoad);
-        for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr, nullptr, &groundUnder, &hiddenFn);
+    auto layer = [&](int k, RenderMesh& top, const Vec3& color) {
+        for (const FlatMesh& m : layerMesh[k]) slab(top, concrete, m.verts, m.tris, m.boundary, layerThick[k], layerLift[k], color, kConcrete, nullptr, nullptr, &groundUnder, &hiddenFn);
     };
     mark("deck sides");
-    layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, kSidewalkThick, false); mark("sidewalk sides");
-    layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, kShoulderThick, false); mark("shoulder sides");
-    layer(r.pavement.median, median, kMedian, 0.10, kMedianThick, true); mark("median sides");
+    layer(0, sidewalk, kSidewalk); mark("sidewalk sides");
+    layer(1, shoulder, kShoulder); mark("shoulder sides");
+    layer(2, median, kMedian); mark("median sides");
     // Parapets and girders on elevated decks (Glenn: "the elevated ones need walls so you don't drive
     // off", "an undercarriage"). The runs come from parapetRuns() so a diagnostic sees exactly what is swept;
     // every elevated freeway/ramp lane also gets a box girder hung from the slab.
