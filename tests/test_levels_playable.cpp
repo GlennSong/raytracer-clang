@@ -2793,13 +2793,14 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
         // forecourt's on a paved plate — so a hedge's foot is measured against the
         // highest surface under it (the drawn ground, or the top of a curb, plate or
         // skirt from the lot pass that lies at or just below the foot), not the ground
-        // alone. Top-facing Trim/Path/Concrete triangles, hashed on a 2 m grid.
+        // alone. Top-facing triangles of EVERY lot part but the greenery itself, hashed
+        // on a 2 m grid: a community garden's crops grow in raised timber beds (Wood,
+        // soil top Detail), 0.36 m up -- a list of "planter" parts missed them all.
         struct TopTri { Vec3 a, b, c; };
         std::unordered_map<long long, std::vector<TopTri>> supports;
         auto cellKey = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
         world.each<engine::LotPartChunk, Renderable>([&](Entity, engine::LotPartChunk& tag, Renderable& r) {
-            if (tag.part != static_cast<uint8_t>(PartId::Trim) && tag.part != static_cast<uint8_t>(PartId::Path) &&
-                tag.part != static_cast<uint8_t>(PartId::Concrete)) return;
+            if (tag.part == static_cast<uint8_t>(PartId::Foliage)) return;
             if (r.minDistance > 0) return;
             auto it = uploader.meshes.find(r.mesh.index);
             if (it == uploader.meshes.end()) return;
@@ -2831,7 +2832,9 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
                 const double l3 = 1.0 - l1 - l2;
                 if (l1 < -1e-4 || l2 < -1e-4 || l3 < -1e-4) continue;
                 const double y = l1 * t.a.y + l2 * t.b.y + l3 * t.c.y;
-                if (y <= p.y + 0.05 && y > best) best = y;
+                // (a foot may stand a little INTO what holds it: a crop's level base on a
+                // draped bed's soil sinks ~6 cm at the uphill end; that is planted, not afloat)
+                if (y <= p.y + 0.15 && y > best) best = y;
             }
             return best;
         };

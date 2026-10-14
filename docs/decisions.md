@@ -10034,6 +10034,15 @@ to access it ... other c++ mesh builders would then call into the common library
   every one. Each had two equal corners -- a sub-millimetre edge 4.6 km out, sound in double, collapsed by float32
   storage. packMesh now drops a triangle with no area in float, for every baked mesh; lanes 10-14.3, lots 10-14.2.) Of the three exceptions
   above, only the SDF mesher's is left; the drape and that collider now go through the library. Lots 2026-10-14.1.
+- **The drape cuts every small triangle** (level_tests lot_dressing_is_planted_on_the_ground, red since the community
+  gardens of 10-09): a triangle a cell or smaller was kept whole and lifted at its corners, so across a cell's diagonal
+  it was a chord over the crease -- and a garden bed's soil and the crop standing on it chorded it differently, the
+  crops sunk 0.15-0.4 m into their beds on steep cells. Now it is cut along the cell lines and diagonals it crosses,
+  as walking surfaces already were, and follows its terrain triangle exactly (cuts on a shared edge land at the same
+  points: a solid stays closed). Draped triangles 644k -> 1.23M on metro_v2_test + metro_lanes, but the ground is
+  asked once per place (the triangles' shared corners were each asking): the drape 16.8 -> 5.0 s, the part-chunk
+  load 13.5 -> 5.1 s and 4.0 -> 1.5 s. Drapes at load: no re-bake. The test also lets a planter stand on any lot
+  part (its list of "planter" parts never had the beds' Wood and Detail -- 1,000 of its 1,100 floats).
 
 Tags: lanes + rail 2026-10-13.2, lots 2026-10-13.6 (a re-bake). Tests: mesh_library_solids_are_clean_and_closed
 (sheared and left-handed frames, clockwise blocks, either outline winding, holes, tilted planes, both lathes), the

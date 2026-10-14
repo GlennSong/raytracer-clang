@@ -2866,7 +2866,28 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
             // it crosses lies on the ground exactly, in a handful of pieces. (Bisecting toward a crease took a walk
             // down to 1/16-cell slivers along every line it crossed: +50 s on the island load. The plane-vs-grid-
             // nodes test below is no use under a cell: on any slope the cell corners are off a small triangle's plane.)
-            if (walking) {
+            // ...AND SO IS ANYTHING A CELL OR SMALLER. Kept whole and lifted at its corners, a small triangle across
+            // a cell's diagonal is a chord over the crease, and two pieces that stack (a garden bed's soil and the
+            // crop on it) chord it differently: on steep cells the crops sank 0.15-0.4 m into their beds
+            // (lot_dressing_is_planted_on_the_ground, 2026-10-14). Cut, every piece follows its terrain triangle
+            // exactly, and two faces sharing an edge are cut at the same points (a solid stays closed). A triangle
+            // inside one terrain triangle crosses no line and costs a bounds check.
+            const Real l2 = len2(e, (e + 1) % 3);
+            if (walking || l2 <= gridStep * gridStep) {
+                // (most kit triangles lie inside one terrain triangle: same cell, same side of its diagonal)
+                auto cellOf = [&](const Vertex& v, int k) {
+                    const Real gx = (v.position.x - ox) * inv, gz = (v.position.z - oz) * inv;
+                    return static_cast<long>(std::floor(k == 0 ? gx : k == 1 ? gz : gx - gz));
+                };
+                bool inside = true;
+                for (int k = 0; k < 3 && inside; ++k)
+                    inside = cellOf(tri[0], k) == cellOf(tri[1], k) && cellOf(tri[0], k) == cellOf(tri[2], k);
+                if (inside) {
+                    const uint32_t base = static_cast<uint32_t>(out.vertices.size());
+                    for (const Vertex& v : tri) out.vertices.push_back(v);
+                    MeshBuilder::triFacing(out, base, base + 1, base + 2, facing);
+                    continue;
+                }
                 std::vector<std::vector<Vertex>> polys{{tri[0], tri[1], tri[2]}};
                 auto gxOf = [&](const Vertex& v) { return (v.position.x - ox) * inv; };
                 auto gzOf = [&](const Vertex& v) { return (v.position.z - oz) * inv; };
@@ -2913,9 +2934,7 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
                 }
                 continue;
             }
-            const Real l2 = len2(e, (e + 1) % 3);
-            const bool keep = l2 <= gridStep * gridStep || withinTol(tri[0], tri[1], tri[2]);
-            if (keep) {
+            if (withinTol(tri[0], tri[1], tri[2])) {
                 const uint32_t base = static_cast<uint32_t>(out.vertices.size());
                 for (const Vertex& v : tri) out.vertices.push_back(v);
                 MeshBuilder::triFacing(out, base, base + 1, base + 2, facing);
@@ -2928,8 +2947,20 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
         }
         m = std::move(out);
     }
-    for (Vertex& v : m.vertices)
-        v.position.y += ground(v.position.x, v.position.z);
+    // ONE GROUND QUERY PER PLACE: a mesh's triangles each carry their own copies of the corners they share (and the
+    // cut points on a shared edge), and the drawn ground is the whole cost of a drape (~19 us a query on a metro).
+    struct XZHash {
+        std::size_t operator()(const std::pair<Real, Real>& p) const {
+            return std::hash<Real>()(p.first) * 0x9E3779B97F4A7C15ull ^ std::hash<Real>()(p.second);
+        }
+    };
+    std::unordered_map<std::pair<Real, Real>, Real, XZHash> liftAt;
+    liftAt.reserve(m.vertices.size() / 2);
+    for (Vertex& v : m.vertices) {
+        auto [it, fresh] = liftAt.try_emplace({v.position.x, v.position.z}, Real(0));
+        if (fresh) it->second = ground(v.position.x, v.position.z);
+        v.position.y += it->second;
+    }
 }
 
 TerrainFlatten lotPadFlatten(const LotBuilding& lb, double apron, double falloff) {
