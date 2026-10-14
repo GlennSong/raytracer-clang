@@ -20,6 +20,36 @@
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/street_kit.h"
+#include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/ladders.h"
+#include "../src/engine/procgen/city/shop_signs.h"
+#include "../src/engine/procgen/furniture_kit.h"
+#include "../src/engine/procgen/real_tree.h"
+#include "../src/engine/procgen/stylized_tree.h"
+#include "../src/engine/procgen/stylized_rock.h"
+#include "../src/engine/procgen/lsystem.h"
+#include "../src/engine/procgen/grass.h"
+#include "../src/engine/procgen/planet.h"
+#include "../src/engine/procgen/terrain_lod.h"
+#include "../src/engine/procgen/vehicle_mesh.h"
+#include "../src/engine/procgen/vehicle/car_mesh.h"
+#include "../src/engine/procgen/vehicle/train_mesh.h"
+#include "../src/engine/procgen/vehicle/occupant.h"
+#include "../src/engine/anim/mannequin.h"
+#include "../src/apps/citysim/city_meshes.h"
+#include "../src/apps/citysim/station_boards.h"
+#include "../src/apps/citysim/scripting/vehicle_body.h"
+#include "../src/engine/scripting/script_vm.h"
+#include "../src/engine/scripting/procgen_bindings.h"
+#include "../src/engine/scripting/script_modules.h"
+#include "../src/engine/script_assets.h"
+#include "mesh_invariants.h"
+
+#include <fstream>
+#include <sstream>
+
+#include <map>
+#include <string>
 
 using namespace engine;
 
@@ -35,20 +65,9 @@ namespace {
 // (>107° apart) sits safely between the two. Degenerate faces/normals are
 // skipped. `total` receives the number of triangles actually tested.
 int backfaceCount(const RenderMesh& mesh, int& total) {
-    total = 0;
-    int bad = 0;
-    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-        const Vertex& a = mesh.vertices[mesh.indices[i]];
-        const Vertex& b = mesh.vertices[mesh.indices[i + 1]];
-        const Vertex& c = mesh.vertices[mesh.indices[i + 2]];
-        Vec3 geo = cross(c.position - a.position, b.position - a.position);
-        Vec3 shade = a.normal + b.normal + c.normal;
-        if (geo.lengthSquared() < 1e-16 || shade.lengthSquared() < 1e-12)
-            continue;   // degenerate face or normals — orientation undefined
-        ++total;
-        if (dot(normalize(geo), normalize(shade)) < -0.3) ++bad;
-    }
-    return bad;
+    const mesh_invariants::Audit a = mesh_invariants::audit(mesh);
+    total = static_cast<int>(a.tris - a.degenerate - a.nonFinite);
+    return static_cast<int>(a.inward);
 }
 
 // Assert a solid (single-sided) mesh is consistently wound front-out: no
@@ -139,4 +158,247 @@ TEST_CASE(winding_city_geometry_faces_out) {
     // this check cannot live here.
     checkSolid(streetLamp(), "streetLamp");
     checkSolid(trafficSignalProto(), "trafficSignalProto");
+}
+
+// ============================================================================
+// THE WHOLE-ENGINE AUDIT (Glenn, 2026-10-13: "the entire procedural generation sits on this ... Everything, and I mean
+// everything in this engine should use the same tooling ... this way we know that every polygon ends up being right
+// when it's created"). mesh_invariants::audit over every producer -- inward triangles, degenerate ones, non-finite
+// positions, non-unit normals -- counted per producer so a regression names its maker. A producer that is clean
+// CHECKs it; one that is not yet prints its counts, which the mesh library work takes to zero.
+// ============================================================================
+using mesh_invariants::Audit;
+using mesh_invariants::audit;
+using mesh_invariants::printAudit;
+
+namespace {
+Poly2 rectPlan(Real w, Real d) { return {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, d / 2}, {-w / 2, d / 2}}; }
+Poly2 lPlan(Real w, Real d) {
+    return {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, 0}, {0, 0}, {0, d / 2}, {-w / 2, d / 2}};
+}
+
+// Audit a building mesh, by part, into `byPart`; returns the whole.
+Audit auditBuilding(const BuildingMesh& bm, std::map<int, Audit>& byPart) {
+    Audit all;
+    for (const RenderMesh& p : bm.parts) {
+        const Audit a = audit(p);
+        byPart[p.materialIndex].add(a);
+        all.add(a);
+    }
+    return all;
+}
+
+// The parts drawn from BOTH sides (the clear glass, the beacon halos): their back faces are seen, so a reversed
+// triangle there is not a hole -- still counted, listed apart.
+bool twoSided(int part) {
+    return part == static_cast<int>(PartId::GlassClear) || part == static_cast<int>(PartId::BeaconGlow) ||
+           part == static_cast<int>(PartId::BeaconHaze);
+}
+}  // namespace
+
+// EVERY RECIPE, outside and in: the architect's whole registry grown on a rect and an L, exterior and interior.
+TEST_CASE(mesh_audit_every_building_recipe) {
+    std::map<int, Audit> byPart;
+    std::map<std::string, Audit> byRecipe;
+    Audit total;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        for (uint32_t seed : {3u, 17u}) {
+            BuildingRecipe r;
+            if (!architectRecipeByName(name, seed, 0.6, 24, 600, r)) continue;
+            if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
+            for (const Poly2& plan : {rectPlan(24, 20), lPlan(28, 24)}) {
+                Audit a = auditBuilding(growPlanBuilding(plan, r.params, 0.0), byPart);
+                a.add(auditBuilding(growInterior(plan, r.params, 0.0), byPart));
+                byRecipe[name].add(a);
+                total.add(a);
+            }
+            if (r.massing == BuildingRecipe::Massing::BoxMass) {
+                Scope s;
+                s.origin = Vec3(-10, 0, -8);
+                s.size = Vec3(20, r.params.floors * 3.5, 16);
+                const Audit a = auditBuilding(growBuilding(s, r.params), byPart);
+                byRecipe[name].add(a);
+                total.add(a);
+            }
+        }
+    }
+    for (const auto& [n, a] : byRecipe)
+        if (!a.clean()) printAudit(("recipe " + n).c_str(), a);
+    for (const auto& [p, a] : byPart)
+        printAudit(("part " + std::to_string(p) + (twoSided(p) ? " (two-sided)" : "")).c_str(), a);
+    printAudit("ALL BUILDINGS", total);
+    CHECK(total.tris > 100000);
+    CHECK(total.nonFinite == 0);
+}
+
+// EVERY FURNITURE PIECE, in a spread of variants.
+TEST_CASE(mesh_audit_every_furniture_piece) {
+    Audit total;
+    for (int i = 0; i < kPieceCount; ++i) {
+        Audit piece;
+        for (uint32_t variant : {0u, 9u, 42u, 101u}) {
+            const FurniturePiece& fp = furniturePiece(static_cast<Piece>(i), variant);
+            for (const RenderMesh& m : fp.mesh) piece.add(audit(m));
+        }
+        if (!piece.clean()) printAudit(furniturePieceName(static_cast<Piece>(i)), piece);
+        total.add(piece);
+    }
+    printAudit("ALL FURNITURE", total);
+    CHECK(total.tris > 1000);
+    CHECK(total.nonFinite == 0);
+}
+
+// THE STREET: lamps, signals, bins, racks, news boxes, tree pits, signs, ladders.
+TEST_CASE(mesh_audit_street_kit_signs_ladders) {
+    Audit total;
+    const std::pair<const char*, RenderMesh> meshes[] = {
+        {"streetLamp", streetLamp()},
+        {"trafficSignalProto", trafficSignalProto()},
+        {"litterBinProto", litterBinProto()},
+        {"bikeRackProto", bikeRackProto()},
+        {"newsBoxesProto", newsBoxesProto()},
+        {"treePitProto", treePitProto()},
+        {"openSignMesh", openSignMesh()},
+        {"busSignMesh", busSignMesh(0, 2)},
+        {"ladderMesh", ladderMesh([] { LadderSpec l; l.out = Vec2(0, 1); l.topY = 6; l.landY = 6; l.cage = true; return l; }())},
+    };
+    for (const auto& [n, m] : meshes) {
+        const Audit a = audit(m);
+        printAudit(n, a);
+        total.add(a);
+    }
+    printAudit("ALL STREET KIT", total);
+    CHECK(total.nonFinite == 0);
+}
+
+// NATURE: every real species, the stylized trees, an L-system tree, rocks, grass, terrain LOD nodes, a planet. Leaf
+// cards, fronds and grass blades are drawn two-sided (their counts are listed, not gated).
+TEST_CASE(mesh_audit_nature) {
+    Audit solid, cards;
+    for (int i = 0; i < static_cast<int>(RealSpecies::Count); ++i) {
+        const RealTree t = realTree(static_cast<RealSpecies>(i), 5, 12.0);
+        const Audit b = audit(t.bark);
+        if (!b.clean()) printAudit((std::string("real bark ") + realSpeciesName(static_cast<RealSpecies>(i))).c_str(), b);
+        solid.add(b);
+        cards.add(audit(t.foliage));
+    }
+    for (int i = 0; i <= static_cast<int>(StylizedShape::FloweringShrub); ++i) {
+        StylizedTreeParams p;
+        p.shape = static_cast<StylizedShape>(i);
+        const StylizedTree t = stylizedTree(7, p);
+        const Audit b = audit(t.bark), c = audit(t.canopy);
+        if (!b.clean()) printAudit(("stylized bark " + std::to_string(i)).c_str(), b);
+        if (!c.clean()) printAudit(("stylized canopy " + std::to_string(i)).c_str(), c);
+        solid.add(b);
+        solid.add(c);
+    }
+    {
+        LSystem sys;
+        sys.rule('F', "F[+F]F[-F][&F]");
+        TurtleParams tp;
+        const Audit a = audit(buildTurtleMesh(sys.expand("F", 3), tp));
+        printAudit("lsystem turtle", a);
+        solid.add(a);
+    }
+    {
+        const TreeMesh tm = growTree(TreeParams{}, 3);
+        cards.add(audit(tm.leaves));
+    }
+    for (uint32_t seed : {1u, 2u, 3u}) {
+        const Audit a = audit(stylizedRock(seed, StylizedRockParams{}));
+        if (!a.clean()) printAudit(("stylized rock " + std::to_string(seed)).c_str(), a);
+        solid.add(a);
+    }
+    {
+        Noise noise(1);
+        TerrainParams p;
+        Audit lod;
+        for (const LodNode& n : {LodNode{0.0f, 0.0f, 100.0f, 0}, LodNode{200.0f, -100.0f, 50.0f, 1}})
+            lod.add(audit(generateLodNodeMesh(p, noise, n, 32).mesh));
+        printAudit("terrain lod nodes", lod);
+        solid.add(lod);
+    }
+    {
+        const Audit a = audit(generatePlanet(PlanetParams{}, 4));
+        printAudit("planet", a);
+        solid.add(a);
+    }
+    const Audit grass = audit(grassClump(3, GrassClumpParams{}));
+    printAudit("grass clump (two-sided)", grass);
+    printAudit("grass card (two-sided)", audit(grassCardMesh(GrassClumpParams{})));
+    printAudit("leaf cards (two-sided)", cards);
+    printAudit("ALL NATURE (solid)", solid);
+    CHECK(solid.tris > 10000);
+    CHECK(solid.nonFinite == 0);
+}
+
+// VEHICLES AND PEOPLE: the C++ car, its shells, the trains, the occupant, the mannequin, the citysim's people and
+// widgets, the station boards, and the Lua fleet (assets/scripts/vehicles.lua) slot by slot.
+TEST_CASE(mesh_audit_vehicles_and_people) {
+    using namespace citysim;
+    Audit total;
+    auto one = [&](const std::string& n, const RenderMesh& m) {
+        const Audit a = audit(m);
+        printAudit(n.c_str(), a);
+        total.add(a);
+    };
+    {
+        const CarMesh car = buildCarMesh(defaultSedanParams());
+        Audit a;
+        for (const RenderMesh& m : car.parts) a.add(audit(m));
+        printAudit("buildCarMesh (sedan)", a);
+        total.add(a);
+    }
+    for (int s = 0; s <= static_cast<int>(CarShellStyle::BoxTruck); ++s)
+        one("buildCarShell " + std::to_string(s), buildCarShell(static_cast<CarShellStyle>(s), Vec3(0.5, 0.1, 0.1),
+                                                                 Vec3(1.8, 1.5, 4.5)));
+    for (const char* kind : {"intercity", "subway", "light_rail"}) {
+        TrainBodySpec spec;
+        spec.kind = kind;
+        const TrainBodyMesh c = buildTrainCarriage(spec), l = buildTrainLocomotive(spec);
+        one(std::string("train carriage ") + kind, c.body);
+        one(std::string("train carriage glass ") + kind, c.glass);
+        one(std::string("train door leaf ") + kind, c.doorLeaf);
+        one(std::string("train locomotive ") + kind, l.body);
+    }
+    one("buildSeatedOccupant", buildSeatedOccupant());
+    {
+        const anim::Mannequin m = anim::buildMannequin(1.8);
+        one("bakeMannequinMesh (bind)", anim::bakeMannequinMesh(m, anim::Pose::bind(m.skeleton)));
+    }
+    for (int o = 0; o < personOutfitCount(); ++o) {
+        Audit a = audit(buildPersonMesh(0.3, o));
+        a.add(audit(buildSeatedPersonMesh(o)));
+        a.add(audit(buildGroundSittingPersonMesh(o)));
+        if (!a.clean()) printAudit(("person outfit " + std::to_string(o)).c_str(), a);
+        total.add(a);
+    }
+    one("ringXZ", ringXZ());
+    one("arrowXZ", arrowXZ());
+    one("stripXZ", stripXZ());
+    one("wedgeXZ", wedgeXZ(0.6));
+    one("stationBoardFrame", stationBoardFrame());
+    one("stationBoardFaces", stationBoardFaces());
+
+    // the Lua fleet
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    openModuleLoader(vm, makeModuleSource(std::string(RT_SOURCE_DIR) + "/assets/scripts"));
+    std::ifstream in(std::string(RT_SOURCE_DIR) + "/assets/scripts/vehicles.lua");
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string err;
+    CHECK(vm.doString(ss.str(), &err));
+    for (int slot = 0; slot < fleetSlotCount(vm); ++slot) {
+        CarBodyRecipe body;
+        if (!loadFleetCarBody(vm, slot, body, &err)) continue;
+        Audit a = audit(body.mesh);
+        a.add(audit(body.chassis));
+        printAudit(("lua fleet " + std::to_string(slot) + " " + body.className).c_str(), a);
+        total.add(a);
+    }
+    printAudit("ALL VEHICLES AND PEOPLE", total);
+    CHECK(total.tris > 10000);
+    CHECK(total.nonFinite == 0);
 }

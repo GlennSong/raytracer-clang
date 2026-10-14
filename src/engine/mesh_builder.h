@@ -62,6 +62,17 @@ struct MeshBuilder {
     // Recompute smooth vertex normals from face geometry (area-weighted by the
     // face cross product), e.g. after displacing vertices (noise terrain).
     static void recomputeNormals(RenderMesh& mesh);
+    // recomputeNormals with CREASES (PolyMesh toParts' autosmooth, for a RenderMesh): a corner's normal averages only
+    // the faces round its vertex within `creaseDeg` of its own face; where they part by more, the vertex is split, so
+    // a hard edge stays hard and no face is shaded from behind (smoothing across a fold turns a small face's normals
+    // away from it -- the mesh audit's "inward" triangles on the car shell's nose).
+    static void autosmooth(RenderMesh& mesh, double creaseDeg = 50.0);
+    // A triangle whose |cross(c - a, b - a)|^2 is under this (area under 0.1 mm^2) has NO AREA: the emitters skip it,
+    // dropDegenerate removes it, and the mesh audit (tests/mesh_invariants.h) counts by the same number.
+    static constexpr double kNoArea2 = 4e-14;
+    // Drop the triangles of no area (a sphere's pole row, a rounded box's collapsed corner): the vertices stay, so
+    // indices into them hold. The grid primitives end with it.
+    static void dropDegenerate(RenderMesh& mesh);
 
     // Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid (cell key = floor(x / cell),
     // floor(z / cell)), in first-seen order; vertices are duplicated per chunk (a vertex is shared by few
@@ -173,7 +184,8 @@ struct MeshBuilder {
     static RenderMesh ribbon(const std::vector<Vec3>& points, const std::vector<double>& halfWidths,
                              const Vec3& up = Vec3(0, 1, 0), const std::vector<Vec3>& colours = {});
     // Indexed building blocks for custom topology (cone tiers, fronds): append one vertex (normal
-    // normalised) and return its index; append a triangle wound to face `out`.
+    // normalised) and return its index; append a triangle wound to face `out` -- or nothing, when it has no area.
+    // Every emitter here (emitTri, emitQuad and their UV forms) winds through triFacing.
     static uint32_t vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, const Vec3& color);
     static void triFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, const Vec3& out);
     // CROSSED CARDS: `planes` vertical quads `width` x `height` through the origin, evenly turned
@@ -191,7 +203,8 @@ struct MeshBuilder {
     // `uvPerMetre` (u along the face's first in-plane axis), so a baked surface tiles at its real scale.
     static RenderMesh roundedBox(const Vec3& size, double radius, int segs = 2, double uvPerMetre = 1.0);
     // A LATHE: the profile (r, y) pairs, bottom to top, turned `segs` times about +y. Radial normals from the
-    // profile's slope; a point on the axis (r = 0) closes the shape there. u round the turn 0..1, v the profile's
+    // profile's slope, smooth through a gentle bend and split at a corner sharper than 40 deg (a bowl's rim, a
+    // plate's edge), each band wound by its own segment; a point on the axis (r = 0) closes the shape there. u round the turn 0..1, v the profile's
     // length in metres. Lamp bases, gas lifts, basins, bowls, finials.
     static RenderMesh lathe(const std::vector<std::pair<double, double>>& profile, int segs);
 };

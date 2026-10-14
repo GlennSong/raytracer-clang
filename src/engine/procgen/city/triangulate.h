@@ -16,8 +16,8 @@ namespace engine {
 //
 // `outer` is the exterior ring, `holes` the interior loops to punch out. Winding
 // is auto-corrected, so either orientation is accepted. Returns the filled
-// triangles as vertex triples in the ground plane (CCW-up). Degenerate input
-// yields no triangles.
+// triangles as vertex triples in the ground plane (CCW-up), never one of zero
+// area. Degenerate input yields no triangles.
 std::vector<std::array<Vec2, 3>>
 triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes);
 

@@ -84,6 +84,7 @@ RenderMesh MeshBuilder::sphere(float radius, int stacks, int slices) {
                 {a, b, a+1, b, b+1, a+1});
         }
     }
+    dropDegenerate(mesh);
     return mesh;
 }
 
@@ -225,6 +226,7 @@ RenderMesh MeshBuilder::cylinder(float radius, float height, int slices) {
             {botCenter, botCenter + 1 + static_cast<uint32_t>(i + 1),
              botCenter + 1 + static_cast<uint32_t>(i)});
 
+    dropDegenerate(mesh);
     return mesh;
 }
 
@@ -290,6 +292,7 @@ RenderMesh MeshBuilder::cone(float radius, float height, int slices) {
             {botCenter, botCenter + 1 + static_cast<uint32_t>(i + 1),
              botCenter + 1 + static_cast<uint32_t>(i)});
 
+    dropDegenerate(mesh);
     return mesh;
 }
 
@@ -381,6 +384,7 @@ RenderMesh MeshBuilder::torus(float majorRadius, float minorRadius,
                 {a, b, a+1, b, b+1, a+1});
         }
     }
+    dropDegenerate(mesh);
     return mesh;
 }
 
@@ -430,6 +434,7 @@ RenderMesh MeshBuilder::capsule(float radius, float height, int stacks, int slic
                 {a, b, a+1, b, b+1, a+1});
         }
     }
+    dropDegenerate(mesh);
     return mesh;
 }
 
@@ -504,6 +509,54 @@ void MeshBuilder::recomputeNormals(RenderMesh& mesh) {
     for (Vertex& v : mesh.vertices) v.normal = normalize(v.normal);
 }
 
+void MeshBuilder::dropDegenerate(RenderMesh& mesh) {
+    std::size_t w = 0;
+    for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+        const uint32_t a = mesh.indices[t], b = mesh.indices[t + 1], c = mesh.indices[t + 2];
+        const Vec3 f = cross(mesh.vertices[c].position - mesh.vertices[a].position,
+                             mesh.vertices[b].position - mesh.vertices[a].position);
+        if (f.lengthSquared() < kNoArea2) continue;
+        mesh.indices[w++] = a; mesh.indices[w++] = b; mesh.indices[w++] = c;
+    }
+    mesh.indices.resize(w);
+}
+
+void MeshBuilder::autosmooth(RenderMesh& mesh, double creaseDeg) {
+    const double cosCrease = std::cos(creaseDeg * 3.141592653589793 / 180.0);
+    const std::size_t nt = mesh.indices.size() / 3;
+    std::vector<Vec3> face(nt), unit(nt);
+    std::vector<std::vector<uint32_t>> around(mesh.vertices.size());   // the faces round each vertex
+    for (std::size_t t = 0; t < nt; ++t) {
+        const Vertex &a = mesh.vertices[mesh.indices[3 * t]], &b = mesh.vertices[mesh.indices[3 * t + 1]],
+                     &c = mesh.vertices[mesh.indices[3 * t + 2]];
+        face[t] = cross(c.position - a.position, b.position - a.position);   // outward (clockwise front), by area
+        unit[t] = face[t].lengthSquared() > 1e-30 ? normalize(face[t]) : Vec3(0, 0, 0);
+        for (int k = 0; k < 3; ++k) around[mesh.indices[3 * t + k]].push_back(static_cast<uint32_t>(t));
+    }
+    // Each corner's normal; corners of one vertex whose normals agree share it, the rest get a copy.
+    std::vector<Vertex> out = mesh.vertices;
+    std::vector<std::vector<std::pair<Vec3, uint32_t>>> made(mesh.vertices.size());
+    for (std::size_t t = 0; t < nt; ++t)
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t vi = mesh.indices[3 * t + k];
+            Vec3 n(0, 0, 0);
+            for (uint32_t f : around[vi])
+                if (dot(unit[f], unit[t]) >= cosCrease) n += face[f];
+            n = n.lengthSquared() > 1e-30 ? normalize(n) : (unit[t].lengthSquared() > 0 ? unit[t] : mesh.vertices[vi].normal);
+            uint32_t idx = UINT32_MAX;
+            for (const auto& [mn, mi] : made[vi])
+                if (dot(mn, n) > 0.9999) { idx = mi; break; }
+            if (idx == UINT32_MAX) {
+                if (made[vi].empty()) idx = vi;
+                else { idx = static_cast<uint32_t>(out.size()); out.push_back(mesh.vertices[vi]); }
+                out[idx].normal = n;
+                made[vi].push_back({n, idx});
+            }
+            mesh.indices[3 * t + k] = idx;
+        }
+    mesh.vertices = std::move(out);
+}
+
 void MeshBuilder::emitTri(RenderMesh& mesh, const Vec3& a, const Vec3& b,
                           const Vec3& c, const Vec3& normal, const Vec3& color) {
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
@@ -517,12 +570,7 @@ void MeshBuilder::emitTri(RenderMesh& mesh, const Vec3& a, const Vec3& b,
     mesh.vertices.push_back(mk(a));
     mesh.vertices.push_back(mk(b));
     mesh.vertices.push_back(mk(c));
-    // Keep (a,b,c) when its outward normal cross(c-a,b-a) agrees with `normal`,
-    // else swap b/c so the front face points the way the shading normal does.
-    if (dot(cross(c - a, b - a), normal) >= 0)
-        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2});
-    else
-        mesh.indices.insert(mesh.indices.end(), {base, base + 2, base + 1});
+    triFacing(mesh, base, base + 1, base + 2, normal);
 }
 
 void MeshBuilder::emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b,
@@ -540,12 +588,8 @@ void MeshBuilder::emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b,
     mesh.vertices.push_back(vtx(b, 1, 0));
     mesh.vertices.push_back(vtx(c, 1, 1));
     mesh.vertices.push_back(vtx(d, 0, 1));
-    if (dot(cross(c - a, b - a), normal) >= 0)
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 1, base + 2, base, base + 2, base + 3});
-    else
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 2, base + 1, base, base + 3, base + 2});
+    triFacing(mesh, base, base + 1, base + 2, normal);
+    triFacing(mesh, base, base + 2, base + 3, normal);
 }
 
 void MeshBuilder::emitTriUV(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
@@ -562,10 +606,7 @@ void MeshBuilder::emitTriUV(RenderMesh& mesh, const Vec3& a, const Vec3& b, cons
     mesh.vertices.push_back(mk(a, ua, va));
     mesh.vertices.push_back(mk(b, ub, vb));
     mesh.vertices.push_back(mk(c, uc, vc));
-    if (dot(cross(c - a, b - a), normal) >= 0)
-        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2});
-    else
-        mesh.indices.insert(mesh.indices.end(), {base, base + 2, base + 1});
+    triFacing(mesh, base, base + 1, base + 2, normal);
 }
 
 void MeshBuilder::emitQuadUV(RenderMesh& mesh, const Vec3& a, const Vec3& b,
@@ -584,12 +625,8 @@ void MeshBuilder::emitQuadUV(RenderMesh& mesh, const Vec3& a, const Vec3& b,
     mesh.vertices.push_back(vtx(b, ub, vb));
     mesh.vertices.push_back(vtx(c, uc, vc));
     mesh.vertices.push_back(vtx(d, ud, vd));
-    if (dot(cross(c - a, b - a), normal) >= 0)
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 1, base + 2, base, base + 2, base + 3});
-    else
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 2, base + 1, base, base + 3, base + 2});
+    triFacing(mesh, base, base + 1, base + 2, normal);
+    triFacing(mesh, base, base + 2, base + 3, normal);
 }
 
 void MeshBuilder::gridIndices(RenderMesh& mesh, int cols, int rows,

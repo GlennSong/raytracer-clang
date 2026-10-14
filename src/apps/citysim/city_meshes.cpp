@@ -72,14 +72,10 @@ constexpr int kNumOutfits = static_cast<int>(sizeof(kOutfits) / sizeof(kOutfits[
 
 // Append a flat white quad (two triangles, +Y normal) — the building block of
 // the ground-projected debug meshes (strips, wedge edges/arc).
+// A flat quad on the ground, facing up whichever way round its corners come (the wedge's arc runs them the other
+// way): MeshBuilder::emitQuad winds it.
 void addQuadXZ(engine::RenderMesh& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
-    uint32_t base = static_cast<uint32_t>(m.vertices.size());
-    for (const Vec3& p : { a, b, c, d }) {
-        engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = Vec3(1, 1, 1);
-        m.vertices.push_back(v);
-    }
-    m.indices.push_back(base + 0); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
-    m.indices.push_back(base + 0); m.indices.push_back(base + 2); m.indices.push_back(base + 3);
+    engine::MeshBuilder::emitQuad(m, a, b, c, d, Vec3(0, 1, 0), Vec3(1, 1, 1));
 }
 
 }  // namespace

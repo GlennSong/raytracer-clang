@@ -75,16 +75,10 @@ RenderMesh stationBoardFaces() {
     for (int side = -1; side <= 1; side += 2) {   // +1 the front (+z, toward the track), -1 the back
         const double z = side * 0.045;
         const Vec3 n(0, 0, static_cast<double>(side));
-        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
         // seen from its own side, left to right is -x..+x on the front and +x..-x on the back
         const double xl = side > 0 ? -hw : hw, xr = -xl;
-        auto v = [&](double x, double y, float u, float vv) {
-            Vertex vx(Vec3(x, y, z), n, u, vv);
-            vx.tangent = Vec3(side > 0 ? 1.0 : -1.0, 0, 0);
-            m.vertices.push_back(vx);
-        };
-        v(xl, y1, 0, 0); v(xr, y1, 1, 0); v(xr, y0, 1, 1); v(xl, y0, 0, 1);
-        for (uint32_t i : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(base + i);
+        engine::MeshBuilder::emitQuadUV(m, Vec3(xl, y1, z), Vec3(xr, y1, z), Vec3(xr, y0, z), Vec3(xl, y0, z), n, Vec3(1, 1, 1),
+                                0, 0, 1, 0, 1, 1, 0, 1);
     }
     return m;
 }

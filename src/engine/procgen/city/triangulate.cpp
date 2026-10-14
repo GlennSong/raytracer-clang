@@ -298,8 +298,13 @@ triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes) {
     E.earcutLinked(E.filterPoints(outerNode));
 
     out.reserve(E.tris.size());
-    for (const std::array<int, 3>& t : E.tris)
-        out.push_back({pts[t[0]], pts[t[1]], pts[t[2]]});
+    for (const std::array<int, 3>& t : E.tris) {
+        // a ZERO-AREA triangle (three points on one line, which a ring with collinear vertices can leave): nothing to
+        // draw, and a sliver in the mesh (the mesh audit, test_winding: thousands in building slabs)
+        const Vec2 &a = pts[t[0]], &b = pts[t[1]], &c = pts[t[2]];
+        if (std::fabs(cross(b - a, c - a)) < 1e-9) continue;
+        out.push_back({a, b, c});
+    }
     return out;
 }
 

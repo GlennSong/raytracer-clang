@@ -1,4 +1,5 @@
 #include "shop_signs.h"
+#include "../../mesh_builder.h"
 #include "trades.h"
 
 #include <algorithm>
@@ -333,14 +334,8 @@ void openSignImages(const Font& tube, TextImage& albedo, TextImage& glow) {
 RenderMesh openSignMesh() {
     RenderMesh m;
     const Real hw = kOpenSignW * 0.5, hh = kOpenSignH * 0.5;
-    const Vec3 n(0, 0, 1);
-    auto vtx = [&](Real x, Real y, float u, float v) {
-        Vertex vx(Vec3(x, y, 0), n, u, v);
-        vx.tangent = Vec3(1, 0, 0);
-        m.vertices.push_back(vx);
-    };
-    vtx(-hw, hh, 0, 0); vtx(hw, hh, 1, 0); vtx(hw, -hh, 1, 1); vtx(-hw, -hh, 0, 1);
-    for (uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(k);
+    MeshBuilder::emitQuadUV(m, Vec3(-hw, hh, 0), Vec3(hw, hh, 0), Vec3(hw, -hh, 0), Vec3(-hw, -hh, 0), Vec3(0, 0, 1),
+                            Vec3(1, 1, 1), 0, 0, 1, 0, 1, 1, 0, 1);
     return m;
 }
 
@@ -393,15 +388,9 @@ void busSignImages(const Font& font, const std::vector<std::string>& labels, Tex
 RenderMesh busSignMesh(int row, int rows) {
     RenderMesh m;
     const Real hw = kBusSignW * 0.5, hh = kBusSignH * 0.5;
-    const Vec3 n(0, 0, 1);
     const float v0 = static_cast<float>(row) / std::max(1, rows), v1 = static_cast<float>(row + 1) / std::max(1, rows);
-    auto vtx = [&](Real x, Real y, float u, float v) {
-        Vertex vx(Vec3(x, y, 0), n, u, v);
-        vx.tangent = Vec3(1, 0, 0);
-        m.vertices.push_back(vx);
-    };
-    vtx(-hw, hh, 0, v0); vtx(hw, hh, 1, v0); vtx(hw, -hh, 1, v1); vtx(-hw, -hh, 0, v1);
-    for (uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(k);
+    MeshBuilder::emitQuadUV(m, Vec3(-hw, hh, 0), Vec3(hw, hh, 0), Vec3(hw, -hh, 0), Vec3(-hw, -hh, 0), Vec3(0, 0, 1),
+                            Vec3(1, 1, 1), 0, v0, 1, v0, 1, v1, 0, v1);
     return m;
 }
 

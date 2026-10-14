@@ -166,7 +166,7 @@ RenderMesh buildCarShell(CarShellStyle style, const Vec3& paint, const Vec3& siz
         Vec3 gn = cross(c - a, b - a);
         if (dot(gn, outward) < 0) std::swap(m.indices[t + 1], m.indices[t + 2]);
     }
-    MeshBuilder::recomputeNormals(m);   // shared loft verts -> SMOOTH shading
+    MeshBuilder::autosmooth(m);   // shared loft verts -> SMOOTH shading, hard where the loft folds
 
     // --- trim: lights + wheels -------------------------------------------------
     auto lamp = [&](Real zEnd, Vec3 color) {

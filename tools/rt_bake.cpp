@@ -4,6 +4,7 @@
 //   rt_bake --inspect <bundle-dir>
 //   rt_bake --prune [--yes] [--out <root>] [level.json ...]
 //   rt_bake --status <level.json> [--out <root>]
+//   rt_bake --audit <bundle-dir>      every baked mesh through the mesh audit (engine/mesh_audit.h)
 //
 // Runs every registered producer that applies to the level (the procedural city, then its lots), copying unchanged
 // producers' sections forward from earlier bundles, and writes <root>/<key>/level.bundle + manifest.json.
@@ -13,15 +14,19 @@
 #include "engine/bundle/bake.h"
 #include "engine/procgen/city/citylots_producer.h"
 #include "engine/bundle/bundle_glb.h"
+#include "engine/bundle/codecs.h"
+#include "engine/mesh_audit.h"
 #ifdef RT_ROADS_LANES
 #include "engine/procgen/city/roads/lanes/city_producer.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
 #endif
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -36,6 +41,7 @@ int usage() {
     std::fprintf(stderr,
         "usage: rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--threads N] [--require]\n"
         "       rt_bake --inspect <bundle-dir>\n"
+        "       rt_bake --audit <bundle-dir>   every baked mesh through the mesh audit (inward, degenerate, non-finite)\n"
         "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root; --yes deletes them\n"
         "                    (stale = not the newest for its level path, and not the current bundle of a listed level)\n"
         "       rt_bake --status <level.json> [--out <root>]   is the level baked, is the bake current, its size (the editor's Level cache panel)\n"
@@ -81,6 +87,34 @@ int inspect(const std::string& dir) {
     std::printf("%zu cell mesh sections\n", cells);
     return 0;
 }
+// THE MESH AUDIT over a bake (Glenn, 2026-10-13: "this way we know that every polygon ends up being right"): every
+// section that is a mesh, through engine::auditMesh -- by material, then the sections with inward or degenerate
+// triangles, worst first, each with where its first one is (world coordinates).
+int audit(const std::string& dir) {
+    std::string err; std::unique_ptr<Bundle> b = Bundle::open(dir + "/" + kBundleFile, &err);
+    if (!b) { std::fprintf(stderr, "rt_bake: %s\n", err.c_str()); return 1; }
+    std::map<std::string, engine::MeshAudit> byMaterial;
+    std::vector<std::pair<std::string, engine::MeshAudit>> bad;
+    engine::MeshAudit total;
+    size_t meshes = 0;
+    for (const std::string& s : b->sections("")) {
+        const Bundle::View v = b->section(s);
+        PackedMesh p; BinReader r(v.data, v.size);
+        if (!getPackedMesh(r, p)) continue;
+        ++meshes;
+        const engine::MeshAudit a = engine::auditMesh(unpackMesh(p));
+        const size_t slash = s.rfind('/');
+        byMaterial[(slash == std::string::npos ? s : s.substr(slash + 1)) + (p.name.empty() ? "" : " (" + p.name + ")")].add(a);
+        total.add(a);
+        if (a.inward > 0 || a.degenerate > 0 || a.nonFinite > 0) bad.push_back({s, a});
+    }
+    std::printf("%zu mesh sections\n", meshes);
+    for (const auto& [m, a] : byMaterial) engine::printMeshAudit(m.c_str(), a);
+    std::sort(bad.begin(), bad.end(), [](const auto& x, const auto& y) { return x.second.inward + x.second.nonFinite > y.second.inward + y.second.nonFinite; });
+    for (size_t i = 0; i < bad.size() && i < 40; ++i) engine::printMeshAudit(bad[i].first.c_str(), bad[i].second);
+    engine::printMeshAudit("TOTAL", total);
+    return total.inward == 0 && total.nonFinite == 0 ? 0 : 2;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -91,6 +125,7 @@ int main(int argc, char** argv) {
     engine::roads::lanes::registerLotsProducer();
 #endif
     if (std::strcmp(argv[1], "--inspect") == 0) { if (argc < 3) return usage(); return inspect(argv[2]); }
+    if (std::strcmp(argv[1], "--audit") == 0) { if (argc < 3) return usage(); return audit(argv[2]); }
     if (std::strcmp(argv[1], "--status") == 0) {
         if (argc < 3) return usage();
         std::string outRoot; for (int i = 3; i < argc; ++i) { if (std::string(argv[i]) == "--out" && i + 1 < argc) outRoot = argv[++i]; else return usage(); }
