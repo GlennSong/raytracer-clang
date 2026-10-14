@@ -453,10 +453,7 @@ static void appendToPart(BuildingMesh& out, PartId id, const RenderMesh& src) {
 }
 
 void emitBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color) {
-    // the mesh library's box on the scope's frame (closed, every face out)
-    MeshFrame f;
-    f.o = s.origin; f.x = s.axis[0] * s.size.x; f.y = s.axis[1] * s.size.y; f.z = s.axis[2] * s.size.z;
-    MeshBuilder::emitBox(partMesh(out, part), f, color);
+    MeshBuilder::emitBox(partMesh(out, part), s.frame(), color);   // the mesh library's box (closed, every face out)
 }
 
 void emitSoftBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color, uint32_t seed) {
@@ -4406,18 +4403,7 @@ static void emitFireEscape(BuildingMesh* vis, RenderMesh* col, const Poly2& plan
     const Real fx0 = xe0, fx1 = xe1 - 0.8;            // the flights' run; the arrival platform beyond it
     const Vec3 X = fr.h, U(0, 1, 0), N = fr.n;
     const Vec3 iron(0.11, 0.11, 0.12);
-    auto boxQuads = [&](RenderMesh& m, const Scope& sc) {
-        const Vec3 c000 = sc.corner(0, 0, 0), c100 = sc.corner(1, 0, 0), c110 = sc.corner(1, 1, 0),
-                   c010 = sc.corner(0, 1, 0), c001 = sc.corner(0, 0, 1), c101 = sc.corner(1, 0, 1),
-                   c111 = sc.corner(1, 1, 1), c011 = sc.corner(0, 1, 1);
-        const Vec3 r = sc.axis[0], u = sc.axis[1], f = sc.axis[2];
-        MeshBuilder::emitQuad(m, c000, c100, c110, c010, f * -1, iron);
-        MeshBuilder::emitQuad(m, c001, c101, c111, c011, f, iron);
-        MeshBuilder::emitQuad(m, c000, c001, c011, c010, r * -1, iron);
-        MeshBuilder::emitQuad(m, c100, c101, c111, c110, r, iron);
-        MeshBuilder::emitQuad(m, c000, c100, c101, c001, u * -1, iron);
-        MeshBuilder::emitQuad(m, c010, c110, c111, c011, u, iron);
-    };
+    auto boxQuads = [&](RenderMesh& m, const Scope& sc) { MeshBuilder::emitBox(m, sc.frame(), iron); };
     RenderMesh steel;
     // An axis-aligned box in face space (x along the wall, y up from baseY, z out from it).
     auto box = [&](Real x0, Real x1, Real y0, Real y1, Real z0, Real z1, bool collide) {

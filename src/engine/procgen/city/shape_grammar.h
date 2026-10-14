@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_SHAPE_GRAMMAR_H
 
 #include "polygon.h"
+#include "../../mesh_builder.h"
 #include "../../../renderer/renderer.h"   // RenderMesh, RenderMaterial
 #include <cstdint>
 #include <functional>
@@ -171,6 +172,12 @@ struct Scope {
                axis[2] * (size.z * w);
     }
     Vec3 center() const { return corner(0.5, 0.5, 0.5); }
+    // the same box as the mesh library's frame (MeshBuilder::emitBox)
+    MeshFrame frame() const {
+        MeshFrame f;
+        f.o = origin; f.x = axis[0] * size.x; f.y = axis[1] * size.y; f.z = axis[2] * size.z;
+        return f;
+    }
 };
 
 // Build a ground-plane scope from a footprint polygon: its oriented bounding box
