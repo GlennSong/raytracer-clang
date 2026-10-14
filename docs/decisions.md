@@ -9982,6 +9982,12 @@ station turnstiles came out inside-out and the elevated decks could be seen thro
   34,009 -> 2,968 of 1.21 M looks. Lanes tag 2026-10-14.1. Left: a shoulder strip cut off from its deck at
   interchange ramp junctions (a lane footprint hides its side where no deck is drawn), station canopy ribs, valley
   ramp ends.
+- **Where people stand** (the same day, the island read after the side-step fix): the angle audit's eyes stood inside
+  ramp slabs 1.3 m off the ground and inside piers longer than its 3 m enclosure test, and counted their own slabs'
+  backs (2,968 -> 808 once headroom is measured from the ground and "inside" is parity: the first face met is a back,
+  level or straight down). What was left was real: layer slivers standing up as fins beside the deck (a steepness
+  test by rise over the longest edge; now the plane's slope) and slab sides hidden by a footprint where nothing is
+  drawn (the side rule now tests the drawn triangles). Lanes 2026-10-14.2.
 - **Not gated**: stylized canopies (normals leaned toward the crown's centre on purpose) and leaf cards (two-sided).
 
 Owed (the mesh library): one triangulator (the road ear-clipper beside earcut), latheMesh folded into
@@ -10016,6 +10022,16 @@ to access it ... other c++ mesh builders would then call into the common library
 - **Found on the way**: the river quay was wound counter-clockwise -- and test_scatter's quay check counted that rule,
   so it passed while every quay face was inside out to the renderer. The street-sign and shop-sign boards used the
   same backwards index list as the OPEN sign.
+
+- **The lots, reworked** (Glenn, 2026-10-14: "city lots should be reworked and we should rebake everything after"):
+  the open-lot sculptors each carried their own box and rectangle adapters over the same plan frame. Now ONE frame,
+  SiteFrame (W, P), which OpenFrame and the depot's yard are; and three words for it in shape_grammar.h --
+  Scope::inFrame (a box at a frame point), Scope::standing (a box centred on a plan point, turned along a direction)
+  and emitPlanRect. The change was proved byte-identical first (rt_bake --sections on river_town and
+  island_8_saltwood: 2 depot yards, 108 playgrounds, 201 gardens, ~930 parks), then the two behaviour fixes went in:
+  the drape's pieces fan through triFacing (the 22 no-area triangles the island bake audit found in the lot parts),
+  and a utility lot's cabinets, its posts and the fence/shed colliders are closed blocks. Of the three exceptions
+  above, only the SDF mesher's is left; the drape and that collider now go through the library. Lots 2026-10-14.1.
 
 Tags: lanes + rail 2026-10-13.2, lots 2026-10-13.6 (a re-bake). Tests: mesh_library_solids_are_clean_and_closed
 (sheared and left-handed frames, clockwise blocks, either outline winding, holes, tilted planes, both lathes), the
