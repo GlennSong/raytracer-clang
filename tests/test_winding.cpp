@@ -44,6 +44,8 @@
 #include "../src/engine/scripting/script_modules.h"
 #include "../src/engine/script_assets.h"
 #include "../src/engine/procgen/polymesh.h"
+#include "../src/engine/procgen/city/structure_set.h"
+#include "../src/engine/procgen/city/water_mesh.h"
 #include "mesh_invariants.h"
 
 #include <fstream>
@@ -483,5 +485,50 @@ TEST_CASE(mesh_audit_polymesh_concave_faces) {
     }
     printAudit("polymesh (L, star; loft, subdivide, extrude)", total);
     CHECK(total.tris > 100);
+    CHECK(total.clean());
+}
+
+// THE SHAPE KIT'S OTHER WORDS and the small producers: rounded boxes (radius 0 to fat), lathes (a vase, a bowl, a
+// plate, a closed knob), tubes (straight, bent, through vertical), ribbons, icospheres, the shape grammar's faceted
+// latheMesh, a retaining wall with its bench, the sea.
+TEST_CASE(mesh_audit_shape_kit_and_small_producers) {
+    Audit total;
+    auto one = [&](const std::string& n, const RenderMesh& m) {
+        const Audit a = audit(m);
+        if (!a.clean()) printAudit(n.c_str(), a);
+        total.add(a);
+    };
+    for (double r : {0.0, 0.004, 0.05, 0.3})
+        for (int segs : {1, 2, 4}) one("roundedBox r" + std::to_string(r), MeshBuilder::roundedBox(Vec3(0.6, 0.4, 0.8), r, segs));
+    const std::vector<std::vector<std::pair<double, double>>> profiles = {
+        {{0.0, 0.0}, {0.05, 0.0}, {0.075, 0.10}, {0.05, 0.22}, {0.035, 0.26}, {0.045, 0.28}, {0.0, 0.28}},
+        {{0.0, 0.0}, {0.06, 0.0}, {0.14, 0.07}, {0.145, 0.075}, {0.0, 0.03}},
+        {{0.0, 0.0}, {0.10, 0.0}, {0.14, 0.02}, {0.0, 0.02}},
+        {{0.0, 0.0}, {0.03, 0.01}, {0.038, 0.035}, {0.03, 0.06}, {0.0, 0.07}}};
+    for (const auto& pr : profiles) {
+        one("lathe", MeshBuilder::lathe(pr, 16));
+        std::vector<Vec2> p2;
+        for (const auto& [r, y] : pr) p2.push_back(Vec2(r, y));
+        one("latheMesh", latheMesh(Vec3(0, 0, 0), p2, 12, Vec3(1, 1, 1)));
+    }
+    one("tube straight", MeshBuilder::tube({Vec3(0, 0, 0), Vec3(0, 1, 0), Vec3(0, 2, 0)}, {0.1, 0.08, 0.05}, 8));
+    one("tube bent", MeshBuilder::tube({Vec3(0, 0, 0), Vec3(0.2, 1, 0), Vec3(1, 1.6, 0.3), Vec3(2, 1.5, 1)}, {0.1, 0.08, 0.06, 0.03}, 6));
+    one("tube through vertical", MeshBuilder::tube({Vec3(0, 0, 0), Vec3(0.05, 1, 0), Vec3(0.1, 2, 0.05), Vec3(1, 2.5, 0)}, {0.1, 0.1, 0.1, 0.1}, 8));
+    one("ribbon", MeshBuilder::ribbon({Vec3(0, 0, 0), Vec3(5, 0.2, 1), Vec3(9, 0.1, 4)}, {1.0, 1.2, 0.8}));
+    for (int sub : {0, 1, 2}) one("icosphere " + std::to_string(sub), MeshBuilder::icosphere(sub));
+    {
+        WallSegment w;
+        w.topA = Vec3(0, 3, 0); w.topB = Vec3(20, 3.5, 2); w.dropA = 2.5; w.dropB = 3.0; w.out = Vec3(0, 0, -1); w.bench = 2.0;
+        WallSegment f = w;
+        f.retaining = false; f.bench = 0;
+        one("bakeWallMesh", bakeWallMesh({w, f}, Vec3(0.5, 0.5, 0.5)));
+    }
+    {
+        WaterMeshParams wp;
+        wp.lo = Vec2(-200, -200); wp.hi = Vec2(200, 200);
+        one("buildWaterMesh", buildWaterMesh([](double x, double z) { return 0.02 * x - 2.0 + 0.01 * z; }, wp));
+    }
+    printAudit("ALL SHAPE KIT + SMALL PRODUCERS", total);
+    CHECK(total.tris > 1000);
     CHECK(total.clean());
 }
