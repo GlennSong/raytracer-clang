@@ -634,6 +634,9 @@ bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // and a warehouse's (their loading bays) -- civicRooms 9, 15, 16.
 inline bool baysStandOpen(const BuildingParams& p) { return p.civicRooms == 9 || p.civicRooms == 15 || p.civicRooms == 16; }
 std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params);
+// A building's FIRE ESCAPE as a walker meets it: its treads, landings and rails, world space (empty: none). The
+// LadderSystem keeps it round the player, so the stair climbs whether the building's interior is streamed or not.
+RenderMesh fireEscapeCollider(const Poly2& plan, const BuildingParams& params, Real baseY);
 // A campus hall's door onto its quad (params.backDoor): the rear face's middle bay, or -- when the stair hugs that wall,
 // as it does in campus halls -- the bay a metre short of the flight's foot. Its centre on the wall and the wall's
 // outward normal; false when there is none. The facade and the floor plan both place it by this.

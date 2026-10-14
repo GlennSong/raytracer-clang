@@ -1,4 +1,5 @@
 #include "station_entrance.h"
+#include "../../engine/mesh_builder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -55,17 +56,12 @@ struct Builder {
                            world(x0, y0 + g, z1), world(x1, y0 + g, z1), world(x1, y1 + g, z1), world(x0, y1 + g, z1)};
         const int f[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 4, 7, 3}, {1, 2, 6, 5}, {0, 1, 5, 4}, {3, 7, 6, 2}};
         const Vec3 n[6] = {zAx * -1.0, zAx, xAx * -1.0, xAx, Vec3(0, -1, 0), Vec3(0, 1, 0)};
+        // (MeshBuilder::emitQuad winds each face to its normal: the engine's front face is CLOCKWISE seen from the
+        // side the normal points to -- a hand-written index list here had every face of the pavilion inside out)
         for (RenderMesh* m : {&to, solid ? &out.collider : nullptr}) {
             if (!m) continue;
-            for (int k = 0; k < 6; ++k) {
-                const uint32_t base = static_cast<uint32_t>(m->vertices.size());
-                for (int j = 0; j < 4; ++j) {
-                    Vertex v(c[f[k][j]], n[k]);
-                    v.color = col;
-                    m->vertices.push_back(v);
-                }
-                for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) m->indices.push_back(base + i);
-            }
+            for (int k = 0; k < 6; ++k)
+                engine::MeshBuilder::emitQuad(*m, c[f[k][0]], c[f[k][1]], c[f[k][2]], c[f[k][3]], n[k], col);
         }
     }
 };

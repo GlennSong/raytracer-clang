@@ -4627,8 +4627,8 @@ std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
-    // The fire escape's treads and landings are walkable while the interior is resident (its back door streams it).
-    if (params.fireEscape && colliderOut) emitFireEscape(nullptr, colliderOut, planIn, params, baseY, true);
+    // (the fire escape's treads and landings are the LadderSystem's collider now, round the player whether the interior
+    // is resident or not -- fireEscapeCollider; Glenn, 2026-10-13: "The fire escape stairwells aren't walkable")
     Poly2 plan = planIn;
     if (plan.size() < 3) return out;
     ensureCCW(plan);
@@ -6648,6 +6648,12 @@ std::vector<std::pair<Vec2, Vec2>> vehicleBayDoors(const Poly2& planIn, const Bu
         doors.push_back({Vec2(p0.x, p0.z), Vec2(p1.x, p1.z)});
     }
     return doors;
+}
+
+RenderMesh fireEscapeCollider(const Poly2& plan, const BuildingParams& params, Real baseY) {
+    RenderMesh col;
+    if (params.fireEscape) emitFireEscape(nullptr, &col, plan, params, baseY, true);
+    return col;
 }
 
 }  // namespace engine

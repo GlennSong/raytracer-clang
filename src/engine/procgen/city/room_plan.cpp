@@ -2133,6 +2133,11 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         RoomPlan of = officePlan(planIn, params, core, inset, storey);
         if (!of.rooms.empty()) { of.finish = interiorFinishFor(params); return of; }
     }
+    if (params.officeUse && !params.residential && storey >= 1 && !officePlanFits(planIn) && std::getenv("RT_OFFICE_DEBUG")) {
+        std::fprintf(stderr, "[office] storey %d: a %zu-corner plate the office floor does not lay:", storey, planIn.size());
+        for (const Vec2& v : planIn) std::fprintf(stderr, " (%.2f %.2f)", v.x, v.y);
+        std::fprintf(stderr, " core %d\n", core.valid ? 1 : 0);
+    }
     if (params.officeUse && !params.residential && officePlanFits(planIn) && storey >= 1) {
         // A WORKPLACE's floor, masonry or glass (Glenn, 2026-10-13): the office floor round its core -- or, in a
         // building with only a stair, round the stair's well, which stands in for the core (no lifts: no reception).

@@ -1,4 +1,5 @@
 #include "station_boards.h"
+#include "../../engine/mesh_builder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,15 +21,9 @@ void box(RenderMesh& m, Vec3 lo, Vec3 hi, const Vec3& col) {
                        {lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z}};
     const int f[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 4, 7, 3}, {1, 2, 6, 5}, {0, 1, 5, 4}, {3, 7, 6, 2}};
     const Vec3 n[6] = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}};
-    for (int k = 0; k < 6; ++k) {
-        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
-        for (int j = 0; j < 4; ++j) {
-            Vertex v(c[f[k][j]], n[k]);
-            v.color = col;
-            m.vertices.push_back(v);
-        }
-        for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) m.indices.push_back(base + i);
-    }
+    // (emitQuad winds each face to its normal: the engine's front face is clockwise seen from outside -- this list was
+    // counter-clockwise, so the boards' posts and rims were inside out)
+    for (int k = 0; k < 6; ++k) engine::MeshBuilder::emitQuad(m, c[f[k][0]], c[f[k][1]], c[f[k][2]], c[f[k][3]], n[k], col);
 }
 
 }  // namespace

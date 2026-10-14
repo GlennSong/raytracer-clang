@@ -634,6 +634,19 @@ TEST_CASE(a_station_entrance_stands_over_its_way_in) {
         wasBlocked = blocked;
     }
     CHECK(passages >= 4);
+    // EVERY FACE OUTWARD (Glenn: "the geometry for the turnstyles ... have their normals inverted"): the engine's front
+    // face is clockwise seen from the normal's side, so each triangle (a, b, c) has cross(c - a, b - a) along its normal
+    int inward = 0, tris = 0;
+    for (const engine::RenderMesh* mm : {&m.body, &m.glass}) {
+        for (std::size_t i = 0; i + 2 < mm->indices.size(); i += 3) {
+            const engine::Vertex& a = mm->vertices[mm->indices[i]];
+            const Vec3 b = mm->vertices[mm->indices[i + 1]].position, c = mm->vertices[mm->indices[i + 2]].position;
+            ++tris;
+            if (engine::dot(engine::cross(c - a.position, b - a.position), a.normal) < 0) ++inward;
+        }
+    }
+    CHECK(tris > 100);
+    CHECK(inward == 0);
     // the board on the roof, facing back toward the street (-along)
     CHECK(m.board.m[2][2] < -0.99);
     CHECK(m.board.m[1][3] > 5.0 + 3.6 - 1.7);

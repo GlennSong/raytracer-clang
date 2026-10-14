@@ -33,6 +33,8 @@ TEST_CASE(low_flat_roofed_buildings_carry_a_roof_ladder_on_their_back_wall) {
                 LadderSpec l;
                 if (!roofLadderFor(plan, p, 2.0, roof, l)) continue;
                 ++ladders;
+                // ONE WAY UP the back (Glenn: "Buildings should have one or the other"): with a fire escape, no ladder
+                { BuildingParams fe = p; fe.fireEscape = true; LadderSpec l2; if (roofLadderFor(plan, fe, 2.0, roof, l2)) ++wrong; }
                 const bool eligible = p.roofStyle == BuildingParams::RoofStyle::Flat && p.floors >= 1 && p.floors <= 4 &&
                                       !p.curtainWall && !p.bigBox;
                 if (!eligible) ++wrong;

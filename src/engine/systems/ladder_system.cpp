@@ -4,6 +4,7 @@
 #include "../interact_broker.h"
 #include "../world.h"
 #include "../procgen/city/building_records.h"
+#include "physics_system.h"
 #include "../procgen/city/ladders.h"
 #include "../procgen/city/shape_grammar.h"   // materialFor
 #include "../interaction.h"   // Seated
@@ -29,6 +30,12 @@ void LadderSystem::onStart(FrameContext& ctx) {
 }
 
 void LadderSystem::onStop(FrameContext& ctx) {
+#ifdef RT_ENABLE_PHYSICS
+    if (physics_)
+        for (auto& kv : escapes_)
+            if (kv.second != ~0ull) physics_->physicsWorld().removeBody(static_cast<PhysicsBodyId>(kv.second));
+#endif
+    escapes_.clear();
     for (auto& kv : drawn_) {
         if (ctx.world.alive(kv.second.e)) ctx.world.destroy(kv.second.e);
         ctx.assets.releaseMesh(kv.second.mesh);
@@ -70,6 +77,36 @@ void LadderSystem::update(FrameContext& ctx) {
     });
     if (!player.valid()) return;
     const Vec3 feet = pos - Vec3(0, feetDrop, 0);
+
+    // THE FIRE ESCAPES round the player: their treads, landings and rails solid (the interior's own collider was the
+    // only one, so an escape climbed only while its building's interior was streamed)
+#ifdef RT_ENABLE_PHYSICS
+    if (physics_) {
+        const CityBuildings* cb = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        if (cb) {
+            for (std::size_t i = 0; i < cb->records.size(); ++i) {
+                const BuildingRecord& r = cb->records[i];
+                if (!r.params.fireEscape || r.plan.empty()) continue;
+                const Real dd = (Vec2(r.plan[0].x, r.plan[0].y) - Vec2(pos.x, pos.z)).length();
+                auto it = escapes_.find(i);
+                if (dd < ESCAPE_M && it == escapes_.end()) {
+                    const RenderMesh col = fireEscapeCollider(r.plan, r.params, r.baseY);
+                    if (col.indices.empty()) { escapes_.emplace(i, ~0ull); continue; }
+                    std::vector<Vec3> verts;
+                    for (const Vertex& v : col.vertices) verts.push_back(v.position);
+                    std::vector<uint32_t> idx = col.indices;
+                    const std::size_t one = idx.size();   // both faces: a tread is stood on from above, hit from below
+                    for (std::size_t k = 0; k + 2 < one; k += 3) { idx.push_back(idx[k]); idx.push_back(idx[k + 2]); idx.push_back(idx[k + 1]); }
+                    escapes_.emplace(i, static_cast<uint64_t>(physics_->physicsWorld().addMesh(verts, idx, Vec3(0, 0, 0), 0.85)));
+                } else if (dd > ESCAPE_RELEASE_M && it != escapes_.end()) {
+                    if (it->second != ~0ull) physics_->physicsWorld().removeBody(static_cast<PhysicsBodyId>(it->second));
+                    escapes_.erase(it);
+                }
+            }
+        }
+    }
+#endif
 
     // DRAWN: the buildings' ladders near the player (a vehicle's is part of its body)
     for (std::size_t i = 0; i < lad->fixed.size(); ++i) {

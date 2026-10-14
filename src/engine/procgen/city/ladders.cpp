@@ -9,6 +9,9 @@ namespace engine {
 
 bool roofLadderFor(const Poly2& planIn, const BuildingParams& params, Real baseY, Real roofY, LadderSpec& out) {
     if (planIn.size() < 3 || params.roofStyle != BuildingParams::RoofStyle::Flat) return false;
+    // ONE WAY UP the back, never both (Glenn, 2026-10-13: "Buildings should have one or the other"): a building with a
+    // fire escape (attached, two to six storeys: the lot pass) climbs by it
+    if (params.fireEscape) return false;
     if (params.floors < 1 || params.floors > 4 || params.curtainWall || params.bigBox || params.campus) return false;
     if (roofY - baseY < 3.0) return false;
     const uint32_t h = static_cast<uint32_t>(params.seed) * 2654435761u;
@@ -23,7 +26,7 @@ bool roofLadderFor(const Poly2& planIn, const BuildingParams& params, Real baseY
     const Vec2 d = (b - a) * (1.0 / W), nOut(d.y, -d.x);
     // CLEAR OF THE WINDOWS (Glenn's ask is a way up, not a ladder across the panes): the rear face's openings on every
     // storey, as the facade cuts them, and the ladder (its cage 0.95 m across) in the first stretch clear of them by
-    // a hand's width, from the end away from the fire escape's
+    // a hand's width
     std::vector<std::pair<Real, Real>> spans;
     {
         const std::vector<StoreyPlan> sps = storeyPlans(plan, params);
@@ -41,7 +44,7 @@ bool roofLadderFor(const Poly2& planIn, const BuildingParams& params, Real baseY
     for (int i = 0; i < 400 && x < 0; ++i) {
         const Real s = 0.8 + i * 0.1;
         if (s > W - 0.8) break;
-        const Real cand = params.fireEscape ? W - s : s;
+        const Real cand = s;
         bool clear = true;
         for (const auto& sp : spans) clear = clear && (cand + half <= sp.first || cand - half >= sp.second);
         if (clear) x = cand;

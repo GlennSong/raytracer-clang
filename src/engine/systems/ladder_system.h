@@ -12,8 +12,10 @@ namespace engine {
 // a city has loaded (roof-access ladders: procgen/city/ladders.h), draws the ones near the player, and OFFERS the
 // broker "climb" at a ladder's foot and "climb down" at its top -- the buildings' and the vehicles' alike. On the
 // command it puts CLIMBING on the player; the PlayerSystem does the climbing.
+class PhysicsSystem;
 class LadderSystem : public System {
 public:
+    explicit LadderSystem(PhysicsSystem* physics = nullptr) : physics_(physics) {}
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void onStop(FrameContext& ctx) override;
@@ -23,9 +25,13 @@ public:
     static constexpr Real REACH = 1.1;         // from its foot, or its top, horizontally
 
 private:
+    PhysicsSystem* physics_ = nullptr;
     Entity laddersEntity_;
     struct Drawn { Entity e; MeshHandle mesh; };
     std::unordered_map<std::size_t, Drawn> drawn_;
+    // THE FIRE ESCAPES' colliders round the player (record index -> its body): their stairs climb whatever is streamed
+    std::unordered_map<std::size_t, uint64_t> escapes_;
+    static constexpr Real ESCAPE_M = 120.0, ESCAPE_RELEASE_M = 170.0;
 };
 
 // Which ladder end, if any, a player standing with feet at `feet` can use: 0 none, 1 the foot (climb), 2 the top

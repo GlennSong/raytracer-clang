@@ -12,7 +12,8 @@
 namespace engine {
 
 // A building's roof ladder, if it carries one: low (one to four storeys over the ground floor) flat-roofed
-// buildings -- not a glass tower, a big box, a house with a pitched roof, a campus hall -- two in three of them,
+// buildings -- not a glass tower, a big box, a house with a pitched roof, a campus hall, nor one with a fire escape
+// (one way up the back, not two) -- two in three of them,
 // on the rear face a little in from its end, a caged ladder from the ground to over the parapet. `roofY` is the
 // roof's surface (world y). False: none.
 bool roofLadderFor(const Poly2& plan, const BuildingParams& params, Real baseY, Real roofY, LadderSpec& out);
