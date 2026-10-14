@@ -9971,6 +9971,17 @@ station turnstiles came out inside-out and the elevated decks could be seen thro
   (8512 open on the island, 1424 on rail_loop, 3959 on light_rail_lab). Walls are closed now, `trackBox` too (a
   stair block, a column; a sleeper opts out), and a platform not held up is a slab from the ground up. Every lab
   graph: 110,739 hanging triangles, 0 open. Tags: lanes and rail 2026-10-13.1, lots 2026-10-13.5 -- a re-bake.
+- **The one-way side strip** (Glenn, 2026-10-14: "on the freeway it's a big seam and it looks to be missing faces
+  entirely ... from the deck you can't see through to the ground so the hole is clearly one way"): the lanes `slab()`
+  dropped a side whenever a neighbour's TOP was level, so the 1.2 m carriageway beside a 0.3 m shoulder left a 0.9 m
+  step open; from below at an angle you looked into the slab and out through the back of the asphalt. The hidden
+  test now returns the neighbour's underside and the side is built up to it. Straight-up checks cannot see this, so
+  `auditSeeThrough`: a person stands under every elevated walkable surface and looks up at 45 deg in 8 directions;
+  a first hit on a back face is see-through (eyes inside a solid are skipped). Lanes test per lab scene with known
+  residuals; rt_bake --audit prints it. Freeway labs 336/145 -> 0, system_interchange 1046 -> 58; island_8
+  34,009 -> 2,968 of 1.21 M looks. Lanes tag 2026-10-14.1. Left: a shoulder strip cut off from its deck at
+  interchange ramp junctions (a lane footprint hides its side where no deck is drawn), station canopy ribs, valley
+  ramp ends.
 - **Not gated**: stylized canopies (normals leaned toward the crown's centre on purpose) and leaf cards (two-sided).
 
 Owed (the mesh library): one triangulator (the road ear-clipper beside earcut), latheMesh folded into
