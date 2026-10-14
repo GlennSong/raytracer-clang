@@ -1,6 +1,7 @@
 #include "train_system.h"
 #include "city_render.h"
 #include "station_boards.h"
+#include "station_entrance.h"
 
 #include "../../engine/asset_manager.h"
 #include "../../engine/audio/sfx.h"
@@ -114,9 +115,44 @@ void TrainSystem::build(engine::FrameContext& ctx) {
         }
         stockOf_.push_back(k);
     }
+    // THE STATION ENTRANCES (station_entrance.h): a pavilion over each station's way in, on the city's ground, its
+    // walls and machines solid; its name board joins the platforms' below
+    std::vector<StationBoard> entranceBoards;
+    if (city_) {
+        auto ground = [&](double x, double z) { return static_cast<double>(city_->groundHeightAt(x, z)); };
+        int built = 0;
+        for (const StationEntrance& se : stationEntrances(sim_, ground)) {
+            const EntranceMeshes em = stationEntranceMeshes(se, ground);
+            const Entity body = makeGroup(ctx, em.body, "station:entrance:" + se.name, false);
+            const Entity glass = makeGroup(ctx, em.glass, "station:entranceglass:" + se.name, true);
+            for (Entity e : {body, glass}) {
+                InstanceGroup* g = e.valid() ? ctx.world.get<InstanceGroup>(e) : nullptr;
+                if (!g) continue;
+                g->transforms.push_back(Mat4::identity());
+                g->boundsCenter = se.foot;
+                g->boundsRadius = 14.0;
+                g->drawDistance = 600.0;
+                g->drawClass = engine::DrawClass::Furniture;
+                if (e == body) { g->material.metallic = 0.0f; g->material.roughness = 0.6f; }
+                entrances_.push_back(e);
+            }
+            if (!em.collider.indices.empty()) {
+                std::vector<Vec3> verts;
+                for (const engine::Vertex& v : em.collider.vertices) verts.push_back(v.position);
+                std::vector<uint32_t> idx = em.collider.indices;
+                const std::size_t one = idx.size();
+                for (std::size_t i = 0; i + 2 < one; i += 3) { idx.push_back(idx[i]); idx.push_back(idx[i + 2]); idx.push_back(idx[i + 1]); }
+                physics_.physicsWorld().addMesh(verts, idx, Vec3(0, 0, 0), 0.8);
+            }
+            entranceBoards.push_back({se.name, em.board});
+            ++built;
+        }
+        LOG_INFO << "[trains] station entrances: " << built;
+    }
     // THE STATIONS' NAMES on their platforms (station_boards.h): one frame group, one lettered group per name
     if (const engine::Font* font = engine::signFont()) {
-        const std::vector<StationBoard> boards = stationBoards(sim_);
+        std::vector<StationBoard> boards = stationBoards(sim_);
+        boards.insert(boards.end(), entranceBoards.begin(), entranceBoards.end());
         auto place = [&](Entity e, const std::vector<const StationBoard*>& on) {
             InstanceGroup* g = e.valid() ? ctx.world.get<InstanceGroup>(e) : nullptr;
             if (!g || on.empty()) return;

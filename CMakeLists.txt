@@ -432,6 +432,7 @@ add_library(citysim STATIC
     src/apps/citysim/rail_sim.cpp   # trains on the road builder's tracks: lines, timetable, carriage poses
     src/apps/citysim/city_rail_riders.cpp   # people taking the train: stations on the streets, who is where
     src/apps/citysim/station_boards.cpp   # the stations' names on their platforms
+    src/apps/citysim/station_entrance.cpp   # the pavilion over each station's way in
     src/apps/citysim/rail_board.cpp   # a platform's departure board: next trains, minutes away
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)

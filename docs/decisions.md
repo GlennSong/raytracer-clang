@@ -9916,3 +9916,28 @@ keep their shops: a hotel's bar and cafe.
 
 Test `a_hotel_has_a_lobby_with_its_reception` (12 hotels): a reception desk and lobby sofas in every one; 126 shop
 doors, none on the entrance face.
+
+## ADR-0171 — Station entrances and the konbini
+
+Glenn, 2026-10-13: "Okay do that" (station buildings and the konbini, after the factories and the hotel lobby).
+
+- **The station entrance** (apps/citysim/station_entrance.*): a station's platforms stand up on the line and its
+  footway climbs to them from a street; the way in (RailStop::access) had nothing to say a station was there. A
+  PAVILION now stands over the footway's first 7.5 m, 8.6 m across: a roof on columns 3.6 m over the highest ground
+  under them, its fascia in the line's colour (rail green, light rail teal), the station's NAME on a lettered board
+  on the roof facing the street (station_boards.h's board, its frame placed there), glass side walls on a steel kerb,
+  three TICKET MACHINES down one side, a KIOSK (its counter, shelves of goods, a red sign) and a BENCH down the other,
+  and a GATE LINE of five cabinets across the way up with a passage a walker fits through between each. Built at load
+  by the TrainSystem from the rail lines, every piece on the ground the city reports under it (CityRenderSystem::
+  groundHeightAt); walls, machines, gates, kiosk and bench into a static collider. Nothing baked: 18 on the island.
+  A ticket hall up at the platforms waits on the rail builder (a 23 min island bake a change).
+- **The konbini**: trade 16 (trades.h), a "supermarket" place for the citysim, open 0-24; two in three grocers become
+  one, read off the facade's own hash without drawing from it, so no other unit on any street changes trade (giving
+  it a weight would have dealt every shop on the island again). Invented chain names only (shop_signs.cpp), a bright
+  white room, its fit-out the counter by the door with a hot-food case, a wall of drinks fridges, shelves and short
+  gondola rows. Build tags 2026-10-13.4: a re-bake.
+
+Tests: `a_station_entrance_stands_over_its_way_in` (on a 5% slope: the roof 3.6 m over the highest column's ground,
+nothing solid above but the columns, four or more passages a walker fits through the gate line, the board facing the
+street); `small_grocers_are_konbini_round_the_clock` (995 shop units: 48 konbini, 16 grocers left, every other unit
+unchanged in trade; the konbini fitted with their fridges).

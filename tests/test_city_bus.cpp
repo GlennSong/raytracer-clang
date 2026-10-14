@@ -588,3 +588,53 @@ TEST_CASE(a_fire_engine_is_stationed_and_never_dealt_to_traffic) {
     for (int t = 0; t < 600; ++t) sim.step(0.05);
     CHECK(sim.vehicles()[static_cast<std::size_t>(vi)].pos.x == 10.0);   // nobody drove it off
 }
+
+#include "../src/apps/citysim/station_entrance.h"
+
+// THE STATION ENTRANCE (Glenn, 2026-10-13: station buildings). A pavilion over a station's way in: the roof 3.6 m
+// over the ground with the name board on it facing the street, the walls and machines solid, and a line of ticket
+// gates across the way up with passages a walker fits through -- on a slope, every piece standing on its own ground.
+TEST_CASE(a_station_entrance_stands_over_its_way_in) {
+    citysim::StationEntrance e;
+    e.name = "Saltwood";
+    e.cls = "rail";
+    e.foot = Vec3(100, 5, 200);
+    e.along = Vec3(0, 0, 1);
+    auto slope = [](double, double z) { return 5.0 + (z - 200.0) * 0.05; };   // rising 5% toward the platforms
+    const citysim::EntranceMeshes m = citysim::stationEntranceMeshes(e, slope);
+    CHECK(!m.body.indices.empty() && !m.glass.indices.empty() && !m.collider.indices.empty());
+    // the roof over the highest column's ground (z 7: 5.35) by 3.6 m; nothing in the collider above head height but
+    // the columns
+    double top = -1e9, colTop = -1e9;
+    for (const engine::Vertex& v : m.body.vertices) top = std::max(top, static_cast<double>(v.position.y));
+    for (const engine::Vertex& v : m.collider.vertices) colTop = std::max(colTop, static_cast<double>(v.position.y));
+    CHECK(top > 5.35 + 3.6 && top < 5.35 + 4.2);
+    CHECK(std::fabs(colTop - (5.35 + 3.6)) < 0.05);
+    // the gate line (z 4.4-5.9): the collider's boxes (24 vertices each), and the runs of floor across the line at
+    // knee height that a 0.6 m capsule fits through
+    struct Box { Vec3 lo, hi; };
+    std::vector<Box> boxes;
+    for (std::size_t i = 0; i + 24 <= m.collider.vertices.size(); i += 24) {
+        Box b{Vec3(1e9, 1e9, 1e9), Vec3(-1e9, -1e9, -1e9)};
+        for (std::size_t k = i; k < i + 24; ++k) {
+            const Vec3 q = m.collider.vertices[k].position;
+            b.lo = Vec3(std::min(b.lo.x, q.x), std::min(b.lo.y, q.y), std::min(b.lo.z, q.z));
+            b.hi = Vec3(std::max(b.hi.x, q.x), std::max(b.hi.y, q.y), std::max(b.hi.z, q.z));
+        }
+        boxes.push_back(b);
+    }
+    const double zg = 205.1, yg = slope(100, zg) + 0.6;
+    int passages = 0;
+    bool wasBlocked = true;
+    for (double x = 96.2; x < 103.8; x += 0.05) {
+        bool blocked = false;
+        for (const Box& b : boxes)
+            blocked = blocked || (x + 0.3 > b.lo.x && x - 0.3 < b.hi.x && zg > b.lo.z && zg < b.hi.z && yg > b.lo.y && yg < b.hi.y);
+        if (!blocked && wasBlocked) ++passages;
+        wasBlocked = blocked;
+    }
+    CHECK(passages >= 4);
+    // the board on the roof, facing back toward the street (-along)
+    CHECK(m.board.m[2][2] < -0.99);
+    CHECK(m.board.m[1][3] > 5.0 + 3.6 - 1.7);
+}

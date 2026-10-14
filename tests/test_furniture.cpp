@@ -1791,3 +1791,43 @@ TEST_CASE(a_hotel_has_a_lobby_with_its_reception) {
     CHECK(shops > 0);
     CHECK(frontShops == 0);
 }
+
+// THE KONBINI (Glenn, 2026-10-13: the convenience store, on the list after the station entrances). Two in three
+// grocers are a konbini now -- read off the facade's own hash, so no other unit on the street changes trade --
+// open round the clock (trades.h), with its counter by the door, a wall of drinks fridges, shelves and gondolas.
+TEST_CASE(small_grocers_are_konbini_round_the_clock) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"brick_shop", "corner_shop", "commercial_block", "mixed_use", "oldtown_house", "oldtown_grand"};
+    const Real sizes[][2] = {{20, 14}, {30, 20}, {40, 26}};
+    int units = 0, konbini = 0, grocers = 0, others = 0, fridges = 0, fitted = 0;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 8; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.walkableGround = true;
+                p.openDoorway = true;
+                bool here = false;
+                for (const ShopFront& f : shopFrontsOf(plan, p)) {
+                    ++units;
+                    if (f.trade == 16) { ++konbini; here = true; }
+                    else if (f.trade == 1) ++grocers;
+                    else ++others;
+                }
+                if (!here) continue;
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, 1);
+                int fr = 0;
+                for (const PlacedPiece& pp : in.furniture) fr += pp.piece == static_cast<uint8_t>(Piece::DrinksFridge);
+                fridges += fr;
+                fitted += fr >= 2;
+            }
+    const TradeInfo* k = tradeById(16);
+    std::printf("    [konbini] %d shop units: %d konbini, %d grocers, %d others; %d drinks fridges, %d buildings fitted\n", units,
+                konbini, grocers, others, fridges, fitted);
+    CHECK(k && std::string(k->placeType) == "supermarket" && k->openHour == 0.0f && k->closeHour == 24.0f);
+    CHECK(konbini > 10);
+    CHECK(konbini > grocers);   // two in three grocers
+    CHECK(fitted > 0 && fridges >= 2 * fitted);
+}

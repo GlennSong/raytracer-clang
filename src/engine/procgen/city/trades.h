@@ -9,7 +9,7 @@
 // that sit out. The citysim and the street agree on what every shop is.
 //
 // Ids are the shop room's style: 0-6 as they always were, 13+ for the trades added since (7-12 are the big-box
-// store's rooms, room_plan bigBoxRoomPlan).
+// store's rooms, room_plan bigBoxRoomPlan; 16 the konbini, 20-23 the malls' concourses).
 
 #include "../../../rt_math.h"
 

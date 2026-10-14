@@ -993,6 +993,9 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                 u.b0 = s; u.b1 = s + g - 1;
                 u.door = g >= 3 ? s + g / 2 : s + static_cast<int>(next() % 2u);
                 u.type = trade;
+                // A KONBINI: two in three grocers -- read off the hash, never drawing from it, so every other
+                // unit on the street stays what it was
+                if (trade == 1 && ((h >> 9) + static_cast<uint32_t>(s)) % 3u != 0) u.type = 16;
                 L.shops.push_back(u);
                 s += g;
             }

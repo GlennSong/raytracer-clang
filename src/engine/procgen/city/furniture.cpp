@@ -760,6 +760,14 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         along(Piece::DrinksFridge, 0.8, 0.75, {2}, 4);
                         F.fill(Piece::Gondola, 2.4, 1.0, 1.0, 1.4);
                         break;
+                    case 16:  // KONBINI: the counter by the door (the till, the hot-food case beside it), the drinks
+                              // fridges across the back wall, shelves down a side, short gondola rows between
+                        if (F.place(1.8, 1.4, {1, 3}, p, false, 0, F.heightOf(Piece::ShopCounter))) F.put(p, Piece::ShopCounter, 0.9, 0.0);
+                        along(Piece::DisplayCase, 1.6, 0.7, {1, 3}, 1);
+                        along(Piece::DrinksFridge, 0.8, 0.75, {2}, 6);
+                        along(Piece::WallShelf, 2.0, 0.45, {3, 1}, 2);
+                        F.fill(Piece::Gondola, 2.4, 1.0, 1.0, 1.2);
+                        break;
                     case 2:   // BOUTIQUE
                         counterAtBack();   // (the till first: the shelves take the walls it leaves)
                         along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 4);

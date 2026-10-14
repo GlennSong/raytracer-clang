@@ -21,6 +21,10 @@ const TradeInfo kTrades[] = {
     {13, "restaurant", "restaurant", 11.0f, 23.5f, {8, 18, 22, 12}, 2, 4, Vec3(1.00, 0.40, 0.30), true},
     {14, "bar", "bar", 16.0f, 2.0f, {3, 10, 22, 4}, 2, 3, Vec3(0.75, 0.40, 1.00), false},
     {15, "club", "club", 21.0f, 3.0f, {0, 2, 10, 0}, 3, 5, Vec3(1.00, 0.25, 0.85), false},
+    // THE KONBINI (Glenn, 2026-10-13: the convenience store): open round the clock, an everyday errand. Never drawn by
+    // weight (adding a weight would deal every shop on the island again): two in three grocers are one
+    // (facadeLayout), so the rest of the street keeps its shops.
+    {16, "konbini", "supermarket", 0.0f, 24.0f, {0, 0, 0, 0}, 2, 3, Vec3(0.30, 0.75, 1.00), false},
 };
 constexpr int kCount = static_cast<int>(sizeof(kTrades) / sizeof(kTrades[0]));
 
@@ -58,6 +62,8 @@ const TradeRoom kRooms[] = {
           {0.94, 0.94, 0.93}, 3}},
     {22, {{{0.90, 0.89, 0.86}, {0.90, 0.89, 0.86}, {0.90, 0.89, 0.86}}, 0.0, {}, {0.80, 0.78, 0.74}, {0.70, 0.68, 0.64}, 1.2,
           {0.96, 0.96, 0.95}, 1}},
+    {16, {{{0.95, 0.95, 0.95}, {0.94, 0.95, 0.96}, {0.95, 0.94, 0.92}}, 0.0, {}, {0.82, 0.82, 0.80},   // konbini: all
+          {}, 0.0, {0.97, 0.97, 0.97}, 0}},                                                          // white, bright
     {15, {{{0.04, 0.04, 0.05}, {0.08, 0.03, 0.10}, {0.03, 0.04, 0.08}}, 0.0, {},                   // club
           {0.03, 0.03, 0.035}, {}, 0.0, {0.02, 0.02, 0.025}, 2}},
 };

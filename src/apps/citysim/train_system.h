@@ -57,6 +57,7 @@ private:
         return car == 0 ? k.loco : k.coach;
     }
 
+    std::vector<engine::Entity> entrances_;   // the station entrances' groups (station_entrance.h)
     engine::PhysicsSystem& physics_;
     engine::FlyCameraController& fly_;
     CityRenderSystem* city_ = nullptr;
