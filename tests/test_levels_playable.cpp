@@ -2386,6 +2386,13 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
         // shoulder, kerb, median and sidewalk alike. Judging furniture by the wide test says
         // "2002 of 2027 lamps in a road" and means only that lamps stand on pavements.
         RoadIntrusion scatter{"trees + rocks (any paved surface)"};
+        // ...but a STREET TREE (street planting, 2026-10-10) is planted in a pit in the sidewalk on
+        // purpose: it is kerb furniture, judged like a lamp -- its foot off the carriageway.
+        RoadIntrusion streetTrees{"street trees (carriageway)"};
+        std::set<std::pair<long long, long long>> streetTree;
+        world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& sf) {
+            for (const Vec3& b : sf.streetTrees) streetTree.insert({std::llround(b.x * 100), std::llround(b.z * 100)});
+        });
         world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
             // SCENERY only. Furniture, paint and structure ride in InstanceGroups too, and
             // some of those carry LOCAL transforms whose translation is the origin — 198 of
@@ -2393,7 +2400,12 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
             // scatter count into a fiction. A measurement that cannot say WHICH thing it
             // measured is not a measurement.
             if (g.drawClass != DrawClass::Scenery) return;
-            for (const Mat4& m : g.transforms) note(scatter, decks, m.m[0][3], m.m[2][3], 0.0, &plan);
+            for (const Mat4& m : g.transforms) {
+                if (streetTree.count({std::llround(m.m[0][3] * 100), std::llround(m.m[2][3] * 100)}))
+                    note(streetTrees, decks, m.m[0][3], m.m[2][3], 0.0);
+                else
+                    note(scatter, decks, m.m[0][3], m.m[2][3], 0.0, &plan);
+            }
         });
         // ...and the LOT trees (yard and park spots), planted one entity each: a bark
         // Renderable per tree (its leaves ride a second entity at the same Transform).
@@ -2441,7 +2453,7 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
             }
         }
 
-        const RoadIntrusion* all[] = {&scatter, &poles, &lamps, &stops};
+        const RoadIntrusion* all[] = {&scatter, &streetTrees, &poles, &lamps, &stops};
         for (const RoadIntrusion* r : all) {
             std::printf("    [furniture] %-14s %-20s %d of %d in a road%s\n", name, r->what.c_str(),
                         r->count, r->total,
@@ -2607,15 +2619,30 @@ TEST_CASE(scenery_is_planted_on_the_ground) {
         int total = 0, floating = 0, buried = 0;
         double worst = 0;
         engine::Vec2 worstAt(0, 0);
+        // STREET TREES stand in pits cut in the SIDEWALK (street planting, 2026-10-10), so their ground is
+        // the sidewalk as drawn -- not the terrain under it, 0.4 m down on a kerb and metres down under a
+        // viaduct (they read as 80% of the scenery "floating"). The drawn road's own triangles say where it is.
+        std::set<std::pair<long long, long long>> streetTree;
+        world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& sf) {
+            for (const Vec3& b : sf.streetTrees) streetTree.insert({std::llround(b.x * 100), std::llround(b.z * 100)});
+        });
+        const DrawnRoad drawnRoad = gatherDrawnRoad(world, /*withHeights=*/true);
+        int streetTotal = 0, streetOffRoad = 0;
         world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
             if (g.drawClass != DrawClass::Scenery) return;
             for (const Mat4& m : g.transforms) {
                 const double x = m.m[0][3], y = m.m[1][3], z = m.m[2][3];
                 // THE DRAWN GROUND: the leaf mesh's triangle under (x, z), not the
                 // smooth field at the point — across a pad edge those differ by metres.
-                const double ground = engine::lodSurfaceHeight(cfg->params, noise, x, z,
-                                                               cfg->worldHalf, cfg->numLods,
-                                                               cfg->gridRes);
+                double ground = engine::lodSurfaceHeight(cfg->params, noise, x, z,
+                                                         cfg->worldHalf, cfg->numLods,
+                                                         cfg->gridRes);
+                if (streetTree.count({std::llround(x * 100), std::llround(z * 100)})) {
+                    ++streetTotal;
+                    double top = 0;
+                    if (drawnRoad.topAt(x, z, &top, y + 0.15)) ground = top;   // the surface under the foot
+                    else ++streetOffRoad;   // (a pit off the drawn pavement is measured on the terrain)
+                }
                 // A trunk is bedded a little below grade and a rock a third of its
                 // height; neither should hang ABOVE it.
                 const double gap = y - ground;
@@ -2651,7 +2678,10 @@ TEST_CASE(scenery_is_planted_on_the_ground) {
         std::printf("    [grounded] %-22s %d scenery instances: %d floating > 0.3 m (worst %.2f m at "
                     "%.0f,%.0f), %d buried > 3 m\n",
                     name, total, floating, worst, worstAt.x, worstAt.y, buried);
+        std::printf("    [grounded] %-22s of them %d street-tree instances (bark + leaves) on the drawn sidewalk, "
+                    "%d off any drawn road\n", name, streetTotal, streetOffRoad);
         CHECK(total > 0);
+        CHECK(streetTotal > 0);
         CHECK(floating == 0);
     }
 }

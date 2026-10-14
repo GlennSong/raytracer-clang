@@ -288,6 +288,23 @@ static Collider buildCollider(const std::string& shape, const json& sizeJ,
     return c;
 }
 
+// THE SURFACE CDLOD DRAWS: the leaf mesh's triangle under (x, z) (lodSurfaceHeight) -- what the player stands on and
+// the leaf collider is built from. Not entityGround: that one is dilated over a cell, up to 0.4 m above the mesh on a
+// hillside. Empty without a CDLOD terrain. BY POINTER: the closure is copied into every streamed chunk's preparer,
+// and a by-value config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks was 44 GB
+// and the OOM killer (2026-09-29).
+static std::function<Real(Real, Real)> cdlodDrawnGround(World& world) {
+    std::function<Real(Real, Real)> g;
+    world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+        auto cfgp = std::make_shared<const TerrainLodConfig>(c);
+        auto nz = std::make_shared<Noise>(c.seed);
+        g = [cfgp, nz](Real x, Real z) {
+            return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);
+        };
+    });
+    return g;
+}
+
 static void createEntityCommon(Entity e, const json& ent, World& world) {
     Transform t;
     if (ent.contains("position"))
@@ -5802,17 +5819,9 @@ bool LevelLoader::load(const std::string& path,
             std::function<Real(Real, Real)> dressingGround;
             Real dressingStep = 0;
             engine::Vec2 dressingOrigin(0, 0);
+            dressingGround = cdlodDrawnGround(world);
             world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
-                const TerrainLodConfig cfg = c;
-                auto nz = std::make_shared<Noise>(cfg.seed);
-                // BY POINTER: the closure is copied into every streamed chunk's preparer, and a by-value
-                // config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks
-                // was 44 GB and the OOM killer (2026-09-29).
-                auto cfgp = std::make_shared<const TerrainLodConfig>(c);
-                dressingGround = [cfgp, nz](Real x, Real z) {
-                    return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods,
-                                            cfgp->gridRes);
-                };
+                const TerrainLodConfig& cfg = c;
                 const int res = std::max(2, cfg.gridRes + (cfg.gridRes % 2));
                 const float leaf = (2.0f * cfg.worldHalf) / static_cast<float>(1 << std::max(0, cfg.numLods - 1));
                 dressingStep = static_cast<Real>(leaf / static_cast<float>(res));   // the mesher's float step
@@ -7146,6 +7155,7 @@ bool LevelLoader::load(const std::string& path,
             furnGround = [g = entityGround](Real x, Real z) { return g(x, z); };
         else if (levelGround)
             furnGround = [g = levelGround](Real x, Real z) { return g(x, z); };
+        const std::function<Real(Real, Real)> carvedGround = furnGround;
         // ...and on the DECK where there is one: the carved sampler sits 0.22 m
         // under the drawn asphalt (road_net.cpp, "Carve a step BELOW"), and a
         // pole planted there stood with its foot inside the sidewalk band. The
@@ -7167,6 +7177,24 @@ bool LevelLoader::load(const std::string& path,
                         if (f.heightAt(x, z, margin, &y)) return static_cast<Real>(y) + curb;
                     }
                     return base(x, z);
+                };
+            }
+        }
+        // ...and ON WHAT WAS DRAWN. Deck + curb is a rule about the sidewalk band, not the band itself: on the lanes
+        // cities the sidewalk was drawn up to 0.9 m below it, and past the drawn pavement (no sidewalk there) it
+        // stood street trees 0.38 m over the grass (scenery_is_planted_on_the_ground, 2026-10-14: ~450 trees). So a
+        // foot stands on the drawn road's top under it -- the highest no more than a metre over the rule's answer,
+        // so a street under a viaduct keeps its own pavement -- and where nothing was drawn, on the drawn terrain.
+        if (furnGround && carvedGround) {
+            auto drawn = std::make_shared<const engine::DrawnRoad>(engine::gatherDrawnRoad(world, /*withHeights=*/true));
+            if (!drawn->empty()) {
+                std::function<Real(Real, Real)> terrain = cdlodDrawnGround(world);
+                if (!terrain) terrain = carvedGround;
+                auto rule = furnGround;
+                furnGround = [rule, terrain, drawn](Real x, Real z) {
+                    double top = 0;
+                    if (drawn->topAt(x, z, &top, rule(x, z) + 1.0)) return static_cast<Real>(top);
+                    return terrain(x, z);
                 };
             }
         }
@@ -7257,6 +7285,7 @@ bool LevelLoader::load(const std::string& path,
             engine::StreetFurniture sf;
             sf.navLinkCount = nav.linkCount();
             sf.lampHeads = fplan.lampHeads;
+            for (const engine::StreetTree& st : fplan.trees) sf.streetTrees.push_back(st.base);
             // ONE POLE PER APPROACH: a signalled link whose pole would stand within 2.5 m of one already placed,
             // facing the same way (two links on one approach), shares that pole -- it planted its own a metre or
             // two off, two heads staggered over each other (Glenn: "the stoplights are doubled up"; 9 on the

@@ -914,6 +914,7 @@ struct StreetFurniture {
     };
     std::vector<Signal> signalPoles;   // ("signals" is a Qt macro — editor includes this)
     std::vector<Vec3> lampHeads;  // street-lamp bulb positions (night lights)
+    std::vector<Vec3> streetTrees;   // street-tree trunk feet, in their pits on the sidewalk (Scenery instances)
     int navLinkCount = 0;         // consumer sanity check: same nav build?
     Entity postGroup{};           // the loader's signal-post InstanceGroup
 };

@@ -40,6 +40,36 @@ void DrawnRoad::add(const Vec2& a, const Vec2& b, const Vec2& c) {
             cells[cellKey(cx, cz)].push_back(i);
 }
 
+void DrawnRoad::add(const Vec3& a, const Vec3& b, const Vec3& c) {
+    add(Vec2(a.x, a.z), Vec2(b.x, b.z), Vec2(c.x, c.z));
+    heights.resize(tris.size());
+    heights.back() = {static_cast<float>(a.y), static_cast<float>(b.y), static_cast<float>(c.y)};
+}
+
+bool DrawnRoad::topAt(double x, double z, double* y, double ceiling) const {
+    auto it = cells.find(cellKey(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
+    if (it == cells.end()) return false;
+    bool found = false;
+    double best = -1e30;
+    for (int ti : it->second) {
+        if (static_cast<std::size_t>(ti) >= heights.size()) continue;   // added plan-only
+        const Tri& t = tris[static_cast<std::size_t>(ti)];
+        const double d = (t.b.y - t.c.y) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.y - t.c.y);
+        if (std::fabs(d) < 1e-9) continue;   // a wall: no area in plan
+        const double l1 = ((t.b.y - t.c.y) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.y)) / d;
+        const double l2 = ((t.c.y - t.a.y) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.y)) / d;
+        const double l3 = 1.0 - l1 - l2;
+        if (l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) continue;
+        const std::array<float, 3>& h = heights[static_cast<std::size_t>(ti)];
+        const double at = l1 * h[0] + l2 * h[1] + l3 * h[2];
+        if (at > ceiling || at <= best) continue;
+        best = at;
+        found = true;
+    }
+    if (found && y) *y = best;
+    return found;
+}
+
 bool DrawnRoad::covers(double x, double z) const {
     auto it = cells.find(cellKey(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
     if (it == cells.end()) return false;
@@ -69,7 +99,7 @@ bool DrawnRoad::near(double x, double z, double margin) const {
     return false;
 }
 
-DrawnRoad gatherDrawnRoad(World& world) {
+DrawnRoad gatherDrawnRoad(World& world, bool withHeights) {
     DrawnRoad rp;
     world.each<Renderable>([&](Entity e, Renderable& r) {
         if (!(r.renderLayer & LayerRoads)) return;
@@ -79,7 +109,10 @@ DrawnRoad gatherDrawnRoad(World& world) {
             const Vec3& a = mc->vertices[mc->indices[i]];
             const Vec3& b = mc->vertices[mc->indices[i + 1]];
             const Vec3& c = mc->vertices[mc->indices[i + 2]];
-            rp.add(Vec2(a.x, a.z), Vec2(b.x, b.z), Vec2(c.x, c.z));
+            if (withHeights)
+                rp.add(a, b, c);
+            else
+                rp.add(Vec2(a.x, a.z), Vec2(b.x, b.z), Vec2(c.x, c.z));
         }
     });
     return rp;

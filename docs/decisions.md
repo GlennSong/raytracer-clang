@@ -9298,6 +9298,18 @@ Still open:
 
 Tests: `streets_are_planted_by_their_character`, `street_tree_species_grow_to_their_kind`. Owed: trunk colliders (still); tuning the wealth field against what reads on the ground.
 
+**Note (2026-10-14): on the sidewalk as drawn.** Two level gates had been red since the street trees landed, and
+both were measuring them as scatter. `scenery_is_planted_on_the_ground` judged them against the terrain under the
+sidewalk (6,080 of metro_v2_test's 7,674 instances "floating"); `city_furniture_never_stands_in_a_road` found every
+pit on a drawn road triangle (the "1 cm into the road" thousands). Now `StreetFurniture::streetTrees` lists the trunk
+feet; the furniture gate judges them like lamps (off the carriageway), the scenery gate against the drawn road's top
+(`DrawnRoad::topAt`, heights opt-in: `gatherDrawnRoad(world, true)`). That exposed a real fault: ~450 trees stood
+0.3-0.9 m up, because the furniture ground was the deck + curb RULE, not the band as drawn (lanes sidewalks sit lower)
+and past the drawn pavement it held trees over the grass. The furniture ground (trees, lamps, poles, sign posts) is
+now the drawn road's top under the foot (no more than 1 m over the rule: not the viaduct overhead), else the drawn
+terrain (`cdlodDrawnGround`, shared with the lot dressing; entityGround is dilated, 0.4 m high on a slope). Both
+gates pass on metro_v2_test and metro_lanes.
+
 ## ADR-0152 — Cars off the pavement, the bus slot, walkers in files, and a crowd that doesn't stop the frame
 
 **Context.** Glenn, downtown Saltwood at 07:48 after the busy-streets change (ADR-0150) had three reports:
