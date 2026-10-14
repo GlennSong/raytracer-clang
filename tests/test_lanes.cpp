@@ -875,6 +875,43 @@ TEST_CASE(lanes_no_elevated_surface_is_see_through_from_below) {
     CHECK(open == 0);
 }
 
+// NOTHING ELEVATED IS SEE-THROUGH FROM AN ANGLE (Glenn, 2026-10-14: "a strip of polygons missing along the side ... the
+// hole is clearly one way"): engine::auditSeeThrough -- from half a metre under every deck's soffit, looking up and at
+// 45 deg all round, no ray meets the back of a face. The 1.2 m carriageway slab beside a 0.3 m shoulder left its 0.9 m
+// step open (slab()'s side rule hid the whole side behind the neighbour's top).
+TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
+    size_t eyes = 0, through = 0;
+    // KNOWN, small, each with its cause (a regression past them fails): a 0.6 m shoulder sliver cut off from its deck at
+    // the interchange's gores keeps one side hidden by a lane footprint that runs on where no deck is drawn (58 looks);
+    // a station canopy's ribs and the light rail's stair walls (6, 2); the valley's ramp ends (10).
+    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 0}, {"light_rail_lab", 2},
+                                                 {"rail_loop", 6}, {"system_interchange", 58}, {"valley_viaduct", 10}};
+    for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange", "valley_viaduct"}) {
+        const Result& r = scene(scn);
+        const std::vector<NamedMesh> meshes = buildMeshes(r);
+        std::vector<NamedMeshRef> refs;
+        for (const NamedMesh& nm : meshes) refs.push_back({nm.name, &nm.mesh});
+        const SeeThroughAudit u = auditSeeThrough(
+            refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform"; },
+            [&r](double x, double z) { return r.hasTerrain ? r.terrain.sample(x, z) : 0.0; });
+        std::printf("    [see-through] %-20s %6zu eyes (%zu inside solids), %6zu of %6zu looks see through", scn, u.eyes, u.insideSolid, u.through, u.looks);
+        if (u.through) std::printf(" -- first from %.1f %.1f %.1f looking %.2f %.2f %.2f", u.firstEye.x, u.firstEye.y, u.firstEye.z, u.firstDir.x, u.firstDir.y, u.firstDir.z);
+        std::printf("\n");
+        for (const auto& [m, n] : u.byHitMesh) std::printf("      backs of %-12s %6zu\n", m.c_str(), n);
+        if (std::getenv("RT_SEE_THROUGH_SAMPLES")) for (const std::string& smp : u.samples) std::printf("      %s\n", smp.c_str());
+        // RT_SEE_THROUGH_SECTION="scene,x0,z0,x1,z1,step": what stands over each point of a line in that scene
+        if (const char* sec = std::getenv("RT_SEE_THROUGH_SECTION")) {
+            char name[64]; double a0, b0, a1, b1, st;
+            if (std::sscanf(sec, "%63[^,],%lf,%lf,%lf,%lf,%lf", name, &a0, &b0, &a1, &b1, &st) == 6 && std::string(name) == scn)
+                printSection(refs, a0, b0, a1, b1, st);
+        }
+        eyes += u.eyes;
+        through += u.through;
+        CHECK(u.through <= known.at(scn));
+    }
+    CHECK(eyes > 1000);
+}
+
 // THE DECKS' UNDERSIDES face DOWN (Glenn: "the elevated freeway/rail undercarriage when viewed from below can be seen
 // through"): over an elevated deck's top, as many square metres face down as face up -- its soffit.
 TEST_CASE(lanes_an_elevated_deck_has_a_soffit_facing_down) {

@@ -178,10 +178,28 @@ int audit(const std::string& dir) {
     double probeX = 0, probeZ = 0;
     if (std::getenv("RT_AUDIT_PROBE") && std::sscanf(std::getenv("RT_AUDIT_PROBE"), "%lf,%lf", &probeX, &probeZ) == 2)
         engine::printColumn(refs, probeX, probeZ);
+    double sx0, sz0, sx1, sz1, sstep;   // RT_AUDIT_SECTION="x0,z0,x1,z1,step": what stands over each point of a line
+    if (std::getenv("RT_AUDIT_SECTION") &&
+        std::sscanf(std::getenv("RT_AUDIT_SECTION"), "%lf,%lf,%lf,%lf,%lf", &sx0, &sz0, &sx1, &sz1, &sstep) == 5)
+        engine::printSection(refs, sx0, sz0, sx1, sz1, sstep);
     const engine::UndersideAudit u = engine::auditUndersides(
         refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform" || n == "concrete"; },
         groundAt);
     engine::printUndersideAudit(u, 20);
+    // SEE-THROUGH FROM AN ANGLE: from a person standing under each deck, looking up at 45 deg all round
+    const engine::SeeThroughAudit st = engine::auditSeeThrough(
+        refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform"; },
+        groundAt);
+    std::printf("    [see-through] %zu eyes under decks (%zu inside solids skipped), %zu of %zu looks see through\n", st.eyes,
+                st.insideSolid, st.through, st.looks);
+    for (const auto& [m, n] : st.byHitMesh) std::printf("    [see-through]   backs of %-12s %zu\n", m.c_str(), n);
+    {
+        std::vector<std::pair<size_t, std::pair<int, int>>> w;
+        for (const auto& [k, n] : st.bySquare) w.push_back({n, k});
+        std::sort(w.rbegin(), w.rend());
+        for (size_t i = 0; i < w.size() && i < 12; ++i)
+            std::printf("    [see-through]   %5zu around x %d, z %d\n", w[i].first, w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
+    }
     const size_t open = u.open;
     return total.inward - total.inwardSliver == 0 && total.nonFinite == 0 && open == 0 ? 0 : 2;
 }

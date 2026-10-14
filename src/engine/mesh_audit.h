@@ -218,6 +218,155 @@ inline size_t openEdges(const RenderMesh& m) {
     return open;
 }
 
+// A CROSS-SECTION: walk from (x0, z0) to (x1, z1) in `step`s and, at each point, list every face whose plan covers it
+// -- its mesh, its height, and whether it faces up (^), down (v) or sideways (|). A crack in a deck is a point under
+// it with nothing overhead; a hole in its soffit, an up face with no v under it. Not for every mesh: a probe.
+inline void printSection(const std::vector<NamedMeshRef>& all, double x0, double z0, double x1, double z1, double step) {
+    const double len = std::hypot(x1 - x0, z1 - z0);
+    const int n = std::max(1, static_cast<int>(len / step));
+    for (int i = 0; i <= n; ++i) {
+        const double x = x0 + (x1 - x0) * i / n, z = z0 + (z1 - z0) * i / n;
+        std::vector<std::pair<double, std::string>> hits;
+        for (const NamedMeshRef& nm : all) {
+            const RenderMesh& m = *nm.mesh;
+            for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+                const Vec3 &A = m.vertices[m.indices[t]].position, &B = m.vertices[m.indices[t + 1]].position,
+                           &C = m.vertices[m.indices[t + 2]].position;
+                if (std::max({A.x, B.x, C.x}) < x || std::min({A.x, B.x, C.x}) > x || std::max({A.z, B.z, C.z}) < z ||
+                    std::min({A.z, B.z, C.z}) > z) continue;
+                const double d = (B.z - C.z) * (A.x - C.x) + (C.x - B.x) * (A.z - C.z);
+                if (std::fabs(d) < 1e-12) continue;
+                const double l1 = ((B.z - C.z) * (x - C.x) + (C.x - B.x) * (z - C.z)) / d;
+                const double l2 = ((C.z - A.z) * (x - C.x) + (A.x - C.x) * (z - C.z)) / d;
+                if (l1 < -1e-6 || l2 < -1e-6 || 1 - l1 - l2 < -1e-6) continue;
+                const Vec3 f = cross(C - A, B - A);
+                const double ny = f.y / std::max(1e-12, f.length());
+                char buf[64];
+                std::snprintf(buf, sizeof buf, "%s%c%.2f", nm.name.c_str(), ny > 0.3 ? '^' : ny < -0.3 ? 'v' : '|',
+                              l1 * A.y + l2 * B.y + (1 - l1 - l2) * C.y);
+                hits.push_back({l1 * A.y + l2 * B.y + (1 - l1 - l2) * C.y, buf});
+            }
+        }
+        std::sort(hits.rbegin(), hits.rend());
+        std::printf("    [section] %8.2f %8.2f :", x, z);
+        for (const auto& [y, h] : hits) std::printf(" %s", h.c_str());
+        std::printf("\n");
+    }
+}
+
+// SEE-THROUGH FROM BELOW (Glenn, 2026-10-14: "a strip of polygons missing along the side ... the hole is clearly one
+// way"): stand on the ground under every hanging walkable surface (one eye per 2 m) and look up -- straight up and at 45 deg in
+// eight directions. The first face each ray meets must face the eye; one that faces away is the back of a surface
+// (culled), so the eye sees through it: a missing side or soffit. Rays that meet nothing within `reach` are open sky
+// beside the deck, which is fine. Counts the looks that see through, and where the first one was.
+struct SeeThroughAudit {
+    size_t eyes = 0, looks = 0, through = 0, insideSolid = 0;   // insideSolid: eyes skipped, inside a girder or pier
+    Vec3 firstEye{0, 0, 0}, firstDir{0, 0, 0};
+    std::map<std::string, size_t> byHitMesh;          // the mesh whose back the eye saw
+    std::vector<std::string> samples;                 // the first few, described
+    std::map<std::pair<int, int>, size_t> bySquare;   // floor(x / 100), floor(z / 100)
+};
+inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, const std::function<bool(const std::string&)>& walk,
+                                       const std::function<double(double, double)>& ground, double hang = 2.0, double reach = 80.0) {
+    struct Tri { Vec3 a, b, c; const std::string* mesh; };
+    std::map<std::pair<int, int>, std::vector<Tri>> grid;   // every triangle by 4 m bucket (plan bbox)
+    std::vector<Vec3> tops;
+    for (const NamedMeshRef& nm : all) {
+        const RenderMesh& m = *nm.mesh;
+        const bool isWalk = walk(nm.name);
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const Tri tri{m.vertices[m.indices[t]].position, m.vertices[m.indices[t + 1]].position, m.vertices[m.indices[t + 2]].position, &nm.name};
+            const Vec3 f = cross(tri.c - tri.a, tri.b - tri.a);
+            if (f.lengthSquared() < 1e-12) continue;
+            for (int i = static_cast<int>(std::floor(std::min({tri.a.x, tri.b.x, tri.c.x}) / 4)); i <= static_cast<int>(std::floor(std::max({tri.a.x, tri.b.x, tri.c.x}) / 4)); ++i)
+                for (int k = static_cast<int>(std::floor(std::min({tri.a.z, tri.b.z, tri.c.z}) / 4)); k <= static_cast<int>(std::floor(std::max({tri.a.z, tri.b.z, tri.c.z}) / 4)); ++k)
+                    grid[{i, k}].push_back(tri);
+            if (isWalk && f.y / f.length() > 0.7) tops.push_back((tri.a + tri.b + tri.c) / 3.0);
+        }
+    }
+    // nearest hit along o + d t, t in (eps, reach): its triangle's facing (cross(c-a, b-a)), or zero for none
+    const std::string* hitMesh = nullptr;
+    auto cast = [&](const Vec3& o, const Vec3& d, double& tHit) {
+        Vec3 face(0, 0, 0);
+        tHit = reach;
+        const Vec3 e = o + d * reach;
+        const int i0 = static_cast<int>(std::floor(std::min(o.x, e.x) / 4)), i1 = static_cast<int>(std::floor(std::max(o.x, e.x) / 4));
+        const int k0 = static_cast<int>(std::floor(std::min(o.z, e.z) / 4)), k1 = static_cast<int>(std::floor(std::max(o.z, e.z) / 4));
+        for (int i = i0; i <= i1; ++i)
+            for (int k = k0; k <= k1; ++k) {
+                auto it = grid.find({i, k});
+                if (it == grid.end()) continue;
+                for (const Tri& t : it->second) {   // Moller-Trumbore, two-sided
+                    const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
+                    const double det = dot(e1, p);
+                    if (std::fabs(det) < 1e-12) continue;
+                    const double inv = 1.0 / det;
+                    const Vec3 s = o - t.a;
+                    const double u = dot(s, p) * inv;
+                    if (u < 0 || u > 1) continue;
+                    const Vec3 q = cross(s, e1);
+                    const double v = dot(d, q) * inv;
+                    if (v < 0 || u + v > 1) continue;
+                    const double tt = dot(e2, q) * inv;
+                    if (tt > 1e-4 && tt < tHit) { tHit = tt; face = cross(t.c - t.a, t.b - t.a); hitMesh = t.mesh; }
+                }
+            }
+        return face;
+    };
+    SeeThroughAudit r;
+    std::vector<Vec3> dirs;   // (straight up is the eye test below)
+    for (int k = 0; k < 8; ++k) {
+        const double a = 6.283185307179586 * k / 8;
+        dirs.push_back(normalize(Vec3(std::cos(a), 1.0, std::sin(a))));
+    }
+    std::map<std::tuple<long, long, long>, bool> seen;   // one eye per 1 m cell
+    for (const Vec3& c : tops) {
+        const double gy = ground(c.x, c.z);
+        if (!std::isfinite(gy) || c.y - gy < hang) continue;
+        // a PERSON standing on the ground under it (eye height 1.7 m): what Glenn looked up from
+        const Vec3 eye(c.x, gy + 1.7, c.z);
+        if (!seen.emplace(std::make_tuple(std::lround(eye.x / 2), std::lround(eye.y / 2), std::lround(eye.z / 2)), true).second) continue;
+        // an eye INSIDE a solid (a girder hung under the slab, a pier's head) sees every wall from behind: it is not
+        // somewhere anyone stands. Most of eight level looks meeting a back within 3 m says so.
+        int enclosed = 0;
+        for (int k = 0; k < 8; ++k) {
+            const double a = 6.283185307179586 * k / 8;
+            const Vec3 d(std::cos(a), 0, std::sin(a));
+            double t;
+            const Vec3 face = cast(eye, d, t);
+            if (face.lengthSquared() > 0 && t < 3.0 && dot(face, d) > 0) ++enclosed;
+        }
+        if (enclosed >= 5) { ++r.insideSolid; continue; }
+        // ...and one that, looking straight up, does not see the FRONT of a soffit at least half a metre over it is in
+        // a slab or a plinth, or under a deck too low to stand under (a missing soffit overhead is auditUndersides')
+        {
+            double t;
+            const Vec3 face = cast(eye, Vec3(0, 1, 0), t);
+            if (face.lengthSquared() == 0 || dot(face, Vec3(0, 1, 0)) > 0 || t < 0.5) { ++r.insideSolid; continue; }
+        }
+        ++r.eyes;
+        for (const Vec3& d : dirs) {
+            ++r.looks;
+            double t;
+            const Vec3 face = cast(eye, d, t);
+            if (face.lengthSquared() == 0) continue;
+            if (dot(face, d) > 0) {   // its front faces along the ray: the eye sees its back
+                if (r.through++ == 0) { r.firstEye = eye; r.firstDir = d; }
+                ++r.byHitMesh[hitMesh ? *hitMesh : std::string("?")];
+                if (r.samples.size() < 12) {
+                    const Vec3 h = eye + d * t, fn = normalize(face);
+                    char buf[200];
+                    std::snprintf(buf, sizeof buf, "eye %.1f %.1f %.1f (deck top %.1f) dir %.2f %.2f %.2f hits %s at %.2f %.2f %.2f, %.2f m, facing %.2f %.2f %.2f",
+                                  eye.x, eye.y, eye.z, c.y, d.x, d.y, d.z, hitMesh ? hitMesh->c_str() : "?", h.x, h.y, h.z, t, fn.x, fn.y, fn.z);
+                    r.samples.push_back(buf);
+                }
+                ++r.bySquare[{static_cast<int>(std::floor(eye.x / 100)), static_cast<int>(std::floor(eye.z / 100))}];
+            }
+        }
+    }
+    return r;
+}
+
 }  // namespace engine
 
 #endif

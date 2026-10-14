@@ -38,11 +38,15 @@ const Vec3 kAsphalt(0.085f, 0.085f, 0.090f), kConcrete(0.80f, 0.79f, 0.75f), kSi
 // UV (one lane's triangles; two lanes' UVs differ and keep their own), and the underside is
 // emitted only where it stands clear of the ground (`groundAt`, 0.3 m) -- a bridge, a viaduct,
 // a ramp; a street lies on the ground. Null groundAt: every underside, as before.
+// the layers' slab thicknesses (sidewalk, shoulder, median): what they are built with, and how far down each one
+// covers a neighbour's side (slab's side rule)
+constexpr double kSidewalkThick = 0.42, kShoulderThick = 0.3, kMedianThick = 0.40;
+
 void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& verts, const std::vector<std::array<int, 3>>& tris,
           const std::vector<std::pair<int, int>>& boundary, double thick, double lift, const Vec3& color, const Vec3& sideColor,
           const std::vector<std::array<float, 6>>* uv, const std::function<bool(const Vec2&, const Vec2&, double)>* seam = nullptr,
           const std::function<double(const Vec2&)>* groundAt = nullptr,
-          const std::function<bool(const Vec2&, double)>* hidden = nullptr) {
+          const std::function<double(const Vec2&, double)>* hidden = nullptr) {
     std::map<std::tuple<int, float, float, int>, uint32_t> shared;   // (deck vertex, u, v, face) -> mesh vertex
     auto vertexFor = [&](int vi, const Vec3& p, float u, float v, const Vec3& normal, const Vec3& tan, int face) {
         auto [it, fresh] = shared.try_emplace(std::make_tuple(vi, u, v, face), static_cast<uint32_t>(top.vertices.size()));
@@ -88,9 +92,12 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
             MeshBuilder::triFacing(side, base, base + 1, base + 2, down);
         }
     }
-    // THE SIDE ONLY WHERE IT SHOWS (ADR-0095). A side is dropped where the surface beyond the edge
+    // THE SIDE ONLY WHERE IT SHOWS (ADR-0095). A side is covered where the surface beyond the edge
     // stands at or above its top (`hidden`: asphalt under a sidewalk, a shoulder against the lane it
-    // continues), and where it does not rise above the ground outside it (`groundAt`); one that shows
+    // continues) -- but only DOWN TO THAT SURFACE'S OWN UNDERSIDE, which `hidden` returns: a 1.2 m
+    // carriageway slab beside a 0.3 m shoulder hangs 0.9 m below it, and that step is a face (Glenn,
+    // 2026-10-14: "a strip of polygons missing along the side ... the hole is clearly one way": from
+    // below you looked into the slab, through the road's culled back, at the sky). And it is dropped where it does not rise above the ground outside it (`groundAt`); one that shows
     // stops 5 cm below that ground instead of the slab's full thickness. Then consecutive sides along
     // one straight line become ONE quad: a kerb is a polyline tessellated for its curves, and on the
     // straights every one of those vertices was a quad of its own. Null groundAt/hidden: every side,
@@ -102,15 +109,23 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
         Vec2 d = b.xy - a.xy; if (d.length() < 1e-9) continue; Vec2 out = Vec2(d.y, -d.x) / d.length();   // interior on the left => outward is the right normal
         if (seam && (*seam)(a.xy, b.xy, 0.5 * (a.z + b.z) + lift)) continue;                          // an internal seam: the asphalt continues at this level, no side face
         const double topA = a.z + lift, topB = b.z + lift;
-        if (hidden && (*hidden)((a.xy + b.xy) * 0.5 + out * 0.15, 0.5 * (topA + topB))) continue;
         double botA = topA - thick, botB = topB - thick;
+        double coverTopA = topA, coverTopB = topB;   // where this side's exposed part ends, up
+        if (hidden) {
+            const double under = (*hidden)((a.xy + b.xy) * 0.5 + out * 0.15, 0.5 * (topA + topB));
+            if (!std::isnan(under)) {   // a neighbour stands at the top: only the step below its underside shows
+                const double drop = 0.5 * (topA + topB) - under;   // how deep the neighbour reaches
+                if (drop >= thick - 0.02) continue;
+                coverTopA = topA - drop; coverTopB = topB - drop;
+            }
+        }
         if (groundAt) {
             const double gA = (*groundAt)(a.xy + out * 0.3), gB = (*groundAt)(b.xy + out * 0.3);
-            if (topA - gA < 0.03 && topB - gB < 0.03) continue;
-            botA = std::max(botA, std::min(topA, gA) - 0.05);
-            botB = std::max(botB, std::min(topB, gB) - 0.05);
+            if (coverTopA - gA < 0.03 && coverTopB - gB < 0.03) continue;
+            botA = std::max(botA, std::min(coverTopA, gA) - 0.05);
+            botB = std::max(botB, std::min(coverTopB, gB) - 0.05);
         }
-        sides.push_back({e.first, e.second, topA, topB, botA, botB});
+        sides.push_back({e.first, e.second, coverTopA, coverTopB, botA, botB});
     }
     // chain: side i continues at the side that starts where it ends (only where that is unambiguous)
     std::unordered_map<int, int> startsAt; startsAt.reserve(sides.size());
@@ -774,22 +789,32 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     };
     const Cover covers[3] = {coverOf(r.pavement.sidewalk, kSidewalkLift, false), coverOf(r.pavement.shoulder, 0.0, false), coverOf(r.pavement.median, 0.10, true)};
     const LaneGrid coverGrid[3] = {LaneGrid(covers[0].box, covers[0].polys), LaneGrid(covers[1].box, covers[1].polys), LaneGrid(covers[2].box, covers[2].polys)};
-    const std::function<bool(const Vec2&, double)> hiddenFn = [&](const Vec2& q, double top) {
+    // ...and it returns how far down that surface reaches (its underside), NaN when nothing covers: the side is a
+    // face below that. A deck's slab is its surface's thickness (laneThick), a layer's the thickness it is built with.
+    std::vector<double> laneThick(L.lanes.size(), 0.0);
+    for (const Surface& s : r.pavement.decks)
+        for (int o : s.triOwner) if (o >= 0 && static_cast<size_t>(o) < laneThick.size()) laneThick[static_cast<size_t>(o)] = std::max(laneThick[static_cast<size_t>(o)], s.thick);
+    const double coverThick[3] = {kSidewalkThick, kShoulderThick, kMedianThick};
+    const std::function<double(const Vec2&, double)> hiddenFn = [&](const Vec2& q, double top) {
         auto hides = [&](double z) { return z >= top - 0.02 && z <= top + 0.5; };
+        double under = std::nan("");   // the deepest underside among the surfaces covering the side
+        auto take = [&](double bottom) { if (std::isnan(under) || bottom < under) under = bottom; };
         for (int li : laneGrid.at(q)) {
             const Box2& bb = laneBox[static_cast<size_t>(li)];
             if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[static_cast<size_t>(li)].contains(q)) continue;
-            if (hides(H.deck(li, q))) return true;
+            const double z = H.deck(li, q);
+            if (hides(z)) take(z - laneThick[static_cast<size_t>(li)]);
         }
         for (int k = 0; k < 3; ++k) {
             const Cover& c = covers[k];
             for (int pi : coverGrid[k].at(q)) {
                 const Box2& bb = c.box[static_cast<size_t>(pi)];
                 if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !c.prep[static_cast<size_t>(pi)].contains(q)) continue;
-                if (hides(H.layerHeight(c.roads, q) + c.lift)) return true;
+                const double z = H.layerHeight(c.roads, q) + c.lift;
+                if (hides(z)) take(z - coverThick[k]);
             }
         }
-        return false;
+        return under;
     };
     // RT_DECK_STATS=1: what each stage adds to the concrete mesh (triangles), to see where it goes.
     static const bool deckStats = std::getenv("RT_DECK_STATS") != nullptr;
@@ -819,9 +844,9 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr, nullptr, &groundUnder, &hiddenFn);
     };
     mark("deck sides");
-    layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, 0.42, false); mark("sidewalk sides");
-    layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, 0.3, false); mark("shoulder sides");
-    layer(r.pavement.median, median, kMedian, 0.10, 0.40, true); mark("median sides");
+    layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, kSidewalkThick, false); mark("sidewalk sides");
+    layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, kShoulderThick, false); mark("shoulder sides");
+    layer(r.pavement.median, median, kMedian, 0.10, kMedianThick, true); mark("median sides");
     // Parapets and girders on elevated decks (Glenn: "the elevated ones need walls so you don't drive
     // off", "an undercarriage"). The runs come from parapetRuns() so a diagnostic sees exactly what is swept;
     // every elevated freeway/ramp lane also gets a box girder hung from the slab.
