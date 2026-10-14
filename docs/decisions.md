@@ -9976,3 +9976,36 @@ station turnstiles came out inside-out and the elevated decks could be seen thro
 Owed (the mesh library): one triangulator (the road ear-clipper beside earcut), latheMesh folded into
 MeshBuilder::lathe, a box-in-a-frame primitive for trackBox and the shape grammar's emitBox, the Lua mesh.* as a thin
 face over the same API, the lot cache's building meshes under rt_bake --audit.
+
+## ADR-0173 — The mesh library v1: every producer on one set of words
+
+Glenn, 2026-10-13: "Mesh library is priority one" — "a common library of triangulation techniques, tristrips, how to
+represent triangles in this engine, and then code to handle all the different cases ... And then lua should be able
+to access it ... other c++ mesh builders would then call into the common library."
+
+- **The convention**, written once at the top of mesh_builder.h: a RenderMesh is an indexed triangle list; the front
+  is clockwise seen from it (cross(c - a, b - a) along the normal); nobody writes index order by hand -- every
+  triangle goes through `triFacing`, which winds it to the outward normal it is given and drops it when it has no
+  area (kNoArea2); solids are closed unless a face is masked because something covers it; one triangulator.
+- **The words** (MeshBuilder): emitTri/emitQuad (+UV), triFacing, quadFacing, vertex; gridIndices/gridCell (the CDLOD
+  lattice); emitBox on a MeshFrame (any frame, sheared or mirrored; `rotatedAbout` a pivot line; Scope::frame),
+  emitBlock (any eight corners), emitPolygon (planar, holes, any plane), emitPlanPrism (a plan outline with holes,
+  walls round every ring), emitCylinder; triangulate (earcut, index triples); lathe (smooth or faceted, LatheStyle);
+  tube, ribbon, roundedBox, icosphere, crossCards; the shape operators (displace, cut, facet, lean, deform, colorBy);
+  flatShade, autosmooth, recomputeNormals, dropDegenerate; append/appendTransformed/transform.
+- **One of each**: the road ear-clipper and the shape grammar's latheMesh now forward to the library's; the boxes
+  copied across station_boards, train_mesh, occupant, citysim, the Lua fleet, deck_mesh (trackBox, box8), the fire
+  escape and the shape grammar are emitBox/emitBlock; the shape grammar's emitTube/Disc/PlanSlab/PlanRing are
+  adapters onto emitCylinder/emitPolygon/emitPlanPrism (a ring slab now walls its hole).
+- **No hand-written index lists** outside the library but three, each saying why: the SDF dual contour (its winding
+  is topological; per-quad winding breaks it), physics colliders (not render meshes), and the terrain drape's clipped
+  pieces (they keep their source triangle's order).
+- **Lua**: mesh.block, box_frame, polygon, prism, column, flat_shade, autosmooth, lathe{smooth=}, and mesh.audit so a
+  script checks what it built (mesh_library_from_lua_is_clean).
+- **Found on the way**: the river quay was wound counter-clockwise -- and test_scatter's quay check counted that rule,
+  so it passed while every quay face was inside out to the renderer. The street-sign and shop-sign boards used the
+  same backwards index list as the OPEN sign.
+
+Tags: lanes + rail 2026-10-13.2, lots 2026-10-13.6 (a re-bake). Tests: mesh_library_solids_are_clean_and_closed
+(sheared and left-handed frames, clockwise blocks, either outline winding, holes, tilted planes, both lathes), the
+mesh_audit_* cases, the lanes deck and underside checks; the full suite.
