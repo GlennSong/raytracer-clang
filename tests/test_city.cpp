@@ -1493,9 +1493,9 @@ TEST_CASE(an_attached_building_has_blank_party_walls_a_back_door_and_a_fire_esca
                 if (v.position.z < -9.0) metalTop = std::max(metalTop, v.position.y);
     const std::vector<StoreyPlan> st = storeyPlans(plan, p);
     CHECK(metalTop > st.back().y0 + 0.8);
-    // every floor's landing is a walkable top in the collider, behind the wall
-    RenderMesh col;
-    (void)growInterior(plan, p, 0.0, &col, 0, -1);
+    // every floor's landing is a walkable top in the collider, behind the wall (the fire escape's own, which the
+    // LadderSystem keeps round the player -- not the streamed interior's any more)
+    const RenderMesh col = fireEscapeCollider(plan, p, 0.0);
     for (std::size_t k = 1; k < st.size(); ++k) {
         int tops = 0;
         for (std::size_t i = 0; i + 2 < col.indices.size(); i += 3) {

@@ -1535,10 +1535,57 @@ static bool chamferedRect(const Poly2& planIn, Poly2& rect, Real cutS[4], Real c
     for (bool b : on) if (!b) return false;   // every corner of the plate on one of the four walls
     return true;
 }
+// THE LARGEST RECTANGLE IN A PLATE, square to its bounding box (Glenn, 2026-10-13, on a tapered tower's ground tier:
+// "no meeting rooms, open workspaces, cubes, or even walls" -- a 98 x 64 m plate with a 39 x 5.8 m entrance notch was
+// neither a rectangle nor a chamfered one, and fell to a ring of offices round an empty middle). Each side of the box
+// steps in until the rectangle lies inside the plate; good enough when it keeps 85% of the plate. What it leaves (the
+// notch's flanks) stays open floor.
+static bool innerRect(const Poly2& planIn, Poly2& rect) {
+    if (planIn.size() < 4) return false;
+    const OBB2 ob = orientedBoundingBox(planIn);
+    const Vec2 u = ob.axis[0], v = ob.axis[1];
+    Real lo[2] = {-ob.half[0], -ob.half[1]}, hi[2] = {ob.half[0], ob.half[1]};
+    Poly2 pl = planIn;
+    ensureCCW(pl);
+    auto P = [&](Real s, Real t) { return ob.center + u * s + v * t; };
+    auto sideInside = [&](int axis, bool high) {
+        const Real c = high ? hi[axis] : lo[axis];
+        const Real a0 = axis == 0 ? lo[1] : lo[0], a1 = axis == 0 ? hi[1] : hi[0];
+        for (int i = 0; i <= 40; ++i) {
+            const Real w = a0 + (a1 - a0) * (0.002 + 0.996 * i / 40.0);
+            const Vec2 q = axis == 0 ? P(c + (high ? -0.01 : 0.01), w) : P(w, c + (high ? -0.01 : 0.01));
+            if (!pointInPolygon(pl, q)) return false;
+        }
+        return true;
+    };
+    for (int pass = 0; pass < 400; ++pass) {
+        bool moved = false;
+        for (int axis = 0; axis < 2; ++axis)
+            for (bool high : {false, true})
+                if (!sideInside(axis, high)) {
+                    if (high) hi[axis] -= 0.25; else lo[axis] += 0.25;
+                    moved = true;
+                }
+        if (!moved) break;
+        if (hi[0] - lo[0] < 6.0 || hi[1] - lo[1] < 6.0) return false;
+    }
+    const Real kept = (hi[0] - lo[0]) * (hi[1] - lo[1]);
+    if (kept < 0.85 * area(pl)) return false;
+    rect = {P(lo[0], lo[1]), P(hi[0], lo[1]), P(hi[0], hi[1]), P(lo[0], hi[1])};
+    ensureCCW(rect);
+    return true;
+}
+// THE RECTANGLE A PLATE IS LAID IN: itself; a chamfered one's (its cut corners); else the largest inside it.
+static bool officeRectFor(const Poly2& planIn, Poly2& plan, Real cutS[4], Real cutE[4]) {
+    for (int i = 0; i < 4; ++i) cutS[i] = cutE[i] = 0;
+    if (planIn.size() == 4) { plan = planIn; return true; }
+    if (chamferedRect(planIn, plan, cutS, cutE)) return true;
+    for (int i = 0; i < 4; ++i) cutS[i] = cutE[i] = 0;
+    return innerRect(planIn, plan);
+}
 static bool officePlanFits(const Poly2& plan) {
-    if (plan.size() == 4) return true;
     Poly2 r; Real a[4], b[4];
-    return chamferedRect(plan, r, a, b);
+    return officeRectFor(plan, r, a, b);
 }
 
 // ------------------------------------------------------------- the office floor
@@ -1562,7 +1609,7 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
     Real cutS[4] = {0, 0, 0, 0}, cutE[4] = {0, 0, 0, 0};
     Poly2 plan = planIn;
     if (storey < 1 || !core.valid) return rp;
-    if (planIn.size() != 4 && !chamferedRect(planIn, plan, cutS, cutE)) return rp;
+    if (!officeRectFor(planIn, plan, cutS, cutE)) return rp;
     ensureCCW(plan);
     const std::size_t n = plan.size();
     const Poly2 coreR = core.rect();
@@ -1744,7 +1791,7 @@ static RoomPlan hospitalPlan(const Poly2& planIn, const BuildingParams& params, 
     Real cutS[4] = {0, 0, 0, 0}, cutE[4] = {0, 0, 0, 0};
     Poly2 plan = planIn;
     if (!core.valid) return rp;
-    if (planIn.size() != 4 && !chamferedRect(planIn, plan, cutS, cutE)) return rp;
+    if (!officeRectFor(planIn, plan, cutS, cutE)) return rp;
     ensureCCW(plan);
     const std::size_t n = plan.size();
     const Poly2 coreR = core.rect();

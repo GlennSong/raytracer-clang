@@ -1831,3 +1831,31 @@ TEST_CASE(small_grocers_are_konbini_round_the_clock) {
     CHECK(konbini > grocers);   // two in three grocers
     CHECK(fitted > 0 && fridges >= 2 * fitted);
 }
+
+// A NOTCHED PLATE (Glenn, 2026-10-13, standing on a tapered glass tower's first floor: "no meeting rooms, open
+// workspaces, cubes, or even walls that might partition this space"). Its ground tier is a 98 x 64 m rectangle with
+// a 39 x 5.8 m entrance notch -- eight corners, not a chamfered rectangle -- and fell to a ring of offices round an
+// empty middle. The office floor is laid in the largest rectangle inside it now: open plan, meeting rooms, offices.
+TEST_CASE(a_notched_office_plate_takes_the_office_floor) {
+    UseShippedFurniture shipped;
+    const Poly2 plate = {{-3922.66, -852.16}, {-3824.66, -852.16}, {-3824.66, -788.16}, {-3851.95, -788.16},
+                         {-3851.95, -794.00}, {-3891.11, -794.00}, {-3891.11, -788.16}, {-3922.66, -788.16}};
+    BuildingRecipe rc;
+    CHECK(architectRecipeByName("tapered_glass_tower", 3, 1.0, 64, 98 * 64, rc));
+    BuildingParams p = rc.params;
+    CHECK(p.officeUse);
+    const CorePlan core = coreFor(plate, p, entranceEdgeFor(plate, p));
+    CHECK(core.valid);
+    const RoomPlan rp = roomPlan(plate, p, core, static_cast<std::size_t>(-1), std::max(p.wallThickness, Real(0.55)), 1);
+    int open = 0, meeting = 0, offices = 0, outside = 0;
+    for (const Room& r : rp.rooms) {
+        open += r.kind == RoomKind::OpenPlan;
+        meeting += r.kind == RoomKind::Meeting;
+        offices += r.kind == RoomKind::Office;
+        for (const Vec2& c : r.rect) if (!pointInPolygon(plate, c + (centroid(r.rect) - c) * 0.01)) ++outside;
+    }
+    std::printf("    [notched] %zu rooms: %d open plan, %d meeting, %d offices; %d room corners outside the plate\n",
+                rp.rooms.size(), open, meeting, offices, outside);
+    CHECK(open > 0 && meeting > 0);
+    CHECK(outside == 0);
+}
