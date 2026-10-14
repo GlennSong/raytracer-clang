@@ -16,6 +16,7 @@
 #include "engine/bundle/bundle_glb.h"
 #include "engine/bundle/codecs.h"
 #include "engine/mesh_audit.h"
+#include "engine/procgen/city/lot_cache.h"
 #ifdef RT_ROADS_LANES
 #include "engine/procgen/city/roads/lanes/city_producer.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
@@ -108,7 +109,26 @@ int audit(const std::string& dir) {
         total.add(a);
         if (a.inward > 0 || a.degenerate > 0 || a.nonFinite > 0) bad.push_back({s, a});
     }
-    std::printf("%zu mesh sections\n", meshes);
+    // THE LOTS' BUILDINGS: their parts live in per-cell lot sections (lot_cache.h), not as plain mesh sections
+    std::map<int, engine::MeshAudit> byPart;
+    size_t lotParts = 0;
+    for (const std::string& s : b->sections("")) {
+        if (s.size() < 5 || s.compare(s.size() - 5, 5, "/meta") != 0) continue;
+        const std::string prefix = s.substr(0, s.size() - 4);
+        std::vector<engine::lotcache::LotCellPart> parts; std::string perr;
+        if (!engine::lotcache::listLotCellParts(*b, prefix, parts, &perr)) continue;
+        for (const engine::lotcache::LotCellPart& lp : parts) {
+            engine::RenderMesh m;
+            if (!engine::lotcache::readLotPart(*b, lp.section, m)) continue;
+            ++lotParts;
+            const engine::MeshAudit a = engine::auditMesh(m);
+            byPart[lp.part].add(a);
+            total.add(a);
+            if (a.inward > a.inwardSliver || a.nonFinite > 0) bad.push_back({lp.section, a});
+        }
+    }
+    for (const auto& [part, a] : byPart) engine::printMeshAudit(("lot part " + std::to_string(part)).c_str(), a);
+    std::printf("%zu mesh sections, %zu lot part sections\n", meshes, lotParts);
     for (const auto& [m, a] : byMaterial) engine::printMeshAudit(m.c_str(), a);
     std::sort(bad.begin(), bad.end(), [](const auto& x, const auto& y) { return x.second.inward + x.second.nonFinite > y.second.inward + y.second.nonFinite; });
     for (size_t i = 0; i < bad.size() && i < 40; ++i) engine::printMeshAudit(bad[i].first.c_str(), bad[i].second);

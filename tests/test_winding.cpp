@@ -177,6 +177,17 @@ Poly2 rectPlan(Real w, Real d) { return {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w /
 Poly2 lPlan(Real w, Real d) {
     return {{-w / 2, -d / 2}, {w / 2, -d / 2}, {w / 2, 0}, {0, 0}, {0, d / 2}, {-w / 2, d / 2}};
 }
+// Lots as the city cuts them: a U (two concave corners facing each other), a flatiron wedge (an acute corner), a
+// trapezoid with a 0.4 m edge where a corner was clipped, and an irregular seven-sided lot with a shallow notch and a
+// near-collinear vertex. The island's bake had flipped cornice and wall faces the rect and L never show.
+std::vector<Poly2> lotPlans() {
+    return {
+        {{-14, -10}, {14, -10}, {14, 10}, {6, 10}, {6, -2}, {-6, -2}, {-6, 10}, {-14, 10}},
+        {{-16, -9}, {16, -9}, {-10, 9}},
+        {{-12, -10}, {12, -10}, {12.4, -9.6}, {9, 10}, {-11, 10}},
+        {{-13, -11}, {4, -12}, {14, -4}, {13.9, 3}, {12, 11}, {-2, 9}, {-3, 11.5}, {-12, 10}},
+    };
+}
 
 // Audit a building mesh, by part, into `byPart`; returns the whole.
 Audit auditBuilding(const BuildingMesh& bm, std::map<int, Audit>& byPart) {
@@ -208,7 +219,9 @@ TEST_CASE(mesh_audit_every_building_recipe) {
             BuildingRecipe r;
             if (!architectRecipeByName(name, seed, 0.6, 24, 600, r)) continue;
             if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
-            for (const Poly2& plan : {rectPlan(24, 20), lPlan(28, 24)}) {
+            std::vector<Poly2> plans = {rectPlan(24, 20), lPlan(28, 24)};
+            for (const Poly2& lp : lotPlans()) plans.push_back(lp);
+            for (const Poly2& plan : plans) {
                 Audit a = auditBuilding(growPlanBuilding(plan, r.params, 0.0), byPart);
                 a.add(auditBuilding(growInterior(plan, r.params, 0.0), byPart));
                 byRecipe[name].add(a);
