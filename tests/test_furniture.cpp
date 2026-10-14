@@ -1740,3 +1740,54 @@ TEST_CASE(factories_and_warehouses_open_onto_their_floors) {
     CHECK(onClearFloor == 0);
     CHECK(upstairsDesks > 0);
 }
+
+// THE HOTEL LOBBY (Glenn, 2026-10-13: "Okay do that"). A hotel's ground floor was shop units round an open middle --
+// no reception anywhere. Its entrance face is all lobby now (no shop unit cut there, inside or on the facade): the
+// reception desk facing the doors from in front of the lifts, sofas either side; its other faces keep their shops.
+TEST_CASE(a_hotel_has_a_lobby_with_its_reception) {
+    UseShippedFurniture shipped;
+    const Real sizes[][2] = {{36, 24}, {48, 34}, {30, 22}};
+    int hotels = 0, lobbies = 0, desks = 0, shops = 0, frontShops = 0;
+    for (uint32_t seed = 1; seed <= 4; ++seed)
+        for (const auto& sz : sizes) {
+            const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+            BuildingRecipe rc;
+            if (!architectRecipeByName("hotel", seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+            BuildingParams p = rc.params;
+            p.openDoorway = true;
+            p.walkableGround = true;
+            CHECK(p.civicRooms == 17);
+            ++hotels;
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, 1);
+            for (const PlacedPiece& pp : in.furniture) desks += pp.piece == static_cast<uint8_t>(Piece::ReceptionDesk);
+            for (const AttachPoint& ap : growPlanBuilding(plan, p).attaches) shops += ap.tag == "shopdoor";
+            // the entrance face's own shop doors
+            const std::size_t ee = entranceEdgeFor(plan, p);
+            Poly2 ccw = plan;
+            ensureCCW(ccw);
+            const Vec2 a = ccw[ee % ccw.size()], b = ccw[(ee + 1) % ccw.size()];
+            const Vec2 d = normalize(b - a), n(d.y, -d.x);
+            for (const AttachPoint& ap : growPlanBuilding(plan, p).attaches)
+                if (ap.tag == "shopdoor" && std::fabs(dot(Vec2(ap.position.x, ap.position.z) - a, n)) < 0.5) ++frontShops;
+        }
+    // the lobby rooms, as the plan has them
+    for (uint32_t seed = 1; seed <= 4; ++seed)
+        for (const auto& sz : sizes) {
+            const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+            BuildingRecipe rc;
+            if (!architectRecipeByName("hotel", seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+            BuildingParams p = rc.params;
+            p.openDoorway = true;
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, 1);
+            bool sofa = false;
+            for (const PlacedPiece& pp : in.furniture) sofa = sofa || pp.piece == static_cast<uint8_t>(Piece::Sofa);
+            lobbies += sofa;
+        }
+    std::printf("    [hotel] %d hotels: %d reception desks, %d with lobby sofas; %d shop doors, %d of them on the entrance face\n",
+                hotels, desks, lobbies, shops, frontShops);
+    CHECK(hotels >= 8);
+    CHECK(desks >= hotels);
+    CHECK(lobbies >= hotels * 3 / 4);
+    CHECK(shops > 0);
+    CHECK(frontShops == 0);
+}

@@ -176,7 +176,7 @@ bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness
 bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential);
 // The civic building's own rooms (BuildingParams::civicRooms): university 1, library 2, museum 4, school 5,
 // hospital 6, church 7, cinema 8, fire station 9, police 10, courthouse 11, capitol 12, market hall 14, factory 15,
-// warehouse (brick warehouse, metal shed) 16, else 0.
+// warehouse (brick warehouse, metal shed) 16, hotel 17 (its lobby), else 0.
 uint8_t civicRoomsFor(const std::string& recipe);
 
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the

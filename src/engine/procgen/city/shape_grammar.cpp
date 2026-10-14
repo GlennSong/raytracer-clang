@@ -965,7 +965,10 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     // facade, its far tier and the interior read the same shops -- by its corner IN PLAN: the facade and the interior
     // grow at the building's world base, the signs and the sim's places (shopFrontsOf) at 0, and with the height in
     // the hash a pharmacy's sign stood over a bookshop's shelves.
-    if (L.retailish && p.groundRetail && !p.campus && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid) {   // (a campus building: no shops)
+    // (a HOTEL's entrance face is all lobby -- its reception behind the glass, no shop -- ADR-0170)
+    const bool hotelFront = p.civicRooms == 17 && mode == FacadeMode::Entrance;
+    if (L.retailish && p.groundRetail && !p.campus && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid &&
+        !hotelFront) {   // (a campus building: no shops)
         uint32_t h = positionHash(Vec3(fr.bl.x + 0.13, 0.0, fr.bl.z + 0.29)) ^ static_cast<uint32_t>(p.seed);
         auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
         const int lobby = mode == FacadeMode::Entrance ? centreBay : -100;
@@ -4241,6 +4244,53 @@ static void paintShopRooms(RoomPlan& rp) {
 
 static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge, Real y0,
                              Real h, const CorePlan& core, const Poly2& well, const Vec2& stairFoot = Vec2(1e30, 1e30)) {
+    // A HOTEL'S LOBBY (Glenn, 2026-10-13: "Okay do that" -- the hotel's ground floor was shops round an open middle,
+    // no reception): along the entrance face, from its glass to the lifts (to 1 m short of the core; else 45% of the
+    // plate, at most 10 m), as wide as the face less the corner shops of the faces either side. The shops of the other
+    // faces stay -- a hotel's bar, its cafe. Added after the walk-through check: it has no walls of its own.
+    auto addHotelLobby = [&](RoomPlan& out) {
+        if (params.civicRooms != 17 || entranceEdge >= planIn.size()) return;
+        Poly2 pl = planIn;
+        ensureCCW(pl);
+        const std::size_t m = pl.size();
+        const Vec2 em = (planIn[entranceEdge] + planIn[(entranceEdge + 1) % planIn.size()]) * 0.5;
+        std::size_t e = 0;
+        Real best = 1e9;
+        for (std::size_t i = 0; i < m; ++i) {
+            const Real dd = ((pl[i] + pl[(i + 1) % m]) * 0.5 - em).length();
+            if (dd < best) { best = dd; e = i; }
+        }
+        const Vec2 a = pl[e], dv = pl[(e + 1) % m] - a;
+        const Real W = dv.length();
+        if (W < 6.0) return;
+        const Vec2 d = dv * (1.0 / W), nOut(d.y, -d.x);
+        const Real inset = interiorInset(params);
+        Real across = 0;
+        for (const Vec2& v : pl) across = std::max(across, dot(a - v, nOut));
+        Real deep = std::min(Real(10.0), across * 0.45);
+        if (core.valid) {
+            Real cd = 1e9;
+            for (const Vec2& c : core.rect()) cd = std::min(cd, dot(a - c, nOut));
+            deep = cd - 1.0;
+        }
+        if (deep < inset + 4.0) return;
+        Real x0 = inset, x1 = W - inset;
+        for (const Room& r : out.rooms) {   // the corner shops of the faces either side
+            Real s0 = 1e9, s1 = -1e9, t0 = 1e9;
+            for (const Vec2& q : r.rect) {
+                s0 = std::min(s0, dot(q - a, d)); s1 = std::max(s1, dot(q - a, d)); t0 = std::min(t0, dot(a - q, nOut));
+            }
+            if (t0 > deep - 0.05 || s1 <= x0 || s0 >= x1) continue;
+            if ((s0 + s1) * 0.5 < W * 0.5) x0 = std::max(x0, s1); else x1 = std::min(x1, s0);
+        }
+        if (x1 - x0 < 6.0) return;
+        auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
+        Room lobby;
+        lobby.edge = e;
+        lobby.kind = RoomKind::HotelLobby;
+        lobby.rect = {P(x0, inset), P(x1, inset), P(x1, deep), P(x0, deep)};
+        out.rooms.push_back(lobby);
+    };
     RoomPlan rp;
     rp.topology = PlateTopology::Ring;
     rp.office = false;
@@ -4402,9 +4452,11 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
         }
         RoomPlan out = planWith();
         paintShopRooms(out);
+        addHotelLobby(out);
         return out;
     }
     paintShopRooms(rp);
+    addHotelLobby(rp);
     return rp;
 }
 
@@ -4965,7 +5017,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         RoomPlan rp = params.bigBox == 6 && ki <= 1 ? mallLevel(plan, params, ki).rp
                     : ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
                     : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
-                    : ki == 0 && !params.campus && !params.civicRooms ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
+                    : ki == 0 && !params.campus && (!params.civicRooms || params.civicRooms == 17) ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
                                              il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
                                              il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30))
                               : RoomPlan{};

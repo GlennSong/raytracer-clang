@@ -9902,3 +9902,17 @@ row of roller doors, no doorway opened in it -- with offices over an empty groun
 
 Test `factories_and_warehouses_open_onto_their_floors` (27 buildings): 60 bays, all drawn open; 234 machines, 345
 pallet racks, 27 forklifts; no piece on the kept-clear floor; offices upstairs.
+
+## ADR-0170 — A hotel's lobby
+
+Glenn, 2026-10-13: "Okay do that." A hotel's ground floor was shop units round an open middle by the lifts -- no
+reception anywhere. `civicRooms` 17 (the hotel, runtime) makes its ENTRANCE FACE all lobby: facadeLayout cuts no
+shop unit there (no shopfront sign, no shop door; build tags 2026-10-13.3, a re-bake), and shopRoomPlan adds a
+HOTEL LOBBY room along that face -- from the glass to 1 m short of the core (else 45% of the plate, at most 10 m), as
+wide as the face less the corner shops of the faces either side -- after its walk-through check (it has no walls of
+its own). Program hotel_lobby: the reception desk on the back wall facing the doors, two clerks behind it, a sofa and
+its table on each side wall, an armchair, plants, pictures; the middle kept for the walk to the lifts. The other faces
+keep their shops: a hotel's bar and cafe.
+
+Test `a_hotel_has_a_lobby_with_its_reception` (12 hotels): a reception desk and lobby sofas in every one; 126 shop
+doors, none on the entrance face.

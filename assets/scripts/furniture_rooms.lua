@@ -2,7 +2,7 @@
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
 -- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting, nave,
--- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay, shop_floor, warehouse. Shops are still furnished in code, by their trade.
+-- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay, shop_floor, warehouse, hotel_lobby. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -304,6 +304,32 @@ furniture_rooms = {
     { wall = { 1.2, 1.0 }, sides = { 1, 3 }, clear = 1.2, count = { per = 4.0, min = 2, max = 5 }, pick = "pallet_stack" },
     { wall = { 1.3, 3.0 }, sides = { 3, 1 }, clear = 1.5, pick = "forklift" },
     { wall = { 2.0, 0.8 }, sides = { 2, 1, 3 }, clear = 1.0, pick = "workbench" },
+  },
+
+  hotel_lobby = {
+    -- a hotel's: the reception desk on the back wall facing the doors, two clerks behind it; a sofa and its table on
+    -- each side wall, an armchair, plants, pictures; the middle kept for the walk from the doors to the lifts
+    { wall = { 3.0, 1.6 }, sides = { 2 },
+      set = {
+        { pick = "office_chair", x = 0.9, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = "office_chair", x = 2.1, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = "reception_desk", x = 1.5, z = 0.75 },
+      } },
+    { wall = { 2.16, 1.75 }, sides = { 1 }, clear = 1.0,
+      set = {
+        { pick = { family = "seating", tags = { "living" } }, x = 1.08, fit = { 2.16, 1.0 } },
+        { pick = { family = "surface", tags = { "living" } }, x = 1.08, z = 1.15, fit = { 1.2, 0.7 } },
+      } },
+    { wall = { 2.16, 1.75 }, sides = { 3 }, clear = 1.0,
+      set = {
+        { pick = { family = "seating", tags = { "living" } }, x = 1.08, fit = { 2.16, 1.0 } },
+        { pick = { family = "surface", tags = { "living" } }, x = 1.08, z = 1.15, fit = { 1.2, 0.7 } },
+      } },
+    { wall = { 0.84, 0.84 }, sides = { 1, 3 }, pick = "lounge_chair" },
+    { wall = { 0.9, 0.9 }, sides = { 2, 1, 3 }, pick = { family = "decor", tags = { "plant" } } },
+    { wall = { 0.9, 0.9 }, sides = { 2, 3, 1 }, pick = { family = "decor", tags = { "plant" } } },
+    { hang = "picture", sides = { 1, 3 } },
+    { hang = "picture", sides = { 3, 1 } },
   },
 
   meeting = {
