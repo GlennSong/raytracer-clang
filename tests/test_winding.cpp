@@ -48,6 +48,7 @@
 #include <fstream>
 #include <sstream>
 
+#include <cstdlib>
 #include <map>
 #include <string>
 
@@ -229,7 +230,7 @@ TEST_CASE(mesh_audit_every_building_recipe) {
         printAudit(("part " + std::to_string(p) + (twoSided(p) ? " (two-sided)" : "")).c_str(), a);
     printAudit("ALL BUILDINGS", total);
     CHECK(total.tris > 100000);
-    CHECK(total.nonFinite == 0);
+    CHECK(total.clean());
 }
 
 // EVERY FURNITURE PIECE, in a spread of variants.
@@ -246,7 +247,7 @@ TEST_CASE(mesh_audit_every_furniture_piece) {
     }
     printAudit("ALL FURNITURE", total);
     CHECK(total.tris > 1000);
-    CHECK(total.nonFinite == 0);
+    CHECK(total.clean());
 }
 
 // THE STREET: lamps, signals, bins, racks, news boxes, tree pits, signs, ladders.
@@ -269,13 +270,15 @@ TEST_CASE(mesh_audit_street_kit_signs_ladders) {
         total.add(a);
     }
     printAudit("ALL STREET KIT", total);
-    CHECK(total.nonFinite == 0);
+    CHECK(total.clean());
 }
 
 // NATURE: every real species, the stylized trees, an L-system tree, rocks, grass, terrain LOD nodes, a planet. Leaf
-// cards, fronds and grass blades are drawn two-sided (their counts are listed, not gated).
+// cards, fronds and grass blades are drawn two-sided, and a stylized canopy's normals are LEANED toward its crown's
+// centre (MeshBuilder::leanNormals: the crown lights as one volume) -- so on a clump's inner side they point away
+// from its face on purpose. Those are listed, not gated.
 TEST_CASE(mesh_audit_nature) {
-    Audit solid, cards;
+    Audit solid, cards, leaned;
     for (int i = 0; i < static_cast<int>(RealSpecies::Count); ++i) {
         const RealTree t = realTree(static_cast<RealSpecies>(i), 5, 12.0);
         const Audit b = audit(t.bark);
@@ -289,9 +292,8 @@ TEST_CASE(mesh_audit_nature) {
         const StylizedTree t = stylizedTree(7, p);
         const Audit b = audit(t.bark), c = audit(t.canopy);
         if (!b.clean()) printAudit(("stylized bark " + std::to_string(i)).c_str(), b);
-        if (!c.clean()) printAudit(("stylized canopy " + std::to_string(i)).c_str(), c);
         solid.add(b);
-        solid.add(c);
+        leaned.add(c);
     }
     {
         LSystem sys;
@@ -328,9 +330,10 @@ TEST_CASE(mesh_audit_nature) {
     printAudit("grass clump (two-sided)", grass);
     printAudit("grass card (two-sided)", audit(grassCardMesh(GrassClumpParams{})));
     printAudit("leaf cards (two-sided)", cards);
+    printAudit("stylized canopies (leaned normals)", leaned);
     printAudit("ALL NATURE (solid)", solid);
     CHECK(solid.tris > 10000);
-    CHECK(solid.nonFinite == 0);
+    CHECK(solid.clean());
 }
 
 // VEHICLES AND PEOPLE: the C++ car, its shells, the trains, the occupant, the mannequin, the citysim's people and
@@ -400,5 +403,45 @@ TEST_CASE(mesh_audit_vehicles_and_people) {
     }
     printAudit("ALL VEHICLES AND PEOPLE", total);
     CHECK(total.tris > 10000);
-    CHECK(total.nonFinite == 0);
+    CHECK(total.clean());
+}
+
+// NOTHING IN A BUILDING IS SEE-THROUGH FROM BELOW (Glenn, 2026-10-13: "in the skyscraper stairwells there's issues
+// too"): engine::auditUndersides over towers grown outside and in -- every floor, landing and tread over 2 m up has
+// something facing down under it (a ceiling, a flight's soffit).
+TEST_CASE(mesh_audit_building_undersides) {
+    size_t hanging = 0, open = 0;
+    for (const char* name : {"glass_tower", "art_deco_tower", "sky_exposure_tower", "stepped_tower", "condo_tower",
+                             "office_slab", "apartments", "hotel", "hospital", "mixed_use"}) {
+        BuildingRecipe r;
+        if (!architectRecipeByName(name, 7, 0.8, 26, 700, r)) continue;
+        const Poly2 plan = rectPlan(26, 22);
+        const BuildingMesh out = growPlanBuilding(plan, r.params, 0.0), in = growInterior(plan, r.params, 0.0);
+        std::vector<NamedMeshRef> refs;
+        std::vector<std::string> names;
+        for (const BuildingMesh* bm : {&out, &in})
+            for (const RenderMesh& p : bm->parts) names.push_back("part " + std::to_string(p.materialIndex));
+        size_t k = 0;
+        for (const BuildingMesh* bm : {&out, &in})
+            for (const RenderMesh& p : bm->parts) refs.push_back({names[k++], &p});
+        const UndersideAudit u = auditUndersides(
+            refs,
+            [](const std::string& n) {
+                return n != "part " + std::to_string(static_cast<int>(PartId::Glass)) &&
+                       n != "part " + std::to_string(static_cast<int>(PartId::GlassClear)) &&
+                       n != "part " + std::to_string(static_cast<int>(PartId::GlassLit));
+            },
+            [](double, double) { return 0.0; });
+        if (u.open > 0) {
+            std::printf("    %s (%d floors):\n", name, r.params.floors);
+            printUndersideAudit(u, 4);
+            std::printf("    [undersides]   first at %.2f %.2f %.2f\n", u.firstOpen.x, u.firstOpen.y, u.firstOpen.z);
+            if (std::getenv("RT_UNDERSIDE_COLUMN")) printColumn(refs, u.firstOpen.x, u.firstOpen.z, 0.6);
+        }
+        hanging += u.hanging;
+        open += u.open;
+    }
+    std::printf("    [undersides] buildings: %zu hanging, %zu open\n", hanging, open);
+    CHECK(hanging > 1000);
+    CHECK(open == 0);
 }
