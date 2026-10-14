@@ -414,10 +414,6 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
 // helper (kept as a free function here so the grammar's many call sites read
 // tersely). Centralising the winding rule means the grammar, terrain and roads
 // can't drift apart on which way a front face points.
-void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
-              const Vec3& d, const Vec3& normal, const Vec3& color) {
-    MeshBuilder::emitQuad(mesh, a, b, c, d, normal, color);
-}
 
 // ROOM UVs on a pane (the interior mapping; Glenn's walk 2026-09-14: "the
 // rooms are stretched on the ground floor because the windows are tall"):
@@ -453,26 +449,14 @@ static RenderMesh& partMesh(BuildingMesh& out, PartId id) {
 // in sequence — the part reference is used only for this one append.
 static void appendToPart(BuildingMesh& out, PartId id, const RenderMesh& src) {
     if (src.vertices.empty()) return;
-    RenderMesh& dst = partMesh(out, id);
-    uint32_t base = static_cast<uint32_t>(dst.vertices.size());
-    dst.vertices.insert(dst.vertices.end(), src.vertices.begin(), src.vertices.end());
-    for (uint32_t idx : src.indices) dst.indices.push_back(base + idx);
+    MeshBuilder::append(partMesh(out, id), src);
 }
 
 void emitBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color) {
-    RenderMesh& mesh = partMesh(out, part);
-    // Eight corners.
-    Vec3 c000 = s.corner(0, 0, 0), c100 = s.corner(1, 0, 0);
-    Vec3 c110 = s.corner(1, 1, 0), c010 = s.corner(0, 1, 0);
-    Vec3 c001 = s.corner(0, 0, 1), c101 = s.corner(1, 0, 1);
-    Vec3 c111 = s.corner(1, 1, 1), c011 = s.corner(0, 1, 1);
-    const Vec3 r = s.axis[0], u = s.axis[1], f = s.axis[2];
-    emitQuad(mesh, c000, c100, c110, c010, f * -1, color);   // back  (-f)
-    emitQuad(mesh, c001, c101, c111, c011, f,      color);   // front (+f)
-    emitQuad(mesh, c000, c001, c011, c010, r * -1, color);   // left  (-r)
-    emitQuad(mesh, c100, c101, c111, c110, r,      color);   // right (+r)
-    emitQuad(mesh, c000, c100, c101, c001, u * -1, color);   // bottom(-u)
-    emitQuad(mesh, c010, c110, c111, c011, u,      color);   // top   (+u)
+    // the mesh library's box on the scope's frame (closed, every face out)
+    MeshFrame f;
+    f.o = s.origin; f.x = s.axis[0] * s.size.x; f.y = s.axis[1] * s.size.y; f.z = s.axis[2] * s.size.z;
+    MeshBuilder::emitBox(partMesh(out, part), f, color);
 }
 
 void emitSoftBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color, uint32_t seed) {
@@ -527,11 +511,8 @@ void emitSoftBox(BuildingMesh& out, const Scope& s, PartId part, const Vec3& col
             for (int i = 0; i < NU; ++i) {
                 const uint32_t a = base + j * (NU + 1) + i, b = a + 1, cc = a + (NU + 1), d = cc + 1;
                 const Vec3 out3 = mesh.vertices[a].normal;
-                for (const auto& t3 : {std::array<uint32_t, 3>{a, b, d}, std::array<uint32_t, 3>{a, d, cc}}) {
-                    const Vec3& A = mesh.vertices[t3[0]].position; const Vec3& B = mesh.vertices[t3[1]].position; const Vec3& C3 = mesh.vertices[t3[2]].position;
-                    if (dot(cross(C3 - A, B - A), out3) >= 0) mesh.indices.insert(mesh.indices.end(), {t3[0], t3[1], t3[2]});
-                    else mesh.indices.insert(mesh.indices.end(), {t3[0], t3[2], t3[1]});
-                }
+                MeshBuilder::triFacing(mesh, a, b, d, out3);
+                MeshBuilder::triFacing(mesh, a, d, cc, out3);
             }
         // Light the LUMPS: blend the smooth mass normal with the lumpy surface's own, so the
         // bumps catch the sun and shade the hollows (the soft normal alone hid them).
@@ -558,15 +539,15 @@ void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color
     RenderMesh& mesh = partMesh(out, part);
     for (int side = 0; side < 4; ++side) {
         FaceRect fr = faceOf(s, side);
-        emitQuad(mesh, fr.at(0, 0), fr.at(fr.width, 0), fr.at(fr.width, fr.height),
+        MeshBuilder::emitQuad(mesh, fr.at(0, 0), fr.at(fr.width, 0), fr.at(fr.width, fr.height),
                  fr.at(0, fr.height), fr.n, color);
     }
     const Vec3 u = s.axis[1];
     if (floor)
-        emitQuad(mesh, s.corner(0, 0, 0), s.corner(1, 0, 0), s.corner(1, 0, 1),
+        MeshBuilder::emitQuad(mesh, s.corner(0, 0, 0), s.corner(1, 0, 0), s.corner(1, 0, 1),
                  s.corner(0, 0, 1), u, color);
     if (ceiling)
-        emitQuad(mesh, s.corner(0, 1, 0), s.corner(1, 1, 0), s.corner(1, 1, 1),
+        MeshBuilder::emitQuad(mesh, s.corner(0, 1, 0), s.corner(1, 1, 0), s.corner(1, 1, 1),
                  s.corner(0, 1, 1), u * -1, color);
 }
 
@@ -781,11 +762,11 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     // A face too NARROW for a pane (a chamfer's first steps, a setback's sliver face): an opaque metal panel the
     // storey's full height, not a stick-thin window (Glenn, 2026-09-30: "some windows are super skinny").
     if (W < 1.0) {
-        emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin, fr.at(W, fh) + gin, fr.at(0, fh) + gin, fr.n, spandrelCol);
+        MeshBuilder::emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin, fr.at(W, fh) + gin, fr.at(0, fh) + gin, fr.n, spandrelCol);
         appendGlassParts(out, glass, glassLit, clearPanes);
         return;
     }
-    emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin,
+    MeshBuilder::emitQuad(glass, fr.at(0, 0) + gin, fr.at(W, 0) + gin,
              fr.at(W, spandrelH) + gin, fr.at(0, spandrelH) + gin,
              fr.n, spandrelCol);                 // spandrel (floor-slab band)
     // Vision glass, per BAY (device: "the way it's lit up row by row is
@@ -805,7 +786,7 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         const bool litBay = litOfficeBay(bayAnchor, occupancy);
         RenderMesh& vision = litBay ? glassLit : glass;
         const std::size_t pv0 = vision.vertices.size();
-        emitQuad(vision, fr.at(x0, spandrelH) + gin, fr.at(x1, spandrelH) + gin,
+        MeshBuilder::emitQuad(vision, fr.at(x0, spandrelH) + gin, fr.at(x1, spandrelH) + gin,
                  fr.at(x1, fh) + gin, fr.at(x0, fh) + gin, fr.n,
                  litBay ? litPaneColour(glassCol, bayAnchor, true) : glassCol);
         roomUV(vision, pv0, fr);
@@ -824,17 +805,17 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
     // glass plane (vertical bars get left/right cheeks, horizontal get top/
     // bottom), so the lattice has real depth from any angle.
     auto bar = [&](Real a0, Real b0, Real a1, Real b1, bool vertical) {
-        emitQuad(mull, fr.at(a0, b0) + outv, fr.at(a1, b0) + outv,
+        MeshBuilder::emitQuad(mull, fr.at(a0, b0) + outv, fr.at(a1, b0) + outv,
                  fr.at(a1, b1) + outv, fr.at(a0, b1) + outv, fr.n, mullCol);
         if (vertical) {
-            emitQuad(mull, fr.at(a0, b0) + gin, fr.at(a0, b0) + outv,
+            MeshBuilder::emitQuad(mull, fr.at(a0, b0) + gin, fr.at(a0, b0) + outv,
                      fr.at(a0, b1) + outv, fr.at(a0, b1) + gin, fr.h * -1, mullCol);
-            emitQuad(mull, fr.at(a1, b0) + gin, fr.at(a1, b0) + outv,
+            MeshBuilder::emitQuad(mull, fr.at(a1, b0) + gin, fr.at(a1, b0) + outv,
                      fr.at(a1, b1) + outv, fr.at(a1, b1) + gin, fr.h, mullCol);
         } else {
-            emitQuad(mull, fr.at(a0, b1) + gin, fr.at(a1, b1) + gin,
+            MeshBuilder::emitQuad(mull, fr.at(a0, b1) + gin, fr.at(a1, b1) + gin,
                      fr.at(a1, b1) + outv, fr.at(a0, b1) + outv, fr.v, mullCol);
-            emitQuad(mull, fr.at(a0, b0) + outv, fr.at(a1, b0) + outv,
+            MeshBuilder::emitQuad(mull, fr.at(a0, b0) + outv, fr.at(a1, b0) + outv,
                      fr.at(a1, b0) + gin, fr.at(a0, b0) + gin, fr.v * -1, mullCol);
         }
     };
@@ -854,9 +835,9 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
         for (int b = 0; b <= bays; b += cs.fins) {
             const Real x = std::min(std::max(b * W / bays, finW * 0.5), W - finW * 0.5);
             const Real a0 = x - finW * 0.5, a1 = x + finW * 0.5;
-            emitQuad(mull, fr.at(a0, 0) + fo, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a0, fh) + fo, fr.n, mullCol);
-            emitQuad(mull, fr.at(a0, 0) + outv, fr.at(a0, 0) + fo, fr.at(a0, fh) + fo, fr.at(a0, fh) + outv, fr.h * -1, mullCol);
-            emitQuad(mull, fr.at(a1, 0) + outv, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a1, fh) + outv, fr.h, mullCol);
+            MeshBuilder::emitQuad(mull, fr.at(a0, 0) + fo, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a0, fh) + fo, fr.n, mullCol);
+            MeshBuilder::emitQuad(mull, fr.at(a0, 0) + outv, fr.at(a0, 0) + fo, fr.at(a0, fh) + fo, fr.at(a0, fh) + outv, fr.h * -1, mullCol);
+            MeshBuilder::emitQuad(mull, fr.at(a1, 0) + outv, fr.at(a1, 0) + fo, fr.at(a1, fh) + fo, fr.at(a1, fh) + outv, fr.h, mullCol);
         }
     }
     appendGlassParts(out, glass, glassLit, clearPanes);
@@ -1228,10 +1209,10 @@ static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge
     if (len < 1e-6) return;
     const Vec2 nOut(d.y / len, -d.x / len);   // CCW plan: outward is the right normal
     RenderMesh skin;
-    emitQuad(skin, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y0 + h, b.y),
+    MeshBuilder::emitQuad(skin, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y0 + h, b.y),
              Vec3(a.x, y0 + h, a.y), Vec3(-nOut.x, 0, -nOut.y), paint);
     if (bothSides)
-        emitQuad(skin, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y0 + h, b.y),
+        MeshBuilder::emitQuad(skin, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y0 + h, b.y),
                  Vec3(a.x, y0 + h, a.y), Vec3(nOut.x, 0, nOut.y), paint);
     appendToPart(out, part, skin);
 }
@@ -1256,7 +1237,7 @@ static void emitInnerCurtainGrid(BuildingMesh& out, const FaceRect& fr, Real ins
     auto bar = [&](Real a0, Real b0, Real a1, Real b1, bool vertical) {
         (void)vertical;
         if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
-        emitQuad(mull, fr.at(a0, b0) + inv, fr.at(a1, b0) + inv, fr.at(a1, b1) + inv, fr.at(a0, b1) + inv,
+        MeshBuilder::emitQuad(mull, fr.at(a0, b0) + inv, fr.at(a1, b0) + inv, fr.at(a1, b1) + inv, fr.at(a0, b1) + inv,
                  fr.n * -1.0, mullCol);
     };
     const int bays = cs.bays(W);   // emitCurtainWallRect's rule
@@ -1305,8 +1286,8 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
         if (atIn && a0 <= 1e-9) A = Vec3(ia.x, A.y, ia.z);
         if (atIn && a1 >= fr.width - 1e-9) B = Vec3(ib.x, B.y, ib.z);
         const Vec3 up(0, b1 - b0, 0);
-        emitQuad(m, A, B, B + up, A + up, nIn, col);
-        emitQuad(m, A, B, B + up, A + up, fr.n, col);
+        MeshBuilder::emitQuad(m, A, B, B + up, A + up, nIn, col);
+        MeshBuilder::emitQuad(m, A, B, B + up, A + up, fr.n, col);
     };
     for (const BayOpening& o : L.open) {
         q(wall, o.x0, 0, o.wx0, fr.height, icol, in);         // left pier
@@ -1366,9 +1347,9 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                 const Vec3 P00 = fr.at(o.wx0, o.sill) + from, P10 = fr.at(o.wx1, o.sill) + from;
                 const Vec3 P01 = fr.at(o.wx0, jambTop) + from, P11 = fr.at(o.wx1, jambTop) + from;
                 const Vec3 to = fr.n * -(thick - revealFrom);
-                emitQuad(wall, P00, P00 + to, P01 + to, P01, fr.h, icol);              // left jamb
-                emitQuad(wall, P10, P10 + to, P11 + to, P11, fr.h * -1.0, icol);       // right jamb
-                emitQuad(wall, P00, P10, P10 + to, P00 + to, Vec3(0, 1, 0), icol);     // sill
+                MeshBuilder::emitQuad(wall, P00, P00 + to, P01 + to, P01, fr.h, icol);              // left jamb
+                MeshBuilder::emitQuad(wall, P10, P10 + to, P11 + to, P11, fr.h * -1.0, icol);       // right jamb
+                MeshBuilder::emitQuad(wall, P00, P10, P10 + to, P00 + to, Vec3(0, 1, 0), icol);     // sill
                 if (narc > 0) {
                     for (int k = 0; k + 1 < narc; ++k) {   // the arch SOFFIT, segment by segment
                         const Vec3 A = fr.at(arc[k].x, arc[k].y) + from;
@@ -1376,10 +1357,10 @@ void emitInnerWallRect(BuildingMesh& out, const FaceRect& fr,
                         const Real mx = (arc[k].x + arc[k + 1].x) * 0.5;
                         const Real my = (arc[k].y + arc[k + 1].y) * 0.5;
                         const Vec3 nrm = normalize(fr.h * (arcC.x - mx) + fr.v * (arcC.y - my));
-                        emitQuad(wall, A, B, B + to, A + to, nrm, icol);
+                        MeshBuilder::emitQuad(wall, A, B, B + to, A + to, nrm, icol);
                     }
                 } else {
-                    emitQuad(wall, P01, P11, P11 + to, P01 + to, Vec3(0, -1, 0), icol);   // flat head
+                    MeshBuilder::emitQuad(wall, P01, P11, P11 + to, P01 + to, Vec3(0, -1, 0), icol);   // flat head
                 }
             }
         }
@@ -1397,7 +1378,7 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
     const FacadeMode layoutMode = mode;   // Rear lays its back door out, and is Residential otherwise
     if (mode == FacadeMode::Rear) mode = FacadeMode::Residential;
     if (mode == FacadeMode::StairDoor) mode = FacadeMode::Solid;
-    emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0),
+    MeshBuilder::emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0),
              fr.at(fr.width, fr.height), fr.at(0, fr.height), fr.n, wallColor);
     const Vec3 proud = fr.n * 0.02;
     const Vec3 gcol = glassGrey();
@@ -1415,7 +1396,7 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
         Vec2 farcC;
         const int fn = openingArc(o, farc, 8, &farcC);       // the middle tier arches too
         const Real fysp = o.head - o.rise;
-        emitQuad(dst, fr.at(o.wx0, o.sill) + proud, fr.at(o.wx1, o.sill) + proud,
+        MeshBuilder::emitQuad(dst, fr.at(o.wx0, o.sill) + proud, fr.at(o.wx1, o.sill) + proud,
                  fr.at(o.wx1, fn > 0 ? fysp : o.head) + proud,
                  fr.at(o.wx0, fn > 0 ? fysp : o.head) + proud, fr.n, fcol);
         for (int k = 0; k + 1 < fn; ++k)
@@ -1435,14 +1416,14 @@ static void emitFlatFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode
             if (o.entrance || o.rise > 0) continue;
             const bool first = g <= 1 || b % g == 0, last = g <= 1 || static_cast<int>(b % g) == g - 1 || b + 1 == FL.open.size();
             const Real sx0 = first ? o.wx0 : o.x0, sx1 = last ? o.wx1 : o.x1;
-            emitQuad(wall, fr.at(sx0, 0) + sp, fr.at(sx1, 0) + sp, fr.at(sx1, o.sill) + sp, fr.at(sx0, o.sill) + sp, fr.n, sc);
-            emitQuad(wall, fr.at(sx0, o.head) + sp, fr.at(sx1, o.head) + sp, fr.at(sx1, fr.height) + sp,
+            MeshBuilder::emitQuad(wall, fr.at(sx0, 0) + sp, fr.at(sx1, 0) + sp, fr.at(sx1, o.sill) + sp, fr.at(sx0, o.sill) + sp, fr.n, sc);
+            MeshBuilder::emitQuad(wall, fr.at(sx0, o.head) + sp, fr.at(sx1, o.head) + sp, fr.at(sx1, fr.height) + sp,
                      fr.at(sx0, fr.height) + sp, fr.n, sc);
         }
         for (int b = 0; b <= FL.bays; b += g) {
             const Real pw = 0.6, x = std::min(std::max(std::min(b, FL.bays) * FL.bw, pw * 0.5), fr.width - pw * 0.5);
             const Vec3 o3 = fr.n * 0.24, al = fr.h * (pw * 0.5);
-            emitQuad(wall, fr.at(x, 0) - al + o3, fr.at(x, 0) + al + o3, fr.at(x, fr.height) + al + o3,
+            MeshBuilder::emitQuad(wall, fr.at(x, 0) - al + o3, fr.at(x, 0) + al + o3, fr.at(x, fr.height) + al + o3,
                      fr.at(x, fr.height) - al + o3, fr.n, wallColor * 1.05);
             if (b == FL.bays) break;
         }
@@ -1480,7 +1461,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
         // Wall surround: bottom band, top band, left pier, right pier.
         auto wallQuad = [&](Real a0, Real a1, Real b0, Real b1) {
             if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
-            emitQuad(wall, fr.at(a0, b0), fr.at(a1, b0), fr.at(a1, b1), fr.at(a0, b1),
+            MeshBuilder::emitQuad(wall, fr.at(a0, b0), fr.at(a1, b0), fr.at(a1, b1), fr.at(a0, b1),
                      fr.n, wallColor);
         };
         // The opening ELEMENT (building-grammar-plan.md P2): its head may be an
@@ -1524,11 +1505,11 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             wallQuad(x0, sx0, openHead, fh); wallQuad(sx1, x1, openHead, fh);
             for (const auto& [b0, b1] : {std::pair<Real, Real>{0, openSill}, std::pair<Real, Real>{openHead, fh}}) {
                 if (b1 - b0 < 1e-3) continue;
-                emitQuad(wall, fr.at(sx0, b0) + in, fr.at(sx1, b0) + in, fr.at(sx1, b1) + in, fr.at(sx0, b1) + in,
+                MeshBuilder::emitQuad(wall, fr.at(sx0, b0) + in, fr.at(sx1, b0) + in, fr.at(sx1, b1) + in, fr.at(sx0, b1) + in,
                          fr.n, sc);
-                if (first) emitQuad(wall, fr.at(sx0, b0), fr.at(sx0, b0) + in, fr.at(sx0, b1) + in, fr.at(sx0, b1),
+                if (first) MeshBuilder::emitQuad(wall, fr.at(sx0, b0), fr.at(sx0, b0) + in, fr.at(sx0, b1) + in, fr.at(sx0, b1),
                                     fr.h, wallColor * 0.8);
-                if (last) emitQuad(wall, fr.at(sx1, b0) + in, fr.at(sx1, b0), fr.at(sx1, b1), fr.at(sx1, b1) + in,
+                if (last) MeshBuilder::emitQuad(wall, fr.at(sx1, b0) + in, fr.at(sx1, b0), fr.at(sx1, b1), fr.at(sx1, b1) + in,
                                    fr.h * -1, wallColor * 0.8);
             }
         } else {
@@ -1551,7 +1532,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                 if (h0 < 1e-4 && h1 < 1e-4) continue;
                 if (h1 < 1e-4)      MeshBuilder::emitTri(wall, A, B, TA, fr.n, wallColor);
                 else if (h0 < 1e-4) MeshBuilder::emitTri(wall, A, B, TB, fr.n, wallColor);
-                else                emitQuad(wall, A, B, TB, TA, fr.n, wallColor);
+                else                MeshBuilder::emitQuad(wall, A, B, TB, TA, fr.n, wallColor);
             }
         }
 
@@ -1570,12 +1551,12 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             Vec3 oTL = fr.at(wx0, openHead), oTR = fr.at(wx1, openHead);
             Vec3 dBL = oBL + in, dBR = oBR + in, dTL = oTL + in, dTR = oTR + in;
             Vec3 rev = wallColor * 0.7;
-            emitQuad(wall, oTL, oTR, dTR, dTL, fr.v * -1, rev);   // lintel (faces down)
-            emitQuad(wall, oBL, oBR, dBR, dBL, fr.v, rev);        // threshold (faces up)
-            emitQuad(wall, oBL, oTL, dTL, dBL, fr.h, rev);        // left jamb
-            emitQuad(wall, oBR, oTR, dTR, dBR, fr.h * -1, rev);   // right jamb
+            MeshBuilder::emitQuad(wall, oTL, oTR, dTR, dTL, fr.v * -1, rev);   // lintel (faces down)
+            MeshBuilder::emitQuad(wall, oBL, oBR, dBR, dBL, fr.v, rev);        // threshold (faces up)
+            MeshBuilder::emitQuad(wall, oBL, oTL, dTL, dBL, fr.h, rev);        // left jamb
+            MeshBuilder::emitQuad(wall, oBR, oTR, dTR, dBR, fr.h * -1, rev);   // right jamb
             if (!p.openDoorway)
-                emitQuad(door, dBL, dBR, dTR, dTL, fr.n,
+                MeshBuilder::emitQuad(door, dBL, dBR, dTR, dTL, fr.n,
                          materialFor(PartId::Door, wallColor).albedo);  // leaf
             // DOORFRAME (device feedback): painted stiles + head rail seated in
             // the recess around the leaf — the same joinery the windows wear.
@@ -1584,7 +1565,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                 const Real dfw = 0.10;
                 auto dfQuad = [&](Real a0, Real b0, Real a1, Real b1) {
                     if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
-                    emitQuad(frame, fr.at(a0, b0) + fp, fr.at(a1, b0) + fp,
+                    MeshBuilder::emitQuad(frame, fr.at(a0, b0) + fp, fr.at(a1, b0) + fp,
                              fr.at(a1, b1) + fp, fr.at(a0, b1) + fp,
                              fr.n, p.window.frameColor);
                 };
@@ -1598,7 +1579,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                 RenderMesh& srd = surround;
                 auto caseQuad = [&](Real a0, Real b0, Real a1, Real b1) {
                     Vec3 ov = fr.n * 0.05;
-                    emitQuad(srd, fr.at(a0, b0) + ov, fr.at(a1, b0) + ov,
+                    MeshBuilder::emitQuad(srd, fr.at(a0, b0) + ov, fr.at(a1, b0) + ov,
                              fr.at(a1, b1) + ov, fr.at(a0, b1) + ov, fr.n, p.trimColor);
                 };
                 const Real cw = 0.12;
@@ -1636,18 +1617,18 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             // centre, so the underside of the arch shades correctly).
             Vec3 oBL = fr.at(wx0, openSill), oBR = fr.at(wx1, openSill);
             Vec3 oTL = fr.at(wx0, ysp), oTR = fr.at(wx1, ysp);
-            emitQuad(wall, oBL, oBR, oBR + in, oBL + in, fr.v, rev);      // sill reveal
-            emitQuad(wall, oBL, oTL, oTL + in, oBL + in, fr.h, rev);      // left jamb
-            emitQuad(wall, oBR, oTR, oTR + in, oBR + in, fr.h * -1, rev); // right jamb
+            MeshBuilder::emitQuad(wall, oBL, oBR, oBR + in, oBL + in, fr.v, rev);      // sill reveal
+            MeshBuilder::emitQuad(wall, oBL, oTL, oTL + in, oBL + in, fr.h, rev);      // left jamb
+            MeshBuilder::emitQuad(wall, oBR, oTR, oTR + in, oBR + in, fr.h * -1, rev); // right jamb
             if (rise <= 0) {
-                emitQuad(wall, oTL, oTR, oTR + in, oTL + in, fr.v * -1, rev);   // lintel
+                MeshBuilder::emitQuad(wall, oTL, oTR, oTR + in, oTL + in, fr.v * -1, rev);   // lintel
             } else {
                 for (int k = 0; k < NARC; ++k) {
                     Vec3 A = fr.at(arc[k].x, arc[k].y), B = fr.at(arc[k + 1].x, arc[k + 1].y);
                     Real mx = (arc[k].x + arc[k + 1].x) * 0.5;
                     Real my = (arc[k].y + arc[k + 1].y) * 0.5;
                     Vec3 nrm = normalize(fr.h * (cx - mx) + fr.v * (Cy - my));
-                    emitQuad(wall, A, B, B + in, A + in, nrm, rev);       // arc soffit
+                    MeshBuilder::emitQuad(wall, A, B, B + in, A + in, nrm, rev);       // arc soffit
                 }
             }
 
@@ -1659,7 +1640,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             const Real fw = std::max(Real(0.04), st.frameWidth);
             auto frameQuad = [&](Real a0, Real b0, Real a1, Real b1) {
                 if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
-                emitQuad(frame, fr.at(a0, b0) + fp, fr.at(a1, b0) + fp,
+                MeshBuilder::emitQuad(frame, fr.at(a0, b0) + fp, fr.at(a1, b0) + fp,
                          fr.at(a1, b1) + fp, fr.at(a0, b1) + fp, fr.n, st.frameColor);
             };
             frameQuad(wx0, openSill, wx1, openSill + fw);                 // bottom rail
@@ -1672,7 +1653,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                 for (int k = 0; k < NARC; ++k) {                          // curved head rail
                     Vec2 iA(cx + (arc[k].x - cx) * innerK, Cy + (arc[k].y - Cy) * innerK);
                     Vec2 iB(cx + (arc[k + 1].x - cx) * innerK, Cy + (arc[k + 1].y - Cy) * innerK);
-                    emitQuad(frame, fr.at(iA.x, iA.y) + fp, fr.at(iB.x, iB.y) + fp,
+                    MeshBuilder::emitQuad(frame, fr.at(iA.x, iA.y) + fp, fr.at(iB.x, iB.y) + fp,
                              fr.at(arc[k + 1].x, arc[k + 1].y) + fp,
                              fr.at(arc[k].x, arc[k].y) + fp, fr.n, st.frameColor);
                 }
@@ -1708,7 +1689,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             RenderMesh& pane = litPane ? glassLit : glass;
             const Vec3 pcol = litPane ? litPaneColour(gcol, fr.at(wx0, openSill), p.curtainWall) : gcol;
             const std::size_t pv0 = pane.vertices.size();
-            emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, pcol);
+            MeshBuilder::emitQuad(pane, oBL + in, oBR + in, oTR + in, oTL + in, fr.n, pcol);
             if (rise > 0) {
                 Vec3 S = fr.at(cx, ysp) + in;
                 for (int k = 0; k < NARC; ++k)
@@ -1727,11 +1708,11 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                     Vec3 ov = fr.n * proud;
                     Vec3 BL = fr.at(a0, b0), BR = fr.at(a1, b0);
                     Vec3 TL = fr.at(a0, b1), TR = fr.at(a1, b1);
-                    emitQuad(srd, BL + ov, BR + ov, TR + ov, TL + ov, fr.n, p.trimColor);
-                    emitQuad(srd, TL, TR, TR + ov, TL + ov, fr.v, p.trimColor);        // top ledge
-                    emitQuad(srd, BL + ov, BR + ov, BR, BL, fr.v * -1, p.trimColor);   // underside
-                    emitQuad(srd, BL, BL + ov, TL + ov, TL, fr.h * -1, p.trimColor);   // left end
-                    emitQuad(srd, BR + ov, BR, TR, TR + ov, fr.h, p.trimColor);        // right end
+                    MeshBuilder::emitQuad(srd, BL + ov, BR + ov, TR + ov, TL + ov, fr.n, p.trimColor);
+                    MeshBuilder::emitQuad(srd, TL, TR, TR + ov, TL + ov, fr.v, p.trimColor);        // top ledge
+                    MeshBuilder::emitQuad(srd, BL + ov, BR + ov, BR, BL, fr.v * -1, p.trimColor);   // underside
+                    MeshBuilder::emitQuad(srd, BL, BL + ov, TL + ov, TL, fr.h * -1, p.trimColor);   // left end
+                    MeshBuilder::emitQuad(srd, BR + ov, BR, TR, TR + ov, fr.h, p.trimColor);        // right end
                 };
                 const Real over = 0.14;                        // oversail past the jambs
                 if (st.sill)
@@ -1754,12 +1735,12 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                         Vec3 B = fr.at(arc[k + 1].x, arc[k + 1].y);
                         Vec2 oA = outerAt(k), oB = outerAt(k + 1);
                         Vec3 OA = fr.at(oA.x, oA.y), OB = fr.at(oB.x, oB.y);
-                        emitQuad(srd, A + hp, B + hp, OB + hp, OA + hp, fr.n, p.trimColor);
+                        MeshBuilder::emitQuad(srd, A + hp, B + hp, OB + hp, OA + hp, fr.n, p.trimColor);
                         Real mx = (arc[k].x + arc[k + 1].x) * 0.5;
                         Real my = (arc[k].y + arc[k + 1].y) * 0.5;
                         Vec3 dn = normalize(fr.h * (cx - mx) + fr.v * (Cy - my));
-                        emitQuad(srd, A, B, B + hp, A + hp, dn, p.trimColor);      // intrados lip
-                        emitQuad(srd, OA + hp, OB + hp, OB, OA, dn * -1, p.trimColor); // extrados
+                        MeshBuilder::emitQuad(srd, A, B, B + hp, A + hp, dn, p.trimColor);      // intrados lip
+                        MeshBuilder::emitQuad(srd, OA + hp, OB + hp, OB, OA, dn * -1, p.trimColor); // extrados
                     }
                     // End CAPS at the springers (device: "the arches ... are
                     // missing the end caps"): close the band's cut face where it
@@ -1768,7 +1749,7 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
                         Vec3 A = fr.at(arc[e].x, arc[e].y);
                         Vec2 oE = outerAt(e);
                         Vec3 OE = fr.at(oE.x, oE.y);
-                        emitQuad(srd, A, OE, OE + hp, A + hp, fr.v * -1, p.trimColor);
+                        MeshBuilder::emitQuad(srd, A, OE, OE + hp, A + hp, fr.v * -1, p.trimColor);
                     }
                 }
             }
@@ -1788,11 +1769,11 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             Vec3 along = normalize(fr.h) * (pw * 0.5);
             Vec3 outv = fr.n * proud;
             // Front quad + two returns of the pier (a shallow box face).
-            emitQuad(trim, c0 - along + outv, c0 + along + outv,
+            MeshBuilder::emitQuad(trim, c0 - along + outv, c0 + along + outv,
                      c1 + along + outv, c1 - along + outv, fr.n, p.trimColor);
-            emitQuad(trim, c0 + along, c0 + along + outv, c1 + along + outv,
+            MeshBuilder::emitQuad(trim, c0 + along, c0 + along + outv, c1 + along + outv,
                      c1 + along, fr.h, p.trimColor);
-            emitQuad(trim, c0 - along + outv, c0 - along, c1 - along,
+            MeshBuilder::emitQuad(trim, c0 - along + outv, c0 - along, c1 - along,
                      c1 - along + outv, fr.h * -1, p.trimColor);
             (void)up;
         }
@@ -1813,9 +1794,9 @@ void emitFacadeRect(BuildingMesh& out, const FaceRect& fr, FacadeMode mode,
             const Vec3 c0 = fr.at(x, 0), c1 = fr.at(x, fh);
             const Vec3 along = fr.h * (pw * 0.5), outv = fr.n * proud;
             const Vec3 pc = wallColor * 1.05;
-            emitQuad(wall, c0 - along + outv, c0 + along + outv, c1 + along + outv, c1 - along + outv, fr.n, pc);
-            emitQuad(wall, c0 + along, c0 + along + outv, c1 + along + outv, c1 + along, fr.h, pc * 0.85);
-            emitQuad(wall, c0 - along + outv, c0 - along, c1 - along, c1 - along + outv, fr.h * -1, pc * 0.85);
+            MeshBuilder::emitQuad(wall, c0 - along + outv, c0 + along + outv, c1 + along + outv, c1 - along + outv, fr.n, pc);
+            MeshBuilder::emitQuad(wall, c0 + along, c0 + along + outv, c1 + along + outv, c1 + along, fr.h, pc * 0.85);
+            MeshBuilder::emitQuad(wall, c0 - along + outv, c0 - along, c1 - along, c1 - along + outv, fr.h * -1, pc * 0.85);
             if (b == bays) break;
         }
     }
@@ -1847,37 +1828,19 @@ void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mod
 // normals, into part `pid` with vertex colour `col`.
 static void emitTube(BuildingMesh& out, const Vec3& cXZ, Real radius, Real y0,
                      Real y1, int sides, PartId pid, const Vec3& col) {
-    RenderMesh m;
-    for (int i = 0; i < sides; ++i) {
-        Real a0 = 2 * PI * i / sides, a1 = 2 * PI * (i + 1) / sides;
-        Vec3 d0(std::cos(a0), 0, std::sin(a0)), d1(std::cos(a1), 0, std::sin(a1));
-        Vec3 n = normalize(d0 + d1);
-        emitQuad(m, cXZ + d0 * radius + Vec3(0, y0, 0),
-                    cXZ + d1 * radius + Vec3(0, y0, 0),
-                    cXZ + d1 * radius + Vec3(0, y1, 0),
-                    cXZ + d0 * radius + Vec3(0, y1, 0), n, col);
-    }
-    appendToPart(out, pid, m);
+    // an open faceted cylinder: the mesh library's, uncapped
+    MeshBuilder::emitCylinder(partMesh(out, pid), cXZ + Vec3(0, y0, 0), radius, y1 - y0, sides, col, true, 0);
 }
 
 // A horizontal disc cap at height y (normal up or down).
 static void emitDisc(BuildingMesh& out, const Vec3& cXZ, Real radius, Real y,
                      int sides, PartId pid, const Vec3& col, bool up) {
-    RenderMesh m;
-    Vec3 c = cXZ + Vec3(0, y, 0);
-    Vec3 n(0, up ? 1 : -1, 0);
+    std::vector<Vec3> ring;
     for (int i = 0; i < sides; ++i) {
-        Real a0 = 2 * PI * i / sides, a1 = 2 * PI * (i + 1) / sides;
-        Vec3 p0 = c + Vec3(std::cos(a0), 0, std::sin(a0)) * radius;
-        Vec3 p1 = c + Vec3(std::cos(a1), 0, std::sin(a1)) * radius;
-        uint32_t base = static_cast<uint32_t>(m.vertices.size());
-        auto v = [&](const Vec3& p) { Vertex vt(p, n, Vec3(1, 0, 0), 0, 0); vt.color = col; return vt; };
-        m.vertices.push_back(v(c));
-        m.vertices.push_back(v(up ? p0 : p1));
-        m.vertices.push_back(v(up ? p1 : p0));
-        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
+        const Real a = 2 * PI * i / sides;
+        ring.push_back(cXZ + Vec3(std::cos(a) * radius, y, std::sin(a) * radius));
     }
-    appendToPart(out, pid, m);
+    MeshBuilder::emitPolygon(partMesh(out, pid), ring, {}, Vec3(0, up ? 1 : -1, 0), col);
 }
 
 static BuildingMesh growCylinder(const Scope& scope, const BuildingParams& p) {
@@ -1946,12 +1909,9 @@ static void emitFlaredRoof(BuildingMesh& out, const Vec3& cXZ, Real eaveY, Real 
         Vec3 e0 = ring(k, 1.0, 0), e1 = ring((k + 1) % 8, 1.0, 0);
         Vec3 m0 = ring(k, 0.42, 0.62), m1 = ring((k + 1) % 8, 0.42, 0.62);
         Vec3 n = normalize(cross(e1 - e0, m0 - e0)); if (n.y < 0) n = n * -1;
-        emitQuad(m, e0, e1, m1, m0, n, tile);              // eave -> mid (concave skirt)
+        MeshBuilder::emitQuad(m, e0, e1, m1, m0, n, tile);              // eave -> mid (concave skirt)
         Vec3 tn = normalize(cross(m1 - m0, apex - m0)); if (tn.y < 0) tn = tn * -1;
-        uint32_t base = static_cast<uint32_t>(m.vertices.size());
-        auto v = [&](const Vec3& p) { Vertex vt(p, tn, Vec3(1, 0, 0), 0, 0); vt.color = tile; return vt; };
-        m.vertices.push_back(v(m0)); m.vertices.push_back(v(m1)); m.vertices.push_back(v(apex));
-        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});   // mid -> apex
+        MeshBuilder::emitTri(m, m0, m1, apex, tn, tile);   // mid -> apex
     }
     appendToPart(out, PartId::Roof, m);
 }
@@ -2281,8 +2241,8 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
             Vec3 out = fr.n * proud;
             Vec3 b0 = fr.at(0, 0), b1 = fr.at(fr.width, 0);
             Vec3 t0 = fr.at(0, bh), t1 = fr.at(fr.width, bh);
-            emitQuad(band, b0 + out, b1 + out, t1 + out, t0 + out, fr.n, col);  // face
-            emitQuad(band, t0 + out, t1 + out, t1, t0, fr.v, col);              // top ledge
+            MeshBuilder::emitQuad(band, b0 + out, b1 + out, t1 + out, t0 + out, fr.n, col);  // face
+            MeshBuilder::emitQuad(band, t0 + out, t1 + out, t1, t0, fr.v, col);              // top ledge
         }
         appendToPart(out, PartId::Trim, band);
     }
@@ -2478,29 +2438,10 @@ FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {
 // side band around the outline — roof decks, cornice tiers, ground pads.
 void emitPlanRing(BuildingMesh& out, const Poly2& outer, const Poly2& hole,
                   Real yTop, Real thick, PartId part, const Vec3& col) {
+    // a slab with a hole: the mesh library's plan prism (its hole now walled too -- it was open round the well)
     if (outer.size() < 3) return;
     RenderMesh m;
-    for (const auto& t : triangulateWithHoles(outer, {hole})) {
-        const Vec3 a(t[0].x, yTop, t[0].y), b(t[1].x, yTop, t[1].y),
-            c(t[2].x, yTop, t[2].y);
-        MeshBuilder::emitTri(m, a, b, c, Vec3(0, 1, 0), col);
-        const Real yb = yTop - thick;
-        MeshBuilder::emitTri(m, Vec3(t[0].x, yb, t[0].y),
-                             Vec3(t[2].x, yb, t[2].y),
-                             Vec3(t[1].x, yb, t[1].y), Vec3(0, -1, 0), col);
-    }
-    for (std::size_t i = 0; i < outer.size(); ++i) {
-        const Vec2 a2 = outer[i], b2 = outer[(i + 1) % outer.size()];
-        Vec2 en(-(b2 - a2).y, (b2 - a2).x);
-        const Real el = en.length();
-        if (el < 1e-9) continue;
-        en = en * (-1.0 / el);   // outward for a CCW outer ring
-        MeshBuilder::emitQuad(m, Vec3(a2.x, yTop, a2.y),
-                              Vec3(b2.x, yTop, b2.y),
-                              Vec3(b2.x, yTop - thick, b2.y),
-                              Vec3(a2.x, yTop - thick, a2.y),
-                              Vec3(en.x, 0, en.y), col);
-    }
+    MeshBuilder::emitPlanPrism(m, outer, {hole}, yTop - thick, yTop, col);
     appendToPart(out, part, m);
 }
 
@@ -2508,20 +2449,7 @@ void emitPlanSlab(BuildingMesh& out, const Poly2& pl, Real yTop, Real thick,
                   PartId part, const Vec3& col) {
     if (pl.size() < 3) return;
     RenderMesh m;
-    for (const auto& t : triangulatePolygon(pl)) {
-        Vec3 a(pl[t[0]].x, yTop, pl[t[0]].y);
-        Vec3 b(pl[t[1]].x, yTop, pl[t[1]].y);
-        Vec3 c(pl[t[2]].x, yTop, pl[t[2]].y);
-        MeshBuilder::emitTri(m, a, b, c, Vec3(0, 1, 0), col);
-        Vec3 a2 = a, b2 = b, c2 = c;
-        a2.y = b2.y = c2.y = yTop - thick;
-        MeshBuilder::emitTri(m, a2, b2, c2, Vec3(0, -1, 0), col);
-    }
-    for (std::size_t i = 0; i < pl.size(); ++i) {
-        FaceRect fr = planEdgeRect(pl, i, yTop - thick, thick);
-        emitQuad(m, fr.at(0, 0), fr.at(fr.width, 0), fr.at(fr.width, thick),
-                 fr.at(0, thick), fr.n, col);
-    }
+    MeshBuilder::emitPlanPrism(m, pl, {}, yTop - thick, yTop, col);
     appendToPart(out, part, m);
 }
 
@@ -2556,7 +2484,7 @@ void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
             if (d.length() < 1e-6) continue;
             d = normalize(d);
             Vec2 nrm = outward ? Vec2(d.y, -d.x) : Vec2(-d.y, d.x);
-            emitQuad(m, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y),
+            MeshBuilder::emitQuad(m, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y),
                      Vec3(b.x, y1, b.y), Vec3(a.x, y1, a.y),
                      Vec3(nrm.x, 0, nrm.y), col);
         }
@@ -2565,7 +2493,7 @@ void emitPlanParapet(BuildingMesh& out, const Poly2& pl, Real roofY, Real h,
                        Real y, bool up2, const Vec3& col) {
         for (std::size_t i = 0; i < n; ++i) {
             const std::size_t j = (i + 1) % n;
-            emitQuad(m, Vec3(oRing[i].x, y, oRing[i].y),
+            MeshBuilder::emitQuad(m, Vec3(oRing[i].x, y, oRing[i].y),
                      Vec3(oRing[j].x, y, oRing[j].y),
                      Vec3(iRing[j].x, y, iRing[j].y),
                      Vec3(iRing[i].x, y, iRing[i].y),
@@ -2699,8 +2627,8 @@ static void emitPortico(BuildingMesh& out, const FaceRect& fr,
     MeshBuilder::emitTri(ped, B, A, apex, fr.n * -1, col);          // back face
     Vec3 nL = normalize(cross(fr.n * -1, apex - A));
     Vec3 nR = normalize(cross(Bf - B, apex - B));
-    emitQuad(ped, A, Af, apexF, apex, nL, col * 0.96);              // left slope
-    emitQuad(ped, Bf, B, apex, apexF, nR, col * 0.96);              // right slope
+    MeshBuilder::emitQuad(ped, A, Af, apexF, apex, nL, col * 0.96);              // left slope
+    MeshBuilder::emitQuad(ped, Bf, B, apex, apexF, nR, col * 0.96);              // right slope
     appendToPart(out, PartId::Trim, ped);
 }
 
@@ -2812,9 +2740,9 @@ static void emitParkingDeckRect(BuildingMesh& out, const FaceRect& fr,
     RenderMesh wall;
     const Real spandrel = std::min(Real(1.05), fr.height * 0.35);
     const Real band = 0.30;
-    emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0), fr.at(fr.width, spandrel),
+    MeshBuilder::emitQuad(wall, fr.at(0, 0), fr.at(fr.width, 0), fr.at(fr.width, spandrel),
              fr.at(0, spandrel), fr.n, wallColor);
-    emitQuad(wall, fr.at(0, fr.height - band), fr.at(fr.width, fr.height - band),
+    MeshBuilder::emitQuad(wall, fr.at(0, fr.height - band), fr.at(fr.width, fr.height - band),
              fr.at(fr.width, fr.height), fr.at(0, fr.height), fr.n, wallColor);
     appendToPart(out, p.wallPart, wall);
     const int bays = std::max(
@@ -2868,7 +2796,7 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
     auto Y = [](const Vec2& v, Real y) { return Vec3(v.x, y, v.y); };
     auto quad = [](RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& cc, const Vec3& d, const Vec3& col) {
         const Vec3 n = normalize(cross(b - a, d - a));
-        emitQuad(m, a, b, cc, d, n, col);
+        MeshBuilder::emitQuad(m, a, b, cc, d, n, col);
     };
     // A vertical box post or beam (metal), centred on a segment's foot.
     auto post = [&](const Vec2& at, Real y0, Real hgt, Real w) {
@@ -3160,10 +3088,10 @@ static Real emitSawtoothRoof(BuildingMesh& out, const Poly2& topPlan, Real y,
         Vec3 A1 = C + r3 * u0 + f3 * hd + up * y0;         // low eave, far
         Vec3 B0 = C + r3 * u1 - f3 * hd + up * (y0 + rise);
         Vec3 B1 = C + r3 * u1 + f3 * hd + up * (y0 + rise);
-        emitQuad(roof, A0, A1, B1, B0, normalize(up * tw - r3 * rise), roofCol);
+        MeshBuilder::emitQuad(roof, A0, A1, B1, B0, normalize(up * tw - r3 * rise), roofCol);
         Vec3 D0 = C + r3 * u1 - f3 * hd + up * y0;
         Vec3 D1 = C + r3 * u1 + f3 * hd + up * y0;
-        emitQuad(glass, D0, D1, B1, B0, r3, glassCol);     // the clerestory
+        MeshBuilder::emitQuad(glass, D0, D1, B1, B0, r3, glassCol);     // the clerestory
         MeshBuilder::emitTri(wallM, A0, D0, B0, f3 * -1, wallColor);
         MeshBuilder::emitTri(wallM, D1, A1, B1, f3, wallColor);
     }
@@ -3249,7 +3177,7 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
     const int n = row.n;
     const Real gap = row.gap, bayW = row.bayW, margin = row.margin;
     if (n == 0) {   // no room for even one bay: plain wall face
-        emitQuad(wall, fr.at(0, 0), fr.at(W, 0), fr.at(W, H), fr.at(0, H),
+        MeshBuilder::emitQuad(wall, fr.at(0, 0), fr.at(W, 0), fr.at(W, H), fr.at(0, H),
                  fr.n, wallColor);
         appendToPart(out, p.wallPart, wall);
         return;
@@ -3257,7 +3185,7 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
     const Real bayH = std::min(H - 0.8, Real(3.8));
     auto wallQuad = [&](Real a0, Real a1, Real b0, Real b1) {
         if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
-        emitQuad(wall, fr.at(a0, b0), fr.at(a1, b0), fr.at(a1, b1),
+        MeshBuilder::emitQuad(wall, fr.at(a0, b0), fr.at(a1, b0), fr.at(a1, b1),
                  fr.at(a0, b1), fr.n, wallColor);
     };
     wallQuad(0, margin, 0, H);                 // end piers
@@ -3270,27 +3198,27 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
         if (b + 1 < n) wallQuad(x1, x1 + gap, 0, bayH);   // pier between bays
         Vec3 tL = fr.at(x0, bayH), tR = fr.at(x1, bayH);
         Vec3 bL = fr.at(x0, 0), bR = fr.at(x1, 0);
-        emitQuad(wall, bL, bL + in, tL + in, tL, fr.h, wallColor);        // jamb
-        emitQuad(wall, bR + in, bR, tR, tR + in, fr.h * -1, wallColor);   // jamb
-        emitQuad(wall, tL, tL + in, tR + in, tR, fr.v * -1, wallColor);   // head
+        MeshBuilder::emitQuad(wall, bL, bL + in, tL + in, tL, fr.h, wallColor);        // jamb
+        MeshBuilder::emitQuad(wall, bR + in, bR, tR, tR + in, fr.h * -1, wallColor);   // jamb
+        MeshBuilder::emitQuad(wall, tL, tL + in, tR + in, tR, fr.v * -1, wallColor);   // head
         if (baysStandOpen(p)) {
             // A FIRE STATION's bays stand OPEN (a factory's and a warehouse's loading bays too) (Glenn, 2026-10-13: "a fire truck should be an actual truck" -- the
             // engines are seen from the street, and driven out): the roller door rolled up on its drum under the
             // head, the bay a way in (an open door: the collider's gap, no leaf).
             const Real dh = 0.42;
             const Vec3 d0 = fr.at(x0 + 0.05, bayH - dh) + in, d1 = fr.at(x1 - 0.05, bayH - dh) + in;
-            emitQuad(detail, d0, d1, d1 + fr.v * dh, d0 + fr.v * dh, fr.n, panel);           // the drum's face
-            emitQuad(detail, d0 + fr.n * -0.45, d1 + fr.n * -0.45, d1, d0, fr.v * -1, slat);   // its underside
+            MeshBuilder::emitQuad(detail, d0, d1, d1 + fr.v * dh, d0 + fr.v * dh, fr.n, panel);           // the drum's face
+            MeshBuilder::emitQuad(detail, d0 + fr.n * -0.45, d1 + fr.n * -0.45, d1, d0, fr.v * -1, slat);   // its underside
             const Vec3 foot = fr.at((x0 + x1) * 0.5, 0);
             out.attaches.push_back({foot, fr.n, "baydoor", x1 - x0, bayH - dh});
             continue;
         }
-        emitQuad(detail, bL + in, bR + in, tR + in, tL + in, fr.n, panel);
+        MeshBuilder::emitQuad(detail, bL + in, bR + in, tR + in, tL + in, fr.n, panel);
         const Vec3 proud = fr.n * 0.03;
         for (Real sy = 0.5; sy < bayH - 0.3; sy += 0.55) {
             Vec3 sL = fr.at(x0 + 0.12, sy) + in + proud;
             Vec3 sR = fr.at(x1 - 0.12, sy) + in + proud;
-            emitQuad(detail, sL, sR, sR + fr.v * 0.16, sL + fr.v * 0.16,
+            MeshBuilder::emitQuad(detail, sL, sR, sR + fr.v * 0.16, sL + fr.v * 0.16,
                      fr.n, slat);
         }
     }
@@ -3298,7 +3226,7 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
     const Vec3 ov = fr.n * 0.10;
     const Real ly0 = bayH + 0.05, ly1 = std::min(H - 0.1, bayH + 0.5);
     if (ly1 > ly0)
-        emitQuad(trim, fr.at(margin * 0.4, ly0) + ov,
+        MeshBuilder::emitQuad(trim, fr.at(margin * 0.4, ly0) + ov,
                  fr.at(W - margin * 0.4, ly0) + ov,
                  fr.at(W - margin * 0.4, ly1) + ov,
                  fr.at(margin * 0.4, ly1) + ov, fr.n, p.trimColor);
@@ -4483,12 +4411,12 @@ static void emitFireEscape(BuildingMesh* vis, RenderMesh* col, const Poly2& plan
                    c010 = sc.corner(0, 1, 0), c001 = sc.corner(0, 0, 1), c101 = sc.corner(1, 0, 1),
                    c111 = sc.corner(1, 1, 1), c011 = sc.corner(0, 1, 1);
         const Vec3 r = sc.axis[0], u = sc.axis[1], f = sc.axis[2];
-        emitQuad(m, c000, c100, c110, c010, f * -1, iron);
-        emitQuad(m, c001, c101, c111, c011, f, iron);
-        emitQuad(m, c000, c001, c011, c010, r * -1, iron);
-        emitQuad(m, c100, c101, c111, c110, r, iron);
-        emitQuad(m, c000, c100, c101, c001, u * -1, iron);
-        emitQuad(m, c010, c110, c111, c011, u, iron);
+        MeshBuilder::emitQuad(m, c000, c100, c110, c010, f * -1, iron);
+        MeshBuilder::emitQuad(m, c001, c101, c111, c011, f, iron);
+        MeshBuilder::emitQuad(m, c000, c001, c011, c010, r * -1, iron);
+        MeshBuilder::emitQuad(m, c100, c101, c111, c110, r, iron);
+        MeshBuilder::emitQuad(m, c000, c100, c101, c001, u * -1, iron);
+        MeshBuilder::emitQuad(m, c010, c110, c111, c011, u, iron);
     };
     RenderMesh steel;
     // An axis-aligned box in face space (x along the wall, y up from baseY, z out from it).
@@ -4684,8 +4612,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 en = en * (1.0 / el);
                 const Vec3 A(a.x, yTop, a.y), B(b.x, yTop, b.y);
                 const Vec3 C(b.x, yTop - 0.25, b.y), D(a.x, yTop - 0.25, a.y);
-                emitQuad(mesh, A, B, C, D, Vec3(en.x, 0, en.y), icol);
-                emitQuad(mesh, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
+                MeshBuilder::emitQuad(mesh, A, B, C, D, Vec3(en.x, 0, en.y), icol);
+                MeshBuilder::emitQuad(mesh, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
             }
         for (const auto& t : triangulateWithHoles(storeys[k].plan, holes)) {
             float u0, v0, u1, v1, u2, v2;
@@ -4773,7 +4701,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                     const Vec3 A = a0 <= 0.0 ? ia : fr.at(a0, 0) + off;
                     const Vec3 B = a1 >= fr.width ? ib : fr.at(a1, 0) + off;
                     const Vec3 up(0, fr.height, 0);
-                    emitQuad(*colliderOut, A, B, B + up, A + up, fr.n * -1.0, icol);
+                    MeshBuilder::emitQuad(*colliderOut, A, B, B + up, A + up, fr.n * -1.0, icol);
                     (void)ih;
                 };
                 Real at = 0;
@@ -4867,8 +4795,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                                     Vec3(-dir.x, 0, -dir.y), scol, 0, vj1, uw,
                                     vj1, uw, vj0, 0, vj0);
             if (colliderOut) {
-                emitQuad(*colliderOut, A, B, C, D, Vec3(0, 1, 0), icol);
-                emitQuad(*colliderOut, A0, B0, B, A,
+                MeshBuilder::emitQuad(*colliderOut, A, B, C, D, Vec3(0, 1, 0), icol);
+                MeshBuilder::emitQuad(*colliderOut, A0, B0, B, A,
                          Vec3(-dir.x, 0, -dir.y), icol);
             }
         }
@@ -4930,7 +4858,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             const Vec3 B(oB.x, y0f + rise + 0.1, oB.y);
             const Vec3 C(oB.x, y0f + rise + 1.1, oB.y);
             const Vec3 D(oA.x, y0f + 1.1, oA.y);
-            emitQuad(*colliderOut, A, B, C, D, Vec3(perp.x, 0, perp.y), icol);
+            MeshBuilder::emitQuad(*colliderOut, A, B, C, D, Vec3(perp.x, 0, perp.y), icol);
         }
     };
     // UNIFORM flights: every storey's flight uses the ground flight's riser
@@ -5052,7 +4980,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 auto at = [&](Real x, Real z, Real y) { const Vec2 p2 = o + u * x + v * z; return Vec3(p2.x, y, p2.y); };
                 auto flat = [&](Real x0, Real z0, Real x1, Real z1, Real y, bool up, const Vec3& c) {
                     const Vec3 A = at(x0, z0, y), B = at(x1, z0, y), C = at(x1, z1, y), D = at(x0, z1, y);
-                    emitQuad(rm.drywall, A, B, C, D, Vec3(0, up ? 1 : -1, 0), c);   // (winds itself by the normal)
+                    MeshBuilder::emitQuad(rm.drywall, A, B, C, D, Vec3(0, up ? 1 : -1, 0), c);   // (winds itself by the normal)
                 };
                 if (ti.tile > 0) {
                     const int nu = std::max(1, static_cast<int>(std::ceil(lu / ti.tile)));
@@ -5110,13 +5038,13 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                     const Vec2 dd = b - a;
                     const Vec2 n = normalize(Vec2(dd.y, -dd.x));
                     const Vec3 A(a.x, yF + pc.h0, a.y), B(b.x, yF + pc.h0, b.y), Cc(b.x, yF + pc.h1, b.y), D(a.x, yF + pc.h1, a.y);
-                    emitQuad(cm.drywall, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
-                    if (pc.collide && colliderOut) emitQuad(*colliderOut, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
+                    MeshBuilder::emitQuad(cm.drywall, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
+                    if (pc.collide && colliderOut) MeshBuilder::emitQuad(*colliderOut, A, B, Cc, D, Vec3(n.x, 0, n.y), pc.colour);
                 }
                 const Vec3 T0(cs[0].x, yF + pc.h1, cs[0].y), T1(cs[1].x, yF + pc.h1, cs[1].y),
                     T2(cs[2].x, yF + pc.h1, cs[2].y), T3(cs[3].x, yF + pc.h1, cs[3].y);
-                emitQuad(cm.drywall, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
-                if (pc.collide && colliderOut) emitQuad(*colliderOut, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
+                MeshBuilder::emitQuad(cm.drywall, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
+                if (pc.collide && colliderOut) MeshBuilder::emitQuad(*colliderOut, T0, T1, T2, T3, Vec3(0, 1, 0), pc.colour);
             }
         }
         appendToPart(out, PartId::Interior, cm.drywall);
@@ -5135,15 +5063,15 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         RenderMesh glassM, steel, treads, lit;
         const Vec3 up(0, 1, 0), steelC(0.62, 0.64, 0.67), dark(0.10, 0.10, 0.11);
         auto colQuad = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& n) {
-            if (colliderOut) emitQuad(*colliderOut, a, b, c, d, n, icol);
+            if (colliderOut) MeshBuilder::emitQuad(*colliderOut, a, b, c, d, n, icol);
         };
         for (const auto& bl : ML.balustrades) {
             const Vec3 A(bl.first.x, yU, bl.first.y), B(bl.second.x, yU, bl.second.y);
             const Vec3 d = B - A;
             if (d.length() < 0.1) continue;
             const Vec3 n = normalize(cross(d, up));
-            emitQuad(glassM, A, B, B + up * 1.05, A + up * 1.05, n, Vec3(0.75, 0.82, 0.85));
-            emitQuad(glassM, B, A, A + up * 1.05, B + up * 1.05, n * -1.0, Vec3(0.75, 0.82, 0.85));
+            MeshBuilder::emitQuad(glassM, A, B, B + up * 1.05, A + up * 1.05, n, Vec3(0.75, 0.82, 0.85));
+            MeshBuilder::emitQuad(glassM, B, A, A + up * 1.05, B + up * 1.05, n * -1.0, Vec3(0.75, 0.82, 0.85));
             emitBox(out, Scope{A + up * 1.05 - n * 0.04, {normalize(d), up, n}, Vec3(d.length(), 0.06, 0.08)}, PartId::Metal, steelC);
             colQuad(A, B, B + up * 1.1, A + up * 1.1, n);
             colQuad(B, A, A + up * 1.1, B + up * 1.1, n * -1.0);
@@ -5159,8 +5087,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 const Real s0 = i * run / nSteps, s1 = (i + 1) * run / nSteps;
                 const Vec3 a = at(s0, -w * 0.5, 0), b = at(s0, w * 0.5, 0), c = at(s1, w * 0.5, 0), d = at(s1, -w * 0.5, 0);
                 const Real hb = a.y, ht = c.y;
-                emitQuad(treads, Vec3(a.x, ht, a.z), Vec3(b.x, ht, b.z), c, d, up, (i & 1) ? dark * 1.6 : dark * 2.2);
-                if (ht > hb + 1e-3) emitQuad(treads, a, b, Vec3(b.x, ht, b.z), Vec3(a.x, ht, a.z), D * -1.0, steelC * 0.6);
+                MeshBuilder::emitQuad(treads, Vec3(a.x, ht, a.z), Vec3(b.x, ht, b.z), c, d, up, (i & 1) ? dark * 1.6 : dark * 2.2);
+                if (ht > hb + 1e-3) MeshBuilder::emitQuad(treads, a, b, Vec3(b.x, ht, b.z), Vec3(a.x, ht, a.z), D * -1.0, steelC * 0.6);
             }
             // the walkable ramp
             colQuad(at(0, -w * 0.5, 0.02), at(0, w * 0.5, 0.02), at(run, w * 0.5, 0.02), at(run, -w * 0.5, 0.02), up);
@@ -5169,16 +5097,16 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 const Real t = side * (w * 0.5 + 0.12);
                 const Vec3 a = at(0, t, 0), b = at(run, t, 0);
                 const Vec3 n = X * static_cast<Real>(side);
-                emitQuad(steel, at(0, t, -0.9), at(run, t, -0.9), b, a, n, steelC);
-                emitQuad(steel, at(run, t, -0.9), at(0, t, -0.9), a, b, n * -1.0, steelC * 0.8);
-                emitQuad(glassM, a, b, b + up * 0.95, a + up * 0.95, n, Vec3(0.75, 0.82, 0.85));
-                emitQuad(glassM, b, a, a + up * 0.95, b + up * 0.95, n * -1.0, Vec3(0.75, 0.82, 0.85));
+                MeshBuilder::emitQuad(steel, at(0, t, -0.9), at(run, t, -0.9), b, a, n, steelC);
+                MeshBuilder::emitQuad(steel, at(run, t, -0.9), at(0, t, -0.9), a, b, n * -1.0, steelC * 0.8);
+                MeshBuilder::emitQuad(glassM, a, b, b + up * 0.95, a + up * 0.95, n, Vec3(0.75, 0.82, 0.85));
+                MeshBuilder::emitQuad(glassM, b, a, a + up * 0.95, b + up * 0.95, n * -1.0, Vec3(0.75, 0.82, 0.85));
                 for (int seg = 0; seg < 6; ++seg) {
                     const Real s0 = run * seg / 6, s1 = run * (seg + 1) / 6;
                     const Vec3 p0 = at(s0, t, 0.98), p1 = at(s1, t, 0.98);
                     emitBox(out, Scope{p0 - X * 0.04, {normalize(p1 - p0), up, X}, Vec3((p1 - p0).length(), 0.07, 0.08)}, PartId::Metal, dark);
                 }
-                emitQuad(lit, at(0.3, t - side * 0.01, 0.05), at(run - 0.3, t - side * 0.01, 0.05), at(run - 0.3, t - side * 0.01, 0.12),
+                MeshBuilder::emitQuad(lit, at(0.3, t - side * 0.01, 0.05), at(run - 0.3, t - side * 0.01, 0.05), at(run - 0.3, t - side * 0.01, 0.12),
                          at(0.3, t - side * 0.01, 0.12), n * -1.0, Vec3(0.55, 0.75, 1.0));   // the skirt light
                 colQuad(a, b, b + up * 1.0, a + up * 1.0, n);
                 colQuad(b, a, a + up * 1.0, b + up * 1.0, n * -1.0);
@@ -5192,8 +5120,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             for (int e = 0; e < 4; ++e) {
                 const Vec3 a = cs[e], b = cs[(e + 1) % 4];
                 const Vec3 n = normalize(cross(b - a, up));
-                emitQuad(glassM, a, b, b + up * H, a + up * H, n, Vec3(0.75, 0.82, 0.85));
-                emitQuad(glassM, b, a, a + up * H, b + up * H, n * -1.0, Vec3(0.75, 0.82, 0.85));
+                MeshBuilder::emitQuad(glassM, a, b, b + up * H, a + up * H, n, Vec3(0.75, 0.82, 0.85));
+                MeshBuilder::emitQuad(glassM, b, a, a + up * H, b + up * H, n * -1.0, Vec3(0.75, 0.82, 0.85));
                 emitBox(out, Scope{a - (b - a) * 0.0, {normalize(b - a), up, n}, Vec3(0.1, H, 0.1)}, PartId::Metal, steelC);
                 colQuad(a, b, b + up * H, a + up * H, n);
             }
@@ -5243,7 +5171,7 @@ static void emitMallWingsDress(BuildingMesh& out, const Poly2& plan, Real y, Rea
         // the glazing: dark glass, mullions, a door's attach in the middle
         RenderMesh glass;
         const Vec3 o = N * 0.05;
-        emitQuad(glass, c - X * (gw * 0.5) + o, c + X * (gw * 0.5) + o, c + X * (gw * 0.5) + up * gh + o,
+        MeshBuilder::emitQuad(glass, c - X * (gw * 0.5) + o, c + X * (gw * 0.5) + o, c + X * (gw * 0.5) + up * gh + o,
                  c - X * (gw * 0.5) + up * gh + o, N, glassGrey());
         appendToPart(out, PartId::Glass, glass);
         if (full)
@@ -5270,8 +5198,8 @@ static void emitMallWingsDress(BuildingMesh& out, const Poly2& plan, Real y, Rea
             const Vec3 l0 = W3(s0, -4.0, 0.05), l1 = W3(s1, -4.0, 0.05), r0 = W3(s0, 4.0, 0.05), r1 = W3(s1, 4.0, 0.05);
             const Vec3 m0 = W3(s0, 0, 1.6), m1 = W3(s1, 0, 1.6);
             const Vec3 nl = normalize(cross(l1 - l0, m0 - l0)), nr = normalize(cross(m0 - r0, r1 - r0));
-            emitQuad(sky, l0, l1, m1, m0, nl.y > 0 ? nl : nl * -1.0, g);
-            emitQuad(sky, r1, r0, m0, m1, nr.y > 0 ? nr : nr * -1.0, g);
+            MeshBuilder::emitQuad(sky, l0, l1, m1, m0, nl.y > 0 ? nl : nl * -1.0, g);
+            MeshBuilder::emitQuad(sky, r1, r0, m0, m1, nr.y > 0 ? nr : nr * -1.0, g);
         }
         const Real ch = 8.0;
         const Vec3 apex(M.c.x, y + H + 4.0, M.c.y);
@@ -5280,7 +5208,7 @@ static void emitMallWingsDress(BuildingMesh& out, const Poly2& plan, Real y, Rea
             const Vec3 a3(cs[e].x, y + H + 0.05, cs[e].y), b3(cs[(e + 1) % 4].x, y + H + 0.05, cs[(e + 1) % 4].y);
             Vec3 n = normalize(cross(b3 - a3, apex - a3));
             if (n.y < 0) n = n * -1.0;
-            emitQuad(sky, a3, b3, apex, apex, n, g);
+            MeshBuilder::emitQuad(sky, a3, b3, apex, apex, n, g);
         }
         appendToPart(out, PartId::GlassClear, sky);
     }
@@ -5380,7 +5308,7 @@ static void emitBigBoxDress(BuildingMesh& out, const Poly2& plan, std::size_t en
             const Real g0 = side == 0 ? cx - 7.0 : cx + 1.2, g1 = side == 0 ? cx - 1.2 : cx + 7.0;
             if (g0 < 0.5 || g1 > fr.width - 0.5) continue;
             const Vec3 o = N * 0.03;
-            emitQuad(glass, fr.at(g0, 0.1) + o, fr.at(g1, 0.1) + o, fr.at(g1, 3.4) + o, fr.at(g0, 3.4) + o, N, glassGrey());
+            MeshBuilder::emitQuad(glass, fr.at(g0, 0.1) + o, fr.at(g1, 0.1) + o, fr.at(g1, 3.4) + o, fr.at(g0, 3.4) + o, N, glassGrey());
             for (Real mx = g0; mx <= g1 + 1e-6; mx += (g1 - g0) / 4)
                 emitBox(out, Scope{fr.at(mx - 0.05, 0.1), {X, U, N}, Vec3(0.1, 3.3, 0.08)}, PartId::Metal, Vec3(0.55, 0.57, 0.6));
             emitBox(out, Scope{fr.at(g0, 3.4), {X, U, N}, Vec3(g1 - g0, 0.12, 0.08)}, PartId::Metal, Vec3(0.55, 0.57, 0.6));
@@ -5478,8 +5406,8 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
         if (x1 - x0 < 0.05 || y1 - y0 < 0.05) return;
         const Vec3 a = W(x0, y0, h), b = W(x1, y0, h), c = W(x1, y1, h), d = W(x0, y1, h);
         if (out) {
-            emitQuad(slabs, a, b, c, d, up, deckCol);
-            if (!ground) emitQuad(under, a - up * 0.25, b - up * 0.25, c - up * 0.25, d - up * 0.25, up * -1.0, conc);
+            MeshBuilder::emitQuad(slabs, a, b, c, d, up, deckCol);
+            if (!ground) MeshBuilder::emitQuad(under, a - up * 0.25, b - up * 0.25, c - up * 0.25, d - up * 0.25, up * -1.0, conc);
         }
         colQuad(a, b, c, d);
     };
@@ -5489,9 +5417,9 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
         if (out && draw) {
             const Vec3 d3 = B - A, n = normalize(cross(d3, up));
             RenderMesh w;
-            emitQuad(w, A + n * 0.1, B + n * 0.1, C + n * 0.1, D + n * 0.1, n, conc);
-            emitQuad(w, B - n * 0.1, A - n * 0.1, D - n * 0.1, C - n * 0.1, n * -1.0, conc);
-            emitQuad(w, D - n * 0.1, C - n * 0.1, C + n * 0.1, D + n * 0.1, up, conc * 1.05);
+            MeshBuilder::emitQuad(w, A + n * 0.1, B + n * 0.1, C + n * 0.1, D + n * 0.1, n, conc);
+            MeshBuilder::emitQuad(w, B - n * 0.1, A - n * 0.1, D - n * 0.1, C - n * 0.1, n * -1.0, conc);
+            MeshBuilder::emitQuad(w, D - n * 0.1, C - n * 0.1, C + n * 0.1, D + n * 0.1, up, conc * 1.05);
             appendToPart(*out, PartId::Concrete, w);
         }
         colQuad(A, B, C, D);
@@ -5518,15 +5446,15 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
             const Vec3 n = normalize(cross(b - a, d - a)) * -1.0;
             const Vec3 nn = n.y < 0 ? n * -1.0 : n;
             if (out) {
-                emitQuad(slabs, a, b, c, d, nn, deckCol * 0.95);
-                emitQuad(under, a - up * 0.25, b - up * 0.25, c - up * 0.25, d - up * 0.25, nn * -1.0, conc);
+                MeshBuilder::emitQuad(slabs, a, b, c, d, nn, deckCol * 0.95);
+                MeshBuilder::emitQuad(under, a - up * 0.25, b - up * 0.25, c - up * 0.25, d - up * 0.25, nn * -1.0, conc);
                 // painted arrows: a chevron every 5 m up the ramp
                 for (Real x = -G.rampHalf + 3.0; x < G.rampHalf - 2.0; x += 5.0) {
                     const Real t = (x + G.rampHalf) / (2 * G.rampHalf);
                     const Real hy = (k == 0 ? 0.03 : h) + (h1 - (k == 0 ? 0.03 : h)) * t + 0.02;
                     const Real ym = (G.s0 + G.s1) * 0.5;
-                    emitQuad(lines, W(x, ym - 1.2, hy), W(x + 0.15, ym - 1.2, hy), W(x + 0.9, ym, hy), W(x + 0.75, ym, hy), up, paint);
-                    emitQuad(lines, W(x + 0.75, ym, hy), W(x + 0.9, ym, hy), W(x + 0.15, ym + 1.2, hy), W(x, ym + 1.2, hy), up, paint);
+                    MeshBuilder::emitQuad(lines, W(x, ym - 1.2, hy), W(x + 0.15, ym - 1.2, hy), W(x + 0.9, ym, hy), W(x + 0.75, ym, hy), up, paint);
+                    MeshBuilder::emitQuad(lines, W(x + 0.75, ym, hy), W(x + 0.9, ym, hy), W(x + 0.15, ym + 1.2, hy), W(x, ym + 1.2, hy), up, paint);
                 }
             }
             colQuad(a, b, c, d);
@@ -5536,8 +5464,8 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
                 const Vec3 n2 = normalize(cross(r1 - r0, up));
                 if (out) {
                     RenderMesh w;
-                    emitQuad(w, r0 + n2 * 0.08, r1 + n2 * 0.08, r1 + up * 1.0 + n2 * 0.08, r0 + up * 1.0 + n2 * 0.08, n2, conc);
-                    emitQuad(w, r1 - n2 * 0.08, r0 - n2 * 0.08, r0 + up * 1.0 - n2 * 0.08, r1 + up * 1.0 - n2 * 0.08, n2 * -1.0, conc);
+                    MeshBuilder::emitQuad(w, r0 + n2 * 0.08, r1 + n2 * 0.08, r1 + up * 1.0 + n2 * 0.08, r0 + up * 1.0 + n2 * 0.08, n2, conc);
+                    MeshBuilder::emitQuad(w, r1 - n2 * 0.08, r0 - n2 * 0.08, r0 + up * 1.0 - n2 * 0.08, r1 + up * 1.0 - n2 * 0.08, n2 * -1.0, conc);
                     appendToPart(*out, PartId::Concrete, w);
                 }
                 colQuad(r0, r1, r1 + up * 1.0, r0 + up * 1.0);
@@ -5576,7 +5504,7 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
                     if (r.width > 0.3) emitParkingDeckRect(*out, r, p, p.wallColor);
                     RenderMesh w;
                     const Real ly = std::min(Real(2.6), fr.height - 0.3);
-                    emitQuad(w, fr.at(g0, ly), fr.at(g1, ly), fr.at(g1, fr.height), fr.at(g0, fr.height), fr.n, p.wallColor);
+                    MeshBuilder::emitQuad(w, fr.at(g0, ly), fr.at(g1, ly), fr.at(g1, fr.height), fr.at(g0, fr.height), fr.n, p.wallColor);
                     appendToPart(*out, p.wallPart, w);
                     // the clearance bar and the sign: a blue board with a white P
                     emitBox(*out, Scope{fr.at(g0, ly - 0.25) + fr.n * 0.1, {fr.h, up, fr.n}, Vec3(g1 - g0, 0.12, 0.06)},
@@ -5605,7 +5533,7 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
                 if (k == 0 && xa + sw > G.portal0 - 1.0 && xa < G.portal1 + 1.0) continue;   // the portal's way in
                 if (out && full)
                     for (Real xl : {xa, xa + sw})
-                        emitQuad(lines, W(xl - 0.05, yWall, h + 0.035), W(xl + 0.05, yWall, h + 0.035),
+                        MeshBuilder::emitQuad(lines, W(xl - 0.05, yWall, h + 0.035), W(xl + 0.05, yWall, h + 0.035),
                                  W(xl + 0.05, yWall + depth * faceSign * -1.0, h + 0.035),
                                  W(xl - 0.05, yWall + depth * faceSign * -1.0, h + 0.035), up, paint);
                 if (stalls) stalls->push_back({G.at(xa + sw * 0.5, yWall - faceSign * depth * 0.5), G.v * faceSign, h + (k == 0 ? 0.03 : 0.0)});
@@ -5624,7 +5552,7 @@ static void buildGarage(const GarageLayout& G, const BuildingParams& p, Real bas
         }
         if (out) {
             RenderMesh r;
-            emitQuad(r, W(x0, y0, ht), W(x1, y0, ht), W(x1, y1, ht), W(x0, y1, ht), up, conc * 0.9);
+            MeshBuilder::emitQuad(r, W(x0, y0, ht), W(x1, y0, ht), W(x1, y1, ht), W(x0, y1, ht), up, conc * 0.9);
             appendToPart(*out, PartId::Roof, r);
             // its door at the bottom, onto the street
             emitBox(*out, Scope{W(x0 + 1.4, y0 - 0.12, 0.0), {normalize(Vec3(G.u.x, 0, G.u.y)), up, Vec3(-G.v.x, 0, -G.v.y)},
@@ -5845,11 +5773,11 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 RenderMesh gi;
                 const Vec3 goff = gfr.n * -interiorInset(params);
                 const Vec3 gcol = interiorPaintFor(params);
-                emitQuad(gi, gfr.at(0, 0) + goff,
+                MeshBuilder::emitQuad(gi, gfr.at(0, 0) + goff,
                          gfr.at(gfr.width, 0) + goff,
                          gfr.at(gfr.width, gfr.height) + goff,
                          gfr.at(0, gfr.height) + goff, gfr.n * -1.0, gcol);
-                emitQuad(gi, gfr.at(0, 0) + goff,
+                MeshBuilder::emitQuad(gi, gfr.at(0, 0) + goff,
                          gfr.at(gfr.width, 0) + goff,
                          gfr.at(gfr.width, gfr.height) + goff,
                          gfr.at(0, gfr.height) + goff, gfr.n, gcol);
@@ -5877,7 +5805,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         if (stairEdge || party) {
             const FaceRect bfr = planEdgeRect(plan, i, y, gh);
             RenderMesh bw;
-            emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
+            MeshBuilder::emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
                      bfr.at(bfr.width, bfr.height), bfr.at(0, bfr.height),
                      bfr.n, wallColor);
             appendToPart(out, params.wallPart, bw);
@@ -5914,7 +5842,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 emitBox(out, Scope{sfr.at(x0, yb), {X, Vec3(0, 1, 0), sfr.n}, Vec3(x1 - x0, yt - yb, proud)},
                         PartId::Trim, Vec3(0.10, 0.10, 0.11));
                 const Vec3 o = sfr.n * (proud + 0.005);
-                emitQuad(lit, sfr.at(x0 + 0.05, yb + 0.05) + o, sfr.at(x1 - 0.05, yb + 0.05) + o,
+                MeshBuilder::emitQuad(lit, sfr.at(x0 + 0.05, yb + 0.05) + o, sfr.at(x1 - 0.05, yb + 0.05) + o,
                          sfr.at(x1 - 0.05, yt - 0.05) + o, sfr.at(x0 + 0.05, yt - 0.05) + o, sfr.n,
                          fasciaOf(u.type));
                 if (full) {   // the name: letter blocks centred on the board
@@ -5925,7 +5853,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                     for (int c = 0; c < nLetters && total < x1 - x0 - 0.3; ++c) {
                         const Real lx = lx0 + c * (lw + gap);
                         const Real lh = (c * 7 + u.type) % 3 == 0 ? 0.22 : 0.30;
-                        emitQuad(letters, sfr.at(lx, yb + 0.10) + lo, sfr.at(lx + lw, yb + 0.10) + lo,
+                        MeshBuilder::emitQuad(letters, sfr.at(lx, yb + 0.10) + lo, sfr.at(lx + lw, yb + 0.10) + lo,
                                  sfr.at(lx + lw, yb + 0.10 + lh) + lo, sfr.at(lx, yb + 0.10 + lh) + lo, sfr.n,
                                  Vec3(0.12, 0.10, 0.10));
                     }
@@ -6028,8 +5956,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 en = en * (1.0 / el);
                 const Vec3 A(a.x, cy + 0.25, a.y), B(b.x, cy + 0.25, b.y);
                 const Vec3 C(b.x, cy, b.y), D(a.x, cy, a.y);
-                emitQuad(ceil, A, B, C, D, Vec3(en.x, 0, en.y), icol);
-                emitQuad(ceil, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
+                MeshBuilder::emitQuad(ceil, A, B, C, D, Vec3(en.x, 0, en.y), icol);
+                MeshBuilder::emitQuad(ceil, A, B, C, D, Vec3(-en.x, 0, -en.y), icol);
             }
         appendToPart(out, PartId::Interior, ceil);
         RenderMesh woodFloor;
@@ -6082,7 +6010,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             const Real el = en.length();
             if (el < 1e-9) continue;
             en = en * (1.0 / el);
-            emitQuad(woodFloor, Vec3(a2.x, y + 0.07, a2.y),
+            MeshBuilder::emitQuad(woodFloor, Vec3(a2.x, y + 0.07, a2.y),
                      Vec3(b2.x, y + 0.07, b2.y),
                      Vec3(b2.x, y + 0.045, b2.y),
                      Vec3(a2.x, y + 0.045, a2.y),
@@ -6100,10 +6028,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             if (i == entranceEdge && params.walkableGround) continue;
             FaceRect fr = planEdgeRect(plan, i, y, bh);
             Vec3 ov = fr.n * 0.1;
-            emitQuad(band, fr.at(0, 0) + ov, fr.at(fr.width, 0) + ov,
+            MeshBuilder::emitQuad(band, fr.at(0, 0) + ov, fr.at(fr.width, 0) + ov,
                      fr.at(fr.width, bh) + ov, fr.at(0, bh) + ov, fr.n,
                      params.trimColor * 0.8);
-            emitQuad(band, fr.at(0, bh) + ov, fr.at(fr.width, bh) + ov,
+            MeshBuilder::emitQuad(band, fr.at(0, bh) + ov, fr.at(fr.width, bh) + ov,
                      fr.at(fr.width, bh), fr.at(0, bh), fr.v, params.trimColor * 0.8);
         }
         appendToPart(out, PartId::Trim, band);
@@ -6185,7 +6113,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             if (partyEdge(cur, params, e)) {   // a party wall: blank to the roof
                 const FaceRect bfr = planEdgeRect(cur, e, y, fh);
                 RenderMesh bw;
-                emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0), bfr.at(bfr.width, bfr.height),
+                MeshBuilder::emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0), bfr.at(bfr.width, bfr.height),
                          bfr.at(0, bfr.height), bfr.n, wallColor);
                 appendToPart(out, params.wallPart, bw);
                 continue;
@@ -6203,7 +6131,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 if (stairEdgeU) {
                     const FaceRect bfr = planEdgeRect(cur, e, y, fh);
                     RenderMesh bw;
-                    emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
+                    MeshBuilder::emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
                              bfr.at(bfr.width, bfr.height),
                              bfr.at(0, bfr.height), bfr.n, wallColor);
                     appendToPart(out, params.wallPart, bw);
@@ -6329,10 +6257,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         const Vec3 dnT = up * -0.18;                     // slab thickness
         const Vec3 tc = materialFor(PartId::Trim, wallColor).albedo;
         RenderMesh under, fascia;
-        emitQuad(under, A0 + dnT, A1 + dnT, Rg1 + dnT, Rg0 + dnT, nNear * -1, tc);
-        emitQuad(under, B1 + dnT, B0 + dnT, Rg0 + dnT, Rg1 + dnT, nFar * -1, tc);
-        emitQuad(fascia, A0 + dnT, A1 + dnT, A1, A0, f3 * -1, tc);   // near eave
-        emitQuad(fascia, B1 + dnT, B0 + dnT, B0, B1, f3, tc);        // far eave
+        MeshBuilder::emitQuad(under, A0 + dnT, A1 + dnT, Rg1 + dnT, Rg0 + dnT, nNear * -1, tc);
+        MeshBuilder::emitQuad(under, B1 + dnT, B0 + dnT, Rg0 + dnT, Rg1 + dnT, nFar * -1, tc);
+        MeshBuilder::emitQuad(fascia, A0 + dnT, A1 + dnT, A1, A0, f3 * -1, tc);   // near eave
+        MeshBuilder::emitQuad(fascia, B1 + dnT, B0 + dnT, B0, B1, f3, tc);        // far eave
         if (hip) {
             const Real run = std::max(Real(0.2), hw - rh);
             const float hv = static_cast<float>(std::sqrt(run * run + rise * rise) / tile);
@@ -6348,8 +6276,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                  normalize(r3 * rise - up * run), tc);
             MeshBuilder::emitTri(under, A1 + dnT, B1 + dnT, Rg1 + dnT,
                                  normalize(r3 * (-rise) - up * run), tc);
-            emitQuad(fascia, A0 + dnT, B0 + dnT, B0, A0, r3 * -1, tc);
-            emitQuad(fascia, B1 + dnT, A1 + dnT, A1, B1, r3, tc);
+            MeshBuilder::emitQuad(fascia, A0 + dnT, B0 + dnT, B0, A0, r3 * -1, tc);
+            MeshBuilder::emitQuad(fascia, B1 + dnT, A1 + dnT, A1, B1, r3, tc);
         } else {
             // Gable END walls stay on the WALL plane and rise to the ridge in
             // the wall material; the slopes overhang them by the rake, and the
@@ -6363,8 +6291,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 const Vec3 rg = (sgn < 0 ? Rg0 : Rg1);   // ridge end
                 MeshBuilder::emitTri(gableW, We - f3 * hd, We + f3 * hd,
                                      We + up * rise, e3, wallColor);
-                emitQuad(fascia, eN + dnT, rg + dnT, rg, eN, e3, tc);
-                emitQuad(fascia, eF + dnT, rg + dnT, rg, eF, e3, tc);
+                MeshBuilder::emitQuad(fascia, eN + dnT, rg + dnT, rg, eN, e3, tc);
+                MeshBuilder::emitQuad(fascia, eF + dnT, rg + dnT, rg, eF, e3, tc);
             }
         }
         appendToPart(out, PartId::Trim, under);
@@ -6451,7 +6379,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 for (std::size_t e = 0; e < cur.size(); ++e) {
                     const FaceRect fr = planEdgeRect(cur, e, bandY, bandH);
                     const Vec3 o = fr.n * 0.03;
-                    emitQuad(lit, fr.at(0, 0) + o, fr.at(fr.width, 0) + o,
+                    MeshBuilder::emitQuad(lit, fr.at(0, 0) + o, fr.at(fr.width, 0) + o,
                              fr.at(fr.width, bandH) + o, fr.at(0, bandH) + o, fr.n, crown);
                 }
             }
@@ -6533,7 +6461,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                     const Real x0 = (fr.width - w) * 0.5;
                     const Vec3 o = fr.n * 0.06;
                     static const Vec3 signs[4] = {{1.0, 0.98, 0.92}, {0.3, 0.95, 1.0}, {1.0, 0.2, 0.15}, {1.0, 0.7, 0.25}};
-                    emitQuad(lit, fr.at(x0, 0) + o, fr.at(x0 + w, 0) + o, fr.at(x0 + w, 1.6) + o,
+                    MeshBuilder::emitQuad(lit, fr.at(x0, 0) + o, fr.at(x0 + w, 0) + o, fr.at(x0 + w, 1.6) + o,
                              fr.at(x0, 1.6) + o, fr.n, signs[(nh >> 24) & 3u]);
                 }
             }
@@ -6547,7 +6475,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 for (std::size_t e = 0; e < plan.size(); ++e) {
                     const FaceRect fr = planEdgeRect(plan, e, by, bh);
                     const Vec3 o = fr.n * 0.05;
-                    emitQuad(lit, fr.at(0, 0) + o, fr.at(fr.width, 0) + o,
+                    MeshBuilder::emitQuad(lit, fr.at(0, 0) + o, fr.at(fr.width, 0) + o,
                              fr.at(fr.width, bh) + o, fr.at(0, bh) + o, fr.n, warm);
                 }
             }

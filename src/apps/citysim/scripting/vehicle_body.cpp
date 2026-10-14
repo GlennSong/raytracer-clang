@@ -79,14 +79,7 @@ bool pushFleetSlot(lua_State* L, int base, int slot, const std::string& where,
 // the EXACT primitive citysim's addBox uses (MeshBuilder::box, offset, tint), so
 // a Lua-authored body winds identically to the box car it replaced.
 void addColoredBox(RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
-    RenderMesh b = MeshBuilder::box(size);
-    uint32_t base = static_cast<uint32_t>(out.vertices.size());
-    for (Vertex v : b.vertices) {
-        v.position = v.position + c;
-        v.color = color;
-        out.vertices.push_back(v);
-    }
-    for (uint32_t i : b.indices) out.indices.push_back(base + i);
+    MeshBuilder::emitBox(out, MeshFrame::centred(c, size), color);
 }
 
 }  // namespace

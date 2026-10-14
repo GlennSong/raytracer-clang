@@ -16,15 +16,6 @@ namespace {
 const Vec3 kBlue(0.08, 0.20, 0.46);
 const Vec3 kPost(0.22, 0.23, 0.25);
 
-void box(RenderMesh& m, Vec3 lo, Vec3 hi, const Vec3& col) {
-    const Vec3 c[8] = {{lo.x, lo.y, lo.z}, {hi.x, lo.y, lo.z}, {hi.x, hi.y, lo.z}, {lo.x, hi.y, lo.z},
-                       {lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z}};
-    const int f[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 4, 7, 3}, {1, 2, 6, 5}, {0, 1, 5, 4}, {3, 7, 6, 2}};
-    const Vec3 n[6] = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}};
-    // (emitQuad winds each face to its normal: the engine's front face is clockwise seen from outside -- this list was
-    // counter-clockwise, so the boards' posts and rims were inside out)
-    for (int k = 0; k < 6; ++k) engine::MeshBuilder::emitQuad(m, c[f[k][0]], c[f[k][1]], c[f[k][2]], c[f[k][3]], n[k], col);
-}
 
 }  // namespace
 
@@ -62,10 +53,10 @@ RenderMesh stationBoardFrame() {
     const double hw = kBoardW / 2, y0 = kBoardBottom, y1 = kBoardBottom + kBoardH;
     for (int s = -1; s <= 1; s += 2) {   // the two posts, a little in from the board's ends
         const double px = s * (hw - 0.35);
-        box(m, Vec3(px - 0.05, 0, -0.05), Vec3(px + 0.05, y1 + 0.06, 0.05), kPost);
+        engine::MeshBuilder::emitBox(m, Vec3(px - 0.05, 0, -0.05), Vec3(px + 0.05, y1 + 0.06, 0.05), kPost);
     }
     // the board: a blue slab with a slim dark rim the faces sit just proud of
-    box(m, Vec3(-hw - 0.05, y0 - 0.05, -0.04), Vec3(hw + 0.05, y1 + 0.05, 0.04), kPost);
+    engine::MeshBuilder::emitBox(m, Vec3(-hw - 0.05, y0 - 0.05, -0.04), Vec3(hw + 0.05, y1 + 0.05, 0.04), kPost);
     return m;
 }
 

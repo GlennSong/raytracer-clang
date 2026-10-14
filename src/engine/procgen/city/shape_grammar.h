@@ -720,9 +720,6 @@ void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color
 void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real depth,
                  const Vec3& r, const Vec3& f, Real y, Real height, Real thick,
                  PartId part, const Vec3& color);
-// Emit a quad (one facade panel / window / sign) from four corners + a normal.
-void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
-              const Vec3& d, const Vec3& normal, const Vec3& color);
 // Split a scope along a local axis (0=right,1=up,2=forward) into child scopes of
 // the given sizes; a negative size means "repeat to fill" with |size| as target.
 std::vector<Scope> splitScope(const Scope& s, int axis,

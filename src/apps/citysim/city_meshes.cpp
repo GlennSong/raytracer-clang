@@ -15,14 +15,7 @@ namespace {
 
 // Append a coloured box (centred at `c`, dimensions `size`) into `out`.
 void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
-    engine::RenderMesh b = MeshBuilder::box(size);
-    uint32_t base = static_cast<uint32_t>(out.vertices.size());
-    for (engine::Vertex v : b.vertices) {
-        v.position = v.position + c;
-        v.color = color;
-        out.vertices.push_back(v);
-    }
-    for (uint32_t i : b.indices) out.indices.push_back(base + i);
+    MeshBuilder::emitBox(out, engine::MeshFrame::centred(c, size), color);
 }
 
 // Append a coloured box PITCHED about an X-axis pivot (for limbs: the hip or
@@ -30,21 +23,7 @@ void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
 // rotates by `angle` around the line y = pivotY (z = 0 plane of the body).
 void addBoxPitched(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color,
                    Real pivotY, Real angle) {
-    engine::RenderMesh b = MeshBuilder::box(size);
-    Real ca = std::cos(angle), sa = std::sin(angle);
-    uint32_t base = static_cast<uint32_t>(out.vertices.size());
-    for (engine::Vertex v : b.vertices) {
-        Vec3 p = v.position + c;
-        Real ry = p.y - pivotY, rz = p.z;
-        p.y = pivotY + ry * ca - rz * sa;
-        p.z = ry * sa + rz * ca;
-        v.position = p;
-        Vec3 n = v.normal;
-        v.normal = Vec3(n.x, n.y * ca - n.z * sa, n.y * sa + n.z * ca);
-        v.color = color;
-        out.vertices.push_back(v);
-    }
-    for (uint32_t i : b.indices) out.indices.push_back(base + i);
+    MeshBuilder::emitBox(out, engine::MeshFrame::centred(c, size).rotatedAbout(Vec3(0, pivotY, 0), Vec3(1, 0, 0), angle), color);
 }
 
 // Deterministic outfits for the person mesh: shirt / pants / skin triples.

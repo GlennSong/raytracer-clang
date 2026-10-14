@@ -4,6 +4,7 @@
 #include "../renderer/renderer.h"
 #include "procgen/city/polygon.h"   // Vec2
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -42,6 +43,13 @@ struct MeshFrame {
                              const Vec3& fwd = Vec3(0, 0, 1)) {
         const Vec3 X = right * size.x, Y = up * size.y, Z = fwd * size.z;
         return {c - X * 0.5 - Y * 0.5 - Z * 0.5, X, Y, Z};
+    }
+    // The frame turned by `angle` (radians, right-handed) about the line through `pivot` along unit `axis`: a limb
+    // pitched at its hip, a door on its hinge.
+    MeshFrame rotatedAbout(const Vec3& pivot, const Vec3& axis, double angle) const {
+        const double c = std::cos(angle), s = std::sin(angle);
+        auto rot = [&](const Vec3& v) { return v * c + cross(axis, v) * s + axis * (dot(axis, v) * (1 - c)); };
+        return {pivot + rot(o - pivot), rot(x), rot(y), rot(z)};
     }
 };
 

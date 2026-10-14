@@ -1614,7 +1614,7 @@ int l_mesh_quad(lua_State* L) {
     Vec3 a = checkVec3(L, 1), b = checkVec3(L, 2), c = checkVec3(L, 3),
          d = checkVec3(L, 4), nrm = checkVec3(L, 5);
     auto m = std::make_shared<RenderMesh>();
-    emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
+    MeshBuilder::emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
     pushMesh(L, std::move(m));
     return 1;
 }
