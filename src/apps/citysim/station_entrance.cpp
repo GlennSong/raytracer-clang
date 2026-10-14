@@ -26,7 +26,9 @@ std::vector<StationEntrance> stationEntrances(const RailSim& sim, const std::fun
             e.name = st.name;
             e.cls = L.cls;
             e.along = along * (1.0 / len);
-            e.foot = Vec3(st.access.x, ground(st.access.x, st.access.y), st.access.y);
+            // 2.5 m up the footway from where it leaves the street: clear of the kerb's lamps, signs and bus stop
+            const double fx = st.access.x + e.along.x * 2.5, fz = st.access.y + e.along.z * 2.5;
+            e.foot = Vec3(fx, ground(fx, fz), fz);
             out.push_back(e);
         }
     return out;

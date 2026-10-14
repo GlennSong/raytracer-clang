@@ -19,7 +19,7 @@ namespace citysim {
 
 struct StationEntrance {
     std::string name, cls;     // the station, its line's class (rail, light_rail)
-    engine::Vec3 foot;         // the way in: where the footway leaves the street, on the ground
+    engine::Vec3 foot;         // 2.5 m up the footway from the way in (where it leaves the street), on the ground
     engine::Vec3 along;        // horizontal unit: from the way in toward the platforms (the way up)
 };
 

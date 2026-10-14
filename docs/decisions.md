@@ -9923,7 +9923,7 @@ Glenn, 2026-10-13: "Okay do that" (station buildings and the konbini, after the 
 
 - **The station entrance** (apps/citysim/station_entrance.*): a station's platforms stand up on the line and its
   footway climbs to them from a street; the way in (RailStop::access) had nothing to say a station was there. A
-  PAVILION now stands over the footway's first 7.5 m, 8.6 m across: a roof on columns 3.6 m over the highest ground
+  PAVILION now stands over the footway 2.5 m up from the street (clear of the kerb's lamps and signs), 7.5 m along it and 8.6 m across: a roof on columns 3.6 m over the highest ground
   under them, its fascia in the line's colour (rail green, light rail teal), the station's NAME on a lettered board
   on the roof facing the street (station_boards.h's board, its frame placed there), glass side walls on a steel kerb,
   three TICKET MACHINES down one side, a KIOSK (its counter, shelves of goods, a red sign) and a BENCH down the other,
