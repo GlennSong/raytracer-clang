@@ -43,6 +43,7 @@
 #include "../src/engine/scripting/procgen_bindings.h"
 #include "../src/engine/scripting/script_modules.h"
 #include "../src/engine/script_assets.h"
+#include "../src/engine/procgen/polymesh.h"
 #include "mesh_invariants.h"
 
 #include <fstream>
@@ -457,4 +458,30 @@ TEST_CASE(mesh_audit_building_undersides) {
     std::printf("    [undersides] buildings: %zu hanging, %zu open\n", hanging, open);
     CHECK(hanging > 1000);
     CHECK(open == 0);
+}
+
+// THE MODELLING LAYER (PolyMesh -> toParts, the Lua poly.*): lofts of an L and a star section, capped -- concave caps,
+// which toParts used to fan from their first corner (triangles outside the face, some reversed) -- extruded and
+// subdivided too.
+TEST_CASE(mesh_audit_polymesh_concave_faces) {
+    const std::vector<Vec2> ell = {{-1, -1}, {1, -1}, {1, 0}, {0, 0}, {0, 1}, {-1, 1}};
+    std::vector<Vec2> star;
+    for (int i = 0; i < 10; ++i) {
+        const double a = 6.283185307179586 * i / 10, r = i % 2 ? 0.45 : 1.0;
+        star.push_back(Vec2(r * std::cos(a), r * std::sin(a)));
+    }
+    Audit total;
+    for (const std::vector<Vec2>& sec : {ell, star}) {
+        PolyMesh m = loft({sec, sec}, {0.0, 1.5}, true, true);
+        const std::vector<int> caps = selectGroup(m, "cap_end");
+        for (const PolyMesh& pm : {m, subdivide(m, 1)}) {
+            for (const auto& [mat, rm] : toParts(pm)) total.add(audit(rm));
+        }
+        PolyMesh e = m;
+        extrude(e, caps, 0.4);
+        for (const auto& [mat, rm] : toParts(e)) total.add(audit(rm));
+    }
+    printAudit("polymesh (L, star; loft, subdivide, extrude)", total);
+    CHECK(total.tris > 100);
+    CHECK(total.clean());
 }

@@ -1,4 +1,6 @@
 #include "polymesh.h"
+#include "city/triangulate.h"
+#include "../mesh_builder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -886,11 +888,40 @@ std::map<std::string, RenderMesh> toParts(const PolyMesh& m, double autosmoothDe
             vx.color = face.color;
             rm.vertices.push_back(vx);
         }
-        // fan, in the engine's winding (outward = cross(c - a, b - a)): emit (0, i+1, i)
-        for (std::size_t i = 1; i + 1 < face.v.size(); ++i) {
-            rm.indices.push_back(base);
-            rm.indices.push_back(base + static_cast<uint32_t>(i + 1));
-            rm.indices.push_back(base + static_cast<uint32_t>(i));
+        // A CONVEX face (every triangle, most quads): a fan from its first corner. A CONCAVE one (a notched panel, an
+        // L-shaped cap) fanned that way lays triangles outside the face, some of them reversed -- so it goes through
+        // the shared triangulator in the face's own plane. Either way each triangle is wound to the face's normal
+        // (MeshBuilder::triFacing), never by index order.
+        const std::size_t nv = face.v.size();
+        const Vec3 fu = normalize(tu - n0 * dot(tu, n0)), fv = cross(n0, fu);
+        std::vector<Vec2> q(nv);
+        for (std::size_t i = 0; i < nv; ++i) {
+            const Vec3 p = m.pts[static_cast<std::size_t>(face.v[i])];
+            q[i] = Vec2(dot(p, fu), dot(p, fv));
+        }
+        bool convex = true;
+        double turn = 0;
+        for (std::size_t i = 0; i < nv && convex; ++i) {
+            const Vec2 a = q[i], b = q[(i + 1) % nv], c = q[(i + 2) % nv];
+            const double z = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if (std::fabs(z) < 1e-12) continue;
+            if (turn == 0) turn = z;
+            else if ((z > 0) != (turn > 0)) convex = false;
+        }
+        if (nv == 3 || convex) {
+            for (std::size_t i = 1; i + 1 < nv; ++i)
+                MeshBuilder::triFacing(rm, base, base + static_cast<uint32_t>(i), base + static_cast<uint32_t>(i + 1), n0);
+        } else {
+            for (const std::array<Vec2, 3>& t : triangulateWithHoles(q, {})) {
+                uint32_t k[3];
+                for (int c = 0; c < 3; ++c) {
+                    std::size_t best = 0;
+                    for (std::size_t i = 1; i < nv; ++i)
+                        if ((q[i] - t[static_cast<std::size_t>(c)]).lengthSquared() < (q[best] - t[static_cast<std::size_t>(c)]).lengthSquared()) best = i;
+                    k[c] = base + static_cast<uint32_t>(best);
+                }
+                MeshBuilder::triFacing(rm, k[0], k[1], k[2], n0);
+            }
         }
     }
     return out;
