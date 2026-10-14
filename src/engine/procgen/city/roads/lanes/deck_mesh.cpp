@@ -159,7 +159,7 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
 // A WALL swept along a chain of points: mitred corners (clamped at 2x for sharp ones), closed end caps,
 // per-point lateral offsets (positive = the chain's right normal = outward on a CCW deck boundary) so a
 // run can pass from a freeway edge (2.5 m shoulder) onto a ramp edge (1 m) without a step. Outer face,
-// inner face, top and caps; the bottom sits on the slab. Every wall in the lab should come through here
+// inner face, top, caps and bottom (it may stand on the seam between two slabs). Every wall in the lab should come through here
 // (Glenn: "missing end caps and there are cracks between the walls").
 // `taperStart` / `taperEnd`: that end ramps down to nothing over this many metres instead of stopping in a
 // full-height vertical face. A parapet stops where its deck drops under the 1.5 m rule, which lands
@@ -200,6 +200,11 @@ void sweepWall(RenderMesh& mesh, const std::vector<Vec2>& pts, const std::vector
         MeshBuilder::emitQuad(mesh, P(i, offOuter[i], 0), P(j, offOuter[j], 0), P(j, offOuter[j], hv[j]), P(i, offOuter[i], hv[i]), nOut, color);
         MeshBuilder::emitQuad(mesh, P(j, offInner[j], 0), P(i, offInner[i], 0), P(i, offInner[i], hv[i]), P(j, offInner[j], hv[j]), nOut * -1.0f, color);
         MeshBuilder::emitQuad(mesh, P(i, offOuter[i], hv[i]), P(i, offInner[i], hv[i]), P(j, offInner[j], hv[j]), P(j, offOuter[j], hv[j]), Vec3(0, 1, 0), color);
+        // and its BOTTOM: a median wall stands on the seam between two carriageways' slabs, and from under the
+        // viaduct the slit between their soffits looked up through the wall to the sky (rt_bake --audit, undersides;
+        // Glenn: "the elevated freeway undercarriage when viewed from below can be seen through"). On a slab the
+        // bottom faces the slab's top and is culled.
+        MeshBuilder::emitQuad(mesh, P(i, offOuter[i], 0), P(j, offOuter[j], 0), P(j, offInner[j], 0), P(i, offInner[i], 0), Vec3(0, -1, 0), color);
     }
     if (!closed && (hv.front() > 1e-4 || hv.back() > 1e-4)) {
         const Vec2 t0 = unit(pts[1] - pts[0]), t1 = unit(pts[n - 1] - pts[n - 2]);
@@ -284,9 +289,12 @@ double laneOffset(const Result& r, const Lane& l) {
 
 // One closed box of a track kit, standing on the deck: centre `c`, `t` along the track, `hx` half its length
 // ACROSS the track and `ht` half along it, from y0 to y1. No bottom face: it lies on the formation.
-void trackBox(RenderMesh& m, const Vec2& c, const Vec2& t, double hx, double ht, double y0, double y1, const Vec3& color) {
+// A box on the track's frame, closed: a stair's block, a column, a railing -- each may stand over air (rt_bake --audit,
+// undersides). `bottom` false only where it lies on something (a sleeper on its ballast).
+void trackBox(RenderMesh& m, const Vec2& c, const Vec2& t, double hx, double ht, double y0, double y1, const Vec3& color, bool bottom = true) {
     const Vec2 n = perp(t), a = c - n * hx - t * ht, b = c + n * hx - t * ht, cc = c + n * hx + t * ht, d = c - n * hx + t * ht;
     MeshBuilder::emitQuad(m, world(a, y1), world(b, y1), world(cc, y1), world(d, y1), Vec3(0, 1, 0), color);
+    if (bottom) MeshBuilder::emitQuad(m, world(a, y0), world(d, y0), world(cc, y0), world(b, y0), Vec3(0, -1, 0), color);
     const Vec3 tn(static_cast<Real>(t.x), 0, static_cast<Real>(t.y)), nn(static_cast<Real>(n.x), 0, static_cast<Real>(n.y));
     MeshBuilder::emitQuad(m, world(a, y0), world(b, y0), world(b, y1), world(a, y1), tn * Real(-1), color);
     MeshBuilder::emitQuad(m, world(d, y0), world(cc, y0), world(cc, y1), world(d, y1), tn, color);
@@ -301,7 +309,7 @@ void trackKit(RenderMesh& sleepers, RenderMesh& rails, const Result& r, int li) 
     const double len = l.s.back();
     for (double st = 0.3; st < len; st += 0.65) {
         const Vec2 p = pointAt(l.xy, l.s, st), t = tangentAtStation(l.xy, l.s, st); const double z = H.deck(li, p);
-        trackBox(sleepers, p, t, 1.3, 0.13, z - 0.04, z + kSleeperTop, kSleeper);
+        trackBox(sleepers, p, t, 1.3, 0.13, z - 0.04, z + kSleeperTop, kSleeper, false);
     }
     const int n = std::max(2, static_cast<int>(std::ceil(len / 2.0)) + 1);
     const double half = kRailGauge / 2 + 0.035, hw = 0.035;
@@ -552,6 +560,16 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, Ren
             top[static_cast<size_t>(k)] = rail + P.h; foot[static_cast<size_t>(k)] = rail - kRailHeadAbove - 0.3;
         }
         (void)l;
+        // HELD UP (over a street: an underside, a railing, columns) where its foot stands 2 m clear of the ground;
+        // anywhere else it is a slab from the GROUND up, its sides taken down to the ground -- it was a box from
+        // under the track ballast, so a platform on a low embankment floated over an open bottom (rt_bake --audit).
+        bool heldUp = false;
+        for (int k = 0; k < n; ++k) if (foot[static_cast<size_t>(k)] - groundUnder(b[static_cast<size_t>(k)]) > 2.0) heldUp = true;
+        if (!heldUp)
+            for (int k = 0; k < n; ++k) {
+                const size_t i = static_cast<size_t>(k);
+                foot[i] = std::min(foot[i], std::min(groundUnder(a[i]), groundUnder(b[i])) - 0.3);
+            }
         for (int k = 0; k + 1 < n; ++k) {
             const size_t i = static_cast<size_t>(k), j = i + 1;
             MeshBuilder::emitQuad(plat, world(a[i], top[i]), world(a[j], top[j]), world(b[j], top[j]), world(b[i], top[i]), Vec3(0, 1, 0), kPlatform);
@@ -567,8 +585,6 @@ void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, Ren
             const Vec3 en(static_cast<Real>(d.x / dl * (end == 0 ? -1 : 1)), 0, static_cast<Real>(d.y / dl * (end == 0 ? -1 : 1)));
             MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(b[i], foot[i]), world(b[i], top[i]), world(a[i], top[i]), en, kConcrete);
         }
-        bool heldUp = false;
-        for (int k = 0; k < n; ++k) if (foot[static_cast<size_t>(k)] - groundUnder(b[static_cast<size_t>(k)]) > 2.0) heldUp = true;
         if (heldUp) {
             auto inSpans = [](const std::vector<std::pair<double, double>>& sp, double a0, double b0) { for (const auto& g0 : sp) if (b0 > g0.first && a0 < g0.second) return true; return false; };
             for (int k = 0; k + 1 < n; ++k) {

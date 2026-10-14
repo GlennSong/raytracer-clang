@@ -9941,3 +9941,38 @@ Tests: `a_station_entrance_stands_over_its_way_in` (on a 5% slope: the roof 3.6 
 nothing solid above but the columns, four or more passages a walker fits through the gate line, the board facing the
 street); `small_grocers_are_konbini_round_the_clock` (995 shop units: 48 konbini, 16 grocers left, every other unit
 unchanged in trade; the konbini fitted with their fridges).
+
+## ADR-0172 — The mesh audit: one rule set over every producer and every bake
+
+Glenn, 2026-10-13: "the entire procedural generation sits on this ... Everything, and I mean everything in this engine
+should use the same tooling ... this way we know that every polygon ends up being right when it's created." After the
+station turnstiles came out inside-out and the elevated decks could be seen through from below.
+
+- **The rule** (engine/mesh_audit.h): the front face is CLOCKWISE seen from the normal's side
+  (cross(c - a, b - a) along the vertex normals; VK_FRONT_FACE_CLOCKWISE, back faces culled). A triangle is INWARD when
+  its face and its normals are more than 107 deg apart (test_winding's angle rule: a smoothed crease or a surface-nets
+  sliver sits near 90 and is not one), FLIPPED past 154 deg, a SLIVER under 1 cm across (float32 rounding at
+  kilometres from the origin flips those on its own), DEGENERATE under MeshBuilder::kNoArea2 (what the emitters
+  themselves skip). `auditUndersides`: every walkable surface more than 2 m over the ground has something facing down
+  within 3 m under it, or the bottom of the solid it tops at the ground. `printColumn` reads a miss.
+- **Where it runs**: test_winding over every building recipe (outside and in, two plans), furniture piece, street-kit
+  piece, sign, ladder, tree species, rock, grass, terrain node, planet, the C++ and Lua vehicles, trains, people and
+  widgets; lanes_tests over every lab graph's decks and undersides; `rt_bake --audit <bundle>` over every mesh a level
+  ships (RT_AUDIT_PROBE="x,z" prints a column).
+- **Fixed at the shared tool**: every MeshBuilder emitter winds through triFacing, which drops a no-area triangle;
+  grid primitives end with dropDegenerate; earcut never returns a zero-area triangle; `lathe` splits normals at a
+  corner sharper than 40 deg and winds each band by its own segment (bowls and plates drew from inside); `tube`
+  carries its ring frame by parallel transport on the bend's bisector (bark quads twisted inside out where a branch
+  passed vertical); `autosmooth` gives a RenderMesh creases (the car shell's nose). wedgeXZ, the station boards and
+  the two neon signs were hand-indexed backwards; they go through MeshBuilder.
+- **The see-through undercarriage**: not a winding bug. The island bake's 2303 flipped deck triangles were all
+  float slivers; the hole was missing faces. `sweepWall` had no bottom ("it sits on the slab") and a median wall
+  stands on the seam between twin carriageways' slabs: from under the viaduct the slit looked up through the wall
+  (8512 open on the island, 1424 on rail_loop, 3959 on light_rail_lab). Walls are closed now, `trackBox` too (a
+  stair block, a column; a sleeper opts out), and a platform not held up is a slab from the ground up. Every lab
+  graph: 110,739 hanging triangles, 0 open. Tags: lanes and rail 2026-10-13.1, lots 2026-10-13.5 -- a re-bake.
+- **Not gated**: stylized canopies (normals leaned toward the crown's centre on purpose) and leaf cards (two-sided).
+
+Owed (the mesh library): one triangulator (the road ear-clipper beside earcut), latheMesh folded into
+MeshBuilder::lathe, a box-in-a-frame primitive for trackBox and the shape grammar's emitBox, the Lua mesh.* as a thin
+face over the same API, the lot cache's building meshes under rt_bake --audit.

@@ -5,6 +5,7 @@
 #include <fstream>
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
+#include "engine/mesh_audit.h"
 
 using namespace engine;
 using namespace engine::roads::lanes;
@@ -171,7 +172,8 @@ TEST_CASE(lanes_two_lane_ramps_die_into_one_over_their_dovetail) {
     CHECK(r.graph.find("ramp_one")->anchorLanes.count("to") == 1);   // the control still merges
 }
 
-// NOTE: this scene fails the no-steps invariant, and that is the scene's point (#82). With
+// NOTE: this scene USED TO fail the no-steps invariant, and that was the scene's point (#82). It holds now (seen
+// 2026-10-13: the suite said "KNOWN FAILURE NOW HOLDS"), so it is asserted like every other. The history: with
 // its open ends pinned the road answers 114 m of ground rise with a 53 m CUTTING at
 // the top, and the terrain conform does not fully clear a cutting that deep: the
 // cutting's lip leaves step edges. Before the pin it passed -- by floating 65 m in the
@@ -180,7 +182,7 @@ TEST_CASE(lanes_two_lane_ramps_die_into_one_over_their_dovetail) {
 // kept main's CI red for weeks, hiding every other regression.
 TEST_CASE(lanes_a_freeway_climbs_sustained_relief_within_its_grade) {
     const Result& r = scene("steep_climb");
-    checkInvariantsExcept(r, {"driving surface has no steps (> kerb, < bridge_h)"}, "#82");
+    checkInvariants(r);
     const EdgeSpec* climb = r.graph.find("climb");
     CHECK(climb != nullptr);
     if (!climb) return;
@@ -822,30 +824,55 @@ TEST_CASE(lanes_light_rail_lab_tracks_carry_no_street_and_stations_have_canopies
 // their normal points to) and culls the rest in the opaque pass: a triangle (a, b, c) faces its normal when
 // cross(c - a, b - a) points along it. Every mesh the decks build, on the freeway, viaduct and rail labs.
 TEST_CASE(lanes_every_deck_triangle_faces_its_normal) {
-    int total = 0, inward = 0;
-    for (const char* scn : {"freeway_cross", "valley_viaduct", "light_rail_lab", "rail_loop"}) {
+    // Every lab graph through the mesh audit (engine/mesh_audit.h), by named mesh, with where its first inward triangle
+    // is. The island's bake had 2303 flipped deck triangles on its elevated freeway (rt_bake --audit) while the four
+    // lab decks this tested passed -- so every lab graph, not a chosen four.
+    MeshAudit total;
+    for (const char* scn : {"curve_blocks", "freeway_cross", "freeway_cross_relief", "grid_city", "hill_junction",
+                            "light_rail_lab", "merge_taper", "rail_loop", "ring_city", "steep_climb",
+                            "system_interchange", "valley_viaduct"}) {
         const Result& r = scene(scn);
         for (const NamedMesh& nm : buildMeshes(r)) {
-            int in = 0, n = 0;
-            const RenderMesh& m = nm.mesh;
-            for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
-                const Vertex& a = m.vertices[m.indices[i]];
-                const Vertex& b = m.vertices[m.indices[i + 1]];
-                const Vertex& c = m.vertices[m.indices[i + 2]];
-                const Vec3 nrm = a.normal + b.normal + c.normal;
-                const Vec3 f = cross(c.position - a.position, b.position - a.position);
-                if (nrm.lengthSquared() < 1e-12 || f.lengthSquared() < 1e-14) continue;
-                ++n;
-                if (dot(f, nrm) < 0) ++in;
-            }
-            total += n;
-            inward += in;
-            if (in > 0) std::printf("    [winding] %s %-14s %6d of %6d triangles inward\n", scn, nm.name.c_str(), in, n);
+            const MeshAudit a = auditMesh(nm.mesh);
+            total.add(a);
+            if (a.inward > 0) printMeshAudit((std::string(scn) + " " + nm.name).c_str(), a);
         }
     }
-    std::printf("    [winding] decks: %d triangles, %d inward\n", total, inward);
-    CHECK(total > 10000);
-    CHECK(inward == 0);
+    printMeshAudit("decks", total);
+    CHECK(total.tris > 10000);
+    CHECK(total.inward == 0);
+}
+
+// NOTHING ELEVATED IS SEE-THROUGH FROM BELOW (Glenn, 2026-10-13: "the elevated freeway/rail undercarriage when viewed
+// from below can be seen through"). engine::auditUndersides over every lab graph with a deck: every walkable surface
+// more than 2 m over the ground has something facing down within 3 m under it. The island's bake had 8512 open (rt_bake
+// --audit), most of them the median wall's top over the seam between twin carriageways -- the wall had no bottom.
+TEST_CASE(lanes_no_elevated_surface_is_see_through_from_below) {
+    size_t hanging = 0, open = 0;
+    for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange",
+                            "valley_viaduct", "steep_climb", "hill_junction"}) {
+        const Result& r = scene(scn);
+        const std::vector<NamedMesh> meshes = buildMeshes(r);
+        std::vector<NamedMeshRef> refs;
+        for (const NamedMesh& nm : meshes) refs.push_back({nm.name, &nm.mesh});
+        const UndersideAudit u = auditUndersides(
+            refs,
+            [](const std::string& n) {
+                return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform" || n == "concrete";
+            },
+            [&r](double x, double z) { return r.hasTerrain ? r.terrain.sample(x, z) : 0.0; });
+        if (u.open > 0) {
+            std::printf("    %s:\n", scn);
+            printUndersideAudit(u, 6);
+            std::printf("    [undersides]   first at %.1f %.2f %.1f\n", u.firstOpen.x, u.firstOpen.y, u.firstOpen.z);
+            if (std::getenv("RT_UNDERSIDE_COLUMN")) printColumn(refs, u.firstOpen.x, u.firstOpen.z, 1.0);
+        }
+        hanging += u.hanging;
+        open += u.open;
+    }
+    std::printf("    [undersides] labs: %zu hanging, %zu open\n", hanging, open);
+    CHECK(hanging > 1000);
+    CHECK(open == 0);
 }
 
 // THE DECKS' UNDERSIDES face DOWN (Glenn: "the elevated freeway/rail undercarriage when viewed from below can be seen

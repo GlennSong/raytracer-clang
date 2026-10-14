@@ -113,7 +113,57 @@ int audit(const std::string& dir) {
     std::sort(bad.begin(), bad.end(), [](const auto& x, const auto& y) { return x.second.inward + x.second.nonFinite > y.second.inward + y.second.nonFinite; });
     for (size_t i = 0; i < bad.size() && i < 40; ++i) engine::printMeshAudit(bad[i].first.c_str(), bad[i].second);
     engine::printMeshAudit("TOTAL", total);
-    return total.inward == 0 && total.nonFinite == 0 ? 0 : 2;
+
+    // UNDERSIDES (engine::auditUndersides): the walkable surfaces that hang over the baked terrain, and the ones with
+    // nothing facing down under them. RT_AUDIT_PROBE="x,z" lists every face within 1.5 m of that point, by height.
+    std::vector<engine::RenderMesh> meshesHeld;
+    std::vector<std::string> names;
+    for (const std::string& s : b->sections("")) {
+        const Bundle::View v = b->section(s);
+        PackedMesh p; BinReader r(v.data, v.size);
+        if (!getPackedMesh(r, p)) continue;
+        meshesHeld.push_back(unpackMesh(p));
+        names.push_back(p.name);
+    }
+    std::vector<engine::NamedMeshRef> refs;
+    for (size_t i = 0; i < meshesHeld.size(); ++i) refs.push_back({names[i], &meshesHeld[i]});
+    // the ground: the baked terrain's up-facing triangles, by 4 m bucket
+    struct GTri { engine::Vec3 a, b, c; };
+    std::map<std::pair<int, int>, std::vector<GTri>> ground;
+    for (const engine::NamedMeshRef& nm : refs) {
+        if (nm.name != "terrain") continue;
+        const engine::RenderMesh& m = *nm.mesh;
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const GTri g{m.vertices[m.indices[t]].position, m.vertices[m.indices[t + 1]].position, m.vertices[m.indices[t + 2]].position};
+            const engine::Vec3 f = engine::cross(g.c - g.a, g.b - g.a);
+            if (f.lengthSquared() < 1e-10 || f.y / f.length() < 0.2) continue;
+            for (int i = static_cast<int>(std::floor(std::min({g.a.x, g.b.x, g.c.x}) / 4)); i <= static_cast<int>(std::floor(std::max({g.a.x, g.b.x, g.c.x}) / 4)); ++i)
+                for (int k = static_cast<int>(std::floor(std::min({g.a.z, g.b.z, g.c.z}) / 4)); k <= static_cast<int>(std::floor(std::max({g.a.z, g.b.z, g.c.z}) / 4)); ++k)
+                    ground[{i, k}].push_back(g);
+        }
+    }
+    auto groundAt = [&](double x, double z) {
+        auto it = ground.find({static_cast<int>(std::floor(x / 4)), static_cast<int>(std::floor(z / 4))});
+        if (it == ground.end()) return std::nan("");
+        for (const GTri& t : it->second) {
+            const double d = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
+            if (std::fabs(d) < 1e-12) continue;
+            const double l1 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / d;
+            const double l2 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / d;
+            if (l1 < -1e-6 || l2 < -1e-6 || 1 - l1 - l2 < -1e-6) continue;
+            return l1 * t.a.y + l2 * t.b.y + (1 - l1 - l2) * t.c.y;
+        }
+        return std::nan("");
+    };
+    double probeX = 0, probeZ = 0;
+    if (std::getenv("RT_AUDIT_PROBE") && std::sscanf(std::getenv("RT_AUDIT_PROBE"), "%lf,%lf", &probeX, &probeZ) == 2)
+        engine::printColumn(refs, probeX, probeZ);
+    const engine::UndersideAudit u = engine::auditUndersides(
+        refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform" || n == "concrete"; },
+        groundAt);
+    engine::printUndersideAudit(u, 20);
+    const size_t open = u.open;
+    return total.inward - total.inwardSliver == 0 && total.nonFinite == 0 && open == 0 ? 0 : 2;
 }
 }  // namespace
 
