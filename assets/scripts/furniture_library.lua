@@ -198,6 +198,38 @@ furniture_library = {
   -- six tip-up seats on the row's riser (rise: the spots climb 0.18 m a tier with the style bits); built below
   lecture_row = { family = "seating", tags = { "lecture" }, rise = 0.18, spots = {}, verbs = {} },
   aisle_step = { family = "fixture", tags = { "lecture", "stair" } },
+  -- THE CIVIC HALLS' AND THE HOSPITAL'S SEATS (Glenn, 2026-10-13: "you can't interact with the chairs" -- every piece
+  -- added that day was scenery: no entry, no spots). Rows are built in a loop below.
+  pew = { family = "seating", tags = { "church", "public" }, spots = {}, verbs = {} },
+  waiting_seats = { family = "seating", tags = { "lobby", "public" }, spots = {}, verbs = {} },
+  cinema_row = { family = "seating", tags = { "cinema" }, rise = 0.25, spots = {}, verbs = {} },
+  jury_box = { family = "seating", tags = { "court" }, spots = {}, verbs = {} },
+  judge_bench = {
+    family = "seating", tags = { "court" },
+    spots = { { id = "chair", at = seat(0, 0.86, 0.55) } },
+    verbs = { { verb = "sit", label = "take the bench", spots = { "chair" }, eye = { 0, 1.56, 0.55 }, look = { 0, -0.12, 1 },
+                exit = { 2.25, 0, 0.6 } } },   -- (down off the dais, past the witness box's end)
+  },
+  hospital_bed = {
+    family = "sleeping", tags = { "hospital" },
+    spots = { { id = "bed", at = seat(0, 0.64, 1.15) }, { id = "edge", at = seat(0.40, 0.64, 1.25) } },
+    verbs = {
+      { verb = "lie", label = "lie down", spots = { "bed", "edge" }, eye = { 0, 1.02, 0.45 }, look = { 0, 0.35, 1 },
+        exit = { 0.95, 0, 1.15 } },
+      { verb = "sit", label = "sit on the bed", spots = { "edge" }, eye = { 0.40, 1.34, 1.25 }, look = { 1, -0.1, 0 },
+        exit = { 0.95, 0, 1.25 } },
+    },
+  },
+  exam_couch = {
+    family = "sleeping", tags = { "hospital" },
+    spots = { { id = "couch", at = seat(0, 0.72, 1.10) }, { id = "edge", at = seat(0.25, 0.72, 1.20) } },
+    verbs = {
+      { verb = "sit", label = "sit on the couch", spots = { "edge" }, eye = { 0.25, 1.42, 1.20 }, look = { 1, -0.1, 0 },
+        exit = { 0.75, 0, 1.20 } },
+      { verb = "lie", label = "lie down", spots = { "couch", "edge" }, eye = { 0, 1.05, 0.35 }, look = { 0, 0.4, 1 },
+        exit = { 0.75, 0, 1.10 } },
+    },
+  },
   -- the sports field's stand: three tiers of four seats, each its own place to sit (built in a loop, below)
   bleacher = { family = "seating", tags = { "outdoor", "sports" }, spots = {}, verbs = {} },
   -- STAFF PLACES (the people who work there, behind what they serve across; Glenn, 2026-10-09: "Ulu Coffee has the
@@ -278,6 +310,40 @@ do
     r.spots[#r.spots + 1] = { id = id, at = { x, 0.48, 0.40 } }
     r.verbs[#r.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.20, 0.36 }, look = { 0, -0.12, 1 },
                              exit = { -1.95, 0, 0.6 } }
+  end
+end
+
+-- THE PEW: four to a pew, each its own seat, getting out into the gap in front of it; THE WAITING SEATS: four on
+-- their beam; THE CINEMA ROW: six on its riser (its tier's rise folded into the placement), out onto the aisle stair
+-- at its left like a lecture row; THE JURY BOX: two rows of six, the back row up its step, out at the box's side
+do
+  local p = furniture_library.pew
+  for i = 0, 3 do
+    local x, id = -1.05 + i * 0.70, "s" .. i
+    p.spots[#p.spots + 1] = { id = id, at = { x, 0.47, 0.42 } }
+    p.verbs[#p.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.17, 0.36 }, look = { 0, -0.06, 1 }, exit = { x, 0, 0.92 } }
+  end
+  local w = furniture_library.waiting_seats
+  for i = 0, 3 do
+    local x, id = -0.79 + i * 0.527, "s" .. i
+    w.spots[#w.spots + 1] = { id = id, at = { x, 0.47, 0.34 } }
+    w.verbs[#w.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.17, 0.30 }, look = { 0, -0.05, 1 }, exit = { x, 0, 1.0 } }
+  end
+  local c = furniture_library.cinema_row
+  for i = 0, 5 do
+    local x, id = -1.4 + i * 0.56, "s" .. i
+    c.spots[#c.spots + 1] = { id = id, at = { x, 0.48, 0.42 } }
+    c.verbs[#c.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.16, 0.38 }, look = { 0, -0.04, 1 }, exit = { -1.95, 0, 0.6 } }
+  end
+  local j = furniture_library.jury_box
+  for r = 0, 1 do
+    for i = 0, 5 do
+      local x, id = -1.45 + i * 0.58, "r" .. r .. "s" .. i
+      local y, z = r == 0 and 0.70 or 0.50, r == 0 and 0.55 or 1.45
+      j.spots[#j.spots + 1] = { id = id, at = { x, y, z } }
+      j.verbs[#j.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, y + 0.70, z - 0.04 }, look = { 0, -0.08, 1 },
+                               exit = { 2.2, 0, 1.0 } }
+    end
   end
 end
 

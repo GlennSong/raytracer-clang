@@ -269,3 +269,26 @@ TEST_CASE(furniture_surfaces_are_dressed_with_goods_on_their_anchors) {
     CHECK(onAnchor == goods);
     lib = keep;
 }
+
+// EVERY SEAT CAN BE SAT ON (Glenn, 2026-10-13: "you can't interact with the chairs" -- the pews, waiting seats,
+// cinema rows, jury box and the judge's chair, the hospital beds and couches were added that day with no entry in the
+// library, so they were scenery). A piece whose name says it is for sitting or lying on carries a sit or lie verb.
+TEST_CASE(every_seat_in_the_kit_can_be_used) {
+    const FurnitureLibrary lib = shippedLibrary();
+    const char* seatWords[] = {"chair", "seat", "sofa", "bench", "pew", "_row", "bed", "couch", "stool", "booth", "bleacher", "jury"};
+    int seats = 0, unusable = 0;
+    for (int i = 0; i < kPieceCount; ++i) {
+        const std::string name = furniturePieceName(static_cast<Piece>(i));
+        bool seatLike = false;
+        for (const char* w : seatWords) seatLike = seatLike || name.find(w) != std::string::npos;
+        if (!seatLike || name == "workbench" || name == "lab_bench" || name == "dj_booth") continue;   // (not seats)
+        ++seats;
+        const FurnitureAsset* a = lib.find(static_cast<Piece>(i));
+        bool usable = false;
+        if (a) for (const FurnVerb& v : a->verbs) usable = usable || v.verb == Verb::Sit || v.verb == Verb::Lie;
+        if (!usable) { ++unusable; std::printf("      not usable: %s\n", name.c_str()); }
+    }
+    std::printf("    [seats] %d seat-like pieces, %d with no sit or lie\n", seats, unusable);
+    CHECK(seats >= 20);
+    CHECK(unusable == 0);
+}
