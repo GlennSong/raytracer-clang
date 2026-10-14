@@ -1262,6 +1262,107 @@ FurniturePiece build(Piece p, uint32_t variant) {
             }
             break;
         }
+        case Piece::Pew: {
+            // A PEW (Glenn, 2026-10-13: the church was empty): a 3 m timber bench, its back raked, carved ends, the
+            // kneeler on the back for the row behind. Faces +z (the altar).
+            k.out.size = {3.0, 0.95, 0.75};
+            k.box(F::Wood, {0, 0.44, 0.42}, {2.92, 0.05, 0.42}, 0.01, wood, 1);                 // the seat
+            k.boxTilted(F::Wood, {0, 0.70, 0.17}, {2.92, 0.50, 0.04}, 0.01, -0.14, wood);        // the back
+            for (double x : {-1.47, 1.47}) k.box(F::Wood, {x, 0.47, 0.37}, {0.06, 0.94, 0.70}, 0.02, wood * 0.85, 1);   // ends
+            k.box(F::Wood, {0, 0.76, 0.06}, {2.92, 0.03, 0.10}, 0.005, wood * 0.9, 1);          // the book ledge behind
+            k.box(F::Fabric, {0, 0.07, 0.04}, {2.80, 0.07, 0.12}, 0.02, Vec3(0.45, 0.12, 0.12));   // the kneeler
+            break;
+        }
+        case Piece::Altar: {
+            // The ALTAR: a table under a white cloth with a coloured frontal, two candlesticks, a book on its stand.
+            k.out.size = {2.0, 1.35, 0.90};
+            k.box(F::Wood, {0, 0.48, 0.45}, {1.96, 0.96, 0.86}, 0.01, wood * 0.8, 1);
+            k.box(F::Fabric, {0, 0.975, 0.45}, {2.0, 0.03, 0.90}, 0.005, kLinen, 1);
+            k.box(F::Fabric, {0, 0.70, 0.905}, {1.20, 0.52, 0.01}, 0.0, Vec3(0.50, 0.10, 0.14), 1);   // the frontal
+            for (double x : {-0.75, 0.75})
+                k.turned(F::Metal, {x, 0.99, 0.30}, {{0.06, 0.0}, {0.02, 0.04}, {0.015, 0.28}, {0.035, 0.30}, {0.012, 0.31},
+                                                     {0.012, 0.36}, {0.0, 0.36}}, Vec3(0.80, 0.65, 0.30), 1.0, 10);   // candlesticks
+            k.boxTilted(F::Wood, {0, 1.05, 0.45}, {0.36, 0.03, 0.26}, 0.004, -0.3, wood);       // the book stand
+            break;
+        }
+        case Piece::CinemaRow: {
+            // A CINEMA ROW: six plush seats with arms and cup holders on a carpeted RISER -- style bits the row's
+            // tier, 0.25 m a tier (a cinema rakes steeper than a lecture hall). Faces +z, the screen.
+            const double h = 0.25 * static_cast<double>(style & 7u);
+            k.out.size = {3.4, 1.05 + h, 1.0};
+            k.out.solid = h > 0;
+            k.out.colliderH = h;
+            const Vec3 carpet = Vec3(0.18, 0.08, 0.10);
+            const Vec3 plush = Vec3(0.55, 0.08, 0.10);
+            if (h > 0) k.box(F::Fabric, {0, h * 0.5, 0.50}, {3.4, h, 1.0}, 0.0, carpet, 1);
+            for (int i = 0; i < 6; ++i) {
+                const double x = -1.4 + i * 0.56;
+                k.box(F::Fabric, {x, h + 0.42, 0.42}, {0.50, 0.12, 0.48}, 0.04, plush);                 // the seat
+                k.boxTilted(F::Fabric, {x, h + 0.74, 0.14}, {0.50, 0.62, 0.12}, 0.04, -0.15, plush);   // its back
+            }
+            for (int i = 0; i < 7; ++i)
+                k.box(F::Hard, {-1.68 + i * 0.56, h + 0.55, 0.40}, {0.06, 0.20, 0.50}, 0.02, kBlack * 2.0, 1);   // arms
+            break;
+        }
+        case Piece::CinemaScreen: {
+            // The SCREEN: a 6 m white panel framed in black masking, hung high on the auditorium's front wall.
+            k.out.size = {6.0, 4.4, 0.08};
+            k.out.solid = false;
+            k.box(F::Hard, {0, 2.70, 0.03}, {6.0, 3.4, 0.05}, 0.0, kBlack, 1);
+            k.box(F::Hard, {0, 2.70, 0.06}, {5.6, 3.0, 0.01}, 0.0, Vec3(0.92, 0.92, 0.94), 1);
+            break;
+        }
+        case Piece::MarketStall: {
+            // A MARKET STALL: a trestle counter heaped with crates of produce, a striped awning on four posts.
+            k.out.size = {2.4, 2.45, 1.4};
+            const Vec3 stripe = kFabric[(variant + 2) & 7u];
+            k.box(F::Wood, {0, 0.82, 0.95}, {2.3, 0.05, 0.85}, 0.01, wood, 1);                  // the counter
+            k.box(F::Wood, {0, 0.42, 1.36}, {2.3, 0.78, 0.04}, 0.01, wood * 0.85, 1);           // its front
+            static const Vec3 produce[4] = {Vec3(0.75, 0.15, 0.10), Vec3(0.90, 0.55, 0.10), Vec3(0.35, 0.60, 0.20),
+                                            Vec3(0.85, 0.80, 0.25)};
+            for (int i = 0; i < 4; ++i) {
+                const double x = -0.82 + i * 0.55;
+                k.box(F::Wood, {x, 0.91, 1.0}, {0.48, 0.13, 0.60}, 0.005, wood * 1.1, 1);       // a crate
+                k.box(F::Hard, {x, 0.99, 1.0}, {0.42, 0.06, 0.52}, 0.03, produce[(i + variant) & 3u]);   // its fruit
+            }
+            for (double x : {-1.14, 1.14})
+                for (double z : {0.06, 1.34}) k.rod(F::Metal, {x, 0, z}, {x, 2.25, z}, 0.025, kSteel, 6);
+            for (int i = 0; i < 6; ++i)
+                k.boxTilted(F::Fabric, {-1.0 + i * 0.4, 2.32, 0.70}, {0.40, 0.03, 1.46}, 0.0, 0.08,
+                            (i & 1) ? stripe : kLinen);                                          // the awning
+            break;
+        }
+        case Piece::JudgeBench: {
+            // The BENCH: the judge's raised desk across the courtroom's front, panelled, the judge's high-backed chair
+            // behind it (at -z, toward the wall); the witness box at one end, the clerk's lower desk at the other.
+            k.out.size = {4.0, 1.85, 2.2};
+            k.box(F::Wood, {0, 0.15, 0.80}, {2.6, 0.30, 1.6}, 0.0, wood * 0.75, 1);              // the dais
+            k.box(F::Wood, {0, 0.70, 1.48}, {2.6, 1.10, 0.10}, 0.01, wood, 1);                   // the bench front
+            k.box(F::Wood, {0, 1.24, 1.33}, {2.6, 0.04, 0.40}, 0.005, wood * 1.1, 1);            // its top
+            k.box(F::Fabric, {0, 0.80, 0.55}, {0.60, 0.10, 0.55}, 0.03, Vec3(0.40, 0.12, 0.12));   // the chair's seat
+            k.box(F::Fabric, {0, 1.30, 0.30}, {0.62, 1.00, 0.10}, 0.03, Vec3(0.40, 0.12, 0.12));   // its high back
+            // the witness box (right) and the clerk's desk (left)
+            k.box(F::Wood, {1.65, 0.55, 1.20}, {0.70, 1.10, 0.06}, 0.01, wood, 1);
+            k.box(F::Wood, {1.98, 0.55, 0.85}, {0.06, 1.10, 0.70}, 0.01, wood, 1);
+            k.box(F::Wood, {1.65, 0.08, 0.85}, {0.70, 0.16, 0.70}, 0.0, wood * 0.75, 1);
+            k.box(F::Wood, {-1.65, 0.37, 1.70}, {0.70, 0.74, 0.50}, 0.01, wood, 1);
+            break;
+        }
+        case Piece::JuryBox: {
+            // The JURY BOX: two rows of six chairs behind a panelled rail, the back row on a step. Faces +z (the
+            // courtroom), to be set against a side wall.
+            k.out.size = {3.6, 1.55, 2.0};
+            k.box(F::Wood, {0, 0.10, 0.55}, {3.6, 0.20, 1.10}, 0.0, wood * 0.75, 1);             // the back row's step
+            k.box(F::Wood, {0, 0.50, 1.96}, {3.6, 1.0, 0.08}, 0.01, wood, 1);                    // the front rail
+            for (double x : {-1.78, 1.78}) k.box(F::Wood, {x, 0.50, 1.0}, {0.06, 1.0, 1.92}, 0.01, wood, 1);
+            for (int r = 0; r < 2; ++r)
+                for (int i = 0; i < 6; ++i) {
+                    const double x = -1.45 + i * 0.58, z = r == 0 ? 0.55 : 1.45, y0 = r == 0 ? 0.20 : 0.0;
+                    k.box(F::Fabric, {x, y0 + 0.46, z}, {0.46, 0.07, 0.44}, 0.025, fabric * 0.8);
+                    k.box(F::Fabric, {x, y0 + 0.80, z - 0.21}, {0.44, 0.55, 0.05}, 0.025, fabric * 0.8);
+                }
+            break;
+        }
         case Piece::Lectern: {
             k.out.size = {0.70, 1.15, 0.55};
             k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
@@ -1373,7 +1474,8 @@ const char* const kPieceNames[kPieceCount] = {
     "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug",
     "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step", "bleacher",
     "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
-    "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats"};
+    "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats",
+    "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box"};
 
 }  // namespace
 

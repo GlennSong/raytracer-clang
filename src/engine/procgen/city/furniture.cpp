@@ -314,7 +314,7 @@ struct Furnisher {
     // WALL ART (Glenn: "the walls are bare. So some pictures hanging on there would be nice"): a picture on the
     // first of `sides` with a clear stretch -- not over a doorway or a tall piece (a wardrobe, a TV, a cupboard);
     // over a sofa or a bed is where pictures go.
-    bool hang(const std::vector<int>& sides, uint32_t artVariant, Piece what = Piece::Picture) {
+    bool hang(const std::vector<int>& sides, uint32_t artVariant, Piece what = Piece::Picture, bool anyWall = false) {
         const FurniturePiece& kit = furniturePiece(what, artVariant);
         const Real w = kit.size.x;
         for (int s : sides) {
@@ -323,7 +323,7 @@ struct Furnisher {
             const Real free = len - w - 0.2;
             for (Real k : {0.5, 0.3, 0.7, 0.15, 0.85}) {
                 Placement c{&f, s, 0.1 + free * k, w, 0.3};
-                if (!onWall(s, c.t - 0.1, c.t + w + 0.1) || overWindow(s, c.t - 0.1, c.t + w + 0.1)) continue;
+                if (!anyWall && (!onWall(s, c.t - 0.1, c.t + w + 0.1) || overWindow(s, c.t - 0.1, c.t + w + 0.1))) continue;
                 const Box2 fp = c.footprint();
                 bool clear = true;
                 for (const Box2& b : doorways) if (overlaps(fp, b, 0.05)) clear = false;
@@ -368,6 +368,13 @@ const char* programFor(RoomKind kind) {
         case RoomKind::Exam: return "exam";
         case RoomKind::NurseStation: return "nurses_station";
         case RoomKind::Waiting: return "waiting";
+        case RoomKind::Nave: return "nave";
+        case RoomKind::Foyer: return "foyer";
+        case RoomKind::Auditorium: return "auditorium";
+        case RoomKind::Market: return "market";
+        case RoomKind::Cell: return "cell";
+        case RoomKind::Courtroom: return "courtroom";
+        case RoomKind::Chamber: return "council_chamber";
         default: return "";
     }
 }
@@ -395,23 +402,29 @@ struct ProgramRun {
     // rows out from the window wall, every cell clear of what is already placed; a row's tier counted from the
     // front, the side away from the windows, where the lectern stands.
     void gridOfSets(const FurnStep& st) {
-        const Real zStart = st.from, zEnd = F.f.D - 0.8, xEnd = F.f.W - 0.6;
+        const Real zStart = st.from, zEnd = F.f.D - st.to, xEnd = F.f.W - 0.6;
         int rows = 0;
         for (Real z = zStart; z + st.d <= zEnd + 1e-6; z += st.d + st.aisleZ) ++rows;
+        if (st.rows > 0) rows = std::min(rows, st.rows);
+        // how tall a cell stands, for the windows (ADR-0160): its pick, or its set's floor-standing pieces. A tiered
+        // grid's rows rise past a sill by design (a lecture hall's back rows), so it is let be.
+        Real top = 0;
+        if (st.set.empty()) top = F.heightOf(pickOf(st.pick, st.w, st.d));
+        else for (const FurnMember& m : st.set) if (m.y <= 0) top = std::max(top, F.heightOf(pickOf(m.pick, st.w, st.d)));
         int r = 0, placed = 0;
         // the clearance kept to what is already placed -- but a grid's own cells may touch (a stack row's bookcases
         // end to end, aisle 0): the margin is never wider than the grid's own aisles, or every other cell drops
         const Real gap = std::min(Real(0.1), std::max(Real(0), std::min(st.aisleX, st.aisleZ) - Real(0.01)));
         const std::size_t ownFrom = F.taken.size();
-        for (Real z = zStart; z + st.d <= zEnd + 1e-6; z += st.d + st.aisleZ, ++r) {
+        for (Real z = zStart; z + st.d <= zEnd + 1e-6 && r < rows; z += st.d + st.aisleZ, ++r) {
             int inRun = 0;
             for (Real x = 0.6; x + st.w <= xEnd + 1e-6; x += st.w + st.aisleX) {
                 if (st.runN > 0 && inRun == st.runN) { x += st.crossW; inRun = 0; if (x + st.w > xEnd + 1e-6) break; }
                 ++inRun;
                 Placement c{&F.f, 0, x, st.w, st.d, z};
                 const Box2 fp = c.footprint();
-                bool clear = true;
-                for (std::size_t bi = 0; bi < F.taken.size(); ++bi)
+                bool clear = st.tiers || !F.blocksWindow(fp, top);
+                for (std::size_t bi = 0; clear && bi < F.taken.size(); ++bi)
                     if (overlaps(fp, F.taken[bi], bi >= ownFrom ? gap : Real(0.1))) { clear = false; break; }
                 if (!clear) continue;
                 F.taken.push_back(fp);
@@ -480,7 +493,7 @@ struct ProgramRun {
             }
             case FurnStep::Kind::Grid: {
                 prevPlaced = false;
-                if (!st.set.empty() || st.tiers) { gridOfSets(st); return; }
+                if (!st.set.empty() || st.tiers || st.rows > 0 || st.to != Real(0.8)) { gridOfSets(st); return; }
                 const Piece pc = pickOf(st.pick, st.w, std::max(st.d, st.d2));
                 if (pc == Piece::Count) return;
                 const uint32_t v2 = st.style2 >= 0 ? (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(st.style2) << 5) : 0u;
@@ -490,7 +503,7 @@ struct ProgramRun {
             case FurnStep::Kind::Hang: {
                 const Piece pc = pickOf(st.pick, 0, 0);
                 const uint32_t v = st.style2 >= 0 ? (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(st.style2) << 5) : F.variant;
-                if (pc != Piece::Count) prevPlaced = F.hang(sidesOf(st), v, pc);
+                if (pc != Piece::Count) prevPlaced = F.hang(sidesOf(st), v, pc, st.anyWall);
                 return;
             }
             case FurnStep::Kind::Counter: {
@@ -856,6 +869,9 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                                  room.kind == RoomKind::Reception || room.kind == RoomKind::Gallery ||
                                  room.kind == RoomKind::Exam || room.kind == RoomKind::NurseStation ||
                                  room.kind == RoomKind::Waiting || room.kind == RoomKind::Ward ||
+                                 room.kind == RoomKind::Nave || room.kind == RoomKind::Foyer ||
+                                 room.kind == RoomKind::Market || room.kind == RoomKind::Courtroom ||
+                                 room.kind == RoomKind::Chamber ||
                                  room.kind == RoomKind::Shop;
             // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
             const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;

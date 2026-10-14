@@ -541,7 +541,10 @@ struct BuildingParams {
     bool  officeUse = false;
     // A CIVIC BUILDING'S OWN ROOMS (Glenn, the same day): off the campus, a university is a teaching hall (1), a library
     // its reading room and stacks (2), a museum its galleries (4), a school its classrooms (5) -- campusPlan's corridor
-    // floor, by these numbers (the campus field's, plus 4 and 5) -- and a hospital its wards (6, hospitalPlan).
+    // floor, by these numbers (the campus field's, plus 4 and 5) -- and a hospital its wards (6, hospitalPlan); a
+    // church its nave (7), a cinema its foyer and auditoriums (8), a market hall its stalls (14) -- hallPlan, the
+    // ground floor; a police station its lobby, cells and interview rooms (10), a courthouse its courtrooms (11), a
+    // capitol its council chamber (12) -- campusPlan, the ground floor only, offices above.
     // Runtime only like officeUse (architect.h civicRoomsFor).
     uint8_t civicRooms = 0;
     // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each other ...

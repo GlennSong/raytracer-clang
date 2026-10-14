@@ -268,6 +268,9 @@ bool readStep(lua_State* L, int t, FurnStep& st, const std::string& where, std::
     readPair(L, t, "aisle", st.aisleX, st.aisleZ);
     st.d2 = numField(L, t, "short", 0.0);
     st.from = numField(L, t, "from", 0.6);
+    st.rows = static_cast<int>(numField(L, t, "rows", 0.0));
+    st.to = numField(L, t, "to", 0.8);
+    st.anyWall = boolField(L, t, "any_wall", false);
     st.tiers = boolField(L, t, "tiers", false);
     {
         Real rn = 0, cw = 0;

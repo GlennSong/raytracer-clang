@@ -119,6 +119,9 @@ struct FurnStep {
     // not fit, built with style2 (the piece's style bits) -- an office pod of four where six will not go
     Real aisleX = 0, aisleZ = 0, d2 = 0;
     Real from = 0.6;   // the first row's gap from the window wall
+    int rows = 0;      // at most this many rows (0: as many as fit) -- a courtroom's public benches, then its counsel
+    Real to = 0.8;     // the last row's gap from the far wall (side 2) -- a nave's sanctuary, a cinema's screen
+    bool anyWall = false;   // Hang: on any wall, the outside wall's windows too (a cinema's screen blacks them out)
     int style2 = -1;
     // Grid TIERS: each row's style bits its tier counted from the front (the far side from the window wall), so a
     // lecture hall's rows step up toward the back (LectureRow models its own riser)

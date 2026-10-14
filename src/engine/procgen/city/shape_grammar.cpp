@@ -4549,7 +4549,9 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // no storeys above ground -- but a BIG BOX is its one tall storey, and that is the store; and a one-storey row of
     // SHOPS is its shops (single-storey shop buildings streamed empty: 56 of 377 on the island)
     const bool shopsOnly = storeys.size() == 1 && params.groundRetail && !params.campus;
-    if (storeys.size() < 2 && !params.bigBox && !shopsOnly) return out;
+    // ...and a one-storey CIVIC HALL is its hall: a church's nave, a cinema, a market hall (room_plan.cpp hallPlan)
+    const bool hallOnly = storeys.size() == 1 && (params.civicRooms == 7 || params.civicRooms == 8 || params.civicRooms == 14);
+    if (storeys.size() < 2 && !params.bigBox && !shopsOnly && !hallOnly) return out;
     // The core (M5) and the storey window [kA, kB).
     const CorePlan core = coreFor(plan, params, entranceEdge);
     const int nS = static_cast<int>(storeys.size());
@@ -4937,8 +4939,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             rp = roomPlan(spk.plan, params, core,
                           il.hasStair ? il.edge : static_cast<std::size_t>(-1),
                           interiorInset(params), ki,
-                          il.hasStair ? il.well : Poly2{}, entranceEdge,
-                          il.hasStair ? il.stairFoot : Vec2(1e30, 1e30));
+                          il.hasStair && nS > 1 ? il.well : Poly2{}, entranceEdge,   // (one storey: no stair)
+                          il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30));
         // A TOWER'S DEPARTMENT STORE (a department a floor: fashion, fashion, electronics, books, the food hall) and its
         // RESTAURANT FLOORS at the top (restaurants and bars by turns round the core): its floors' rooms are shops
         {

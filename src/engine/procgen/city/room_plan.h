@@ -63,9 +63,12 @@ enum class PlateTopology : uint8_t {
 // Gallery: a museum's room: pictures round its walls, display cases down the middle, a bench.
 // Ward .. Waiting: the hospital (hospitalPlan): a patients' room (one bed or two), an examination room, the nurses'
 // station facing the lifts, the entrance lobby's waiting area with its information desk.
+// Nave .. Chamber: the civic halls (hallPlan, campusPlan): a church's nave, a cinema's foyer and its auditoriums, a
+// market hall's floor of stalls, a police cell, a courtroom, a council chamber.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
                                 Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception, Gallery,
-                                Ward, Exam, NurseStation, Waiting };
+                                Ward, Exam, NurseStation, Waiting,
+                                Nave, Foyer, Auditorium, Market, Cell, Courtroom, Chamber };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

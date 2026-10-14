@@ -1247,6 +1247,7 @@ TEST_CASE(furniture_keeps_out_of_the_outside_doors_and_off_the_windows) {
                         if (y < -0.05 || y > sp.h - 0.3) continue;   // another storey's
                         const Piece pc = static_cast<Piece>(pp.piece);
                         if (pc == Piece::CeilingLight || pc == Piece::Rug || pc == Piece::DanceFloor) continue;
+                        if (pc == Piece::CinemaScreen) continue;   // (blacks out the windows behind it, by design)
                         if (FurnitureLibrary::global().find(pc) && FurnitureLibrary::global().find(pc)->family == "goods") continue;
                         ++pieces;
                         if (std::getenv("RT_OPENINGS_WHY")) ++what[std::string("all: ") + furniturePieceName(pc)];
@@ -1592,4 +1593,45 @@ TEST_CASE(the_hospital_has_wards_a_lobby_and_examination_rooms) {
     CHECK(c(Piece::HospitalBed) > 300);
     CHECK(c(Piece::Bed) == 0 && c(Piece::Sofa) == 0 && c(Piece::Bathtub) == 0);
     CHECK(c(Piece::ExamCouch) > 50 && c(Piece::WaitingSeats) > 50 && c(Piece::Toilet) > 0);
+}
+
+// THE CIVIC HALLS (Glenn, 2026-10-13, on the list of buildings standing empty or fitted as a cafe-bar: "I like your
+// idea. Do that"). A church was empty; a cinema and a market hall were furnished as a cafe-bar; a police station's,
+// a courthouse's and a capitol's ground floors were empty. Now: the church's nave (pews facing the altar), the
+// cinema's foyer and auditoriums (raked rows, a screen each), the market hall's stalls, the police station's lobby,
+// cells and interview rooms, the courthouse's courtrooms (the bench, the jury box, counsel, the public benches) and
+// the capitol's council chamber.
+TEST_CASE(civic_halls_are_furnished_for_what_they_are) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"church", "cinema", "market_hall", "police", "courthouse", "capitol"};
+    const Real sizes[][2] = {{36, 24}, {30, 20}, {44, 28}};
+    std::map<std::string, std::array<int, kPieceCount>> by;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 3; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.openDoorway = true;
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, 1);   // the ground floor
+                for (const PlacedPiece& pp : in.furniture) ++by[rn][pp.piece];
+            }
+    auto c = [&](const char* rn, Piece pc) { return by[rn][static_cast<std::size_t>(pc)]; };
+    std::printf("    [halls] church: pews %d, altars %d | cinema: rows %d, screens %d, ticket desks %d | market: stalls %d "
+                "| police: cell bunks %d, interview tables %d, front desks %d | courthouse: benches %d, jury boxes %d, "
+                "pews %d | capitol: daises %d | bars in the cinema and the market %d, beds outside the cells %d\n",
+                c("church", Piece::Pew), c("church", Piece::Altar), c("cinema", Piece::CinemaRow),
+                c("cinema", Piece::CinemaScreen), c("cinema", Piece::ReceptionDesk), c("market_hall", Piece::MarketStall),
+                c("police", Piece::SingleBed), c("police", Piece::MeetingTable), c("police", Piece::ReceptionDesk),
+                c("courthouse", Piece::JudgeBench), c("courthouse", Piece::JuryBox), c("courthouse", Piece::Pew),
+                c("capitol", Piece::JudgeBench), c("cinema", Piece::BarCounter) + c("market_hall", Piece::BarCounter),
+                c("police", Piece::Bed) + c("courthouse", Piece::Bed) + c("capitol", Piece::Bed));
+    CHECK(c("church", Piece::Pew) > 300 && c("church", Piece::Altar) >= 9);
+    CHECK(c("cinema", Piece::CinemaRow) > 100 && c("cinema", Piece::CinemaScreen) >= 9);
+    CHECK(c("market_hall", Piece::MarketStall) > 100);
+    CHECK(c("police", Piece::SingleBed) > 20 && c("police", Piece::ReceptionDesk) >= 5);
+    CHECK(c("courthouse", Piece::JudgeBench) >= 9 && c("courthouse", Piece::JuryBox) > 0);
+    CHECK(c("capitol", Piece::JudgeBench) >= 5);
+    CHECK(c("cinema", Piece::BarCounter) + c("market_hall", Piece::BarCounter) == 0);
 }

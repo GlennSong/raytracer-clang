@@ -1223,7 +1223,7 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
             // RESTROOMS beside the stair: a teaching hall's 3.6 m room carved off the run's end by the stair hall --
             // never a whole room turned into one (it took a 15 m lecture hall: a toilet and a vanity in a hall)
             const bool byStair = stairHere && runs.size() == 2;
-            const bool restroom = byStair && ri == 0 && (use == 1 || use == 4 || use == 5) && r1 - r0 >= 3.6 + 6.5;
+            const bool restroom = byStair && ri == 0 && (use == 1 || use == 4 || use == 5 || use >= 10) && r1 - r0 >= 3.6 + 6.5;
             const Real len = r1 - r0 - (restroom ? 3.6 : 0.0);
             auto fill = [&](Real target, Real minW, RoomKind kind) {
                 int n = std::max(1, static_cast<int>(len / target));
@@ -1233,6 +1233,18 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
             switch (use) {
                 case 4:   // a museum: galleries, ~10 m a room, every floor
                     fill(10.0, 6.0, RoomKind::Gallery);
+                    break;
+                case 10:  // a police station's ground floor: cells, an interview room every third
+                    fill(3.0, 2.4, RoomKind::Cell);
+                    for (std::size_t k = 0; k < want.size(); ++k)
+                        if ((roomNo + static_cast<int>(k)) % 3 == 2) want[k].kind = RoomKind::Meeting;
+                    break;
+                case 11:  // a courthouse's: courtrooms
+                    fill(12.0, 8.0, RoomKind::Courtroom);
+                    break;
+                case 12:  // a capitol's: the council chamber (its first run), committee rooms
+                    if (roomNo == 0) want.push_back({len, RoomKind::Chamber});
+                    else fill(6.0, 4.0, RoomKind::Meeting);
                     break;
                 case 1:   // teaching hall
                 case 5:   // a school: classrooms and labs, no lecture hall
@@ -1260,6 +1272,45 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                     }
                     break;
             }
+            // THE LOBBY of a police station, a courthouse, a capitol: 7 m of the run the front door opens into, the
+            // run's rooms either side of it (the rooms that fell across it give way)
+            if (storey == 0 && use >= 10 && entranceEdge < planIn.size()) {
+                const Vec2 door = (planIn[entranceEdge] + planIn[(entranceEdge + 1) % planIn.size()]) * 0.5;
+                const Vec2 p0 = b.P(0, 0), ax = b.P(1, 0) - p0, av = b.P(0, 1) - p0;
+                const Real xd = dot(door - p0, ax), vd = dot(door - p0, av);
+                if (std::fabs(vd) < 1.0 && xd > r0 + 1.0 && xd < r0 + len - 1.0 && len >= 7.0 + 2.4) {
+                    const Real la = std::clamp(xd - 3.5, r0, r0 + len - 7.0) - r0, lb = la + 7.0;   // run coordinates
+                    std::vector<Seg> carved;
+                    Real at = 0;
+                    for (const Seg& sg : want) {
+                        const Real s0 = at, s1 = at + sg.w;
+                        at = s1;
+                        if (s1 <= la + 1e-6) carved.push_back(sg);
+                        else if (s0 >= lb - 1e-6) carved.push_back(sg);
+                    }
+                    // the room before the lobby runs to it; the lobby; the room after starts at it
+                    std::vector<Seg> out;
+                    Real end = 0;
+                    std::size_t i = 0;
+                    for (; i < carved.size() && end + carved[i].w <= la + 1e-6; ++i) { out.push_back(carved[i]); end += carved[i].w; }
+                    // a stretch the lobby cut from a room keeps that room's kind (a courtroom either side of it),
+                    // unless too short for one
+                    auto kindFor = [&](Real w, RoomKind k) {
+                        return (k == RoomKind::Courtroom || k == RoomKind::Chamber) && w < 8.0 ? RoomKind::Meeting : k;
+                    };
+                    if (la - end > 1e-6) {
+                        if (!out.empty() && la - end < 2.4) out.back().w += la - end;
+                        else out.push_back({la - end, kindFor(la - end, out.empty() ? want.front().kind : out.back().kind)});
+                    }
+                    out.push_back({7.0, RoomKind::Waiting});
+                    for (; i < carved.size(); ++i) out.push_back(carved[i]);
+                    Real sum = 0;
+                    for (const Seg& sg : out) sum += sg.w;
+                    if (sum < len - 1e-6 && out.back().kind != RoomKind::Waiting) out.back().w += len - sum;
+                    else if (sum < len - 1e-6) out.push_back({len - sum, kindFor(len - sum, want.back().kind)});
+                    want = out;
+                }
+            }
             if (restroom) want.push_back({3.6, RoomKind::Bath});
             if (std::getenv("RT_CAMPUS_DEBUG") && storey == 0)
                 std::fprintf(stderr, "[campus plan] campus %d band %zu run %zu: D %.1f len %.1f stair %d -> %zu rooms, first kind %d\n",
@@ -1273,6 +1324,10 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                 rm.edge = bi;
                 rm.kind = want[k].kind;
                 rm.rect = {b.P(x0, vIn), b.P(x1, vIn), b.P(x1, b.vFront), b.P(x0, b.vFront)};
+                // a courtroom or a chamber runs ALONG its band: side 0 its public end (x0, by the door), side 2 the
+                // bench's -- so its benches face down the room's length (the furniture's sides follow the rect)
+                const bool along = want[k].kind == RoomKind::Courtroom || want[k].kind == RoomKind::Chamber;
+                if (along) rm.rect = {b.P(x0, b.vFront), b.P(x0, vIn), b.P(x1, vIn), b.P(x1, b.vFront)};
                 rp.rooms.push_back(rm);
                 // the front, onto the corridor, with the room's door (a lecture hall's near its back corner)
                 RoomWall fw;
@@ -1281,7 +1336,7 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                 // a teaching room's door near the back corner (the middle of that wall is the front: the board)
                 const bool teaching = want[k].kind == RoomKind::Lecture || want[k].kind == RoomKind::Classroom ||
                                       want[k].kind == RoomKind::Lab;
-                fw.doorAt = teaching ? (b.alongPlus ? 0.88 : 0.12) : 0.5;
+                fw.doorAt = teaching ? (b.alongPlus ? 0.88 : 0.12) : along ? 0.12 : 0.5;
                 rp.walls.push_back(fw);
                 // the partition to the next room
                 if (k + 1 < want.size()) {
@@ -1297,6 +1352,99 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                 RoomWall w; w.a = b.P(xe, vIn); w.b = b.P(xe, b.vFront);
                 rp.walls.push_back(w);
             }
+        }
+    }
+    // A POLICE STATION'S, A COURTHOUSE'S, A CAPITOL'S ground floor: the room the front door opens into is its LOBBY
+    // (the front desk, waiting seats) -- never the chamber.
+    bool hasLobby = false;
+    for (const Room& r : rp.rooms) hasLobby = hasLobby || r.kind == RoomKind::Waiting;
+    if (storey == 0 && use >= 10 && !hasLobby && entranceEdge < planIn.size()) {
+        const Vec2 door = (planIn[entranceEdge] + planIn[(entranceEdge + 1) % planIn.size()]) * 0.5;
+        Room* best = nullptr;
+        Real bestD = 1e9;
+        for (Room& r : rp.rooms) {
+            if (r.kind == RoomKind::Chamber || r.kind == RoomKind::Bath) continue;
+            const Real dd = (centroid(r.rect) - door).length();
+            if (dd < bestD) { bestD = dd; best = &r; }
+        }
+        if (best) best->kind = RoomKind::Waiting;
+    }
+    return rp;
+}
+
+// ------------------------------------------------------------- the civic halls
+// ONE-ROOM HALLS (Glenn, 2026-10-13: "I like your idea. Do that" -- the buildings standing empty, or fitted as a
+// cafe-bar): the ground floor of a church is its NAVE, pews facing the altar at the far end from the door; a market
+// hall's is its floor of stalls; a cinema's is its FOYER along the street (the ticket desk, the concession, seats)
+// and two to four AUDITORIUMS behind it, each with its screen on the far wall and its rows raked up toward its door.
+// Every room's side 0 is its street side (the entrance), so the far wall is side 2. Rectangular plans only.
+static RoomPlan hallPlan(const Poly2& planIn, const BuildingParams& params, Real inset, std::size_t entranceEdge,
+                         const Poly2& well) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = true;   // (a restroom, were there one; lit as a public room)
+    if (planIn.size() != 4 || entranceEdge >= planIn.size()) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const Vec2 em = (planIn[entranceEdge] + planIn[(entranceEdge + 1) % 4]) * 0.5;
+    std::size_t e = 0;
+    Real best = 1e9;
+    for (std::size_t i = 0; i < 4; ++i) {
+        const Real dd = ((plan[i] + plan[(i + 1) % 4]) * 0.5 - em).length();
+        if (dd < best) { best = dd; e = i; }
+    }
+    const Vec2 a = plan[e], dv = plan[(e + 1) % 4] - a;
+    const Real W = dv.length();
+    if (W < 6.0) return rp;
+    const Vec2 d = dv * (1.0 / W), nOut(d.y, -d.x);
+    Real Dp = 0;
+    for (const Vec2& v : plan) Dp = std::max(Dp, dot(a - v, nOut));
+    auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
+    auto room = [&](Real xa, Real xb, Real va, Real vb, RoomKind kind) {
+        Room r; r.edge = e; r.kind = kind;
+        r.rect = {P(xa, va), P(xb, va), P(xb, vb), P(xa, vb)};
+        rp.rooms.push_back(r);
+    };
+    const Real x0 = inset, x1 = W - inset, v0 = inset, v1 = Dp - inset;
+    if (v1 - v0 < 5.0) return rp;
+    const int use = params.civicRooms;
+    if (use != 8) {
+        room(x0, x1, v0, v1, use == 7 ? RoomKind::Nave : RoomKind::Market);
+        return rp;
+    }
+    // THE CINEMA: the foyer, then the auditoriums side by side (8 m wide or more, 6 m deep or more)
+    const Real fd = std::clamp((v1 - v0) * 0.35, Real(4.5), Real(7.0)), vf = v0 + fd;
+    const int n = std::clamp(static_cast<int>((x1 - x0) / 9.0), 1, 4);
+    const bool screens = v1 - vf >= 6.0 && (x1 - x0) / n >= 8.0;
+    // (a cinema with an upper floor: an auditorium its stair stands in is left out -- the stair's hall, open to the
+    // foyer)
+    Real wx0 = 1e9, wx1 = -1e9, wv1 = -1e9;
+    for (const Vec2& q : well) {
+        wx0 = std::min(wx0, dot(q - a, d)); wx1 = std::max(wx1, dot(q - a, d));
+        wv1 = std::max(wv1, dot(a - q, nOut));
+    }
+    if (!screens) {
+        room(x0, x1, v0, v1, RoomKind::Foyer);
+        return rp;
+    }
+    room(x0, x1, v0, vf, RoomKind::Foyer);
+    const Real aw = (x1 - x0) / n;
+    for (int i = 0; i < n; ++i) {
+        const Real xa = x0 + aw * i, xb = xa + aw;
+        const bool stair = well.size() >= 3 && wv1 > vf && wx1 > xa - 1.0 && wx0 < xb + 1.0;
+        if (!stair) {
+            room(xa, xb, vf, v1, RoomKind::Auditorium);
+            RoomWall front;   // onto the foyer, its door at the end away from its neighbour's
+            front.a = P(xa, vf);
+            front.b = P(xb, vf);
+            front.doorAt = (i % 2 == 0) ? 0.12 : 0.88;
+            rp.walls.push_back(front);
+        }
+        if (i + 1 < n) {
+            RoomWall side;
+            side.a = P(xb, vf);
+            side.b = P(xb, v1);
+            rp.walls.push_back(side);
         }
     }
     return rp;
@@ -1885,8 +2033,20 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         if (std::getenv("RT_HOSPITAL_DEBUG"))
             std::fprintf(stderr, "[hospital] storey %d: %zu rooms -- not walkable, falls through\n", storey, hp.rooms.size());
     }
-    if ((params.campus || (params.civicRooms && params.civicRooms != 6)) && !core.valid && planIn.size() >= 4 &&
-        stairWell.size() >= 3) {
+    const int civic = params.civicRooms;
+    if ((civic == 7 || civic == 8 || civic == 14) && storey == 0) {
+        // A CHURCH, A CINEMA, A MARKET HALL: the ground floor is the hall (hallPlan), walked from its front door.
+        RoomPlan hp = hallPlan(planIn, params, inset, entranceEdge, stairWell);
+        hp.finish = interiorFinishFor(params);
+        Vec2 entry = centroid(planIn);
+        if (entranceEdge < planIn.size()) {
+            const Vec2 m = (planIn[entranceEdge] + planIn[(entranceEdge + 1) % planIn.size()]) * 0.5;
+            entry = m + (centroid(planIn) - m) * (inset + 0.8) * (1.0 / std::max(Real(1e-6), (centroid(planIn) - m).length()));
+        }
+        if (!hp.rooms.empty() && floorIsWalkable(hp, planIn, entry, stairWell)) return hp;
+    }
+    const bool civicCorridor = (civic >= 1 && civic <= 5) || (civic >= 10 && civic <= 12 && storey == 0);
+    if ((params.campus || civicCorridor) && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
         RoomPlan cp = campusPlan(planIn, params, stairWell, inset, storey, stairFoot, entranceEdge);

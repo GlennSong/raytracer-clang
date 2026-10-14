@@ -9772,3 +9772,38 @@ Test `the_hospital_has_wards_a_lobby_and_examination_rooms` (12 hospitals): ever
 nurses' station, every floor walkable; 1617 hospital beds, 198 examination couches, 476 waiting seats; no double bed,
 sofa or bathtub (before: 1050 beds, 987 sofas, no lobby). Window rule (ADR-0160) on every civic and office floor:
 346204 pieces, none tall before glass.
+
+## ADR-0166 — Civic halls: the church, the cinema, the market hall, the police station, the courthouse, the capitol
+
+Glenn, 2026-10-13, on a survey of what stood inside the buildings we have: "I like your idea. Do that." A church was
+empty (a one-storey building without shops never reached the room pass); a cinema and a market hall were fitted out
+as a cafe-bar by the shop pass; a police station's, a courthouse's and a capitol's ground floors were empty.
+
+- `civicRooms` (runtime, from the recipe) gains church 7, cinema 8, police 10, courthouse 11, capitol 12, market hall
+  14. `RT_NO_CIVIC_ROOMS=1` is still the A/B switch.
+- **hallPlan** (church, cinema, market hall: the ground floor, rectangular plans; growInterior now lets a one-storey
+  civic hall through): every room's side 0 its street side. A church is its NAVE: the altar and lectern on the far
+  wall, pews in blocks with aisles between them, clear of the door's way in and 4.5 m short of the altar. A market
+  hall is its floor of MARKET STALLS in rows. A cinema is its FOYER along the street (the ticket desk, the concession
+  counter and fridge, waiting seats, posters) and two to four AUDITORIUMS behind it, each with its screen high on the
+  far wall and raked rows (CinemaRow, 0.25 m a tier, aisle stairs) climbing toward its door; an auditorium its stair
+  would stand in is left out, open to the foyer.
+- **campusPlan, the ground floor of a police station, a courthouse, a capitol** (offices above, as ADR-0162): a police
+  station's runs are CELLS (a bunk, a toilet) with an interview room every third; a courthouse's COURTROOMS; a
+  capitol's first run its COUNCIL CHAMBER, committee rooms after. A courtroom or chamber runs along its band (its rect
+  turned so side 0 is the public end by the door, side 2 the bench's): the bench (judge, witness box, clerk), the jury
+  box on a side wall, counsel's tables facing the bench, public pews at the back. The LOBBY is carved where the front
+  door opens: 7 m of that run, the rooms either side giving way (a courtroom cut short of 8 m becomes a meeting room).
+- A one-storey building's stair well is no longer passed to the room planner: there is no stair in it.
+- Room programs gain `rows` (at most so many), `to` (the last row's gap from the far wall) and `any_wall` for a hang
+  (an outside wall, over its windows: a cinema's screen blacks them out -- the window test exempts it). A grid of sets
+  now keeps off the windows like a grid of single pieces (a tiered grid excepted: its back rows rise by design).
+- New pieces: pew, altar, cinema_row, cinema_screen, market_stall, judge_bench, jury_box.
+
+Not done: fire stations, factories, warehouses and sheds are not enterable -- their street face is roller doors, and
+the lot pass opens no doorway in a bay front (`wantsDoorway`), so their insides are never seen. That needs a door of
+their own and a re-bake: the next batch.
+
+No re-bake. Test `civic_halls_are_furnished_for_what_they_are` (9 of each): 891 pews and an altar in every church,
+458 cinema rows and 26 screens, 431 market stalls, 93 cell bunks and a front desk in every police station, a bench in
+every courtroom, a dais in every capitol; no bar counter in a cinema or a market (46 before).

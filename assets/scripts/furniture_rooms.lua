@@ -1,7 +1,8 @@
 -- furniture_rooms.lua -- ROOM PROGRAMS (the furniture library, M3b; Glenn, 2026-10-03: "go ahead with the furniture
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
--- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting. Shops are still furnished in code, by their trade.
+-- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting, nave,
+-- foyer, auditorium, market, cell, courtroom, council_chamber. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -18,11 +19,12 @@
 --   tall              it stands up the wall (no picture over it).   clear  floor kept free in front (metres; a
 --                     described clearance wins).   count  a number, or { per = m, min, max }: one per m of width.
 --   min_w             only in a room wider than this.
---   grid = { w, d }   cells in rows out from the window wall (the first `from` metres off it, default 0.6):
+--   grid = { w, d }   cells in rows out from the window wall (the first `from` metres off it, default 0.6; the last
+--                     `to` short of the far wall, default 0.8; at most `rows` rows):
 --                     aisle = { x, z }; short = a shallower cell where a full one will not fit, built with
 --                     short_style (the piece's style bits).
 --   counter = "kitchen" | "kitchenette"   a run of 0.6 m modules: base, sink, hob, tall_unit, wall_unit picks.
---   hang = pick       on the first clear wall of `sides`.
+--   hang = pick       on the first clear wall of `sides` (`any_wall`: an outside wall too, over its windows).
 --   one_of = { step, step }   one per building (its hash): offices are pods or cubicles, a building at a time -- the
 --                     others in turn where the building's choice fits nothing; `fallback = step` beside it where
 --                     none of them does.
@@ -204,6 +206,77 @@ furniture_rooms = {
     { grid = { 2.4, 0.8 }, from = 3.0, aisle = { 1.4, 1.0 }, pick = "waiting_seats" },
     { wall = { 0.9, 0.9 }, sides = { 1, 3 }, pick = { family = "decor", tags = { "plant" } } },
     { wall = { 0.9, 0.9 }, sides = { 3, 1 }, pick = { family = "decor", tags = { "plant" } } },
+  },
+
+  -- THE CIVIC HALLS (hallPlan / campusPlan, room_plan.cpp): side 0 is the street side or the public end, side 2 the
+  -- far wall -- the altar's, the screen's, the bench's
+  nave = {
+    -- a church: the altar and the lectern on the far wall, pews in blocks either side of the aisles facing them
+    { wall = { 2.4, 1.4 }, sides = { 2 }, pick = "altar" },
+    { wall = { 0.8, 0.7 }, sides = { 2 }, pick = "lectern" },
+    { grid = { 3.0, 0.75 }, from = 2.2, to = 4.5, aisle = { 2.2, 0.3 }, pick = "pew" },
+    { wall = { 0.9, 0.9 }, sides = { 2, 1, 3 }, pick = { family = "decor", tags = { "plant" } } },
+  },
+
+  foyer = {
+    -- a cinema's: the ticket desk facing the doors, the concession (a counter and its fridges), seats to wait on
+    { wall = { 2.4, 1.6 }, sides = { 2, 1 },
+      set = {
+        { pick = "office_chair", x = 1.2, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = "reception_desk", x = 1.2, z = 0.75 },
+      } },
+    { wall = { 1.8, 0.7 }, sides = { 1, 3, 2 }, clear = 1.0, pick = "shop_counter" },
+    { wall = { 0.9, 0.7 }, sides = "opposite", tall = true, clear = 0.8, pick = "drinks_fridge" },
+    { grid = { 2.4, 0.8 }, from = 2.0, aisle = { 1.6, 1.4 }, rows = 2, pick = "waiting_seats" },
+    { hang = "picture", sides = { 1, 3, 2 } },
+    { hang = "picture", sides = { 3, 1, 2 } },
+  },
+
+  auditorium = {
+    -- the screen high on the far wall; rows of six on their risers raking up toward the door (the back), an aisle
+    -- stair beside every block of rows
+    { hang = "cinema_screen", sides = { 2 }, any_wall = true },
+    { grid = { 4.3, 1.0 }, from = 0.6, to = 4.0, aisle = { 0.0, 0.0 }, tiers = true,
+      set = {
+        { pick = "aisle_step", x = 0.45 },
+        { pick = "cinema_row", x = 2.6 },
+      } },
+  },
+
+  market = {
+    -- a market hall: stalls in rows, aisles between to walk and shop
+    { grid = { 2.4, 1.4 }, from = 2.0, aisle = { 1.2, 2.4 }, pick = "market_stall" },
+  },
+
+  cell = {
+    -- a police cell: a bunk along a side wall, a steel toilet in the corner
+    { wall = { 0.9, 2.0 }, sides = { 1, 3 }, pick = "single_bed" },
+    { wall = { 0.5, 0.7 }, sides = { 0, 3, 1 }, pick = "toilet" },
+  },
+
+  courtroom = {
+    -- the bench across the far end (the judge, the witness box, the clerk), the jury box on a side wall, counsel's
+    -- tables facing the bench, the public's benches at the back by the door
+    { wall = { 4.0, 2.2 }, sides = { 2 }, pick = "judge_bench" },
+    { wall = { 3.6, 2.0 }, sides = { 3, 1 }, pick = "jury_box" },
+    { grid = { 3.0, 0.75 }, from = 0.6, aisle = { 1.2, 0.3 }, rows = 4, pick = "pew" },
+    { grid = { 2.4, 1.6 }, from = 5.2, aisle = { 1.6, 0.0 }, rows = 1,
+      set = {
+        { pick = { family = "surface", tags = { "office" } }, x = 1.2, z = 0.75, fit = { 1.6, 0.8 } },
+        { pick = office_kind({ "office" }), x = 0.7, z = 0.05, fit = { 0.7, 0.7 } },
+        { pick = office_kind({ "office" }), x = 1.7, z = 0.05, fit = { 0.7, 0.7 } },
+      } },
+  },
+
+  council_chamber = {
+    -- the dais across the far end, the councillors' desks in rows facing it, the public at the back
+    { wall = { 4.0, 2.2 }, sides = { 2 }, pick = "judge_bench" },
+    { grid = { 3.0, 0.75 }, from = 0.6, aisle = { 1.2, 0.3 }, rows = 3, pick = "pew" },
+    { grid = { 1.6, 1.6 }, from = 4.6, aisle = { 0.4, 0.6 },
+      set = {
+        { pick = { family = "surface", tags = { "office" } }, x = 0.8, z = 0.75, fit = { 1.6, 0.8 } },
+        { pick = office_kind({ "office" }), x = 0.8, z = 0.05, fit = { 0.7, 0.7 } },
+      } },
   },
 
   meeting = {
