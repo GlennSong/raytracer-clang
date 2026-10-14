@@ -92,7 +92,7 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
         w.put<uint32_t>(static_cast<uint32_t>(lb.units.size()));
         for (const BuildingUnit& u : lb.units) {
             putPoly(w, u.plan); w.put<double>(u.baseY); putBuildingParams(w, u.params);
-            w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); putBool(w, d.back); }
+            w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); putBool(w, d.back); putBool(w, d.open); }
             putBool(w, u.enterable);
             w.put<uint32_t>(static_cast<uint32_t>(u.beacons.size())); for (const Vec3& b : u.beacons) putVec3(w, b);
         }
@@ -128,7 +128,7 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
         for (BuildingUnit& u : lb.units) {
             if (!getPoly(r, u.plan) || !r.get(u.baseY) || !getBuildingParams(r, u.params)) return false;
             uint32_t nd = 0; if (!r.get(nd)) return false; u.doors.resize(nd);
-            for (DoorSpec& d : u.doors) if (!getVec2(r, d.foot) || !getVec2(r, d.normal) || !r.get(d.width) || !r.get(d.height) || !getBool(r, d.back)) return false;
+            for (DoorSpec& d : u.doors) if (!getVec2(r, d.foot) || !getVec2(r, d.normal) || !r.get(d.width) || !r.get(d.height) || !getBool(r, d.back) || !getBool(r, d.open)) return false;
             if (!getBool(r, u.enterable)) return false;
             uint32_t nb = 0; if (!r.get(nb)) return false; u.beacons.resize(nb);
             for (Vec3& b : u.beacons) if (!getVec3(r, b)) return false;

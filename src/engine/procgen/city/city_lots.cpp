@@ -3595,6 +3595,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (ap.tag == "shopdoor" || ap.tag == "backdoor")
                 u.doors.push_back({Vec2(ap.position.x, ap.position.z), Vec2(ap.normal.x, ap.normal.z), ap.width,
                                    ap.height, ap.tag == "backdoor"});
+        // A FIRE STATION's open bays (emitBayFront): its way in, a gap the collider cuts, no leaf
+        for (const AttachPoint& ap : um.attaches)
+            if (ap.tag == "baydoor")
+                u.doors.push_back({Vec2(ap.position.x, ap.position.z), Vec2(ap.normal.x, ap.normal.z), ap.width,
+                                   ap.height, false, true});
         // Enterable requires an ACTUAL collected door: recipes that never
         // take FacadeMode::Entrance (cylinders, pagodas, bay fronts) can
         // carry openDoorway without ever emitting an aperture. Evaluated
@@ -3616,7 +3621,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // open. Curtain-wall shafts keep painted doors (their look is
         // unresolved), as do units with no walkable ground. Taller
         // buildings wait for elevators (roadmap).
-        if (bp.walkableGround && bp.groundBays <= 0) {
+        // (a FIRE STATION opens through its bays: their roller doors stand up, the engines inside -- 2026-10-13)
+        if (bp.walkableGround && (bp.groundBays <= 0 || bp.civicRooms == 9)) {
             if (!bp.curtainWall && bp.floors <= 3) return true;
             // THE UNIVERSITY's halls climb by their own stair (campusPlan), however many storeys: the residence
             // hall's four or five were shut, so its students had nowhere to be seen (campus M4)

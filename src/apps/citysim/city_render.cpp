@@ -160,6 +160,9 @@ int CityRenderSystem::drawSlotFor(int ai) const {
     int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
     if (v >= drawVariantCount()) v %= drawVariantCount();
     if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < drawVariantCount()) v = busVariant_;
+    if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&
+        a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+        sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine) v = fireVariant_;
     return v;
 }
 
@@ -565,8 +568,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 // ...and the slot IS a bus to the sim too: the type came from the built-in table by slot number
                 // (slot 24 wraps to a sedan), so ambientSlotFor, which skips Bus slots, dealt ordinary cars the bus
                 // body -- 1 in 25 cars a 12 m "sedan" wearing NOT IN SERVICE (Glenn: the signs stacked over the kerb)
-                if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
+                // ...and the FIRE ENGINE, stationed in the fire stations' bays (never dealt to traffic), by its name
+                // too -- first, so the built-in table's type for its slot number (it stands where the bus did) is
+                // never read
+                if (className == "fire_engine") { fireVariant_ = v; body.type = VehicleType::FireEngine; }
+                else if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
+                else if (body.type == VehicleType::FireEngine) body.type = VehicleType::BoxTruck;
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
@@ -611,6 +619,34 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE FIRE STATIONS' ENGINES (Glenn, 2026-10-13: "a fire truck should be an actual truck"): one parked behind each
+    // bay door of every fire station (vehicleBayDoors: the doors the facade draws), its nose to the door, on the bay's
+    // floor -- the fleet's fire engine, a vehicle like any other, which the sim never deals to traffic.
+    {
+        const engine::CityBuildings* cbs = nullptr;
+        world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& c) { cbs = &c; });
+        Real engineL = 0;
+        for (int fs = 0; fs < sim_.fleetSize(); ++fs)
+            if (sim_.fleetBody(fs).type == VehicleType::FireEngine) engineL = sim_.fleetBody(fs).length;
+        int stations = 0, engines = 0;
+        if (cbs && engineL > 0)
+            for (const engine::BuildingRecord& r : cbs->records) {
+                if (r.recipe != "fire_station") continue;
+                ++stations;
+                Vec2 out(0, 0);
+                for (const auto& [a, b] : engine::vehicleBayDoors(r.plan, r.params, out)) {
+                    const Vec2 mid = (a + b) * 0.5;
+                    Real deep = 0;   // how far the station runs back from this door
+                    for (const Vec2& q : r.plan) deep = std::max(deep, dot(mid - q, out));
+                    if (deep < engineL + 1.6) continue;   // (a station too shallow for its engine keeps the bay empty)
+                    const Vec2 pos = mid - out * (1.0 + engineL * 0.5);
+                    if (sim_.addStationedVehicle(VehicleType::FireEngine, pos, out, r.baseY) >= 0) ++engines;
+                }
+            }
+        if (stations > 0)
+            LOG_INFO << "[citysim] fire stations: " << stations << ", " << engines << " engines in their bays"
+                     << (engineL > 0 ? "" : " (the fleet has no fire engine)");
+    }
     {
         int stalls = 0;
         for (const CitySim::ParkingBay& b : sim_.parkingBays()) stalls += b.garage >= 0;
@@ -2518,6 +2554,10 @@ void CityRenderSystem::syncGroups(World& world) {
             if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
                 busVariant_ < drawVariantCount())
                 v = busVariant_;
+            if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&   // (someone took the engine)
+                a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine)
+                v = fireVariant_;
             if (!cars[v]) continue;
             // R5: a physically-possessed agent renders its Jolt body's pose —
             // real suspension, pitch and roll — while the sim's kinematic
@@ -2609,6 +2649,7 @@ void CityRenderSystem::syncGroups(World& world) {
             int v = sim_.ambientSlotFor(static_cast<int>(vi));
             if (v >= drawVariantCount()) v %= drawVariantCount();
             if (sv.type == VehicleType::Bus && busVariant_ >= 0 && busVariant_ < drawVariantCount()) v = busVariant_;   // a bus parked in its depot
+            if (sv.type == VehicleType::FireEngine && fireVariant_ >= 0 && fireVariant_ < drawVariantCount()) v = fireVariant_;   // in its bay
             if (!cars[v]) continue;
             // The ground sample is the per-frame cost the old one-shot bake
             // existed to avoid — but only a few dozen cars survive the cull, and

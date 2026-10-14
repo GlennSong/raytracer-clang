@@ -51,6 +51,7 @@ struct DoorSpec {
     Real width = 0;
     Real height = 0;
     bool back = false;   // the rear service door (attached buildings): it faces the yard, not the street
+    bool open = false;   // an OPEN BAY (a fire station's, its roller door up): a gap in the wall, no leaf to swing
 };
 
 // One GROWN MASSING and its verbatim regen key (ADR-0080): growPlanBuilding

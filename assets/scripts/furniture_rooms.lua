@@ -2,7 +2,7 @@
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
 -- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting, nave,
--- foyer, auditorium, market, cell, courtroom, council_chamber. Shops are still furnished in code, by their trade.
+-- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -277,6 +277,15 @@ furniture_rooms = {
         { pick = { family = "surface", tags = { "office" } }, x = 0.8, z = 0.75, fit = { 1.6, 0.8 } },
         { pick = office_kind({ "office" }), x = 0.8, z = 0.05, fit = { 0.7, 0.7 } },
       } },
+  },
+
+  engine_bay = {
+    -- a fire station's: the crew's gear lockers along the side walls, a workbench and a locker at the back; the floor
+    -- behind each open bay door is its engine's (the city sim parks it there) and stays clear
+    { grid = { 0.9, 0.6 }, from = 11.0, aisle = { 0.05, 1.8 }, rows = 1, run = { 6, 2.0 }, pick = "gear_locker" },
+    { wall = { 0.9, 0.6 }, sides = { 1, 3 }, tall = true, clear = 0.8, count = { per = 4.0, min = 1, max = 4 }, pick = "gear_locker" },
+    { wall = { 2.4, 0.75 }, sides = { 2 }, clear = 0.8, pick = { family = "surface", tags = { "lab" } } },
+    { wall = { 0.46, 0.6 }, sides = { 2 }, tall = true, clear = 0.6, pick = { family = "storage", tags = { "office" } } },
   },
 
   meeting = {

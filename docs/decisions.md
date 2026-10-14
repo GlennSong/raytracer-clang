@@ -9807,3 +9807,40 @@ their own and a re-bake: the next batch.
 No re-bake. Test `civic_halls_are_furnished_for_what_they_are` (9 of each): 891 pews and an altar in every church,
 458 cinema rows and 26 screens, 431 market stalls, 93 cell bunks and a front desk in every police station, a bench in
 every courtroom, a dais in every capitol; no bar counter in a cinema or a market (46 before).
+
+## ADR-0167 — The fire station: open bays, a real fire engine in each, the engine bay and the crew's quarters
+
+Glenn, 2026-10-13: "I like your idea. Do that" (the fire station on the list of buildings standing wrong inside), then
+"Btw a fire truck should be an actual truck."
+
+The fire station was shut: its street face was a row of roller doors (emitBayFront), the lot pass opens no doorway in
+a bay front (`wantsDoorway`), and inside were offices nobody could reach.
+
+- **The fire engine is a vehicle**, not furniture: a vehicle-kit spec (`vehicle_kit.lua` S.fire_engine: a crew cab on
+  the truck cab profile, a red body of equipment compartments shut by chrome roller doors, a white stripe, a ladder
+  racked on top, a red light bar, dual rear wheels; 9.20 x 2.52 x 3.21 m, a US Type 1 pumper's size) in the fleet
+  before the bus (`vehicles.lua`, the kit and mixed fleets). The sim types it `VehicleType::FireEngine` by its class
+  name and, like the bus, never deals it to ordinary traffic (`serviceVehicle`, `ambientSlotFor`).
+- **Stationed**: `CitySim::addStationedVehicle` adds a driverless vehicle of a type at a pose (the parked index
+  grown to hold it). After the sim is built, the citysim parks one fire engine behind each bay door of every fire
+  station (`vehicleBayDoors`: the doors emitBayFront draws -- its layout now one shared `bayRowFor`), its nose a metre
+  in from the door, on the station's floor; a bay too shallow keeps none. Drawn as the fleet's fire-engine body,
+  parked or driven.
+- **The bays stand open**: a fire station's (civicRooms 9) roller doors are drawn rolled up on their drums, and each
+  bay is a "baydoor" attach -> a DoorSpec with the new `open` flag: the building prism cuts its gap, the DoorSystem
+  hangs no leaf, the furniture keeps its way in clear (storeyOpenings gives a bay front's ground floor its bays). The
+  lot pass opens a fire station through them. Lots format 5; kCityLotsBuildTag / kLotsBuildTag 2026-10-13.1: a
+  re-bake.
+- **Inside**: the ground floor is the ENGINE BAY (hallPlan), the floor each engine stands on an APPARATUS room the
+  furniture treats as taken (as an open plan treats the rooms set into it); the crew's turnout gear in GEAR LOCKERS
+  (a new piece), in groups of six in a row behind the engines; a workbench and a locker at the back. The floor above is
+  the crew's QUARTERS: campusPlan's residence hall -- bunk rooms, a bath -- with the day room and the kitchen in its
+  first run with the rooms for them.
+
+Owed (Glenn, the same day): LADDERS to climb -- a climbing mode, roof-access ladders on buildings, the fire escape's
+drop ladder, a ladder up the fire engine, and its racked ladder taken down and stood against a wall. And the semis
+into traffic, once their trailers articulate in the sim.
+
+Tests: `the_fire_station_opens_its_bays_on_its_engines` (9 stations: 27 bays, 27 open bay doors drawn, 27 engine
+spots kept clear, 219 gear lockers, 224 bunks, a day room and a kitchen each, no office furniture);
+`a_fire_engine_is_stationed_and_never_dealt_to_traffic`; `the_fire_engine_is_fire_engine_sized`.

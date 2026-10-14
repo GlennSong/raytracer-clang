@@ -59,6 +59,7 @@ void DoorSystem::fixedUpdate(FrameContext& ctx) {
         const int64_t ri = r - cb->records.data();
         for (std::size_t d = 0; d < r->doors.size() && d < 255; ++d) {
             const int64_t key = (ri << 8) | static_cast<int64_t>(d);
+            if (r->doors[d].open) continue;   // an open bay: nothing to swing
             desired.push_back(key);
             if (leaves_.count(key)) continue;
             const DoorSpec& ds = r->doors[d];

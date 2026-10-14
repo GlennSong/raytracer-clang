@@ -487,6 +487,7 @@ private:
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
     int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
+    int fireVariant_ = -1;  // ...and as a fire engine (a fire station's, stationed in its bays)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)

@@ -331,6 +331,9 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
 struct WallOpening;   // room_plan.h
 // The doors and windows of one storey's outside walls (`splan`, floor at y0, h tall), as the facade cuts them, on the
 // walls' inner face: what the furniture keeps clear of (room_plan.h WallOpening).
+// A VEHICLE-BAY front's doors (a fire station's, a depot's; params.groundBays on the entrance edge): each bay's two
+// ends on the plan edge, world XZ, and the edge's outward normal. The layout emitBayFront draws. Empty: none.
+std::vector<std::pair<Vec2, Vec2>> vehicleBayDoors(const Poly2& plan, const BuildingParams& params, Vec2& outward);
 std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams& params, int storey, Real y0, Real h,
                                         std::size_t entranceEdge);
 
@@ -544,7 +547,9 @@ struct BuildingParams {
     // floor, by these numbers (the campus field's, plus 4 and 5) -- and a hospital its wards (6, hospitalPlan); a
     // church its nave (7), a cinema its foyer and auditoriums (8), a market hall its stalls (14) -- hallPlan, the
     // ground floor; a police station its lobby, cells and interview rooms (10), a courthouse its courtrooms (11), a
-    // capitol its council chamber (12) -- campusPlan, the ground floor only, offices above.
+    // capitol its council chamber (12) -- campusPlan, the ground floor only, offices above; a fire station its engine
+    // bay (9, hallPlan; its bays stand open, the engines parked in them) and the crew's quarters above (campusPlan's
+    // residence hall).
     // Runtime only like officeUse (architect.h civicRoomsFor).
     uint8_t civicRooms = 0;
     // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each other ...

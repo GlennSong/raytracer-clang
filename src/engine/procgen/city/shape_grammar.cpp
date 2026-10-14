@@ -3236,26 +3236,36 @@ static Real emitSteeple(BuildingMesh& out, const Vec3& cXZ, const Vec3& r3,
 // bay is a real recessed opening — jamb + head reveals connect the wall plane
 // back to the door plane — and the door panel carries horizontal SLATS so it
 // reads as a roller door, with a lintel band across the whole front.
+// The bays' layout along a face W wide: how many, their width, the end margin, the pier between two. Shared by the
+// facade (emitBayFront) and whoever parks behind the doors (vehicleBayDoors: a fire station's engines).
+struct BayRow { int n = 0; Real margin = 1.0, bayW = 0, gap = 0.8; };
+static BayRow bayRowFor(Real W, int groundBays) {
+    BayRow r;
+    r.n = std::max(1, groundBays);
+    r.bayW = (W - 2 * r.margin - (r.n - 1) * r.gap) / r.n;
+    while (r.n > 1 && r.bayW < 3.2) {   // cramped front: fewer, proper-width bays
+        --r.n;
+        r.bayW = (W - 2 * r.margin - (r.n - 1) * r.gap) / r.n;
+    }
+    r.bayW = std::min(r.bayW, Real(4.8));
+    if (r.bayW < 2.6) { r.n = 0; return r; }   // no room for even one bay
+    r.margin = (W - (r.n * r.bayW + (r.n - 1) * r.gap)) * 0.5;
+    return r;
+}
+
 void emitBayFront(BuildingMesh& out, const FaceRect& fr,
                   const BuildingParams& p, const Vec3& wallColor) {
     RenderMesh wall, detail, trim;
     const Real W = fr.width, H = fr.height;
-    int n = std::max(1, p.groundBays);
-    Real margin = 1.0;
-    const Real gap = 0.8;
-    Real bayW = (W - 2 * margin - (n - 1) * gap) / n;
-    while (n > 1 && bayW < 3.2) {   // cramped front: fewer, proper-width bays
-        --n;
-        bayW = (W - 2 * margin - (n - 1) * gap) / n;
-    }
-    bayW = std::min(bayW, Real(4.8));
-    if (bayW < 2.6) {   // no room for even one bay: plain wall face
+    const BayRow row = bayRowFor(W, p.groundBays);
+    const int n = row.n;
+    const Real gap = row.gap, bayW = row.bayW, margin = row.margin;
+    if (n == 0) {   // no room for even one bay: plain wall face
         emitQuad(wall, fr.at(0, 0), fr.at(W, 0), fr.at(W, H), fr.at(0, H),
                  fr.n, wallColor);
         appendToPart(out, p.wallPart, wall);
         return;
     }
-    margin = (W - (n * bayW + (n - 1) * gap)) * 0.5;
     const Real bayH = std::min(H - 0.8, Real(3.8));
     auto wallQuad = [&](Real a0, Real a1, Real b0, Real b1) {
         if (a1 - a0 < 1e-4 || b1 - b0 < 1e-4) return;
@@ -3275,6 +3285,18 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
         emitQuad(wall, bL, bL + in, tL + in, tL, fr.h, wallColor);        // jamb
         emitQuad(wall, bR + in, bR, tR, tR + in, fr.h * -1, wallColor);   // jamb
         emitQuad(wall, tL, tL + in, tR + in, tR, fr.v * -1, wallColor);   // head
+        if (p.civicRooms == 9) {
+            // A FIRE STATION's bays stand OPEN (Glenn, 2026-10-13: "a fire truck should be an actual truck" -- the
+            // engines are seen from the street, and driven out): the roller door rolled up on its drum under the
+            // head, the bay a way in (an open door: the collider's gap, no leaf).
+            const Real dh = 0.42;
+            const Vec3 d0 = fr.at(x0 + 0.05, bayH - dh) + in, d1 = fr.at(x1 - 0.05, bayH - dh) + in;
+            emitQuad(detail, d0, d1, d1 + fr.v * dh, d0 + fr.v * dh, fr.n, panel);           // the drum's face
+            emitQuad(detail, d0 + fr.n * -0.45, d1 + fr.n * -0.45, d1, d0, fr.v * -1, slat);   // its underside
+            const Vec3 foot = fr.at((x0 + x1) * 0.5, 0);
+            out.attaches.push_back({foot, fr.n, "baydoor", x1 - x0, bayH - dh});
+            continue;
+        }
         emitQuad(detail, bL + in, bR + in, tR + in, tL + in, fr.n, panel);
         const Vec3 proud = fr.n * 0.03;
         for (Real sy = 0.5; sy < bayH - 0.3; sy += 0.55) {
@@ -4530,6 +4552,18 @@ std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams
         for (const BayOpening& o : L.open) {
             if (!o.entrance && o.head - o.sill < 1e-3) continue;   // a blank bay: wall
             out.push_back({at(o.wx0), at(o.wx1), o.sill, o.head, o.entrance});
+        }
+    }
+    // A VEHICLE-BAY front's ground floor is its bays (emitBayFront), not the facade layout's: each a door to keep clear
+    if (storey == 0 && params.groundBays > 0) {
+        Vec2 n(0, 0);
+        const auto bays = vehicleBayDoors(splan, params, n);
+        if (!bays.empty()) {
+            const Vec2 on = bays.front().first;
+            out.erase(std::remove_if(out.begin(), out.end(), [&](const WallOpening& o) {
+                          return std::fabs(dot(o.a - on, n) + inset) < 0.3 && std::fabs(dot(o.b - on, n) + inset) < 0.3;
+                      }), out.end());
+            for (const auto& [a, b] : bays) out.push_back({a - n * inset, b - n * inset, 0, std::min(h - 0.8, Real(3.8)), true});
         }
     }
     return out;
@@ -6541,6 +6575,24 @@ CurtainStyle curtainStyleOf(const BuildingParams& p) {
     cs.bay = p.curtainBay > 0.5 ? p.curtainBay : 1.6;
     cs.spandrelFrac = p.spandrelFrac;
     return cs;
+}
+
+std::vector<std::pair<Vec2, Vec2>> vehicleBayDoors(const Poly2& planIn, const BuildingParams& params, Vec2& outward) {
+    std::vector<std::pair<Vec2, Vec2>> doors;
+    if (params.groundBays <= 0 || planIn.size() < 3) return doors;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t e = entranceEdgeFor(plan, params);
+    if (e >= plan.size()) return doors;
+    const FaceRect fr = planEdgeRect(plan, e, 0, params.groundHeight);
+    const BayRow row = bayRowFor(fr.width, params.groundBays);
+    outward = Vec2(fr.n.x, fr.n.z);
+    for (int b = 0; b < row.n; ++b) {
+        const Real x0 = row.margin + b * (row.bayW + row.gap);
+        const Vec3 p0 = fr.at(x0, 0), p1 = fr.at(x0 + row.bayW, 0);
+        doors.push_back({Vec2(p0.x, p0.z), Vec2(p1.x, p1.z)});
+    }
+    return doors;
 }
 
 }  // namespace engine

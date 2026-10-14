@@ -370,7 +370,9 @@ struct Agent {
 // The kind of body a vehicle wears (ADR-0061 Phase 4: one composable vehicle,
 // varied by a Body component). Dimensions come from the shared fleet table below,
 // so the sim (following distance, colliders) and the renderer (mesh, lift) agree.
-enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus };
+// FireEngine: a fire station's (2026-10-13), stationed in its bays -- never dealt to ordinary traffic, like the bus.
+enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus, FireEngine };
+inline bool serviceVehicle(VehicleType t) { return t == VehicleType::Bus || t == VehicleType::FireEngine; }
 
 // A body's physical dimensions (metres) + its type. `length` is the travel axis;
 // car-following keeps cars a bumper apart from THIS, so a longer truck naturally
@@ -458,15 +460,19 @@ public:
         if (ambientBus) return ((i % n) + n) % n;
         int usable = 0;
         for (int s2 = 0; s2 < n; ++s2)
-            if (fleetBody(s2).type != VehicleType::Bus) ++usable;
+            if (!serviceVehicle(fleetBody(s2).type)) ++usable;
         if (usable <= 0) return ((i % n) + n) % n;   // a fleet of only buses
         int want = ((i % usable) + usable) % usable;
         for (int s2 = 0; s2 < n; ++s2) {
-            if (fleetBody(s2).type == VehicleType::Bus) continue;
+            if (serviceVehicle(fleetBody(s2).type)) continue;
             if (want-- == 0) return s2;
         }
         return 0;
     }
+    // A VEHICLE THAT LIVES PARKED where it is stationed (a fire engine in its station's bay): no owner, no driver,
+    // its body the fleet slot of that type; standing at `pos` facing `heading`, on the floor at world y `y`. Call
+    // after build(). The index of the new vehicle, or -1 when the fleet has no body of that type.
+    int addStationedVehicle(VehicleType type, engine::Vec2 pos, engine::Vec2 heading, Real y);
     const VehicleBody& fleetBody(int slot) const {
         if (fleet_.empty()) return vehicleFleetBody(slot);
         const int n = static_cast<int>(fleet_.size());

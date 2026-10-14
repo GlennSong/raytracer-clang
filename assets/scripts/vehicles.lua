@@ -548,7 +548,7 @@ local CLASSIC_SLOTS = {
 }
 
 -- THE FLEET (v2): kit bodies for the cars and trucks; the city BUS stays the mesh.car bus Glenn likes,
--- in the 13th slot (the sim's built-in table types slot 13 as the bus). Semis wait for articulated
+-- in the last slot (the sim finds it by its class name), the fire engine before it. Semis wait for articulated
 -- trailers (a 22 m rigid body would swing its trailer through every kerb).
 local FLEET_SLOTS = {
     { kit = "sedan",       color = { 0.62, 0.06, 0.07 } },   -- sedan (red)
@@ -563,6 +563,7 @@ local FLEET_SLOTS = {
     { kit = "pickup",      color = { 0.14, 0.30, 0.20 } },   -- pickup (green)
     { kit = "step_van",    color = { 0.36, 0.22, 0.10 } },   -- parcel step van (brown)
     { kit = "small_truck", color = { 0.90, 0.90, 0.88 } },   -- small box truck (white cab)
+    { kit = "fire_engine", color = { 0.70, 0.05, 0.05 } },   -- FIRE ENGINE (fire-engine red): stationed, never traffic
     { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow), mesh.car
 }
 
@@ -599,8 +600,9 @@ end
 -- THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"): the kit cars and
 -- trucks, then the classic ones, then the one city bus -- 25 slots, every body on the road at once.
 local MIXED_SLOTS = {}
-for _, s in ipairs(FLEET_SLOTS) do if s.class ~= "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+for _, s in ipairs(FLEET_SLOTS) do if s.class ~= "bus" and s.kit ~= "fire_engine" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
 for _, s in ipairs(CLASSIC_SLOTS) do if s.class ~= "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+for _, s in ipairs(FLEET_SLOTS) do if s.kit == "fire_engine" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
 for _, s in ipairs(FLEET_SLOTS) do if s.class == "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
 
 -- The named fleets. A level picks one with `citysim.fleet` (level_loader points vehicle.fleet at it);

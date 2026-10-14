@@ -1363,6 +1363,23 @@ FurniturePiece build(Piece p, uint32_t variant) {
                 }
             break;
         }
+        case Piece::GearLocker: {
+            // A GEAR LOCKER: an open steel rack, a firefighter's turnout coat on its hook, the trousers folded down
+            // over the boots below, the helmet on the shelf over them. Faces +z; backs onto a wall.
+            k.out.size = {0.90, 1.95, 0.60};
+            const Vec3 tan(0.62, 0.52, 0.30), band(0.85, 0.85, 0.30);
+            for (double x : {-0.43, 0.43}) k.box(F::Metal, {x, 0.975, 0.30}, {0.04, 1.95, 0.58}, 0.0, kSteel, 1);   // the sides
+            k.box(F::Metal, {0, 1.65, 0.30}, {0.86, 0.03, 0.56}, 0.0, kSteel, 1);                 // the shelf
+            k.box(F::Metal, {0, 0.06, 0.30}, {0.86, 0.03, 0.56}, 0.0, kSteel, 1);                 // the floor
+            k.box(F::Metal, {0, 0.975, 0.03}, {0.86, 1.95, 0.02}, 0.0, kSteel * 0.8, 1);          // the back
+            k.box(F::Fabric, {0, 1.20, 0.25}, {0.56, 0.75, 0.24}, 0.05, tan);                       // the coat
+            k.box(F::Fabric, {0, 1.02, 0.38}, {0.58, 0.06, 0.02}, 0.0, band, 1);                     // its reflective band
+            k.box(F::Fabric, {0, 0.42, 0.30}, {0.48, 0.30, 0.30}, 0.06, tan * 0.9);                 // the trousers over the boots
+            for (double x : {-0.12, 0.12}) k.box(F::Hard, {x, 0.20, 0.32}, {0.16, 0.30, 0.28}, 0.04, kBlack);   // the boots
+            k.turned(F::Hard, {0, 1.67, 0.30}, {{0.0, 0.0}, {0.20, 0.0}, {0.17, 0.03}, {0.13, 0.12}, {0.07, 0.18}, {0.0, 0.19}},
+                     Vec3(0.80, 0.12, 0.08), 1.0, 12);                                               // the helmet
+            break;
+        }
         case Piece::Lectern: {
             k.out.size = {0.70, 1.15, 0.55};
             k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
@@ -1475,7 +1492,8 @@ const char* const kPieceNames[kPieceCount] = {
     "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step", "bleacher",
     "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
     "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats",
-    "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box"};
+    "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box",
+    "gear_locker"};
 
 }  // namespace
 

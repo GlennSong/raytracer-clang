@@ -3765,6 +3765,35 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     assignDepots();
 }
 
+int CitySim::addStationedVehicle(VehicleType type, Vec2 pos, Vec2 heading, Real y) {
+    int slot = -1;
+    for (int fs = 0; fs < fleetSize() && slot < 0; ++fs)
+        if (fleetBody(fs).type == type) slot = fs;
+    if (slot < 0) return -1;
+    const VehicleBody& bb = fleetBody(slot);
+    SimVehicle v;
+    v.length = bb.length;
+    v.width = bb.width;
+    v.height = bb.height;
+    v.type = type;
+    v.pos = pos;
+    v.heading = heading;
+    v.parkedY = y;
+    vehicles_.push_back(v);
+    // the parked index was sized for the fleet at build: grow it by one and hash everything again
+    if (nav_ && !nav_->nodes.empty()) {
+        Vec2 lo = nav_->nodes[0], hi = nav_->nodes[0];
+        for (const Vec2& p : nav_->nodes) {
+            lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y);
+            hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y);
+        }
+        const Vec2 pad(kGridPad, kGridPad);
+        parkedGrid_.configure(lo - pad, hi + pad, kAgentGridCell, static_cast<int>(vehicles_.size()));
+        for (std::size_t i = 0; i < vehicles_.size(); ++i) parkedGrid_.place(static_cast<int>(i), vehicles_[i].pos);
+    }
+    return static_cast<int>(vehicles_.size()) - 1;
+}
+
 // EACH ROUTE'S DEPOT: of the depots its buses can drive to (from its first stop to the depot's gate link), the one
 // nearest any of its stops. A route with none keeps the old yard (its outermost stop, parked at the kerb).
 void CitySim::assignDepots() {

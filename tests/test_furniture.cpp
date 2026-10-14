@@ -1635,3 +1635,54 @@ TEST_CASE(civic_halls_are_furnished_for_what_they_are) {
     CHECK(c("capitol", Piece::JudgeBench) >= 5);
     CHECK(c("cinema", Piece::BarCounter) + c("market_hall", Piece::BarCounter) == 0);
 }
+
+// THE FIRE STATION (Glenn, 2026-10-13: "a fire truck should be an actual truck"). It was shut -- its street face was
+// roller doors and the lot pass opened no doorway in a bay front -- and offices inside. Now its bays stand open (the
+// facade marks each one a "baydoor": an open door, the collider's gap, no leaf), the ground floor is the engine bay
+// with the floor each engine stands on kept clear (the city sim parks the fleet's fire engine there) and the crew's
+// gear in lockers behind them, and the floor above is the crew's quarters: bunk rooms, a day room, a kitchen.
+TEST_CASE(the_fire_station_opens_its_bays_on_its_engines) {
+    UseShippedFurniture shipped;
+    const Real sizes[][2] = {{30, 20}, {24, 16}, {36, 24}};
+    int stations = 0, bayDoors = 0, bays = 0, spots = 0, lockers = 0, dayRooms = 0, kitchens = 0, bunks = 0, offices = 0;
+    for (uint32_t seed = 1; seed <= 3; ++seed)
+        for (const auto& sz : sizes) {
+            const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+            BuildingRecipe rc;
+            if (!architectRecipeByName("fire_station", seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+            BuildingParams p = rc.params;
+            p.openDoorway = true;
+            ++stations;
+            CHECK(p.civicRooms == 9);
+            const BuildingMesh ext = growPlanBuilding(plan, p);
+            for (const AttachPoint& ap : ext.attaches) bayDoors += ap.tag == "baydoor";
+            Vec2 out(0, 0);
+            bays += static_cast<int>(vehicleBayDoors(plan, p, out).size());
+            const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+            const std::size_t ee = entranceEdgeFor(plan, p);
+            const InteriorLayout il = interiorLayout(plan, p, ee);
+            const RoomPlan g = roomPlan(sps[0].plan, p, CorePlan{}, il.edge, std::max(p.wallThickness, Real(0.55)), 0,
+                                        il.hasStair ? il.well : Poly2{}, ee);
+            for (const Room& r : g.rooms) spots += r.kind == RoomKind::Apparatus;
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, p.floors + 1);
+            for (const PlacedPiece& pp : in.furniture) {
+                lockers += pp.piece == static_cast<uint8_t>(Piece::GearLocker);
+                bunks += pp.piece == static_cast<uint8_t>(Piece::SingleBed);
+                offices += pp.piece == static_cast<uint8_t>(Piece::Cubicle) || pp.piece == static_cast<uint8_t>(Piece::DeskPod);
+            }
+            if (sps.size() > 1) {
+                const RoomPlan q = roomPlan(sps[1].plan, p, CorePlan{}, il.edge, std::max(p.wallThickness, Real(0.55)), 1,
+                                            il.hasStair ? il.well : Poly2{}, ee, il.hasStair ? il.stairFoot : Vec2(1e30, 1e30));
+                for (const Room& r : q.rooms) { dayRooms += r.kind == RoomKind::Living; kitchens += r.kind == RoomKind::Kitchen; }
+            }
+        }
+    std::printf("    [fire] %d stations: %d bays, %d open bay doors drawn, %d engine spots kept clear; %d gear lockers, %d bunks, "
+                "%d day rooms, %d kitchens, %d office workstations\n", stations, bays, bayDoors, spots, lockers, bunks, dayRooms,
+                kitchens, offices);
+    CHECK(stations >= 6);
+    CHECK(bays > 0 && bayDoors == bays);
+    CHECK(spots * 10 >= bays * 7);   // (a bay too shallow for an engine keeps its floor)
+    CHECK(lockers > 0 && bunks > 0);
+    CHECK(dayRooms > 0 && kitchens > 0);
+    CHECK(offices == 0);
+}

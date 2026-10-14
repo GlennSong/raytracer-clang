@@ -1075,7 +1075,8 @@ static RoomPlan walkupPlan(const Poly2& planIn, const BuildingParams& params, co
 //   RESIDENCE HALL (3)         two-bed DORM rooms (3.6 m), a shared bath every eighth, a lounge by the stair.
 static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, const Poly2& well, Real inset,
                            int storey, const Vec2& stairFoot, std::size_t entranceEdge) {
-    const int use = params.campus ? params.campus : params.civicRooms;   // the campus's halls, or a civic building's
+    // the campus's halls, or a civic building's -- a fire station's upper floor is its crew's quarters, a residence hall's
+    const int use = params.campus ? params.campus : params.civicRooms == 9 ? 3 : params.civicRooms;
     RoomPlan rp;
     rp.topology = PlateTopology::Apartments;
     rp.office = use != 3;
@@ -1148,6 +1149,7 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
     // rows), on whichever side of the corridor has it -- the stair's side is often cut too short. The city's halls
     // are single-loaded, their rooms ~7 m deep: deep enough for the stage and three tiers
     bool lectureDone = false;
+    bool loungeDone = false;   // (a fire station's day room: the first run with the rooms for it)
     for (std::size_t bi = 0; bi < bands.size(); ++bi) {
         const Band& b = bands[bi];
         const Real vIn = inset, D = b.vFront - vIn;
@@ -1265,10 +1267,15 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
                     fill(3.6, 3.3, RoomKind::Dorm);
                     for (std::size_t k = 0; k < want.size(); ++k)
                         if ((roomNo + static_cast<int>(k)) % 8 == 7) want[k].kind = RoomKind::Bath;
-                    if (storey == 0 && bi == 0 && ri == 0 && want.size() >= 3) {   // the lounge: two rooms merged
+                    // the lounge: two rooms merged -- on a fire station's quarters (its first floor up), the crew's day
+                    // room, their kitchen beside it
+                    if (storey == (params.civicRooms == 9 ? 1 : 0) && want.size() >= 3 &&
+                        (params.civicRooms == 9 ? !loungeDone : bi == 0 && ri == 0)) {
+                        loungeDone = true;
                         want[1].w += want[0].w;
                         want[1].kind = RoomKind::Living;
                         want.erase(want.begin());
+                        if (params.civicRooms == 9 && want.size() >= 2) want[1].kind = RoomKind::Kitchen;
                     }
                     break;
             }
@@ -1408,6 +1415,26 @@ static RoomPlan hallPlan(const Poly2& planIn, const BuildingParams& params, Real
     const Real x0 = inset, x1 = W - inset, v0 = inset, v1 = Dp - inset;
     if (v1 - v0 < 5.0) return rp;
     const int use = params.civicRooms;
+    if (use == 9) {
+        // THE ENGINE BAY: the whole floor, and behind each open bay door the floor its engine stands on -- the city
+        // sim parks one there (the fleet's fire engine, 9.2 m: its nose a metre in from the door), so nothing else
+        // may; a bay too shallow for one keeps its floor
+        room(x0, x1, v0, v1, RoomKind::EngineBay);
+        Vec2 out(0, 0);
+        constexpr Real kEngineL = 9.3, kEngineW = 2.6;
+        for (const auto& [da, db] : vehicleBayDoors(planIn, params, out)) {
+            const Vec2 mid = (da + db) * 0.5;
+            Real deep = 0;
+            for (const Vec2& q : planIn) deep = std::max(deep, dot(mid - q, out));
+            if (deep < kEngineL + 1.2) continue;   // (a little short of the sim's own test: never a parked engine unreserved)
+            const Real xm = dot(mid - a, d);
+            Room ap; ap.edge = e; ap.kind = RoomKind::Apparatus;
+            ap.rect = {P(xm - kEngineW * 0.5 - 0.3, v0), P(xm + kEngineW * 0.5 + 0.3, v0),
+                       P(xm + kEngineW * 0.5 + 0.3, 1.0 + kEngineL + 0.4), P(xm - kEngineW * 0.5 - 0.3, 1.0 + kEngineL + 0.4)};
+            rp.rooms.push_back(ap);
+        }
+        return rp;
+    }
     if (use != 8) {
         room(x0, x1, v0, v1, use == 7 ? RoomKind::Nave : RoomKind::Market);
         return rp;
@@ -2034,7 +2061,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
             std::fprintf(stderr, "[hospital] storey %d: %zu rooms -- not walkable, falls through\n", storey, hp.rooms.size());
     }
     const int civic = params.civicRooms;
-    if ((civic == 7 || civic == 8 || civic == 14) && storey == 0) {
+    if ((civic == 7 || civic == 8 || civic == 9 || civic == 14) && storey == 0) {
         // A CHURCH, A CINEMA, A MARKET HALL: the ground floor is the hall (hallPlan), walked from its front door.
         RoomPlan hp = hallPlan(planIn, params, inset, entranceEdge, stairWell);
         hp.finish = interiorFinishFor(params);
@@ -2045,7 +2072,8 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         }
         if (!hp.rooms.empty() && floorIsWalkable(hp, planIn, entry, stairWell)) return hp;
     }
-    const bool civicCorridor = (civic >= 1 && civic <= 5) || (civic >= 10 && civic <= 12 && storey == 0);
+    const bool civicCorridor = (civic >= 1 && civic <= 5) || (civic >= 10 && civic <= 12 && storey == 0) ||
+                               (civic == 9 && storey >= 1);   // (the fire crew's quarters: the residence hall's floor)
     if ((params.campus || civicCorridor) && !core.valid && planIn.size() >= 4 && stairWell.size() >= 3) {
         // A CAMPUS building: its rooms either side of a corridor from the stair, every floor (the ground floor too:
         // a lecture hall, the reading room, dorms), walked from the stair's foot.
