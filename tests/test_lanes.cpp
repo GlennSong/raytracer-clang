@@ -816,3 +816,58 @@ TEST_CASE(lanes_light_rail_lab_tracks_carry_no_street_and_stations_have_canopies
         }
     CHECK(stops >= 2);
 }
+
+// EVERY DECK FACE OUTWARD (Glenn, 2026-10-13: "the elevated freeway/rail undercarriage when viewed from below can be
+// seen through, the normals are wound wrong there as well"). The engine draws CLOCKWISE triangles (seen from the side
+// their normal points to) and culls the rest in the opaque pass: a triangle (a, b, c) faces its normal when
+// cross(c - a, b - a) points along it. Every mesh the decks build, on the freeway, viaduct and rail labs.
+TEST_CASE(lanes_every_deck_triangle_faces_its_normal) {
+    int total = 0, inward = 0;
+    for (const char* scn : {"freeway_cross", "valley_viaduct", "light_rail_lab", "rail_loop"}) {
+        const Result& r = scene(scn);
+        for (const NamedMesh& nm : buildMeshes(r)) {
+            int in = 0, n = 0;
+            const RenderMesh& m = nm.mesh;
+            for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+                const Vertex& a = m.vertices[m.indices[i]];
+                const Vertex& b = m.vertices[m.indices[i + 1]];
+                const Vertex& c = m.vertices[m.indices[i + 2]];
+                const Vec3 nrm = a.normal + b.normal + c.normal;
+                const Vec3 f = cross(c.position - a.position, b.position - a.position);
+                if (nrm.lengthSquared() < 1e-12 || f.lengthSquared() < 1e-14) continue;
+                ++n;
+                if (dot(f, nrm) < 0) ++in;
+            }
+            total += n;
+            inward += in;
+            if (in > 0) std::printf("    [winding] %s %-14s %6d of %6d triangles inward\n", scn, nm.name.c_str(), in, n);
+        }
+    }
+    std::printf("    [winding] decks: %d triangles, %d inward\n", total, inward);
+    CHECK(total > 10000);
+    CHECK(inward == 0);
+}
+
+// THE DECKS' UNDERSIDES face DOWN (Glenn: "the elevated freeway/rail undercarriage when viewed from below can be seen
+// through"): over an elevated deck's top, as many square metres face down as face up -- its soffit.
+TEST_CASE(lanes_an_elevated_deck_has_a_soffit_facing_down) {
+    for (const char* scn : {"valley_viaduct", "light_rail_lab", "freeway_cross"}) {
+        const Result& r = scene(scn);
+        double up = 0, down = 0;
+        for (const NamedMesh& nm : buildMeshes(r)) {
+            const RenderMesh& m = nm.mesh;
+            for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+                const Vec3 a = m.vertices[m.indices[i]].position, b = m.vertices[m.indices[i + 1]].position,
+                           c = m.vertices[m.indices[i + 2]].position;
+                const Vec3 f = cross(c - a, b - a);   // (the engine's front: clockwise from outside)
+                const double area = 0.5 * f.length();
+                if (area < 1e-9) continue;
+                const double ny = f.y / (2 * area);
+                if (ny > 0.9) up += area; else if (ny < -0.9) down += area;
+                (void)nm;
+            }
+            std::printf("    [soffit] %s %-14s up %10.0f m2, down %10.0f m2\n", scn, nm.name.c_str(), up, down);
+            up = down = 0;
+        }
+    }
+}
