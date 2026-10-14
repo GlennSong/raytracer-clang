@@ -134,6 +134,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
     src/engine/procgen/city/room_plan.cpp
+    src/engine/procgen/city/ladders.cpp
     src/engine/procgen/city/furniture.cpp
     src/engine/procgen/furniture_kit.cpp
     src/engine/procgen/furniture_library.cpp
@@ -231,6 +232,7 @@ add_library(engine_core STATIC
     src/engine/systems/teleport_pose.cpp
     src/engine/systems/building_interior_system.cpp
     src/engine/systems/door_system.cpp
+    src/engine/systems/ladder_system.cpp
     src/engine/systems/elevator_system.cpp
     src/engine/systems/interaction_system.cpp
     src/engine/systems/interact_broker_system.cpp
@@ -823,6 +825,7 @@ add_executable(run_tests
     tests/test_site_plan.cpp
     tests/test_core_plan.cpp
     tests/test_room_plan.cpp
+    tests/test_ladders.cpp
     tests/test_furniture.cpp
     tests/test_alignment.cpp
     tests/test_surface_field.cpp

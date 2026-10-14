@@ -642,6 +642,17 @@ S.fire_engine = function()
         add(kit.box_part({ 0.10, 0.26, bodyL + 0.6 }, { sx * 0.45, 0.80, zc + 0.3 }, 3, "chassis"))
       end
       add(kit.box_part({ 2.30, 0.14, 0.12 }, { 0, 0.62, zB1 + 0.10 }, 3, "chrome"))   -- rear step
+      -- the LADDER UP THE BACK (the LadderSystem's: you climb it to the top, engine/ladder.h): two rails off the
+      -- body's back on stand-offs, a rung every 0.3 m, from the step to over the roof
+      local top = bodyY + bodyH + 0.35
+      for _, sx in ipairs({ 1, -1 }) do
+        add(kit.box_part({ 0.05, top - 0.55, 0.05 }, { sx * 0.22, 0.55 + (top - 0.55) * 0.5, zB1 - 0.10 }, 3, "chrome"))
+        add(kit.box_part({ 0.04, 0.04, 0.10 }, { sx * 0.22, bodyY + 0.6, zB1 - 0.05 }, 3, "chrome"))
+        add(kit.box_part({ 0.04, 0.04, 0.10 }, { sx * 0.22, bodyY + bodyH - 0.2, zB1 - 0.05 }, 3, "chrome"))
+      end
+      for y = 0.85, top - 0.1, 0.3 do
+        add(kit.box_part({ 0.44, 0.03, 0.03 }, { 0, y, zB1 - 0.10 }, 3, "chrome"))
+      end
       car.duals = { [zR] = true }
     end }
   P.wheel_w = 0.30

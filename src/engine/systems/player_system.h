@@ -89,6 +89,13 @@ struct SwimState {
     }
 };
 
+// CLIMBING a ladder (engine/ladder.h): a steady climb, quicker with run held -- a fixed ladder's pace, about a
+// rung (0.3 m) every quarter second.
+struct ClimbSpeed {
+    static constexpr Real kClimb = 1.1;   // m/s
+    static constexpr Real kRun = 1.7;
+};
+
 // Drives the on-foot player character and its camera. The FLY controller is
 // the player's HEADING either way (CameraSystem feeds it mouse/stick look):
 // first person renders from its pinned eye; third person (V — the on-foot

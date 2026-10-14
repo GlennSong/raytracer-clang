@@ -9844,3 +9844,39 @@ into traffic, once their trailers articulate in the sim.
 Tests: `the_fire_station_opens_its_bays_on_its_engines` (9 stations: 27 bays, 27 open bay doors drawn, 27 engine
 spots kept clear, 219 gear lockers, 224 bunks, a day room and a kitchen each, no office furniture);
 `a_fire_engine_is_stationed_and_never_dealt_to_traffic`; `the_fire_engine_is_fire_engine_sized`.
+
+## ADR-0168 — Ladders you can climb: roof-access ladders and the fire engine's
+
+Glenn, 2026-10-13: "We don't have ladders as interactable objects? Can we make ladders as interactable? And then use
+it on the fire engine and on buildings like auxiliary access ways to roofs?"
+
+There was no climbing: furniture offered sit, lie and stand; the player walked and swam.
+
+- **A ladder is data** (`engine/ladder.h` LadderSpec: its foot, the normal off its wall, the rails' top, the surface it
+  lands on and where you stand once off). The world's list (`Ladders`) holds the buildings' (`fixed`, built once a
+  city loads) and the vehicles' (`moving`, rewritten every frame by their owner).
+- **The LadderSystem** (an interaction provider, like furniture): offers the broker "climb" standing in front of a
+  ladder's foot and "climb down" standing where it lets you off at the top (`ladderEndWithinReach`); on the command
+  it puts `Climbing` on the player. It draws the buildings' ladders within 140 m (let go beyond 180 m).
+- **Climbing** (PlayerSystem, like swimming: `moveCharacterFree`, no gravity): forward climbs at 1.1 m/s (1.7 with
+  run), back climbs down; over the top the body steps off onto the landing, down at the foot onto the ground in front;
+  jump lets go. A rung is footing, never a fall.
+- **Roof-access ladders** (`procgen/city/ladders.h` roofLadderFor, pure in the building record, nothing baked): low
+  flat-roofed buildings (one to four storeys over the ground floor; no curtain wall, big box or campus hall), two in
+  three, on the REAR face, clear of every window the facade cuts on every storey (the first stretch a caged ladder's
+  width clear, from the end away from the fire escape's); a ladder of rails, rungs and wall brackets from the ground
+  to 1.1 m over the roof, bent back over the parapet, caged above 2.4 m where the roof is over 4.5 m up. The island:
+  3115 before the window rule.
+- **The fire engine's**: a ladder up the back of its body (in the kit spec, vehicle_kit.lua), published by the citysim
+  for every parked engine within 40 m: from the floor behind it to its roof (its collider box's top), stepping off
+  between the racked ladder's rails.
+
+Probed on island_8_nature: the fire engine's ladder offered and climbed (eye 13.65 -> 16.40 m), the player stood on its
+roof; a building's roof ladder offered, climbed and stepped off onto its roof 12 m up.
+
+Owed: the fire engine's racked ladder taken down, carried and stood against a wall (a carry-and-place mechanic); a
+climbing pose for the third-person body; ladders on the fire escapes' top landings to the roof.
+
+Tests: `low_flat_roofed_buildings_carry_a_roof_ladder_on_their_back_wall` (144 buildings: 26 ladders, all on the rear
+wall, letting off on the roof, over the parapet, the tall ones caged, none where none belongs, none across a window);
+`a_ladder_is_reached_from_its_foot_or_its_top`.

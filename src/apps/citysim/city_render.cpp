@@ -1,4 +1,5 @@
 #include "city_render.h"
+#include "../../engine/ladder.h"   // the fire engines' ladders
 #include "../../engine/interaction.h"           // Interactables: the outdoor seats (M5)
 #include "../../engine/procgen/furniture_library.h"
 #include "../../engine/procgen/city/shop_signs.h"    // busSignImages: the buses' destination signs
@@ -640,7 +641,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     for (const Vec2& q : r.plan) deep = std::max(deep, dot(mid - q, out));
                     if (deep < engineL + 1.6) continue;   // (a station too shallow for its engine keeps the bay empty)
                     const Vec2 pos = mid - out * (1.0 + engineL * 0.5);
-                    if (sim_.addStationedVehicle(VehicleType::FireEngine, pos, out, r.baseY) >= 0) ++engines;
+                    if (sim_.addStationedVehicle(VehicleType::FireEngine, pos, out, r.baseY) >= 0) {
+                        ++engines;
+                        if (engines <= 3)   // (where to find one: a bay door, its outward normal, the floor)
+                            LOG_INFO << "[citysim] fire engine in its bay: door " << mid.x << " " << mid.y << " out "
+                                     << out.x << " " << out.y << " floor " << r.baseY;
+                    }
                 }
             }
         if (stations > 0)
@@ -3607,6 +3613,36 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // staged cycle it must read the same as the sky's (one clock).
     ctx.settings.setDouble("citysim.hour", built_ ? sim_.clockHours() : -1.0);
     if (built_ && !busSignsTried_ && busVariant_ >= 0 && sim_.buses().routeCount() > 0) makeBusSigns(ctx);
+    // THE FIRE ENGINES' LADDERS (engine/ladder.h; Glenn, 2026-10-13: "use it on the fire engine"): the ladder up the
+    // back of every parked fire engine near the player, for the LadderSystem to offer -- from the road behind it to
+    // its top, where you step off between the racked ladder's rails.
+    if (built_) {
+        Vec3 me(0, 0, 0);
+        bool havePlayer = false;
+        ctx.world.each<engine::Transform, engine::ControlledBy>([&](Entity, engine::Transform& t, engine::ControlledBy&) {
+            if (!havePlayer) { me = t.position; havePlayer = true; }
+        });
+        ctx.world.each<engine::Ladders>([&](Entity, engine::Ladders& lad) {
+            lad.moving.clear();
+            if (!havePlayer) return;
+            const auto& vs = sim_.vehicles();
+            for (const SimVehicle& sv : vs) {
+                if (sv.type != VehicleType::FireEngine || sv.driver >= 0) continue;
+                if ((sv.pos - Vec2(me.x, me.z)).length() > 40.0) continue;
+                const Real y = sv.parkedY > -1e29 ? sv.parkedY : groundAt(sv.pos.x, sv.pos.y);
+                const Vec2 back = sv.pos - sv.heading * (sv.length * 0.5);
+                engine::LadderSpec l;
+                l.out = sv.heading * -1.0;
+                l.foot = Vec3(back.x + l.out.x * 0.08, y, back.y + l.out.y * 0.08);
+                l.width = 0.44;
+                l.landY = y + sv.height;
+                l.topY = l.landY + 0.4;
+                const Vec2 on = back + sv.heading * 1.6;
+                l.exit = Vec3(on.x, l.landY, on.y);
+                lad.moving.push_back(l);
+            }
+        });
+    }
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
     // Semicolon flips the city-plan layer (blocks + lots) — and switches the

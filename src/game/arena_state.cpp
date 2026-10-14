@@ -12,6 +12,7 @@
 #include "../engine/systems/teleport_system.h"
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
+#include "../engine/systems/ladder_system.h"
 #include "../engine/systems/elevator_system.h"
 #include "../engine/systems/interaction_system.h"
 #include "../engine/systems/interact_broker_system.h"
@@ -227,6 +228,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<NatureColliderSystem>(physSys);   // trunk + rock colliders round the player (#55)
     addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
+    addSystem<LadderSystem>();  // roof ladders + vehicles' ladders: climb (engine/ladder.h)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
     addSystem<InteractionSystem>();       // sit / lie on furniture (the furniture library, M1)
     // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
