@@ -3622,7 +3622,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // unresolved), as do units with no walkable ground. Taller
         // buildings wait for elevators (roadmap).
         // (a FIRE STATION opens through its bays: their roller doors stand up, the engines inside -- 2026-10-13)
-        if (bp.walkableGround && (bp.groundBays <= 0 || bp.civicRooms == 9)) {
+        if (bp.walkableGround && (bp.groundBays <= 0 || baysStandOpen(bp))) {
             if (!bp.curtainWall && bp.floors <= 3) return true;
             // THE UNIVERSITY's halls climb by their own stair (campusPlan), however many storeys: the residence
             // hall's four or five were shut, so its students had nowhere to be seen (campus M4)

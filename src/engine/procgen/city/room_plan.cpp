@@ -1386,7 +1386,7 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
 // and two to four AUDITORIUMS behind it, each with its screen on the far wall and its rows raked up toward its door.
 // Every room's side 0 is its street side (the entrance), so the far wall is side 2. Rectangular plans only.
 static RoomPlan hallPlan(const Poly2& planIn, const BuildingParams& params, Real inset, std::size_t entranceEdge,
-                         const Poly2& well) {
+                         const Poly2& well, const Vec2& stairFoot = Vec2(1e30, 1e30)) {
     RoomPlan rp;
     rp.topology = PlateTopology::Ring;
     rp.office = true;   // (a restroom, were there one; lit as a public room)
@@ -1415,6 +1415,35 @@ static RoomPlan hallPlan(const Poly2& planIn, const BuildingParams& params, Real
     const Real x0 = inset, x1 = W - inset, v0 = inset, v1 = Dp - inset;
     if (v1 - v0 < 5.0) return rp;
     const int use = params.civicRooms;
+    // THE STAIR (a hall with a floor above): its well and its flight's foot are floor nothing may stand on
+    auto keepStairClear = [&]() {
+        if (well.size() < 3) return;
+        Real s0 = 1e9, s1 = -1e9, t0 = 1e9, t1 = -1e9;
+        auto take = [&](const Vec2& q) {
+            const Real s = dot(q - a, d), t = dot(a - q, nOut);
+            s0 = std::min(s0, s); s1 = std::max(s1, s); t0 = std::min(t0, t); t1 = std::max(t1, t);
+        };
+        for (const Vec2& q : well) take(q);
+        if (stairFoot.x < 1e29) take(stairFoot);
+        Room st; st.edge = e; st.kind = RoomKind::Apparatus;
+        st.rect = {P(s0 - 0.8, t0 - 0.8), P(s1 + 0.8, t0 - 0.8), P(s1 + 0.8, t1 + 0.8), P(s0 - 0.8, t1 + 0.8)};
+        rp.rooms.push_back(st);
+    };
+    if (use == 15 || use == 16) {
+        // A FACTORY'S SHOP FLOOR, A WAREHOUSE'S RACKS: the whole floor, a loading strip kept clear inside each open bay
+        // (a truck's length in: 5 m), the stair's flight clear
+        room(x0, x1, v0, v1, use == 15 ? RoomKind::ShopFloor : RoomKind::Warehouse);
+        Vec2 out(0, 0);
+        for (const auto& [da, db] : vehicleBayDoors(planIn, params, out)) {
+            const Real xa = dot(da - a, d), xb = dot(db - a, d);
+            Room ld; ld.edge = e; ld.kind = RoomKind::Apparatus;
+            ld.rect = {P(std::min(xa, xb) - 0.3, v0), P(std::max(xa, xb) + 0.3, v0), P(std::max(xa, xb) + 0.3, v0 + 5.0),
+                       P(std::min(xa, xb) - 0.3, v0 + 5.0)};
+            rp.rooms.push_back(ld);
+        }
+        keepStairClear();
+        return rp;
+    }
     if (use == 9) {
         // THE ENGINE BAY: the whole floor, and behind each open bay door the floor its engine stands on -- the city
         // sim parks one there (the fleet's fire engine, 9.2 m: its nose a metre in from the door), so nothing else
@@ -1433,6 +1462,7 @@ static RoomPlan hallPlan(const Poly2& planIn, const BuildingParams& params, Real
                        P(xm + kEngineW * 0.5 + 0.3, 1.0 + kEngineL + 0.4), P(xm - kEngineW * 0.5 - 0.3, 1.0 + kEngineL + 0.4)};
             rp.rooms.push_back(ap);
         }
+        keepStairClear();
         return rp;
     }
     if (use != 8) {
@@ -2061,16 +2091,20 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
             std::fprintf(stderr, "[hospital] storey %d: %zu rooms -- not walkable, falls through\n", storey, hp.rooms.size());
     }
     const int civic = params.civicRooms;
-    if ((civic == 7 || civic == 8 || civic == 9 || civic == 14) && storey == 0) {
-        // A CHURCH, A CINEMA, A MARKET HALL: the ground floor is the hall (hallPlan), walked from its front door.
-        RoomPlan hp = hallPlan(planIn, params, inset, entranceEdge, stairWell);
+    if ((civic == 7 || civic == 8 || civic == 9 || civic == 14 || civic == 15 || civic == 16) && storey == 0) {
+        // A CHURCH, A CINEMA, A MARKET HALL, A FIRE STATION, A FACTORY, A WAREHOUSE: the ground floor is the hall
+        // (hallPlan), walked from its front door.
+        RoomPlan hp = hallPlan(planIn, params, inset, entranceEdge, stairWell, stairFoot);
         hp.finish = interiorFinishFor(params);
         Vec2 entry = centroid(planIn);
         if (entranceEdge < planIn.size()) {
             const Vec2 m = (planIn[entranceEdge] + planIn[(entranceEdge + 1) % planIn.size()]) * 0.5;
             entry = m + (centroid(planIn) - m) * (inset + 0.8) * (1.0 / std::max(Real(1e-6), (centroid(planIn) - m).length()));
         }
-        if (!hp.rooms.empty() && floorIsWalkable(hp, planIn, entry, stairWell)) return hp;
+        RoomPlan walk = hp;   // (the floor kept clear -- a parked engine's, a loading strip, a stair's flight -- is no room to reach)
+        walk.rooms.erase(std::remove_if(walk.rooms.begin(), walk.rooms.end(),
+                                        [](const Room& r) { return r.kind == RoomKind::Apparatus; }), walk.rooms.end());
+        if (!hp.rooms.empty() && floorIsWalkable(walk, planIn, entry, stairWell)) return hp;
     }
     const bool civicCorridor = (civic >= 1 && civic <= 5) || (civic >= 10 && civic <= 12 && storey == 0) ||
                                (civic == 9 && storey >= 1);   // (the fire crew's quarters: the residence hall's floor)

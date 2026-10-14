@@ -179,6 +179,8 @@ uint8_t civicRoomsFor(const std::string& recipe) {
     if (recipe == "courthouse") return 11;
     if (recipe == "capitol") return 12;
     if (recipe == "market_hall") return 14;
+    if (recipe == "factory") return 15;
+    if (recipe == "brick_warehouse" || recipe == "metal_shed") return 16;
     return 0;
 }
 

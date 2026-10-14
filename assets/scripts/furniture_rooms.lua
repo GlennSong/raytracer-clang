@@ -2,7 +2,7 @@
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
 -- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting, nave,
--- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay. Shops are still furnished in code, by their trade.
+-- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay, shop_floor, warehouse. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -286,6 +286,24 @@ furniture_rooms = {
     { wall = { 0.9, 0.6 }, sides = { 1, 3 }, tall = true, clear = 0.8, count = { per = 4.0, min = 1, max = 4 }, pick = "gear_locker" },
     { wall = { 2.4, 0.75 }, sides = { 2 }, clear = 0.8, pick = { family = "surface", tags = { "lab" } } },
     { wall = { 0.46, 0.6 }, sides = { 2 }, tall = true, clear = 0.6, pick = { family = "storage", tags = { "office" } } },
+  },
+
+  shop_floor = {
+    -- a factory: workbenches along the walls, the machines in rows down the floor (aisles to walk and wheel between),
+    -- pallets of stock and the forklift by the loading bays
+    { wall = { 1.3, 3.0 }, sides = { 3, 1 }, clear = 1.5, pick = "forklift" },
+    { wall = { 1.2, 1.0 }, sides = { 1, 3 }, clear = 1.2, count = { per = 6.0, min = 1, max = 3 }, pick = "pallet_stack" },
+    { wall = { 2.0, 0.8 }, sides = { 1, 3, 2 }, clear = 1.0, count = { per = 3.0, min = 2, max = 6 }, pick = "workbench" },
+    { grid = { 2.6, 1.6 }, from = 6.0, aisle = { 1.6, 2.6 }, run = { 3, 3.0 }, pick = "machine" },
+  },
+
+  warehouse = {
+    -- a warehouse: double-sided pallet racking in runs down the floor, wide aisles for the forklift, pallets waiting
+    -- by the loading bays
+    { grid = { 2.8, 2.2 }, from = 6.0, aisle = { 0.0, 3.2 }, run = { 4, 3.2 }, pick = "pallet_rack" },
+    { wall = { 1.2, 1.0 }, sides = { 1, 3 }, clear = 1.2, count = { per = 4.0, min = 2, max = 5 }, pick = "pallet_stack" },
+    { wall = { 1.3, 3.0 }, sides = { 3, 1 }, clear = 1.5, pick = "forklift" },
+    { wall = { 2.0, 0.8 }, sides = { 2, 1, 3 }, clear = 1.0, pick = "workbench" },
   },
 
   meeting = {

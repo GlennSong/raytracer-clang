@@ -376,6 +376,8 @@ const char* programFor(RoomKind kind) {
         case RoomKind::Courtroom: return "courtroom";
         case RoomKind::Chamber: return "council_chamber";
         case RoomKind::EngineBay: return "engine_bay";
+        case RoomKind::ShopFloor: return "shop_floor";
+        case RoomKind::Warehouse: return "warehouse";
         default: return "";
     }
 }
@@ -582,9 +584,14 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         // An OPEN PLAN zone has rooms set into it (corner offices, meeting rooms, the kitchenette): they are
         // obstacles here, with a clear margin round them.
         // ...and so has a fire station's ENGINE BAY: the floor each engine stands on (Apparatus)
-        if (room.kind == RoomKind::OpenPlan || room.kind == RoomKind::EngineBay)
+        // (the halls whose whole floor is one room: what is set into them -- a parked engine's floor, a loading strip,
+        // a stair's flight -- is taken)
+        const bool hall = room.kind == RoomKind::EngineBay || room.kind == RoomKind::ShopFloor || room.kind == RoomKind::Warehouse ||
+                          room.kind == RoomKind::Nave || room.kind == RoomKind::Market || room.kind == RoomKind::Foyer;
+        if (room.kind == RoomKind::OpenPlan || hall)
             for (const Room& other : rp.rooms) {
-                if (&other == &room || other.kind == RoomKind::OpenPlan || other.kind == RoomKind::EngineBay) continue;
+                if (&other == &room || other.kind == RoomKind::OpenPlan || other.kind == RoomKind::EngineBay ||
+                    other.kind == RoomKind::ShopFloor || other.kind == RoomKind::Warehouse) continue;
                 Real a0 = 1e9, b0 = 1e9, a1 = -1e9, b1 = -1e9;
                 for (const Vec2& v : other.rect) {
                     const Vec2 l = F.f.local(v);
@@ -874,6 +881,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                                  room.kind == RoomKind::Nave || room.kind == RoomKind::Foyer ||
                                  room.kind == RoomKind::Market || room.kind == RoomKind::Courtroom ||
                                  room.kind == RoomKind::Chamber || room.kind == RoomKind::EngineBay ||
+                                 room.kind == RoomKind::ShopFloor || room.kind == RoomKind::Warehouse ||
                                  room.kind == RoomKind::Shop;
             // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
             const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;

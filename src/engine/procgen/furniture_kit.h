@@ -48,6 +48,7 @@ enum class Piece : uint8_t {
     HospitalBed, ExamCouch, WaitingSeats,   // the hospital (2026-10-13)
     Pew, Altar, CinemaRow, CinemaScreen, MarketStall, JudgeBench, JuryBox,   // church, cinema, market, courts
     GearLocker,   // a fire station's: a firefighter's turnout gear on its open rack
+    Machine, Workbench, PalletStack, Forklift,   // the factory floor, the warehouse (2026-10-13)
     Count
 };
 constexpr int kPieceCount = static_cast<int>(Piece::Count);

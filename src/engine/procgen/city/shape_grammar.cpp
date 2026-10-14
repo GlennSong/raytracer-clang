@@ -3285,8 +3285,8 @@ void emitBayFront(BuildingMesh& out, const FaceRect& fr,
         emitQuad(wall, bL, bL + in, tL + in, tL, fr.h, wallColor);        // jamb
         emitQuad(wall, bR + in, bR, tR, tR + in, fr.h * -1, wallColor);   // jamb
         emitQuad(wall, tL, tL + in, tR + in, tR, fr.v * -1, wallColor);   // head
-        if (p.civicRooms == 9) {
-            // A FIRE STATION's bays stand OPEN (Glenn, 2026-10-13: "a fire truck should be an actual truck" -- the
+        if (baysStandOpen(p)) {
+            // A FIRE STATION's bays stand OPEN (a factory's and a warehouse's loading bays too) (Glenn, 2026-10-13: "a fire truck should be an actual truck" -- the
             // engines are seen from the street, and driven out): the roller door rolled up on its drum under the
             // head, the bay a way in (an open door: the collider's gap, no leaf).
             const Real dh = 0.42;

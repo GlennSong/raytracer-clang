@@ -9880,3 +9880,25 @@ climbing pose for the third-person body; ladders on the fire escapes' top landin
 Tests: `low_flat_roofed_buildings_carry_a_roof_ladder_on_their_back_wall` (144 buildings: 26 ladders, all on the rear
 wall, letting off on the roof, over the parapet, the tall ones caged, none where none belongs, none across a window);
 `a_ladder_is_reached_from_its_foot_or_its_top`.
+
+## ADR-0169 — Factories and warehouses open onto their floors
+
+Glenn, 2026-10-13: "Okay do that" (factories and warehouses first, then the hotel lobby, station halls and the
+konbini). A factory, a brick warehouse and a metal shed were shut the way the fire station was -- the street face a
+row of roller doors, no doorway opened in it -- with offices over an empty ground floor.
+
+- `civicRooms` factory 15, warehouse (brick warehouse, metal shed) 16; `baysStandOpen` (9, 15, 16): the facade rolls
+  their doors up and marks each bay an open door, and the lot pass opens them (ADR-0167's machinery). Build tags
+  2026-10-13.2: a re-bake.
+- hallPlan: the ground floor is a factory's SHOP FLOOR or a warehouse's racked floor; inside each open bay a 5 m
+  LOADING STRIP (a truck's length) is kept clear (Apparatus), and so is the stair's well and its flight's foot --
+  now in every hall with a floor above it (the fire station's engine bay too). The hall's walkability check leaves
+  the kept-clear floor out (the stair's sits over its hole).
+- Programs: shop_floor -- a forklift, pallets of stock and workbenches along the walls, machine tools (a CNC mill or a
+  lathe) in rows with cross aisles; warehouse -- double-sided pallet racking in runs of four, 3.2 m aisles for the
+  forklift, pallets by the walls, a workbench. New pieces: machine, workbench, pallet_stack, forklift (a prop: not
+  drivable).
+- The floors above stay offices (officeUse).
+
+Test `factories_and_warehouses_open_onto_their_floors` (27 buildings): 60 bays, all drawn open; 234 machines, 345
+pallet racks, 27 forklifts; no piece on the kept-clear floor; offices upstairs.

@@ -65,11 +65,13 @@ enum class PlateTopology : uint8_t {
 // station facing the lifts, the entrance lobby's waiting area with its information desk.
 // Nave .. Chamber: the civic halls (hallPlan, campusPlan): a church's nave, a cinema's foyer and its auditoriums, a
 // market hall's floor of stalls, a police cell, a courtroom, a council chamber, a fire station's engine bay and the
-// floor one engine stands on (Apparatus: kept clear, furnished by nothing).
+// floor one engine stands on (Apparatus: kept clear, furnished by nothing -- a loading bay's strip and a stair's flight
+// too), a factory's shop floor, a warehouse's racked floor.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
                                 Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception, Gallery,
                                 Ward, Exam, NurseStation, Waiting,
-                                Nave, Foyer, Auditorium, Market, Cell, Courtroom, Chamber, EngineBay, Apparatus };
+                                Nave, Foyer, Auditorium, Market, Cell, Courtroom, Chamber, EngineBay, Apparatus,
+                                ShopFloor, Warehouse };
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

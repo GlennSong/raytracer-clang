@@ -549,7 +549,7 @@ struct BuildingParams {
     // ground floor; a police station its lobby, cells and interview rooms (10), a courthouse its courtrooms (11), a
     // capitol its council chamber (12) -- campusPlan, the ground floor only, offices above; a fire station its engine
     // bay (9, hallPlan; its bays stand open, the engines parked in them) and the crew's quarters above (campusPlan's
-    // residence hall).
+    // residence hall); a factory its shop floor (15), a warehouse its racks (16) -- hallPlan, bays open, offices above.
     // Runtime only like officeUse (architect.h civicRoomsFor).
     uint8_t civicRooms = 0;
     // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each other ...
@@ -630,6 +630,9 @@ bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, V
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
 // plan.size() when there is none.
+// A building whose bay doors stand OPEN (rolled up, each bay a way in): a fire station's (its engines), a factory's
+// and a warehouse's (their loading bays) -- civicRooms 9, 15, 16.
+inline bool baysStandOpen(const BuildingParams& p) { return p.civicRooms == 9 || p.civicRooms == 15 || p.civicRooms == 16; }
 std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params);
 // A campus hall's door onto its quad (params.backDoor): the rear face's middle bay, or -- when the stair hugs that wall,
 // as it does in campus halls -- the bay a metre short of the flight's foot. Its centre on the wall and the wall's

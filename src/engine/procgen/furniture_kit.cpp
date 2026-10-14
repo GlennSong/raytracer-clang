@@ -1380,6 +1380,66 @@ FurniturePiece build(Piece p, uint32_t variant) {
                      Vec3(0.80, 0.12, 0.08), 1.0, 12);                                               // the helmet
             break;
         }
+        case Piece::Machine: {
+            // A MACHINE TOOL (a factory floor's: a CNC mill or a lathe, by the style dice): a painted steel base, the
+            // working enclosure over it with its window, the control pendant on its arm, a warning-striped plinth, a
+            // stack light. Faces +z: its operator stands there.
+            const bool lathe = (style & 1u) != 0;
+            const Vec3 paint = lathe ? Vec3(0.30, 0.42, 0.36) : Vec3(0.78, 0.78, 0.74);
+            k.out.size = {lathe ? 2.6 : 2.0, 2.15, 1.6};
+            const double W = k.out.size.x;
+            k.box(F::Hard, {0, 0.04, 0.80}, {W, 0.08, 1.56}, 0.0, Vec3(0.85, 0.70, 0.10), 1);         // the plinth
+            k.box(F::Metal, {0, 0.50, 0.75}, {W - 0.1, 0.84, 1.4}, 0.01, paint * 0.8, 1);             // the base
+            k.box(F::Metal, {0, 1.40, 0.70}, {W - 0.2, 0.96, 1.2}, 0.03, paint, 1);                   // the enclosure
+            k.box(F::Hard, {lathe ? -0.2 : 0, 1.42, 1.31}, {W * 0.5, 0.55, 0.02}, 0.0, Vec3(0.20, 0.25, 0.28), 1);   // its window
+            k.box(F::Hard, {W * 0.5 - 0.15, 1.35, 1.36}, {0.30, 0.45, 0.10}, 0.01, kBlack * 2.0, 1);     // the pendant
+            k.rod(F::Metal, {W * 0.5 - 0.4, 1.95, 0.4}, {W * 0.5 - 0.4, 2.12, 0.4}, 0.02, kSteel, 6);   // the stack light's post
+            k.box(F::Light, {W * 0.5 - 0.4, 2.08, 0.4}, {0.07, 0.06, 0.07}, 0.0, Vec3(0.2, 0.9, 0.3), 1);
+            break;
+        }
+        case Piece::Workbench: {
+            // A WORKBENCH: a thick timber top on a steel frame, a vice at one end, a pegboard of tools behind it on
+            // its own uprights, a drawer unit under one end. Backs onto a wall (+z the worker's side).
+            k.out.size = {2.0, 1.85, 0.80};
+            k.box(F::Wood, {0, 0.88, 0.45}, {2.0, 0.06, 0.70}, 0.006, wood, 1);
+            for (double x : {-0.94, 0.94})
+                for (double z : {0.14, 0.76}) k.box(F::Metal, {x, 0.43, z}, {0.05, 0.86, 0.05}, 0.0, kSteel * 0.6, 1);
+            k.box(F::Metal, {0.6, 0.45, 0.45}, {0.6, 0.70, 0.62}, 0.006, Vec3(0.70, 0.15, 0.12), 1);   // drawers
+            k.box(F::Metal, {-0.75, 0.98, 0.70}, {0.16, 0.14, 0.16}, 0.01, Vec3(0.20, 0.30, 0.55), 1); // the vice
+            k.box(F::Hard, {0, 1.42, 0.04}, {1.9, 0.86, 0.02}, 0.0, Vec3(0.75, 0.68, 0.52), 1);      // the pegboard
+            for (int i = 0; i < 6; ++i)                                                               // its tools
+                k.box(F::Metal, {-0.75 + i * 0.3, 1.40 + (i % 2) * 0.12, 0.07}, {0.04, 0.26, 0.03}, 0.0, kSteel * (0.8 + 0.05 * i), 1);
+            break;
+        }
+        case Piece::PalletStack: {
+            // A PALLET of goods on the floor: the timber pallet, cartons stacked on it, shrink-wrapped.
+            k.out.size = {1.2, 1.45, 1.0};
+            k.box(F::Wood, {0, 0.07, 0.5}, {1.2, 0.14, 1.0}, 0.0, wood * 1.1, 1);
+            const int layers = 2 + static_cast<int>(style & 1u);
+            for (int l = 0; l < layers; ++l)
+                k.box(F::Hard, {0, 0.14 + 0.21 + l * 0.42, 0.5}, {1.14, 0.40, 0.94}, 0.01, Vec3(0.62, 0.48, 0.32) * (0.92 + 0.05 * l), 1);
+            k.box(F::Hard, {0, 0.14 + layers * 0.21, 0.5}, {1.17, layers * 0.42, 0.97}, 0.0, Vec3(0.85, 0.87, 0.90), 1);   // the wrap
+            break;
+        }
+        case Piece::Forklift: {
+            // A FORKLIFT: the counterweighted body, the overhead guard on its posts, the seat and wheel, the mast at
+            // the front (+z) with its forks down on the floor.
+            k.out.size = {1.2, 2.2, 2.9};
+            const Vec3 yellow(0.90, 0.68, 0.10);
+            k.box(F::Hard, {0, 0.55, 1.0}, {1.1, 0.80, 1.8}, 0.03, yellow, 1);                     // body
+            k.box(F::Hard, {0, 0.75, 0.15}, {1.1, 0.90, 0.30}, 0.03, kBlack * 2.5, 1);            // counterweight
+            for (double x : {-0.48, 0.48})
+                for (double z : {0.35, 1.70}) k.box(F::Metal, {x, 1.55, z}, {0.06, 1.25, 0.06}, 0.0, kBlack, 1);   // guard posts
+            k.box(F::Metal, {0, 2.17, 1.02}, {1.04, 0.05, 1.42}, 0.0, kBlack, 1);                 // the guard
+            k.box(F::Fabric, {0, 1.08, 0.75}, {0.50, 0.12, 0.50}, 0.03, kBlack * 2.0);            // the seat
+            k.box(F::Metal, {0, 1.62, 2.00}, {0.80, 1.16, 0.10}, 0.0, kSteel * 0.6, 1);           // the mast
+            k.box(F::Metal, {0, 1.10, 2.00}, {0.90, 2.0, 0.08}, 0.0, kSteel * 0.5, 1);
+            for (double x : {-0.30, 0.30}) k.box(F::Metal, {x, 0.04, 2.45}, {0.12, 0.05, 0.90}, 0.0, kSteel * 0.7, 1);   // forks
+            for (double x : {-0.50, 0.50})
+                for (double z : {0.45, 1.65})
+                    k.turned(F::Hard, {x, 0, z}, {{0.0, 0.0}, {0.12, 0.0}, {0.12, 0.30}, {0.0, 0.30}}, kBlack, 1.0, 10);   // wheels
+            break;
+        }
         case Piece::Lectern: {
             k.out.size = {0.70, 1.15, 0.55};
             k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
@@ -1493,7 +1553,7 @@ const char* const kPieceNames[kPieceCount] = {
     "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
     "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats",
     "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box",
-    "gear_locker"};
+    "gear_locker", "machine", "workbench", "pallet_stack", "forklift"};
 
 }  // namespace
 

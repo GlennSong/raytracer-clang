@@ -1686,3 +1686,57 @@ TEST_CASE(the_fire_station_opens_its_bays_on_its_engines) {
     CHECK(dayRooms > 0 && kitchens > 0);
     CHECK(offices == 0);
 }
+
+// FACTORIES AND WAREHOUSES (Glenn, 2026-10-13: "Okay do that" -- the next on the list). They were shut like the fire
+// station was -- their street face roller doors -- with offices above an empty ground floor. Their loading bays stand
+// open now (baysStandOpen), the ground floor is a factory's SHOP FLOOR (machines in rows, workbenches, stock, a
+// forklift) or a warehouse's racked floor (pallet racking in runs, pallets, a forklift), and the strip inside each bay
+// -- a truck's length -- and the stair's flight are kept clear: no piece stands on either.
+TEST_CASE(factories_and_warehouses_open_onto_their_floors) {
+    UseShippedFurniture shipped;
+    const char* recipes[] = {"factory", "brick_warehouse", "metal_shed"};
+    const Real sizes[][2] = {{30, 24}, {40, 30}, {24, 18}};
+    int buildings = 0, bays = 0, bayDoors = 0, machines = 0, racks = 0, forklifts = 0, onClearFloor = 0, upstairsDesks = 0;
+    for (const char* rn : recipes)
+        for (uint32_t seed = 1; seed <= 3; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                BuildingParams p = rc.params;
+                p.openDoorway = true;
+                ++buildings;
+                CHECK(baysStandOpen(p));
+                for (const AttachPoint& ap : growPlanBuilding(plan, p).attaches) bayDoors += ap.tag == "baydoor";
+                Vec2 out(0, 0);
+                bays += static_cast<int>(vehicleBayDoors(plan, p, out).size());
+                const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+                const std::size_t ee = entranceEdgeFor(plan, p);
+                const InteriorLayout il = interiorLayout(plan, p, ee);
+                const bool upstairs = sps.size() > 1;
+                const RoomPlan g = roomPlan(sps[0].plan, p, CorePlan{}, il.edge, std::max(p.wallThickness, Real(0.55)), 0,
+                                            il.hasStair && upstairs ? il.well : Poly2{}, ee,
+                                            il.hasStair && upstairs ? il.stairFoot : Vec2(1e30, 1e30));
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, static_cast<int>(sps.size()));
+                for (const PlacedPiece& pp : in.furniture) {
+                    const Piece pc = static_cast<Piece>(pp.piece);
+                    machines += pc == Piece::Machine;
+                    racks += pc == Piece::PalletRack;
+                    forklifts += pc == Piece::Forklift;
+                    const bool ground = pp.xform.m[1][3] < sps[0].h - 0.5;
+                    if (!ground) { upstairsDesks += pc == Piece::Desk || pc == Piece::Cubicle || pc == Piece::DeskPod; continue; }
+                    if (pc == Piece::CeilingLight) continue;
+                    const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+                    for (const Room& r : g.rooms)
+                        if (r.kind == RoomKind::Apparatus && pointInPolygon(r.rect, at)) ++onClearFloor;
+                }
+            }
+    std::printf("    [industry] %d buildings: %d bays, %d open bay doors drawn; %d machines, %d pallet racks, %d forklifts; "
+                "%d pieces on the kept-clear floor; %d desks upstairs\n", buildings, bays, bayDoors, machines, racks, forklifts,
+                onClearFloor, upstairsDesks);
+    CHECK(buildings >= 20);
+    CHECK(bays > 0 && bayDoors == bays);
+    CHECK(machines > 50 && racks > 50 && forklifts > 5);
+    CHECK(onClearFloor == 0);
+    CHECK(upstairsDesks > 0);
+}
