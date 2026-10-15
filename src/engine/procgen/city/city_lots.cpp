@@ -8,6 +8,7 @@
 #include "roads/road_entity.h"        // RoadEntity + navRoadGraph (growLotBuildingsOnNets)
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
+#include "section.h"         // the toolkit's section massing (issue #105)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
 #include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
@@ -5972,6 +5973,30 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         if ((roads && !clearOfRoads(v)) ||
                             !pointInPolygon(plan, v)) { clear = false; break; }
                     if (clear) { plan = circ; break; }
+                }
+            }
+            // THE TOOLKIT'S SECTION (section.h, issue #105): the recipe's outline -- rounded corners, a stadium --
+            // drawn in the site's rectangle and shrunk to fit, every rim point on the lot and off the road, as the
+            // drum above; its tessellation is the plan everything downstream reads.
+            if (planOk && rec.massing == BuildingRecipe::Massing::Section &&
+                rec.section.kind != BuildingRecipe::SectionSpec::Kind::None && shortSide > 14) {
+                const OBB2 sb = orientedBoundingBox(plan);
+                const int la = sb.longAxis(), sa2 = 1 - la;
+                Vec2 cc = b.site;
+                if (!pointInPolygon(plan, cc)) cc = sb.center;
+                Real w = 2 * sb.half[la] - 3.2, d = 2 * sb.half[sa2] - 3.2;
+                for (int attempt = 0; attempt < 8 && d > 12.0; ++attempt) {
+                    const Real r = rec.section.kind == BuildingRecipe::SectionSpec::Kind::Stadium
+                                       ? d * 0.5
+                                       : std::min(rec.section.radius, std::min(w, d) * 0.3);
+                    const Section sec = Section::rect(w, d).rounded(r).transformed(cc, sb.axis[la], sb.axis[sa2]);
+                    const Poly2 rim = sec.tessellate();
+                    bool clear = rim.size() >= 3;
+                    for (const Vec2& v : rim)
+                        if ((roads && !clearOfRoads(v)) || !pointInPolygon(plan, v)) { clear = false; break; }
+                    if (clear) { plan = rim; ensureCCW(plan); break; }
+                    w *= 0.9;
+                    d *= 0.9;
                 }
             }
             // ROWHOUSES (device: "town homes ... packed side by side"): the

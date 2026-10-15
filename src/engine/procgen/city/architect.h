@@ -65,10 +65,12 @@ struct BuildingRecipe {
                      // round: "more varied building shapes")
         BigBox,      // a BIG-BOX store on a whole block: the box at the back,
                      // a striped parking lot in front (Glenn, 2026-10-01)
-        TowerInPlaza // the 1961 New York model (Seagram): the tower pulled
+        TowerInPlaza,// the 1961 New York model (Seagram): the tower pulled
                      // 12-30 m back from the avenue, the front of the lot a
                      // paved PLAZA with pools, planters and benches
                      // (skyscrapers v2, ADR-0086 point 5)
+        Section      // THE TOOLKIT'S SECTION (section.h, issue #105): the plan is `section` fitted to the lot's
+                     // rectangle, shrink-to-fit like the drum -- rounded corners, a stadium, and the shapes to come
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow
@@ -81,6 +83,12 @@ struct BuildingRecipe {
     // PodiumTower massing: how many of params.floors belong to the full-lot
     // podium (the rest rise in the tower). 0 elsewhere.
     int podiumFloors = 0;
+    // Section massing: the outline, as a DESCRIPTOR the lot pass fits to the site (never geometry: the record keeps
+    // the fitted plan). Rounded: a rectangle with corners of `radius`; Stadium: semicircular ends.
+    struct SectionSpec {
+        enum class Kind : uint8_t { None, Rounded, Stadium } kind = Kind::None;
+        Real radius = 0;        // Rounded: the corner radius (m), clamped to what the site can give
+    } section;
 };
 
 // LANDMARK archetypes: placed by the PLANNER (best-lot picks with quotas —

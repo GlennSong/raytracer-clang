@@ -1404,8 +1404,8 @@ int l_building_space_graph(lua_State* L) {
     return 1;
 }
 
-// building.section{ rect = {w, d} | ngon = {n, r} | lot = {{x,z}, ...}, centre = {x, z}, inset = d }
-//   -> { plan = {{x,z}, ...}, edges = n }
+// building.section{ rect = {w, d} | ngon = {n, r} | lot = {{x,z}, ...}, centre = {x, z}, inset = d, rounded = r, tol = t }
+//   -> { plan = {{x,z}, ...}, edges = n }   (rounded: every corner a quarter arc of radius r, tessellated within tol)
 // THE SECTION (section.h, issue #105 step 2a): a building outline as edges -- the rectangle, the drum's n-gon, a
 // lot's plan -- offset by `inset`, tessellated to the plan every other building word takes.
 int l_building_section(lua_State* L) {
@@ -1436,7 +1436,9 @@ int l_building_section(lua_State* L) {
     if (s.empty()) return luaL_error(L, "building.section: give rect = {w, d}, ngon = {n, r} or lot = {{x,z}, ...}");
     const Real inset = static_cast<Real>(optField(L, 1, "inset", 0.0));
     if (inset != 0.0) s = s.offset(inset);
-    const Poly2 plan = s.tessellate();
+    const Real roundedR = static_cast<Real>(optField(L, 1, "rounded", 0.0));   // corner radius: arcs
+    if (roundedR > 0.0) s = s.rounded(roundedR);
+    const Poly2 plan = s.tessellate(static_cast<Real>(optField(L, 1, "tol", 0.25)));
     lua_newtable(L);
     lua_newtable(L);
     for (std::size_t i = 0; i < plan.size(); ++i) {

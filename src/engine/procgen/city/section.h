@@ -17,8 +17,16 @@ struct Edge {
     enum class Kind : uint8_t { Line, Arc, Spline };
     Kind kind = Kind::Line;
     Vec2 a, b;                 // the ends (world XZ)
-    Real bulge = 0;            // Arc: the sagitta over the chord, signed (left of a->b positive); 2b
-    std::vector<Vec2> ctrl;    // Spline: the control points between a and b; 2b
+    Real bulge = 0;            // Arc: the SAGITTA (m) the arc rises over its chord, signed: left of a->b positive
+    std::vector<Vec2> ctrl;    // Spline: the control points between a and b (owed)
+    Real length() const;       // along the edge (an arc's arc length)
+};
+
+// A tessellation that remembers its edges: `edgeOf[i]` is the section edge the Poly2 edge points[i] -> points[i+1]
+// lies on, so the facade can lay one run of bays along an arc's chords.
+struct Tessellation {
+    Poly2 points;
+    std::vector<int> edgeOf;
 };
 
 struct Section {
@@ -26,9 +34,10 @@ struct Section {
     std::vector<std::vector<Edge>> holes;    // as given
 
     bool empty() const { return outer.size() < 3; }
-    // The outline as the grammar reads it: lines give their corners (every edge's `a`); an arc or a spline its chords
-    // within `tol` (2b). Corners are kept so the facade's bays know their edges.
+    // The outline as the grammar reads it: lines give their corners (every edge's `a`); an arc its chords, each
+    // rising no more than `tol` off the arc, its ends kept as corners so the facade's bays know their edges.
     Poly2 tessellate(Real tol = 0.25) const;
+    Tessellation tessellation(Real tol = 0.25) const;
     std::vector<Poly2> holesTessellated(Real tol = 0.25) const;
 
     // The words.
@@ -37,6 +46,10 @@ struct Section {
     static Section fromLot(const Poly2& plan);                                   // every edge a line; CCW
     Section offset(Real d) const;                                                // d > 0 inset, d < 0 outset: the grammar's offsetPlan
     Section withHole(const Section& hole) const;
+    // THE ROUNDED CORNERS: every corner between two lines becomes an arc of radius `r` tangent to both (trimmed to
+    // what the edges can give). A rectangle rounded by half its depth is a STADIUM: two semicircular ends.
+    Section rounded(Real r) const;
+    Section transformed(const Vec2& origin, const Vec2& u, const Vec2& v) const;   // local (x, y) -> origin + u x + v y
 };
 
 }  // namespace engine

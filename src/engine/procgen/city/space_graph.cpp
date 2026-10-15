@@ -555,8 +555,12 @@ std::string blueprintSvg(const SpaceGraph& g, const std::string& title, const st
                 if (want != pass) continue;
                 std::string d = pathOf(c.plan, ox, oz, s, tileY);
                 if (pass == 0) for (const Poly2& h : c.holes) d += pathOf(h, ox, oz, s, tileY);
-                std::snprintf(buf, sizeof buf, "<path transform=\"translate(%.1f,0)\" d=\"%s\" fill=\"%s\" fill-rule=\"evenodd\" stroke=\"#333\" stroke-width=\"%s\"/>\n",
-                              tx + pad, d.c_str(), bad[i] ? "url(#bad)" : useFill(c), pass == 0 ? "1.2" : "0.6");
+                // (a string, not a fixed buffer: a hall with thirty rooms' holes is a long path)
+                std::snprintf(buf, sizeof buf, "<path transform=\"translate(%.1f,0)\" d=\"", tx + pad);
+                out += buf;
+                out += d;
+                std::snprintf(buf, sizeof buf, "\" fill=\"%s\" fill-rule=\"evenodd\" stroke=\"#333\" stroke-width=\"%s\"/>\n",
+                              bad[i] ? "url(#bad)" : useFill(c), pass == 0 ? "1.2" : "0.6");
                 out += buf;
                 if (pass == 1 || pass == 2) {
                     const Vec2 cc = centroid(c.plan);

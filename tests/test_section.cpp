@@ -6,10 +6,15 @@
 #include "../src/engine/procgen/city/face.h"
 #include "../src/engine/procgen/city/section.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/space_graph.h"
+#include "../src/engine/mesh_audit.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace engine;
 
@@ -105,4 +110,117 @@ TEST_CASE(a_section_grows_what_its_plan_grows) {
     const uint64_t fromSection = hashOf(growSectionBuilding(Section::fromLot(lPlan), p, 1.5));
     CHECK(fromPlan == fromSection);
     CHECK(hashOf(growSectionBuilding(Section::rect(24, 20), p, 1.5)) == hashOf(growPlanBuilding(Section::rect(24, 20).tessellate(), p, 1.5)));
+}
+
+TEST_CASE(rounded_corners_are_arcs_tessellated_within_tolerance) {
+    const Section s = Section::rect(24, 20).rounded(5.0);
+    int lines = 0, arcs = 0;
+    for (const Edge& e : s.outer) (e.kind == Edge::Kind::Arc ? arcs : lines)++;
+    CHECK(lines == 4);
+    CHECK(arcs == 4);
+    for (const Edge& e : s.outer) if (e.kind == Edge::Kind::Arc) CHECK_APPROX(e.length(), 5.0 * 3.14159265358979323846 * 0.5, 1e-6);
+    const Real tol = 0.25;
+    const Tessellation t = s.tessellation(tol);
+    CHECK(t.points.size() == t.edgeOf.size());
+    CHECK(t.points.size() > 8);
+    CHECK(isCCW(t.points));
+    // Every point on the arcs' circles, inside the rectangle, and every arc chord within the tolerance.
+    const Vec2 centres[4] = {{-7, -5}, {7, -5}, {7, 5}, {-7, 5}};
+    for (std::size_t i = 0; i < t.points.size(); ++i) {
+        const Vec2& p = t.points[i];
+        CHECK(std::fabs(p.x) <= 12.0 + 1e-9 && std::fabs(p.y) <= 10.0 + 1e-9);
+        if (s.outer[static_cast<std::size_t>(t.edgeOf[i])].kind != Edge::Kind::Arc) continue;
+        Real best = 1e9;
+        for (const Vec2& c : centres) best = std::min(best, std::fabs((p - c).length() - 5.0));
+        CHECK(best < 1e-6);
+        CHECK(std::fabs(p.x) >= 7.0 - 1e-9 && std::fabs(p.y) >= 5.0 - 1e-9);   // in the corner, not curling inward
+        const Vec2& q = t.points[(i + 1) % t.points.size()];
+        if (t.edgeOf[(i + 1) % t.points.size()] == t.edgeOf[i]) {
+            const Real chord = (q - p).length();
+            const Real sag = 5.0 - std::sqrt(std::max(Real(0), 25.0 - chord * chord * 0.25));
+            CHECK(sag <= tol + 1e-6);
+        }
+    }
+    // The arcs' ends are corners of the polygon (the tangent points), so a facade knows where an arc starts.
+    bool tangentKept = false;
+    for (const Vec2& p : t.points) if (std::fabs(p.x - 7.0) < 1e-9 && std::fabs(p.y + 10.0) < 1e-9) tangentKept = true;
+    CHECK(tangentKept);
+}
+
+TEST_CASE(a_stadium_is_two_semicircles) {
+    const Section s = Section::rect(30, 16).rounded(8.0);   // half the depth: the short edges vanish
+    if (std::getenv("RT_SECTION_DEBUG")) {
+        for (const Edge& e : s.outer) std::printf("    %s a(%.4f %.4f) b(%.4f %.4f) bulge %.4f len %.4f\n", e.kind == Edge::Kind::Arc ? "arc " : "line", e.a.x, e.a.y, e.b.x, e.b.y, e.bulge, e.length());
+        for (const Vec2& q : s.tessellate(0.1)) std::printf("      (%.3f %.3f)\n", q.x, q.y);
+    }
+    int lines = 0, arcs = 0;
+    for (const Edge& e : s.outer) (e.kind == Edge::Kind::Arc ? arcs : lines)++;
+    CHECK(lines == 2);
+    CHECK(arcs == 4);
+    const Poly2 p = s.tessellate(0.1);
+    CHECK(isCCW(p));
+    Real minX = 1e9, maxX = -1e9;
+    for (const Vec2& q : p) { minX = std::min(minX, q.x); maxX = std::max(maxX, q.x); }
+    CHECK_APPROX(minX, -15.0, 1e-6);
+    CHECK_APPROX(maxX, 15.0, 1e-6);
+    CHECK_APPROX(area(p), 14.0 * 16.0 + 3.14159265358979323846 * 64.0, 5.0);   // short by the chords' slack only
+}
+
+TEST_CASE(a_section_moves_into_a_site_frame) {
+    const Section s = Section::rect(10, 4).rounded(1.0);
+    const Vec2 o(100, 50), u(0, 1), v(-1, 0);   // a quarter turn
+    const Poly2 a = s.tessellate(), b = s.transformed(o, u, v).tessellate();
+    CHECK(a.size() == b.size());
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const Vec2 w = o + u * a[i].x + v * a[i].y;
+        CHECK_APPROX(w.x, b[i].x, 1e-9);
+        CHECK_APPROX(w.y, b[i].y, 1e-9);
+    }
+    CHECK(isCCW(b));
+}
+
+// THE FIRST SECTION BUILDING (Glenn, 2026-10-15: "one of these new buildings using cells working with a furnished
+// interior and an exterior that fits in the lot"): the rounded tower recipe on the rounded plan the lot pass fits to
+// a lot like the lab's -- every cell reached from the street up to the roof, the upper floors furnished, the
+// exterior and the interior clean through the mesh audit.
+TEST_CASE(rounded_tower_is_furnished_and_walkable_base_to_roof) {
+    BuildingRecipe rc;
+    CHECK(architectRecipeByName("rounded_tower", 7, 0.25, 40, 2400, rc));
+    CHECK(rc.massing == BuildingRecipe::Massing::Section);
+    CHECK(rc.section.kind == BuildingRecipe::SectionSpec::Kind::Rounded);
+    BuildingParams p = rc.params;
+    p.openDoorway = true;
+    const Section sec = Section::rect(56, 40).rounded(std::min(rc.section.radius, Real(12.0)));
+    const Poly2 plan = sec.tessellate();
+    CHECK(plan.size() > 8);
+    CHECK(isCCW(plan));
+    int arcs = 0;
+    for (const Edge& e : sec.outer) if (e.kind == Edge::Kind::Arc) ++arcs;
+    CHECK(arcs == 4);
+    // The gate.
+    const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+    CHECK(g.modelled);
+    CHECK(g.roof >= 0);
+    const std::vector<int> bad = unreachableCells(g);
+    std::printf("    [rounded] %d storeys, %zu cells, %zu portals, %zu unreachable, %zu-gon plan, %d floors\n", g.storeys, g.cells.size(),
+                g.portals.size(), bad.size(), plan.size(), p.floors);
+    CHECK(bad.empty());
+    // Furnished: the lobby's shops and the office floors above.
+    const BuildingMesh lobby = growInterior(plan, p, 0.0, nullptr, 0, 1);
+    const BuildingMesh floor5 = growInterior(plan, p, 0.0, nullptr, 5, 6);
+    std::printf("    [rounded] furniture: lobby %zu pieces (%zu shop units), storey 5 %zu pieces\n", lobby.furniture.size(), lobby.units.size(),
+                floor5.furniture.size());
+    CHECK(lobby.furniture.size() > 20);
+    CHECK(floor5.furniture.size() > 20);
+    // Clean meshes: the exterior and the interior through the audit.
+    MeshAudit ext, in;
+    for (const RenderMesh& part : growPlanBuilding(plan, p, 0.0).parts) ext.add(auditMesh(part));
+    for (const RenderMesh& part : growInterior(plan, p, 0.0).parts) in.add(auditMesh(part));
+    std::printf("    [rounded] audit: exterior %ld tris, %ld inward, %ld degenerate; interior %ld tris, %ld inward, %ld degenerate\n",
+                ext.tris, ext.inward, ext.degenerate, in.tris, in.inward, in.degenerate);
+    CHECK(ext.tris > 1000);
+    CHECK(ext.inward == 0);
+    CHECK(ext.degenerate == 0);
+    CHECK(in.inward == 0);
+    CHECK(in.degenerate == 0);
 }

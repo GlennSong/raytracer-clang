@@ -568,6 +568,26 @@ void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "podium_tower";
 }
 
+// THE ROUNDED TOWER (the toolkit's first section building, issue #105): a glass office tower on a rounded-corner
+// plan -- the rectangle the lot gives with its four corners turned into quarter arcs of 5-8 m -- shops in its lobby
+// ring, a core, a flat roof the stairs reach. The long straight sides keep today's room ring and its furniture; the
+// arcs are the section's, tessellated to chords the facade lays glass on.
+void recipeRoundedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    const int lift = static_cast<int>(cx.coreness * 30);
+    p.floors = rng.irange(cx.roomy ? 12 : 9, cx.roomy ? 18 : 12) + lift;
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    cx.slender = 3.0 + cx.coreness * 3.0;
+    out.massing = BuildingRecipe::Massing::Section;
+    out.section.kind = BuildingRecipe::SectionSpec::Kind::Rounded;
+    out.section.radius = 5.0 + 3.0 * rng.unit();
+    out.placeType = "office";
+    if (p.curtainWall) glassStyle(p, rng, true);
+    towerTop(p, {{1, 50}, {2, 30}, {3, 20}});   // a flat top: the roof is walked (the bulkhead's doors)
+    out.name = "rounded_tower";
+}
+
 // The PARKING GARAGE: open concrete decks over a bay-door entry.
 void recipeParkingGarage(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
@@ -1414,6 +1434,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"stepped_tower", recipeSteppedTower},
     {"drum_tower", recipeDrumTower},
     {"podium_tower", recipePodiumTower},
+    {"rounded_tower", recipeRoundedTower},
     {"parking_garage", recipeParkingGarage},
     {"pagoda_tower", recipePagodaTower},
     {"condo_tower", recipeCondoTower},
