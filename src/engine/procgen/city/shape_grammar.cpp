@@ -3634,15 +3634,14 @@ std::vector<ColliderTier> colliderTiers(const Poly2& planIn, const BuildingParam
     return out;
 }
 
-InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
-                              std::size_t entranceEdge) {
+namespace {
+// The straight stair on a plan, core or no core: interiorLayout's placement (the ground), and a setback tier's
+// (stairRuns).
+InteriorLayout straightStairOn(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
     InteriorLayout il;
     Poly2 plan = planIn;
     if (plan.size() < 3 || params.bigBox >= 6) return il;   // (a mall climbs by its escalators: mallLevel)
     ensureCCW(plan);
-    // A building with a CORE climbs by its stairwells: no straight stair, no
-    // well (the core's shafts are the holes — coreSlabHoles).
-    if (coreFor(plan, params, entranceEdge).valid) return il;
     // One full-storey flight, sized by the TALLEST storey it must serve
     // (the ground storey). Riser 0.28 / tread 0.25 (~48 degrees, inside the
     // 50-degree slope limit and 0.55 stepHeight): the 0.18/0.28 first cut
@@ -3718,6 +3717,73 @@ InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
         return il;
     }
     return il;
+}
+}  // namespace
+
+InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
+                              std::size_t entranceEdge) {
+    Poly2 plan = planIn;
+    if (plan.size() < 3 || params.bigBox >= 6) return {};
+    ensureCCW(plan);
+    // A building with a CORE climbs by its stairwells: no straight stair, no
+    // well (the core's shafts are the holes — coreSlabHoles).
+    if (coreFor(plan, params, entranceEdge).valid) return {};
+    return straightStairOn(plan, params, entranceEdge);
+}
+
+std::vector<StairRun> stairRuns(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge,
+                                const std::vector<StoreyPlan>& storeys) {
+    std::vector<StairRun> runs;
+    Poly2 plan = planIn;
+    if (plan.size() < 3) return runs;
+    ensureCCW(plan);
+    const int nS = static_cast<int>(storeys.size());
+    auto wellFits = [&](const Poly2& tier, const Poly2& well) {
+        for (const Vec2& c : well)
+            if (!pointInPolygon(tier, c)) return false;
+        return true;
+    };
+    InteriorLayout il = interiorLayout(plan, params, entranceEdge);
+    std::size_t sides = plan.size();
+    int k0 = 0;
+    while (il.hasStair) {
+        StairRun r;
+        r.il = il;
+        r.sides = sides;
+        r.k0 = k0;
+        r.k1 = k0;
+        for (int k = k0 + 1; k < nS; ++k) {
+            if (!wellFits(storeys[static_cast<std::size_t>(k)].plan, il.well)) break;
+            r.k1 = k;
+        }
+        if (r.k1 == r.k0 && !runs.empty()) break;   // (a tier no stair climbs into: the runs end here)
+        runs.push_back(r);
+        if (r.k1 >= nS - 1 || r.k1 == r.k0) break;
+        // THE STAIR MOVES INBOARD: the next run laid out on the first storey the well no longer fits, its first
+        // flight leaving the last storey of this run (a nested tier: the foot stands inside the storey below too).
+        const Poly2& tier = storeys[static_cast<std::size_t>(r.k1) + 1].plan;
+        il = straightStairOn(tier, params, entranceEdgeFor(tier, params));
+        sides = tier.size();
+        k0 = r.k1;
+    }
+    return runs;
+}
+
+const StairRun* runLeaving(const std::vector<StairRun>& runs, int storey) {
+    for (const StairRun& r : runs) if (storey >= r.k0 && storey < r.k1) return &r;
+    return nullptr;
+}
+
+const StairRun* runArriving(const std::vector<StairRun>& runs, int storey) {
+    for (const StairRun& r : runs) if (storey > r.k0 && storey <= r.k1) return &r;
+    return nullptr;
+}
+
+const StairRun* runOn(const std::vector<StairRun>& runs, int storey) {
+    if (const StairRun* r = runLeaving(runs, storey)) return r;
+    if (const StairRun* r = runArriving(runs, storey)) return r;
+    if (runs.size() == 1 && runs[0].k0 == runs[0].k1 && storey == runs[0].k0) return &runs[0];
+    return nullptr;
 }
 
 Poly2 LobbyPiece::footprint() const {
@@ -4500,13 +4566,12 @@ std::vector<ShopRoomRect> shopRoomsOf(const Poly2& planIn, const BuildingParams&
     if (plan.size() < 3 || params.bigBox || params.campus) return out;
     ensureCCW(plan);
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
-    const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
     if (storeys.empty() || (storeys.size() < 2 && !params.groundRetail)) return out;
     const CorePlan core = coreFor(plan, params, entranceEdge);
-    const bool stair = il.hasStair && storeys.size() > 1;   // (as growInterior: one storey, no stair)
+    const StairRun* r0 = runLeaving(stairRuns(plan, params, entranceEdge, storeys), 0);   // (as growInterior: one storey, no stair)
     const RoomPlan rp = shopRoomPlan(storeys[0].plan, params, entranceEdge, baseY + storeys[0].y0, storeys[0].h, core,
-                                     stair ? il.well : Poly2{}, stair ? il.stairFoot : Vec2(1e30, 1e30));
+                                     r0 ? r0->il.well : Poly2{}, r0 ? r0->il.stairFoot : Vec2(1e30, 1e30));
     for (const Room& r : rp.rooms)
         if (r.kind == RoomKind::Shop) out.push_back({r.rect, r.style});
     return out;
@@ -4559,13 +4624,24 @@ Real interiorWallInset(const BuildingParams& p) { return interiorInset(p); }
 
 StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real baseY,
                         const std::vector<StoreyPlan>& storeys, int ki, const CorePlan& core,
-                        const InteriorLayout& il, std::size_t entranceEdge) {
+                        const std::vector<StairRun>& runs, std::size_t entranceEdge) {
     StoreyRooms sr;
     const int nS = static_cast<int>(storeys.size());
     if (ki < 0 || ki >= nS) return sr;
     if (mechanicalStorey(params, ki)) return sr;   // the plant room: no partitions
     const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
     RoomPlan& rp = sr.rp;
+    // THE STAIR ON THIS STOREY (stairRuns): the well kept clear and the hall picked up at it, the flight's foot
+    // kept clear, the stair's wall left blank. A TRANSFER STOREY -- one run arrives, the next leaves -- is an open
+    // floor, the sky lobby between the stair that came up and the stair that goes on: no partition over either well.
+    const StairRun* leave = runLeaving(runs, ki);
+    const StairRun* arrive = runArriving(runs, ki);
+    if (leave && arrive && leave != arrive) return sr;
+    const StairRun* on = runOn(runs, ki);
+    const bool stair = on != nullptr && nS > 1;   // (one storey: no stair)
+    const Poly2 well = stair ? on->il.well : Poly2{};
+    const Vec2 foot = stair ? on->il.stairFoot : Vec2(1e30, 1e30);
+    const std::size_t blankEdge = on && on->sides == spk.plan.size() ? on->il.edge : static_cast<std::size_t>(-1);
     // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
     if (params.bigBox == 6 && ki <= 1) {
         const MallLevel ML = mallLevel(plan, params, ki);
@@ -4582,16 +4658,11 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
         rp = ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
            : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
            : ki == 0 && !params.campus && (!params.civicRooms || params.civicRooms == 17) ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
-                                    il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
-                                    il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30))
+                                    well, foot)
                      : RoomPlan{};
     }
     if (rp.rooms.empty())
-        rp = roomPlan(spk.plan, params, core,
-                      il.hasStair ? il.edge : static_cast<std::size_t>(-1),
-                      interiorInset(params), ki,
-                      il.hasStair && nS > 1 ? il.well : Poly2{}, entranceEdge,   // (one storey: no stair)
-                      il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30));
+        rp = roomPlan(spk.plan, params, core, blankEdge, interiorInset(params), ki, well, entranceEdge, foot);
     // A TOWER'S DEPARTMENT STORE (a department a floor: fashion, fashion, electronics, books, the food hall) and its
     // RESTAURANT FLOORS at the top (restaurants and bars by turns round the core): its floors' rooms are shops
     {
@@ -4621,8 +4692,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     if (plan.size() < 3) return out;
     ensureCCW(plan);
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
-    const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
+    const std::vector<StairRun> runs = stairRuns(plan, params, entranceEdge, storeys);
     // no storeys above ground -- but a BIG BOX is its one tall storey, and that is the store; and a one-storey row of
     // SHOPS is its shops (single-storey shop buildings streamed empty: 56 of 377 on the island)
     const bool shopsOnly = storeys.size() == 1 && params.groundRetail && !params.campus;
@@ -4653,19 +4724,6 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         v = static_cast<float>((lx * grainP.x + lz * grainP.y) / grainTile);
     };
 
-    // How high the stair reaches: the first shrunken tier the well no longer
-    // fits inside ends it (the slab there keeps its hole shut).
-    int stairTop = 0;
-    if (il.hasStair) {
-        stairTop = static_cast<int>(storeys.size()) - 1;
-        for (std::size_t k = 1; k < storeys.size(); ++k) {
-            bool fits = true;
-            for (const Vec2& c : il.well)
-                if (!pointInPolygon(storeys[k].plan, c)) { fits = false; break; }
-            if (!fits) { stairTop = static_cast<int>(k) - 1; break; }
-        }
-    }
-
     // --- floor slabs (top + underside; the underside IS the ceiling of the
     // storey below; the top storey's ceiling is the roof slab's underside,
     // which the exterior grow always emits) ------------------------------
@@ -4673,8 +4731,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const std::size_t k = static_cast<std::size_t>(ki);
         std::vector<Poly2> holes;
         if (core.valid) holes = coreSlabHoles(core);   // the shafts' own walls dress these rims
-        else if (il.hasStair && static_cast<int>(k) <= stairTop)
-            holes.push_back(il.well);
+        else if (const StairRun* ar = runArriving(runs, static_cast<int>(k)))
+            holes.push_back(ar->il.well);   // the run climbing into this storey
         if (params.bigBox == 6 && k == 1) holes = mallLevel(plan, params, 1).holes;   // the atria
         const Real yTop = baseY + storeys[k].y0 + 0.05;
         // The hole's CUT EDGE: without a skirt the slab is two horizontal
@@ -4847,12 +4905,15 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     }
 
     // --- the stair (riser <= 0.18, run 0.28, inside the well) ------------
-    const Vec2 u = il.stairDir;
     // The stair's own mesh and tint: stairFinishFor is an independent
     // axis (device ask), so treads/risers/soffit/stringers/railing land in
     // the STAIR finish's part and carry its albedo.
     RenderMesh stairMesh;
     const Vec3 scol = stairFinishFor(params).albedo * floorTone;
+    // RUN BY RUN (stairRuns): each run's flights between its storeys, the next run's from where the last arrived.
+    for (const StairRun& stairRun : runs) {
+    const InteriorLayout& il = stairRun.il;
+    const Vec2 u = il.stairDir;
     auto flight = [&](const Vec2& foot, const Vec2& dir, Real y0f, Real rise,
                       int nR) {
         const Vec2 perp(-dir.y, dir.x);
@@ -4949,7 +5010,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // shared hole began, and its top opened onto the hole's mid-air.
     const int nR =
         std::max(3, static_cast<int>(std::lround(il.run / il.tread)) + 1);
-    for (int k = kA; il.hasStair && k < std::min(stairTop, kB); ++k) {
+    for (int k = std::max(kA, stairRun.k0); k < std::min(stairRun.k1, kB); ++k) {
         const Real yk = baseY + storeys[static_cast<std::size_t>(k)].y0 + 0.05;
         const Real rise = storeys[static_cast<std::size_t>(k) + 1].y0 -
                           storeys[static_cast<std::size_t>(k)].y0;
@@ -4998,6 +5059,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
             stringer(perp * -half, perp * -1.0);
         }
     }
+    }   // (the runs)
 
     // --- ROOMS (M7): a ring of rooms along the outside walls of every
     // storey above the lobby — offices behind a curtain wall, apartments
@@ -5008,7 +5070,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
         if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
         // The storey's rooms -- the one plan the SPACE GRAPH reads too (storeyRooms; space_graph.h, issue #105).
-        RoomPlan rp = storeyRooms(plan, params, baseY, storeys, ki, core, il, entranceEdge).rp;
+        RoomPlan rp = storeyRooms(plan, params, baseY, storeys, ki, core, runs, entranceEdge).rp;
         // (RT_FURNITURE_BLIND_OPENINGS=1: the A/B -- furnished as before the outside doors and windows were known)
         static const bool blindOpenings = std::getenv("RT_FURNITURE_BLIND_OPENINGS") != nullptr;
         if (!blindOpenings) rp.openings = storeyOpenings(spk.plan, params, ki, baseY + spk.y0, spk.h, entranceEdge);
@@ -5981,11 +6043,11 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // the streamed interior will build its stair from, so they agree by
     // construction.
     if (full && params.openDoorway) {
-        const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
         const CorePlan gcore = coreFor(plan, params, entranceEdge);
         std::vector<Poly2> holes;
         if (gcore.valid) holes = coreSlabHoles(gcore);   // the shafts (M5)
-        else if (il.hasStair) holes.push_back(il.well);
+        else if (const StairRun* ar = runArriving(stairRuns(plan, params, entranceEdge, storeyPlans(plan, params)), 1))
+            holes.push_back(ar->il.well);
         if (params.bigBox == 6) holes = mallLevel(plan, params, 1).holes;   // the mall's atria, open to the floor above
         const Real cy = y + gh - 0.25;
         const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
@@ -6182,11 +6244,11 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor,
                                     detail, false, curtainStyleOf(params));
             else if (full) {
+                // the stair's blank wall on this storey: the run that owns it (the ground's, or one moved inboard)
                 bool stairEdgeU = false;
-                if (params.openDoorway && cur.size() == plan.size()) {
-                    const InteriorLayout ilw =
-                        interiorLayout(plan, params, entranceEdge);
-                    stairEdgeU = ilw.hasStair && e == ilw.edge;
+                if (params.openDoorway) {
+                    const StairRun* sr = runOn(stairRuns(plan, params, entranceEdge, storeys), i + 1);
+                    stairEdgeU = sr && sr->sides == cur.size() && e == sr->il.edge;
                 }
                 if (stairEdgeU) {
                     const FaceRect bfr = planEdgeRect(cur, e, y, fh);

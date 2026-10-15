@@ -171,8 +171,8 @@ RoomPlan roomPlan(const Poly2& storeyPlan, const BuildingParams& params, const C
 // (roomPlan above), a tower's department-store and restaurant floors re-dressed as shops. Empty on a mechanical storey
 // (no partitions). With the storey's own circulation where its plan has it: a mall's atria (the slab's holes, the
 // upper level), its escalators (feet on the lower level, rising `escalatorRun` along `dir` one storey) and its glass
-// lift. `plan` is the building's CCW plan; `storeys` its storey stack; `core` its core (invalid: none); `il` the
-// straight stair's layout; the entrance edge as entranceEdgeFor gives it.
+// lift. `plan` is the building's CCW plan; `storeys` its storey stack; `core` its core (invalid: none); `runs` the
+// straight stair's runs (stairRuns); the entrance edge as entranceEdgeFor gives it.
 struct StoreyRooms {
     RoomPlan rp;
     std::vector<Poly2> holes;
@@ -184,7 +184,7 @@ struct StoreyRooms {
 };
 StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real baseY,
                         const std::vector<StoreyPlan>& storeys, int storey, const CorePlan& core,
-                        const InteriorLayout& il, std::size_t entranceEdge);
+                        const std::vector<StairRun>& runs, std::size_t entranceEdge);
 
 // WALKABILITY (Glenn, 2026-09-15: "it might help if there's an algorithm to
 // determine if the entire floor is walkable which could be used for

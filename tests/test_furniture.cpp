@@ -1311,7 +1311,7 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
                              "pagoda_tower", "condo_tower", "sky_exposure_tower", "tower_on_base",
                              "tapered_glass_tower", "pencil_tower"};
     const Real sizes[][2] = {{24, 24}, {30, 30}, {40, 26}, {48, 34}};
-    long allFloors = 0, allBare = 0, deskRows = 0, deepRows = 0;
+    long allFloors = 0, allBare = 0, deskRows = 0, deepRows = 0, transfers = 0;
     for (const char* rn : recipes) {
         int floors = 0, bare = 0;
         for (uint32_t seed = 1; seed <= 2; ++seed)
@@ -1323,8 +1323,14 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
                 p.openDoorway = true;
                 const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
                 const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+                const std::vector<StairRun> runs = stairRuns(plan, p, entranceEdgeFor(plan, p), sps);
                 for (int k = 1; k < static_cast<int>(sps.size()); k += 2) {   // every other floor, up every tier
                     if (mechanicalStorey(p, k)) continue;
+                    // A TRANSFER storey (stairRuns: one run arrives, the next leaves) is an open floor by design, the
+                    // sky lobby between two stairs; furnishing it is owed, and it is not a bare floor here.
+                    const StairRun* lv = runLeaving(runs, k);
+                    const StairRun* ar = runArriving(runs, k);
+                    if (lv && ar && lv != ar) { ++transfers; continue; }
                     ++floors;
                     const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, k, k + 1);
                     long real = 0;
@@ -1344,7 +1350,7 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
                     }
                 }
             }
-        std::printf("    [towers] %-20s %3d floors, %2d bare\n", rn, floors, bare);
+        std::printf("    [towers] %-20s %3d floors, %2d bare (transfer floors so far: %ld)\n", rn, floors, bare, transfers);
         CHECK(floors > 0);
         CHECK(bare * 100 <= floors * 10);   // (the 24 m lots' crowns)
         allFloors += floors;

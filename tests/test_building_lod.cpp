@@ -6,6 +6,7 @@
 #include "test_framework.h"
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/architect.h"   // the every-recipe census
 
 #include <algorithm>
 #include <cmath>
@@ -227,6 +228,54 @@ TEST_CASE(interior_layout_fits_the_plan_and_repeats) {
 // extraction, ADR-0080 Phase 2): prints a positional hash + tri count for a
 // spread of param variants. Always passes — run it before and after the
 // refactor and DIFF the two prints; a moved vertex changes the hash.
+// THE CENSUS OVER EVERY RECIPE (the architectural toolkit's byte-identity proof, issue #105 / ADR-0174): one line
+// per recipe, seed and plan with a positional hash of the exterior parts and one of the interior's. The first act
+// of every refactor step is to run this into a file; the last is to diff. Only the lines a step means to change may
+// change.
+TEST_CASE(building_mesh_hash_census_every_recipe) {
+    auto hashOf = [](const BuildingMesh& bm, std::size_t& nv, std::size_t& nt) {
+        uint64_t h = 1469598103934665603ull;
+        nv = nt = 0;
+        for (const RenderMesh& part : bm.parts) {
+            nt += part.indices.size() / 3;
+            nv += part.vertices.size();
+            for (const Vertex& vx : part.vertices) {
+                const double q[3] = {vx.position.x, vx.position.y, vx.position.z};
+                for (double d : q) {
+                    const int64_t k = static_cast<int64_t>(std::llround(d * 4096.0));
+                    h ^= static_cast<uint64_t>(k);
+                    h *= 1099511628211ull;
+                }
+            }
+        }
+        return h;
+    };
+    const Poly2 rect24 = {{-12, -10}, {12, -10}, {12, 10}, {-12, 10}};
+    const Poly2 lPlan = {{-14, -12}, {14, -12}, {14, 0}, {0, 0}, {0, 12}, {-14, 12}};
+    const Poly2 rect40 = {{-20, -20}, {20, -20}, {20, 20}, {-20, 20}};
+    int lines = 0;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        for (uint32_t seed : {3u, 17u}) {
+            BuildingRecipe r;
+            if (!architectRecipeByName(name, seed, 0.6, 24, 600, r)) continue;
+            if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
+            r.params.openDoorway = true;
+            const char* planNames[3] = {"rect24", "L", "rect40"};
+            const Poly2* plans[3] = {&rect24, &lPlan, &rect40};
+            for (int pi = 0; pi < 3; ++pi) {
+                std::size_t ev, et, iv, it;
+                const uint64_t he = hashOf(growPlanBuilding(*plans[pi], r.params, 1.5), ev, et);
+                const uint64_t hi = hashOf(growInterior(*plans[pi], r.params, 1.5), iv, it);
+                std::printf("    [census] %-22s seed %2u %-6s ext=%016llx tris=%zu  int=%016llx tris=%zu\n", name, seed, planNames[pi],
+                            static_cast<unsigned long long>(he), et, static_cast<unsigned long long>(hi), it);
+                ++lines;
+            }
+        }
+    }
+    CHECK(lines > 0);
+}
+
 TEST_CASE(building_mesh_hash_census) {
     Poly2 plan = {{0, 0}, {22, 0}, {26, 14}, {11, 20}, {0, 14}};
     for (int v = 0; v < 6; ++v) {

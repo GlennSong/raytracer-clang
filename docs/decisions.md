@@ -10133,9 +10133,13 @@ to replace or retire the current building looks ... we want more variety".
   read), `CorePlan` and the facade's doors -- and later steps grow from it. The order is by dependency: the space
   graph and its gate (this step), `Section` + `Face`, circulation, `Mass` + the slice bridge + `Stack`, `Complex`,
   `Sweep` / `Implicit` / `Mesh` / `Envelope` / rakes, then books and the variety census. No schedule.
-- **What the gate found on day one.** Apartment end units whose entry hall faced a bedroom across a solid divider --
-  the flat was a dead end past its bath (fixed: an end unit keeps one bedroom at its far end, `layoutApartment`).
-  Coreless setback towers whose straight stair ends at the first shrunken tier, leaving every storey above it with no
-  way up: ten recipes, the fix list the gate test carries by name until the grammar climbs through a setback.
+- **What the gate found on day one, all fixed the same day.** Apartment end units whose entry hall faced a bedroom
+  across a solid divider -- the flat was a dead end past its bath (an end unit keeps one bedroom at its far end,
+  `layoutApartment`). Coreless setback towers whose straight stair ended at the first shrunken tier, leaving every
+  storey above with no way up -- ten recipes (`stairRuns`: the stair moves inboard, a new layout on the shrunken
+  tier whose first flight leaves the storey the last run arrived at; that transfer storey is an open floor, the sky
+  lobby between the two stairs). A ring office on an L's narrow arm that spanned the arm and opened its door on the
+  exterior wall (`ringPlan` measures its depth into a concave plan, not across its box). The gate test keeps a FIX
+  LIST by name for whatever it finds next; it is empty.
 - **Rules.** Non-prismatic masses are always glass. Every word lands in C++ and Lua together (ADR-0042:
   `building.space_graph`). A ledger row before each module. No one-off functions: a new shape is grammar words.

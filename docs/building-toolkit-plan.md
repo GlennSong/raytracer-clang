@@ -9,8 +9,8 @@ issue holds the discussion; this file is the record. No schedule: steps land whe
 | --- | --- | --- |
 | 0 | ADR-0174, this document, ledger rows, the `toolkit_lab` level | done: the lab is one lot, one `podium_tower`, walkable lobby to roof (the roof exit and the tiered collider landed with it) |
 | 1a | `SpaceGraph` built FROM today's growers (`spaceGraphOf` over `storeyPlans`, `storeyRooms`, `CorePlan`, the facade's doors); `storeyView` equals `storeyPlans` | done: `storey_view_equals_storey_plans_every_recipe`, 372 buildings, 0 mismatches |
-| 1b | `reachable` / `unreachableCells`, the gate over every recipe, the blueprint sheet, `building.space_graph` in Lua | done: `graph_gate_every_recipe` (347 of 372 pass), `level_blueprints_and_graph_gate` (`RT_BLUEPRINTS=<dir>`), `procgen_script_reads_a_space_graph` |
-| 1c | what 1b found | apartment end units fixed (`layoutApartment`); OWED: the straight stair through a setback (ten recipes on the fix list in `test_space_graph.cpp`) |
+| 1b | `reachable` / `unreachableCells`, the gate over every recipe, the blueprint sheet, `building.space_graph` in Lua | done: `graph_gate_every_recipe` (347 of 372 passed on day one; 372 after 1c), `level_blueprints_and_graph_gate` (`RT_BLUEPRINTS=<dir>`), `procgen_script_reads_a_space_graph` |
+| 1c | what 1b found | done: apartment end units (`layoutApartment`); the straight stair through a setback (`stairRuns`, transfer storeys open floors; `character_climbs_the_straight_stair_through_a_setback`); the ring on an L's narrow arm (`ringPlan` depth into the plan). 372 of 372 pass; the fix list is empty. OWED: transfer floors furnished as lounges (open floors today) |
 | 2a | `Section` with lines only; `fromLot`; `Face::Flat` wraps `FaceRect` | not started |
 | 2b | arcs, splines, holes, Clipper2 ops; cylindrical faces | not started |
 | 3a | `corePreset` reproduces `corePlan`; shafts as cells | not started (the adapter already makes shafts cells) |

@@ -166,19 +166,13 @@ TEST_CASE(storey_view_equals_storey_plans_every_recipe) {
 // THE GATE over every recipe (the brief on #105, step 1b): every cell of every building reachable from the street.
 // THE FIX LIST (step 1c) is the recipes it fails today, each with its one cause, written here so the suite stays
 // green and honest: a recipe not on the list must pass; a recipe on it must still fail, and leaves the list the day
-// its cause is fixed. What the gate found on day one (2026-10-15): apartment end units whose hall faced a bedroom
-// across a solid divider (fixed in room_plan.cpp the same day), and coreless setback towers whose straight stair
-// ends at the first shrunken tier.
+// its cause is fixed. What the gate found on day one (2026-10-15), all fixed the same day: apartment end units whose
+// hall faced a bedroom across a solid divider (layoutApartment); coreless setback towers whose straight stair ended
+// at the first shrunken tier (stairRuns: the stair moves inboard, the transfer storey an open floor); a ring office
+// on an L's narrow arm that spanned the arm and opened its door on the exterior wall (ringPlan measures into the
+// plan). The list is empty; it stays here for the next thing the gate finds.
 namespace {
-constexpr const char* kStairEnds =
-    "no core fits the plan and the straight stair ends at the first setback (growInterior's stairTop): the storeys "
-    "above it have no way up";
-const std::map<std::string, const char*> kFixList = {
-    {"art_deco_tower", kStairEnds},  {"commercial_block", kStairEnds}, {"condo_tower", kStairEnds},
-    {"glass_tower", kStairEnds},     {"hotel", kStairEnds},            {"office_slab", kStairEnds},
-    {"sky_exposure_tower", kStairEnds}, {"stepped_tower", kStairEnds}, {"terrace_condo", kStairEnds},
-    {"tower_on_base", kStairEnds},
-};
+const std::map<std::string, const char*> kFixList = {};
 }  // namespace
 
 TEST_CASE(graph_gate_every_recipe) {
@@ -222,6 +216,42 @@ TEST_CASE(graph_gate_every_recipe) {
     CHECK(unlisted == 0);   // nothing fails that the fix list does not name, and the list names nothing that passes
 }
 
+// THE STAIR MOVES INBOARD (issue #105, step 1c): a coreless setback tower's straight stair ran out at the first
+// shrunken tier, and every storey above had no way up -- ten recipes on the gate's day-one fix list. stairRuns lays
+// a new run on the shrunken tier, its first flight leaving the storey the last run arrived at, and the graph climbs
+// to the top.
+TEST_CASE(straight_stair_climbs_through_a_setback) {
+    const Poly2 plan = rectPlan(24, 20);
+    BuildingParams p = towerParams(16);
+    p.core = 1;   // never: the straight stair is the way up
+    p.setbackFloors = 5;
+    p.setbackEvery = 2.0;
+    Poly2 ccw = plan;
+    ensureCCW(ccw);
+    const std::vector<StoreyPlan> sps = storeyPlans(ccw, p);
+    CHECK(sps.back().tier >= 2);
+    const std::vector<StairRun> runs = stairRuns(ccw, p, entranceEdgeFor(ccw, p), sps);
+    CHECK(runs.size() >= 2);
+    for (std::size_t i = 0; i < runs.size(); ++i) {
+        CHECK(runs[i].k1 > runs[i].k0);
+        if (i > 0) CHECK(runs[i].k0 == runs[i - 1].k1);   // the next run leaves where the last arrived
+        if (i > 0) CHECK(runs[i].il.edge < runs[i].sides);
+    }
+    CHECK(runs.front().k0 == 0);
+    CHECK(runs.back().k1 == static_cast<int>(sps.size()) - 1);   // ...to the top
+    for (int k = 0; k + 1 < static_cast<int>(sps.size()); ++k) CHECK(runLeaving(runs, k) != nullptr);
+    const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+    int stairPortals = 0;
+    for (const Portal& po : g.portals) if (po.kind == Portal::Kind::Stair) ++stairPortals;
+    CHECK(stairPortals == static_cast<int>(sps.size()) - 1);
+    const std::vector<int> bad = unreachableCells(g);
+    std::printf("    [runs] %zu runs over %zu storeys, %zu unreachable\n", runs.size(), sps.size(), bad.size());
+    for (std::size_t i = 0; i < runs.size(); ++i)
+        std::printf("    [runs]   run %zu storeys %d..%d edge %zu of %zu foot (%.1f, %.1f)\n", i, runs[i].k0, runs[i].k1,
+                    runs[i].il.edge, runs[i].sides, runs[i].il.stairFoot.x, runs[i].il.stairFoot.y);
+    CHECK(bad.empty());
+}
+
 TEST_CASE(blueprint_svg_draws_every_storey_and_the_roof) {
     const Poly2 plan = rectPlan(40, 40);
     const BuildingParams p = towerParams(12);
@@ -248,8 +278,10 @@ TEST_CASE(graph_dump_debug) {
         const std::vector<bool> seen = reachableFrom(g, -1, WalkerCaps{});
         std::printf("=== %s seed %u: %d storeys, %zu cells, %zu portals, core %s\n", name, seed, g.storeys, g.cells.size(), g.portals.size(),
                     coreFor(plan, params, entranceEdgeFor(plan, params)).valid ? "yes" : "no");
-        const InteriorLayout il = interiorLayout(plan, params, entranceEdgeFor(plan, params));
-        std::printf("  stair %d dogleg %d foot (%.1f,%.1f) dir (%.1f,%.1f) run %.1f well %zu\n", il.hasStair, il.dogleg, il.stairFoot.x, il.stairFoot.y, il.stairDir.x, il.stairDir.y, il.run, il.well.size());
+        const std::vector<StoreyPlan> sps = storeyPlans(plan, params);
+        const std::vector<StairRun> runs = stairRuns(plan, params, entranceEdgeFor(plan, params), sps);
+        for (const StairRun& r : runs)
+            std::printf("  stair run %d..%d foot (%.1f,%.1f) dir (%.1f,%.1f) run %.1f edge %zu/%zu\n", r.k0, r.k1, r.il.stairFoot.x, r.il.stairFoot.y, r.il.stairDir.x, r.il.stairDir.y, r.il.run, r.il.edge, r.sides);
         const std::vector<int> bad = unreachableCells(g);
         std::printf("  unreachable (%zu):", bad.size());
         for (std::size_t i = 0; i < bad.size() && i < 14; ++i) std::printf(" %d=%s", bad[i], describe(g, bad[i]).c_str());
@@ -268,15 +300,25 @@ TEST_CASE(graph_dump_debug) {
             std::printf("  portal %-9s s%d  %d <-> %d  at (%.1f,%.1f)\n", portalKindName(p.kind), p.storey, p.a, p.b, (p.p0.x + p.p1.x) * 0.5, (p.p0.y + p.p1.y) * 0.5);
         }
         // the walls with doors on storey 1, and what the planner put either side
-        const std::vector<StoreyPlan> sps = storeyPlans(plan, params);
         const CorePlan core = coreFor(plan, params, entranceEdgeFor(plan, params));
         for (int k = showK; k < std::min(showK + 1, g.storeys); ++k) {
-            const StoreyRooms sr = storeyRooms(plan, params, 0.0, sps, k, core, il, entranceEdgeFor(plan, params));
+            const StoreyRooms sr = storeyRooms(plan, params, 0.0, sps, k, core, runs, entranceEdgeFor(plan, params));
             std::printf("  storey %d: topology %d rooms %zu walls %zu (doors %zu) openings %zu\n", k, static_cast<int>(sr.rp.topology), sr.rp.rooms.size(), sr.rp.walls.size(),
                         static_cast<std::size_t>(std::count_if(sr.rp.walls.begin(), sr.rp.walls.end(), [](const RoomWall& w) { return w.doorAt >= 0; })),
                         sr.rp.openings.size());
             for (const Room& r : sr.rp.rooms) { Vec2 lo, hi; bounds(r.rect, lo, hi); std::printf("    room %-10s [%.1f %.1f]-[%.1f %.1f]\n", cellUseName(r.kind), lo.x, lo.y, hi.x, hi.y); }
-            for (const RoomWall& w : sr.rp.walls) if (w.doorAt >= 0) { const Vec2 p = w.a + (w.b - w.a) * w.doorAt; std::printf("    door at (%.1f,%.1f) on wall (%.1f,%.1f)-(%.1f,%.1f)\n", p.x, p.y, w.a.x, w.a.y, w.b.x, w.b.y); }
+            for (const RoomWall& w : sr.rp.walls) if (w.doorAt >= 0) {
+                const Vec2 p = w.a + (w.b - w.a) * w.doorAt;
+                Vec2 d = w.b - w.a; d = d * (1.0 / d.length()); const Vec2 n(-d.y, d.x);
+                auto side = [&](const Vec2& q) {
+                    for (std::size_t ri = 0; ri < sr.rp.rooms.size(); ++ri) if (pointInPolygon(sr.rp.rooms[ri].rect, q)) return std::string("room") + std::to_string(ri);
+                    return pointInPolygon(sps[static_cast<std::size_t>(k)].plan, q) ? std::string("hall") : std::string("OUTSIDE");
+                };
+                std::printf("    door at (%.1f,%.1f) on wall (%.1f,%.1f)-(%.1f,%.1f): sides %s / %s\n", p.x, p.y, w.a.x, w.a.y, w.b.x, w.b.y,
+                            side(p + n * 0.45).c_str(), side(p - n * 0.45).c_str());
+            }
+            for (const RoomWall& w : sr.rp.walls) if (w.doorAt < 0) std::printf("    wall (%.1f,%.1f)-(%.1f,%.1f)%s\n", w.a.x, w.a.y, w.b.x, w.b.y, w.glass ? " glass" : "");
+            { Vec2 lo, hi; bounds(sps[static_cast<std::size_t>(k)].plan, lo, hi); std::printf("    plan %zu-gon [%.1f %.1f]-[%.1f %.1f]:", sps[static_cast<std::size_t>(k)].plan.size(), lo.x, lo.y, hi.x, hi.y); for (const Vec2& v : sps[static_cast<std::size_t>(k)].plan) std::printf(" (%.1f,%.1f)", v.x, v.y); std::printf("\n"); }
         }
     });
 }

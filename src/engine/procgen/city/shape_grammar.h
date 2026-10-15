@@ -275,6 +275,7 @@ struct InteriorLayout {
 InteriorLayout interiorLayout(const Poly2& plan, const BuildingParams& params,
                               std::size_t entranceEdge);
 
+
 // The storey stack (ADR-0080): every storey's plan, base height (relative to
 // baseY) and height, with the setback/inset validation the exterior tier
 // loop applies. Extracted so the EXTERIOR massing and the streamed INTERIOR
@@ -288,6 +289,26 @@ struct StoreyPlan {
 };
 std::vector<StoreyPlan> storeyPlans(const Poly2& plan,
                                     const BuildingParams& params);
+
+// THE STRAIGHT STAIR'S RUNS (issue #105, step 1c): a coreless building climbs by straight flights hugging a wall
+// (interiorLayout); where a setback shrinks the plan past the well, the stair moves inboard -- a new layout on the
+// shrunken tier's plan, its first flight leaving the last storey of the run below. Run r climbs storeys k0..k1
+// (a flight leaves every storey k in [k0, k1)); its well is cut in slabs k0+1..k1. The runs end where no stair
+// fits a tier; the storeys above are unreachable, and the space graph's gate says so. Every consumer -- the
+// flights, the slab holes, the room planner's keep-outs, the facade's blank wall, the space graph -- reads these
+// same runs. (Before them the one ground layout ended at the first shrunken tier, and ten recipes' towers had
+// storeys no one could reach: the gate's day-one fix list.)
+struct StairRun {
+    InteriorLayout il;
+    int k0 = 0, k1 = 0;
+    std::size_t sides = 0;   // the vertex count of the plan the layout was made on (il.edge indexes it)
+};
+std::vector<StairRun> stairRuns(const Poly2& plan, const BuildingParams& params, std::size_t entranceEdge,
+                                const std::vector<StoreyPlan>& storeys);
+const StairRun* runLeaving(const std::vector<StairRun>& runs, int storey);    // a flight's foot stands on `storey`
+const StairRun* runArriving(const std::vector<StairRun>& runs, int storey);   // its well is cut in `storey`'s slab
+// The run that owns `storey` (leaving, else arriving, else the ground layout of a building too low to climb).
+const StairRun* runOn(const std::vector<StairRun>& runs, int storey);
 
 // THE COLLIDER'S TIERS (architectural toolkit, issue #105, step 1): the storey stack grouped by tier, each a
 // prism the walker meets -- walls from `y0` to `y1`, a walkable cap at `y1` (the tier's roof deck: a setback's

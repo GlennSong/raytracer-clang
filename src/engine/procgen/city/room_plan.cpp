@@ -37,6 +37,35 @@ std::vector<Real> bayBoundaries(Real W, const BuildingParams& p) {
 // when the core does not stand IN FRONT of the edge: on an L or cross plate
 // (buildings M10) the core beside an arm's edge is no limit on that arm's
 // rooms. The edge's span along `d` (length W) is widened by the corridor ring.
+// How far a ray from `from` along `dir` runs inside `plan` before it leaves: the first crossing of any edge but
+// `skipEdge` (the one the ray starts on).
+Real depthInto(const Poly2& plan, const Vec2& from, const Vec2& dir, std::size_t skipEdge) {
+    Real best = 1e9;
+    const std::size_t n = plan.size();
+    for (std::size_t e = 0; e < n; ++e) {
+        if (e == skipEdge) continue;
+        const Vec2 a = plan[e], b = plan[(e + 1) % n];
+        const Vec2 ab = b - a;
+        const Real den = dir.x * ab.y - dir.y * ab.x;
+        if (std::fabs(den) < 1e-9) continue;   // parallel
+        const Vec2 ao = a - from;
+        const Real t = (ao.x * ab.y - ao.y * ab.x) / den;   // along the ray
+        const Real s = (ao.x * dir.y - ao.y * dir.x) / den;   // along the edge
+        if (t > 1e-6 && s >= -1e-6 && s <= 1.0 + 1e-6) best = std::min(best, t);
+    }
+    return best;
+}
+
+bool convexPlan(const Poly2& plan) {   // (CCW)
+    const std::size_t n = plan.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec2 a = plan[i], b = plan[(i + 1) % n], c = plan[(i + 2) % n];
+        const Vec2 u = b - a, v = c - b;
+        if (u.x * v.y - u.y * v.x < -1e-6) return false;
+    }
+    return true;
+}
+
 Real depthToCore(const Vec2& a, const Vec2& d, Real W, const Vec2& nOut, const CorePlan& core) {
     if (!core.valid) return 1e9;
     Real t0 = 1e30, t1 = -1e30, best = 1e9;
@@ -63,6 +92,7 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
     const std::size_t n = plan.size();
     const Real depthWant = rp.office ? kOfficeDepth : kFlatDepth;
     const Real widthWant = rp.office ? kOfficeWidth : kFlatWidth;
+    const bool concave = !convexPlan(plan);
 
     // Per edge: the frame and the band depth it can afford.
     struct Edge { Vec2 a, d, nOut; Real W = 0, depth = 0; bool rooms = false; Real cornerStart = 0, cornerEnd = 0; };
@@ -87,6 +117,18 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         // invariant for every plate in between).
         Real across = 0;
         for (const Vec2& w : plan) across = std::max(across, dot(w - ed.a, ed.nOut * -1.0));
+        // ...measured INTO the plan where the plan is not convex: an L's arm is as deep as the arm, not as the
+        // whole plate (the space graph's gate, issue #105, 2026-10-15: a ring office on a 5 m arm spanned it and
+        // opened its door onto the exterior wall). A convex plate measures as before.
+        if (concave) {
+            Real into = 1e9;
+            for (int si = 0; si < 5; ++si) {
+                const Real x = inset + 0.5 + std::max(Real(0), ed.W - 2.0 * inset - 1.0) * (si / 4.0);
+                if (x > ed.W) continue;
+                into = std::min(into, depthInto(plan, ed.a + ed.d * x, ed.nOut * -1.0, e));
+            }
+            if (into < 1e8) across = std::min(across, into);
+        }
         ed.depth = std::min(ed.depth, (across - 2.0 * inset - 1.4) * 0.5);
         ed.rooms = ed.depth >= kMinDepth && ed.W >= 2.0 * inset + 2.5;
     }

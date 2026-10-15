@@ -204,8 +204,8 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
     // A GARAGE is decks and ramps you drive up (garageColliderOf), not rooms: no graph of it yet.
     if (params.parkingDecks) { g.modelled = false; return g; }
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
-    const InteriorLayout il = interiorLayout(plan, params, entranceEdge);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
+    const std::vector<StairRun> runs = stairRuns(plan, params, entranceEdge, storeys);
     const CorePlan core = coreFor(plan, params, entranceEdge);
     const int nS = static_cast<int>(storeys.size());
     g.storeys = nS;
@@ -242,24 +242,12 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
         g.portals.push_back(po);
     };
 
-    // THE STRAIGHT STAIR's reach (growInterior): the first shrunken tier its well no longer fits inside ends it.
-    int stairTop = 0;
-    if (il.hasStair) {
-        stairTop = nS - 1;
-        for (int k = 1; k < nS; ++k) {
-            bool fits = true;
-            for (const Vec2& c : il.well)
-                if (!pointInPolygon(storeys[static_cast<std::size_t>(k)].plan, c)) { fits = false; break; }
-            if (!fits) { stairTop = k - 1; break; }
-        }
-    }
-
     // STOREY BY STOREY: the hall, its rooms, their doors, the street doors.
     std::vector<StoreyRooms> rooms(static_cast<std::size_t>(nS));
     for (int k = 0; k < nS; ++k) {
         const StoreyPlan& sp = storeys[static_cast<std::size_t>(k)];
         StoreyRooms& sr = rooms[static_cast<std::size_t>(k)];
-        sr = storeyRooms(plan, params, baseY, storeys, k, core, il, entranceEdge);
+        sr = storeyRooms(plan, params, baseY, storeys, k, core, runs, entranceEdge);
         Cell hall;
         hall.kind = CellKind::Hall;
         hall.use = RoomKind::Hall;
@@ -454,18 +442,22 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             doorSpan(hw, p0, p1);
             for (int k = 0; k < nS; ++k) doorPortal(hallOf[static_cast<std::size_t>(k)], lc, Portal::Kind::Lift, p0, p1, hw.doorHeight, k);
         }
-    } else if (il.hasStair && nS > 1) {
-        // THE STRAIGHT STAIR (ADR-0080): hall to hall up its well, as far as the well fits.
-        const Vec2 perp(-il.stairDir.y, il.stairDir.x);
-        const Vec2 wellC = il.well.size() >= 3 ? centroid(il.well) : il.stairFoot;
-        for (int k = 0; k < stairTop && k + 1 < nS; ++k) {
-            int a = cellAt(k, il.stairFoot - il.stairDir * 0.3);
-            if (a < 0) a = cellAt(k, wellC);
-            int b = cellAt(k + 1, wellC);
-            if (b < 0) b = hallOf[static_cast<std::size_t>(k + 1)];
-            if (a < 0 || b < 0) continue;
-            doorPortal(a, b, Portal::Kind::Stair, il.stairFoot - perp * (il.width * 0.5), il.stairFoot + perp * (il.width * 0.5),
-                       storeys[static_cast<std::size_t>(k)].h, k);
+    } else if (nS > 1) {
+        // THE STRAIGHT STAIR (ADR-0080), run by run (stairRuns): hall to hall up each run's well, the next run's
+        // first flight leaving the storey the last arrived at.
+        for (const StairRun& r : runs) {
+            const InteriorLayout& il = r.il;
+            const Vec2 perp(-il.stairDir.y, il.stairDir.x);
+            const Vec2 wellC = il.well.size() >= 3 ? centroid(il.well) : il.stairFoot;
+            for (int k = r.k0; k < r.k1 && k + 1 < nS; ++k) {
+                int a = cellAt(k, il.stairFoot - il.stairDir * 0.3);
+                if (a < 0) a = cellAt(k, wellC);
+                int b = cellAt(k + 1, wellC);
+                if (b < 0) b = hallOf[static_cast<std::size_t>(k + 1)];
+                if (a < 0 || b < 0) continue;
+                doorPortal(a, b, Portal::Kind::Stair, il.stairFoot - perp * (il.width * 0.5), il.stairFoot + perp * (il.width * 0.5),
+                           storeys[static_cast<std::size_t>(k)].h, k);
+            }
         }
     }
 
