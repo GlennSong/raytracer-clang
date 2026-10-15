@@ -113,6 +113,10 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
         // carriageway slab and out through the road's culled top (the island's see-through audit, 2026-10-14)
         const bool seamed = seam && (*seam)(a.xy, b.xy, 0.5 * (a.z + b.z) + lift);
         const double topA = a.z + lift, topB = b.z + lift;
+        // A STEP UNDER A NEIGHBOUR OVERLAPS IT by kSeal, up into the neighbour's slab: butted exactly against its soffit,
+        // the two met in a hairline (Glenn's island shot, 2026-10-14). (Its bottom meets its own soffit's edge exactly;
+        // a lip below that is a back face to anyone under the slab.)
+        constexpr double kSeal = 0.02;
         double botA = topA - thick, botB = topB - thick;
         double coverTopA = topA, coverTopB = topB;   // where this side's exposed part ends, up
         if (seamed && !hidden) continue;
@@ -122,7 +126,7 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
             if (!std::isnan(under)) {   // a neighbour stands at the top: only the step below its underside shows
                 const double drop = 0.5 * (topA + topB) - under;   // how deep the neighbour reaches
                 if (drop >= thick - 0.02) continue;
-                coverTopA = topA - drop; coverTopB = topB - drop;
+                coverTopA = topA - drop + kSeal; coverTopB = topB - drop + kSeal;
             }
         }
         if (groundAt) {
@@ -159,9 +163,11 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
             bool ok = true;
             auto check = [&](int vi, double top, double bot) {
                 const Vec2 q = verts[static_cast<size_t>(vi)].xy - A; const double t = dot(q, u) / len;
-                if (t <= 0.0 || t >= 1.0 || std::fabs(cross(u, q)) > 0.01) return false;
+                // within 2 mm of the edge it stands on: at 1 cm a merged run left a crack along its soffit's edge that a
+                // look up at the slab's corner went through (the island's see-through audit, 2026-10-14)
+                if (t <= 0.0 || t >= 1.0 || std::fabs(cross(u, q)) > 0.002) return false;
                 const double topL = f.topA + (nx.topB - f.topA) * t, botL = f.botA + (nx.botB - f.botA) * t;
-                return std::fabs(topL - top) < 0.01 && botL <= bot + 0.01 && botL >= bot - 0.5;   // the top exact, the bottom no shallower
+                return std::fabs(topL - top) < 0.002 && botL <= bot + 0.002 && botL >= bot - 0.5;   // the top exact, the bottom no shallower
             };
             for (size_t k = 0; k < run.size() && ok; ++k) {
                 const Side& s0 = sides[static_cast<size_t>(run[k])];

@@ -184,6 +184,37 @@ inline void printUndersideAudit(const UndersideAudit& u, size_t worst = 12) {
         std::printf("    [undersides]   %5zu open around x %d, z %d\n", w[i].first, w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
 }
 
+// EVERY FACE ALONG ONE RAY o + d t, t in (0, reach), nearest first: its mesh, distance, hit point, facing and whether
+// the ray meets its FRONT. The probe a see-through look is read with (rt_bake --audit's RT_AUDIT_RAY) -- a column
+// cannot show a side face merged into one long quad, whose centre stands metres away.
+inline void printRay(const std::vector<NamedMeshRef>& all, const Vec3& o, Vec3 d, double reach = 40.0) {
+    d = normalize(d);
+    std::vector<std::pair<double, std::string>> hits;
+    for (const NamedMeshRef& nm : all)
+        for (size_t t = 0; t + 2 < nm.mesh->indices.size(); t += 3) {
+            const Vec3 &A = nm.mesh->vertices[nm.mesh->indices[t]].position, &B = nm.mesh->vertices[nm.mesh->indices[t + 1]].position,
+                       &C = nm.mesh->vertices[nm.mesh->indices[t + 2]].position;
+            const Vec3 e1 = B - A, e2 = C - A, p = cross(d, e2);
+            const double det = dot(e1, p);
+            if (std::fabs(det) < 1e-12) continue;
+            const Vec3 s = o - A;
+            const double u = dot(s, p) / det;
+            if (u < 0 || u > 1) continue;
+            const Vec3 q = cross(s, e1);
+            const double v = dot(d, q) / det;
+            if (v < 0 || u + v > 1) continue;
+            const double tt = dot(e2, q) / det;
+            if (tt <= 1e-4 || tt > reach) continue;
+            const Vec3 f = cross(C - A, B - A), h = o + d * tt;
+            char line[220];
+            std::snprintf(line, sizeof line, "%-12s t %6.2f at %.2f %.2f %.2f facing %.2f %.2f %.2f %s", nm.name.c_str(), tt, h.x, h.y, h.z,
+                          f.x / f.length(), f.y / f.length(), f.z / f.length(), dot(f, d) < 0 ? "FRONT" : "back");
+            hits.push_back({tt, line});
+        }
+    std::sort(hits.begin(), hits.end());
+    for (const auto& [t, l] : hits) std::printf("    [ray] %s\n", l.c_str());
+}
+
 // WHAT STANDS IN ONE COLUMN: every face within `radius` of (x, z), top down -- its mesh, centre and facing. The probe
 // an audit miss is read with (rt_bake --audit's RT_AUDIT_PROBE, the lanes tests).
 inline void printColumn(const std::vector<NamedMeshRef>& all, double x, double z, double radius = 1.5) {

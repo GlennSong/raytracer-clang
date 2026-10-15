@@ -926,13 +926,11 @@ TEST_CASE(lanes_no_elevated_surface_is_see_through_from_below) {
 // step open (slab()'s side rule hid the whole side behind the neighbour's top).
 TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
     size_t eyes = 0, through = 0;
-    // KNOWN, small (a regression past them fails): 27 at the interchange -- most graze a deck's outer bottom edge and
-    // meet the side face on that edge rather than the soffit beside it (a tie on a shared edge, the hit at the soffit's
-    // own height: from (-103, 25), (-360, -50), (243, -49)), but some meet a side face halfway up its height, a real
-    // gap not yet found (from (-615, -234)); the shoulder sliver a footprint hid is gone now the side rule tests what is
-    // drawn. The valley's ramp ends (8; 10 and a light-rail stair wall's 1 before the decks judged the ground as drawn).
+    // KNOWN, small (a regression past them fails): 4 at the interchange, 5 at the valley's ramp ends. They were 27 and
+    // 10 while the slab's sides merged within a centimetre of their edge: a look up at a slab's corner went through the
+    // crack between the step face and the soffit (2026-10-14: merged within 2 mm now).
     const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 0}, {"light_rail_lab", 0},
-                                                 {"rail_loop", 0}, {"system_interchange", 27}, {"valley_viaduct", 8}};
+                                                 {"rail_loop", 0}, {"system_interchange", 4}, {"valley_viaduct", 5}};
     for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange", "valley_viaduct"}) {
         const Result& r = scene(scn);
         const std::vector<NamedMesh> meshes = buildMeshes(r);

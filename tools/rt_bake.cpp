@@ -203,6 +203,13 @@ int audit(const std::string& dir) {
         double x, z;
         if (std::sscanf(p, "%lf,%lf", &x, &z) == 2) { std::printf("    [column] at %.1f %.1f (ground %.2f)\n", x, z, groundAt(x, z)); engine::printColumn(refs, x, z, std::getenv("RT_AUDIT_PROBE_R") ? std::atof(std::getenv("RT_AUDIT_PROBE_R")) : 1.5); }
     });
+    each("RT_AUDIT_RAY", [&](const char* p) {   // "ox,oy,oz,dx,dy,dz": every face along that ray
+        double v[6];
+        if (std::sscanf(p, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
+            std::printf("    [ray] from %.2f %.2f %.2f along %.2f %.2f %.2f\n", v[0], v[1], v[2], v[3], v[4], v[5]);
+            engine::printRay(refs, engine::Vec3(v[0], v[1], v[2]), engine::Vec3(v[3], v[4], v[5]));
+        }
+    });
     each("RT_AUDIT_SECTION", [&](const char* p) {   // what stands over each point of a line
         double sx0, sz0, sx1, sz1, sstep;
         if (std::sscanf(p, "%lf,%lf,%lf,%lf,%lf", &sx0, &sz0, &sx1, &sz1, &sstep) == 5) engine::printSection(refs, sx0, sz0, sx1, sz1, sstep);
@@ -248,7 +255,7 @@ int audit(const std::string& dir) {
     if (const char* ns = std::getenv("RT_SEE_THROUGH_SAMPLES")) {
         const size_t n = std::strtoul(ns, nullptr, 10);
         auto show = [](const engine::SeeThroughAudit::Look& l) {
-            std::printf("      eye %.1f %.1f %.1f (deck top %.1f) dir %.2f %.2f %.2f -> back of %s at %.2f %.2f %.2f (%.2f m), facing %.2f %.2f %.2f\n",
+            std::printf("      eye %.3f %.3f %.3f (deck top %.1f) dir %.2f %.2f %.2f -> back of %s at %.2f %.2f %.2f (%.2f m), facing %.2f %.2f %.2f\n",
                         l.eye.x, l.eye.y, l.eye.z, l.deckTop, l.dir.x, l.dir.y, l.dir.z, l.mesh.c_str(), l.hit.x, l.hit.y, l.hit.z,
                         (l.hit - l.eye).length(), l.facing.x, l.facing.y, l.facing.z);
         };
