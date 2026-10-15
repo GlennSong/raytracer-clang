@@ -577,6 +577,12 @@ static void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec
         }
         // WINDOW SIDE: bedrooms at the ends away from the hall, the living room between.
         int beds = UW >= 10.5 ? 2 : (UW >= 7.0 ? 1 : 0);
+        // THE HALL FACES THE LIVING ROOM (the space graph's gate, issue #105, 2026-10-15: an end unit's hall opened onto
+        // nothing but its bath -- with a bedroom at each end, one stood in front of the hall across the solid divider,
+        // and the flat was a dead end). Where the hall sits within a bedroom's width of the unit's end, only the far
+        // end takes a bedroom.
+        const bool hallAtEnd = hx0 - x0 < kBedW - 1e-6 || x1 - hx1 < kBedW - 1e-6;
+        if (beds == 2 && hallAtEnd) beds = 1;
         // A kitchen before a second bedroom: one that could not sit in the back strip needs the window side.
         const Real kitchenFront = kitchenBack ? 0.0 : 2.6;
         while (beds > 0 && UW - beds * kBedW - kitchenFront < kLivingMin) --beds;

@@ -10103,3 +10103,39 @@ to access it ... other c++ mesh builders would then call into the common library
 Tags: lanes + rail 2026-10-13.2, lots 2026-10-13.6 (a re-bake). Tests: mesh_library_solids_are_clean_and_closed
 (sheared and left-handed frames, clockwise blocks, either outline winding, holes, tilted planes, both lathes), the
 mesh_audit_* cases, the lanes deck and underside checks; the full suite.
+
+## ADR-0174 — The architectural toolkit on two foundations: the space graph and the exterior model
+
+Glenn, 2026-10-14 and 15 (issue #105): "what are the architectural tools we need in our toolkit to express a wide
+variety of buildings ... Boxy skyscrapers, art deco ones, the sears tower, westfield mall, curved buildings, stadiums";
+"buildings that function inside and out, fully traversable with stairs, escalators, elevators"; "What about buildings
+that have 3D cells and not just 2D floorplan cells?"; "entirely build buildings with interior and exterior using
+cells"; "it needs to be done using the building shape grammar and not a one off function or chunk of code"; "this isn't
+to replace or retire the current building looks ... we want more variety".
+
+- **Two foundations.** A: the SPACE GRAPH (`procgen/city/space_graph.h`). A building is CELLS -- the volumes a person
+  can be in: rooms, a storey's hall, stair shafts, hoistways, the roof deck, later atria, ramps, raked bowls -- with a
+  floor surface (level, sloped, stepped, helical) and a height, joined by PORTALS -- door, passage, void, stair,
+  escalator, lift, ramp, vomitory. A cell is three-dimensional (a stair shaft spans every storey it serves); a storey
+  plan is a VIEW of the graph (`storeyView`), not the model. B: the EXTERIOR MODEL -- `Section` (edges line / arc /
+  spline, holes, booleans by Clipper2), `Face` (flat / cylindrical / ruled), `Mass` sources behind `slice(y)` /
+  `shell()` (`Stack`, `Sweep`, `Implicit` on the SDF kit, `Mesh`, `Complex` of cells in frames) -- and the SLICE
+  BRIDGE that turns any mass into storey outlines for A. Clipper2 and the SDF kit, already in the tree, enter the
+  building grammar by this ADR. Plan and brief: issue #105; the record: `docs/building-toolkit-plan.md`.
+- **The gate.** A style ships only as a real building, fully accessible inside and out, base to top: reachability
+  over the space graph from the street to every cell with the walker's means (`unreachableCells`, `WalkerCaps`),
+  plus one physics walk per portal emitter (the door walk, the stairwell, the cab ride, the deck ride, the bulkhead).
+  `graph_gate_every_recipe` runs the graph gate over every architect recipe on three plans at two seeds;
+  `level_blueprints_and_graph_gate` over a level's records, drawing each building's BLUEPRINT SHEET (`blueprintSvg`).
+- **Migration, not replacement.** Today's buildings stay as presets, byte-identical through every refactor step (the
+  mesh-hash census and `rt_bake --sections` are the proof). The graph is first built FROM today's growers by an
+  adapter -- `spaceGraphOf` over `storeyPlans`, `storeyRooms` (the one storey plan `growInterior` and the graph both
+  read), `CorePlan` and the facade's doors -- and later steps grow from it. The order is by dependency: the space
+  graph and its gate (this step), `Section` + `Face`, circulation, `Mass` + the slice bridge + `Stack`, `Complex`,
+  `Sweep` / `Implicit` / `Mesh` / `Envelope` / rakes, then books and the variety census. No schedule.
+- **What the gate found on day one.** Apartment end units whose entry hall faced a bedroom across a solid divider --
+  the flat was a dead end past its bath (fixed: an end unit keeps one bedroom at its far end, `layoutApartment`).
+  Coreless setback towers whose straight stair ends at the first shrunken tier, leaving every storey above it with no
+  way up: ten recipes, the fix list the gate test carries by name until the grammar climbs through a setback.
+- **Rules.** Non-prismatic masses are always glass. Every word lands in C++ and Lua together (ADR-0042:
+  `building.space_graph`). A ledger row before each module. No one-off functions: a new shape is grammar words.

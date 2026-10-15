@@ -38,6 +38,9 @@
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (the dressing gate)
 #include "../src/engine/procgen/city/trades.h"
 #include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
+#include "../src/engine/procgen/city/space_graph.h"   // the blueprints and the graph gate (issue #105)
+#include <fstream>
+#include <map>
 #include "../src/engine/procgen/furniture_kit.h"   // Piece (level_print_shop_interiors)
 #include "../src/engine/procgen/city/furniture.h"
 #include "../src/engine/procgen/city/city_svg.h"   // CityMapData (the in-road census)
@@ -729,6 +732,50 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
         std::printf("    [in-road] %s: %d of %zu buildings stand in a carriageway; worst %.2f m "
                     "into the lane at (%.1f, %.1f), record %zu\n",
                     f.name.c_str(), offenders, cb->records.size(), worst, worstAt.x, worstAt.y, worstRec);
+    }
+}
+
+// THE BLUEPRINTS AND THE GRAPH GATE over a level's buildings (architectural toolkit, issue #105, foundation A): with
+// RT_BLUEPRINTS=<dir>, every enterable building's space graph as one SVG sheet in <dir>/<level>_<record>.svg (the
+// first 60 per level) and, per level, the gate's census -- how many buildings are modelled, how many every walker
+// reaches base to top, and what the rest fail on. RT_LEVELS picks the levels; the lab is one building.
+TEST_CASE(level_blueprints_and_graph_gate) {
+    const char* dir = std::getenv("RT_BLUEPRINTS");
+    if (!dir) return;
+    for (const std::string& name : shippedLevels()) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) continue;
+        const CityBuildings* cbp = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& cb) { cbp = &cb; });
+        if (!cbp) continue;
+        const std::string stem = name.substr(0, name.find(".json"));
+        int enterable = 0, modelled = 0, passing = 0, written = 0;
+        std::map<std::string, int> why;
+        for (std::size_t i = 0; i < cbp->records.size(); ++i) {
+            const BuildingRecord& r = cbp->records[i];
+            if (!r.enterable || r.plan.size() < 3) continue;
+            ++enterable;
+            const SpaceGraph g = spaceGraphOf(r.plan, r.params, r.baseY);
+            if (!g.modelled) continue;
+            ++modelled;
+            const std::vector<int> bad = unreachableCells(g);
+            if (bad.empty()) ++passing;
+            for (int c : bad) {
+                const Cell& cell = g.cells[static_cast<std::size_t>(c)];
+                ++why[std::string(r.recipe) + ": " + cellKindName(cell.kind) + (cell.kind == CellKind::Room ? std::string(":") + cellUseName(cell.use) : "") + "@" + std::to_string(cell.k0)];
+            }
+            if (written < 60) {
+                std::ofstream f(std::string(dir) + "/" + stem + "_" + std::to_string(i) + ".svg");
+                if (f) { f << blueprintSvg(g, stem + " record " + std::to_string(i) + " (" + r.recipe + ", " + std::to_string(g.storeys) + " storeys)", bad); ++written; }
+            }
+        }
+        std::printf("[blueprints] %s: %d enterable, %d modelled, %d pass the gate, %d sheets in %s\n", name.c_str(), enterable, modelled, passing, written, dir);
+        int shown = 0;
+        for (const auto& [w, n] : why) { if (shown++ >= 12) { std::printf("[blueprints]   ...\n"); break; } std::printf("[blueprints]   fails %s x%d\n", w.c_str(), n); }
     }
 }
 

@@ -15,6 +15,7 @@
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/city/space_graph.h"
 #include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
@@ -1339,6 +1340,67 @@ static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
         lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
         lua_setfield(L, 1, "grown_floors");
     }
+}
+
+// building.space_graph{ plan = {{x,z}, ...}, <params> | recipe = "name", seed = n, coreness = c, base_y = y, svg = true }
+//   -> { storeys, modelled, entrance, roof, cells = { {kind, use, storey, top, x0, z0, x1, z1, free} ... },
+//        portals = { {a, b (0 = the street), kind, storey, x, z} ... }, unreachable = { cell indices }, svg = "..." }
+// THE SPACE GRAPH of a building (space_graph.h, issue #105) and its gate, from Lua: the same adapter the tests and the
+// blueprint sheets use, so a recipe script can ask whether what it grew is walkable base to top. Cell and portal
+// indices are 1-based; `svg = true` adds the blueprint sheet.
+int l_building_space_graph(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.space_graph: `plan` needs three or more points");
+    const SpaceGraph g = spaceGraphOf(plan, p, static_cast<Real>(optField(L, 1, "base_y", 0.0)));
+    const std::vector<int> bad = unreachableCells(g);
+    lua_newtable(L);
+    lua_pushinteger(L, g.storeys); lua_setfield(L, -2, "storeys");
+    lua_pushboolean(L, g.modelled); lua_setfield(L, -2, "modelled");
+    lua_pushinteger(L, g.entrance + 1); lua_setfield(L, -2, "entrance");
+    lua_pushinteger(L, g.roof + 1); lua_setfield(L, -2, "roof");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < g.cells.size(); ++i) {
+        const Cell& c = g.cells[i];
+        Vec2 lo, hi;
+        bounds(c.plan, lo, hi);
+        lua_newtable(L);
+        lua_pushstring(L, cellKindName(c.kind)); lua_setfield(L, -2, "kind");
+        lua_pushstring(L, cellUseName(c.use)); lua_setfield(L, -2, "use");
+        lua_pushinteger(L, c.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, c.k1); lua_setfield(L, -2, "top");
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+        lua_pushnumber(L, c.freeArea); lua_setfield(L, -2, "free");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "cells");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < g.portals.size(); ++i) {
+        const Portal& po = g.portals[i];
+        lua_newtable(L);
+        lua_pushinteger(L, po.a + 1); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, po.b < 0 ? 0 : po.b + 1); lua_setfield(L, -2, "b");
+        lua_pushstring(L, portalKindName(po.kind)); lua_setfield(L, -2, "kind");
+        lua_pushinteger(L, po.storey); lua_setfield(L, -2, "storey");
+        lua_pushnumber(L, (po.p0.x + po.p1.x) * 0.5); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, (po.p0.y + po.p1.y) * 0.5); lua_setfield(L, -2, "z");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "portals");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < bad.size(); ++i) { lua_pushinteger(L, bad[i] + 1); lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1)); }
+    lua_setfield(L, -2, "unreachable");
+    if (optField(L, 1, "svg", 0.0) != 0.0) {
+        const std::string svg = blueprintSvg(g, "building", bad);
+        lua_pushlstring(L, svg.data(), svg.size());
+        lua_setfield(L, -2, "svg");
+    }
+    return 1;
 }
 
 int l_building_grow_plan_parts(lua_State* L) {
@@ -3722,6 +3784,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"grow", l_building_grow},
         {"grow_parts", l_building_grow_parts},
         {"grow_plan_parts", l_building_grow_plan_parts},
+        {"space_graph", l_building_space_graph},
         {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},

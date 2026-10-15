@@ -975,3 +975,28 @@ TEST_CASE(archetype_book_reweights_the_city) {
     CHECK(glass == 200);
     CHECK(defaultMatches == 200);
 }
+
+TEST_CASE(procgen_script_reads_a_space_graph) {
+    // THE SPACE GRAPH from Lua (space_graph.h, issue #105): a recipe's tower on a lot, its cells and portals, and its
+    // gate -- the same adapter the C++ tests and the blueprint sheets use.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        g = building.space_graph{ plan = {{-20,-20},{20,-20},{20,20},{-20,20}}, recipe = 'glass_tower', seed = 5, coreness = 0.8 }
+        n_cells, n_portals, n_bad, storeys, roof = #g.cells, #g.portals, #g.unreachable, g.storeys, g.roof
+        stairs, lifts, street = 0, 0, 0
+        for _, c in ipairs(g.cells) do if c.kind == 'stair' then stairs = stairs + 1 elseif c.kind == 'lift' then lifts = lifts + 1 end end
+        for _, p in ipairs(g.portals) do if p.b == 0 then street = street + 1 end end
+        entrance_is_hall = (g.cells[g.entrance].kind == 'hall') and 1 or 0
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("storeys", v)); CHECK(v >= 8);
+    CHECK(vm.getGlobalNumber("n_cells", v)); CHECK(v > 20);
+    CHECK(vm.getGlobalNumber("n_portals", v)); CHECK(v > 20);
+    CHECK(vm.getGlobalNumber("stairs", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("lifts", v)); CHECK(v >= 1);
+    CHECK(vm.getGlobalNumber("street", v)); CHECK(v >= 1);
+    CHECK(vm.getGlobalNumber("n_bad", v)); CHECK(v == 0);
+    CHECK(vm.getGlobalNumber("roof", v)); CHECK(v > 0);
+    CHECK(vm.getGlobalNumber("entrance_is_hall", v)); CHECK(v == 1);
+}

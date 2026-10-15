@@ -166,6 +166,26 @@ RoomPlan roomPlan(const Poly2& storeyPlan, const BuildingParams& params, const C
                   std::size_t entranceEdge = static_cast<std::size_t>(-1),
                   const Vec2& stairFoot = Vec2(1e30, 1e30));
 
+// ONE STOREY'S ROOMS as growInterior plans them, and the SPACE GRAPH reads them (space_graph.h, issue #105): a
+// mall's levels, a big box's floor, the ground storey's shops, else the room planner's ring / flats / apartments
+// (roomPlan above), a tower's department-store and restaurant floors re-dressed as shops. Empty on a mechanical storey
+// (no partitions). With the storey's own circulation where its plan has it: a mall's atria (the slab's holes, the
+// upper level), its escalators (feet on the lower level, rising `escalatorRun` along `dir` one storey) and its glass
+// lift. `plan` is the building's CCW plan; `storeys` its storey stack; `core` its core (invalid: none); `il` the
+// straight stair's layout; the entrance edge as entranceEdgeFor gives it.
+struct StoreyRooms {
+    RoomPlan rp;
+    std::vector<Poly2> holes;
+    struct Escalator { Vec2 foot, dir; bool up; };
+    std::vector<Escalator> escalators;
+    Real escalatorRun = 0;
+    bool lift = false;
+    Vec2 liftAt, liftDir;
+};
+StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real baseY,
+                        const std::vector<StoreyPlan>& storeys, int storey, const CorePlan& core,
+                        const InteriorLayout& il, std::size_t entranceEdge);
+
 // WALKABILITY (Glenn, 2026-09-15: "it might help if there's an algorithm to
 // determine if the entire floor is walkable which could be used for
 // validation, and if not the entire interior needs to be rebuilt"). A coarse

@@ -4555,6 +4555,63 @@ std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams
     return out;
 }
 
+Real interiorWallInset(const BuildingParams& p) { return interiorInset(p); }
+
+StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real baseY,
+                        const std::vector<StoreyPlan>& storeys, int ki, const CorePlan& core,
+                        const InteriorLayout& il, std::size_t entranceEdge) {
+    StoreyRooms sr;
+    const int nS = static_cast<int>(storeys.size());
+    if (ki < 0 || ki >= nS) return sr;
+    if (mechanicalStorey(params, ki)) return sr;   // the plant room: no partitions
+    const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
+    RoomPlan& rp = sr.rp;
+    // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
+    if (params.bigBox == 6 && ki <= 1) {
+        const MallLevel ML = mallLevel(plan, params, ki);
+        rp = ML.rp;
+        if (ki == 1) sr.holes = ML.holes;
+        if (ki == 0) {
+            for (const MallLevel::Escalator& e : ML.escalators) sr.escalators.push_back({e.foot, e.dir, e.up});
+            sr.escalatorRun = kEscalatorRun;
+            sr.lift = true;
+            sr.liftAt = ML.liftAt;
+            sr.liftDir = ML.liftDir;
+        }
+    } else {
+        rp = ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
+           : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
+           : ki == 0 && !params.campus && (!params.civicRooms || params.civicRooms == 17) ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
+                                    il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
+                                    il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30))
+                     : RoomPlan{};
+    }
+    if (rp.rooms.empty())
+        rp = roomPlan(spk.plan, params, core,
+                      il.hasStair ? il.edge : static_cast<std::size_t>(-1),
+                      interiorInset(params), ki,
+                      il.hasStair && nS > 1 ? il.well : Poly2{}, entranceEdge,   // (one storey: no stair)
+                      il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30));
+    // A TOWER'S DEPARTMENT STORE (a department a floor: fashion, fashion, electronics, books, the food hall) and its
+    // RESTAURANT FLOORS at the top (restaurants and bars by turns round the core): its floors' rooms are shops
+    {
+        const int top = params.dineFloors > 0 ? dineTopOf(storeys) : nS - 1;
+        const bool fitted = plan.size() == 4;   // (shops are fitted in rectangular rooms: a drum tower stays offices)
+        const bool store = fitted && params.storeFloors > 0 && ki >= 1 && ki <= params.storeFloors;
+        const bool dine = fitted && params.dineFloors > 0 && ki >= 1 && ki <= top && ki > top - params.dineFloors && !store;
+        if (store || dine) {
+            static const uint8_t kDept[5] = {2, 2, 4, 3, 6};
+            int n = 0;
+            for (Room& r : rp.rooms) {
+                if (r.rect.size() < 3) continue;
+                r.kind = RoomKind::Shop;
+                r.style = store ? kDept[(ki - 1) % 5] : ((n++ & 1) ? 14 : 13);
+            }
+        }
+    }
+    return sr;
+}
+
 BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut, int k0, int k1) {
     BuildingMesh out;
@@ -4950,37 +5007,8 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     for (int ki = kA; ki < kB; ++ki) {
         const StoreyPlan& spk = storeys[static_cast<std::size_t>(ki)];
         if (mechanicalStorey(params, ki)) continue;   // the plant room: no partitions
-        // THE GROUND STOREY'S SHOPS (where the facade has them) take the ground floor; else the floor's plan.
-        RoomPlan rp = params.bigBox == 6 && ki <= 1 ? mallLevel(plan, params, ki).rp
-                    : ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
-                    : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
-                    : ki == 0 && !params.campus && (!params.civicRooms || params.civicRooms == 17) ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
-                                             il.hasStair && nS > 1 ? il.well : Poly2{},   // one storey: no stair
-                                             il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30))
-                              : RoomPlan{};
-        if (rp.rooms.empty())
-            rp = roomPlan(spk.plan, params, core,
-                          il.hasStair ? il.edge : static_cast<std::size_t>(-1),
-                          interiorInset(params), ki,
-                          il.hasStair && nS > 1 ? il.well : Poly2{}, entranceEdge,   // (one storey: no stair)
-                          il.hasStair && nS > 1 ? il.stairFoot : Vec2(1e30, 1e30));
-        // A TOWER'S DEPARTMENT STORE (a department a floor: fashion, fashion, electronics, books, the food hall) and its
-        // RESTAURANT FLOORS at the top (restaurants and bars by turns round the core): its floors' rooms are shops
-        {
-            const int top = params.dineFloors > 0 ? dineTopOf(storeys) : nS - 1;
-            const bool fitted = plan.size() == 4;   // (shops are fitted in rectangular rooms: a drum tower stays offices)
-            const bool store = fitted && params.storeFloors > 0 && ki >= 1 && ki <= params.storeFloors;
-            const bool dine = fitted && params.dineFloors > 0 && ki >= 1 && ki <= top && ki > top - params.dineFloors && !store;
-            if (store || dine) {
-                static const uint8_t kDept[5] = {2, 2, 4, 3, 6};
-                int n = 0;
-                for (Room& r : rp.rooms) {
-                    if (r.rect.size() < 3) continue;
-                    r.kind = RoomKind::Shop;
-                    r.style = store ? kDept[(ki - 1) % 5] : ((n++ & 1) ? 14 : 13);
-                }
-            }
-        }
+        // The storey's rooms -- the one plan the SPACE GRAPH reads too (storeyRooms; space_graph.h, issue #105).
+        RoomPlan rp = storeyRooms(plan, params, baseY, storeys, ki, core, il, entranceEdge).rp;
         // (RT_FURNITURE_BLIND_OPENINGS=1: the A/B -- furnished as before the outside doors and windows were known)
         static const bool blindOpenings = std::getenv("RT_FURNITURE_BLIND_OPENINGS") != nullptr;
         if (!blindOpenings) rp.openings = storeyOpenings(spk.plan, params, ki, baseY + spk.y0, spk.h, entranceEdge);

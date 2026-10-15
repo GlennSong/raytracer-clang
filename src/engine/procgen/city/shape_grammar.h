@@ -379,6 +379,9 @@ std::vector<std::pair<Vec2, Vec2>> vehicleBayDoors(const Poly2& plan, const Buil
 std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams& params, int storey, Real y0, Real h,
                                         std::size_t entranceEdge);
 
+// The interior wall inset: the inner face of the exterior wall, where the room planner's rooms stop.
+Real interiorWallInset(const BuildingParams& p);
+
 BuildingMesh growInterior(const Poly2& plan, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut = nullptr,
                           int k0 = 0, int k1 = -1);

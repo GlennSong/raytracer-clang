@@ -7,6 +7,7 @@
 #include "../src/engine/procgen/city/room_plan.h"
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/space_graph.h"
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/trades.h"
 #include <algorithm>
@@ -154,7 +155,11 @@ TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
         CHECK(baths == halls);
         CHECK(livings == halls);
         CHECK(kitchens == halls);
-        CHECK(beds >= halls);
+        // A 7 m unit is a studio with no bedroom; the rest have one or two (an END unit one, at its far end, so its
+        // hall faces the living room -- the space graph's gate found the two-bedroom end unit a dead end past its
+        // bath, issue #105, 2026-10-15), and every room is reached from the street.
+        CHECK(beds >= halls / 2);
+        CHECK(unreachableCells(spaceGraphOf(plan, p, 0.0)).empty());
         // No two rooms overlap (rectangles, 2 cm shrunk: touching is not overlapping).
         for (std::size_t i = 0; i < rp.rooms.size(); ++i)
             for (std::size_t j = i + 1; j < rp.rooms.size(); ++j) {
@@ -176,7 +181,7 @@ TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
         }
         std::printf("    [apts] furnished: %zu pieces, %d beds, %d closets shelved, %d pictures\n", placed.size(), pbeds,
                     shelves, pictures);
-        CHECK(pbeds >= halls);
+        CHECK(pbeds >= beds);   // every bedroom gets its bed
         CHECK(shelves >= closets / 2);
         CHECK(pictures >= halls);
     }
