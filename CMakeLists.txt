@@ -73,7 +73,6 @@ add_library(engine_core STATIC
     src/engine/lot_grow_setup.cpp
     src/engine/city_grow.cpp
     src/engine/city_prepass.cpp
-    src/engine/procgen/city/citylots_producer.cpp
     src/engine/editable_curve.cpp
     src/engine/curve_edit.cpp
     src/engine/animation_path.cpp
@@ -170,9 +169,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/roads/road_entity.cpp
     src/engine/procgen/city/roads/road_builder.cpp
     src/engine/procgen/city/roads/ground_grid.cpp
-    src/engine/procgen/city/roads/lattice_builder.cpp
-    src/engine/procgen/deprecated/roads/road_net_mesh.cpp
-    src/engine/procgen/deprecated/roads/road_lattice.cpp
     src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
@@ -197,7 +193,6 @@ add_library(engine_core STATIC
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
     src/engine/editor_bridge.cpp
-    src/engine/city_planner.cpp
     src/engine/properties.cpp
     src/engine/component_registry.cpp
     src/engine/property_json.cpp
@@ -463,10 +458,10 @@ endif()
 # The LANES road builder (ADR-0083, folded into the roads module by ADR-0089):
 # lanes as the atomic paved object, footprints by polygon union, one constrained
 # Delaunay over every lane outline, heights by projection onto the owning spine.
-# There is no lab and no separate library any more — it builds inside engine_core
-# beside the lattice — but it still has two geometry deps (Clipper2, CDT: pinned
-# submodules, reached only through roads/lanes/geom2d.cpp), so a checkout without
-# them builds an engine that simply does not know the lanes builder.
+# There is no lab and no separate library any more — it builds inside engine_core,
+# the only road builder since the lattice retired (2026-10-14). Its two geometry deps
+# (Clipper2, CDT: pinned submodules, reached only through roads/lanes/geom2d.cpp)
+# are required.
 # ============================================================
 option(RT_BUILD_ROADS_LANES "Build the lanes road builder (needs the Clipper2 and CDT submodules)" ON)
 # The city planner: design a city as data (a road graph and blocks with a use),
@@ -535,7 +530,8 @@ if(RT_BUILD_ROADS_LANES)
         target_link_libraries(lanes_tests PRIVATE engine_core citysim CDT::CDT)
         add_test(NAME lanes_tests COMMAND lanes_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     else()
-        message(WARNING "roads/lanes: Clipper2/CDT submodules missing — the lanes builder is not in this build")
+        # The lanes builder is the ONLY road builder (the lattice retired 2026-10-14): no submodules, no roads.
+        message(FATAL_ERROR "roads/lanes: Clipper2/CDT submodules missing (git submodule update --init) -- the lanes builder is the engine's only road builder")
     endif()
 endif()
 
@@ -673,7 +669,6 @@ add_executable(run_tests
     tests/main.cpp
     tests/test_bundle.cpp
     tests/test_lot_cache.cpp
-    tests/test_citylots.cpp
     tests/test_math.cpp
     tests/test_slot_map.cpp
     tests/test_sparse_set.cpp
@@ -683,7 +678,6 @@ add_executable(run_tests
     tests/test_weather_cycle.cpp
     tests/test_editor_home_view.cpp
     tests/test_vehicle_audio.cpp
-    tests/test_lot_conformance.cpp
     tests/test_frame_stats.cpp
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp
@@ -758,19 +752,11 @@ add_executable(run_tests
     tests/test_road_graph_order.cpp
     tests/test_road_rules.cpp
     tests/test_road_weld.cpp
-    tests/test_junction_surface.cpp
-    tests/test_drive_freeway.cpp
-    tests/test_piedmont_drive.cpp
-    tests/test_mesh_quality.cpp
-    tests/test_mesh_lattice.cpp
-    tests/test_road_lattice.cpp
-    tests/test_road_join.cpp
     tests/test_road_spec.cpp
     tests/test_freeway_graph.cpp
     tests/test_idm.cpp
     tests/test_street_furniture.cpp
     tests/test_street_signs.cpp
-    tests/test_junction_zoo.cpp
     tests/test_ground_truth.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
@@ -911,15 +897,6 @@ if(RT_BUILD_DEMOS)
     target_include_directories(pose_demo PRIVATE src)
     target_compile_options(pose_demo PRIVATE -Wall -Wextra)
     target_link_libraries(pose_demo PRIVATE engine_core)
-
-    # Curb-weld diagnostic: measures the curb/sidewalk band the real mesher
-    # emitted, at every junction of a shipped level (rounding / overlap /
-    # continuity). Device report: "overlapping curbs ... not properly
-    # dovetailed and rounded".
-    add_executable(curb_weld_probe tools/diagnostics/curb_weld_probe.cpp ${CORE_SOURCES})
-    target_include_directories(curb_weld_probe PRIVATE src)
-    target_compile_options(curb_weld_probe PRIVATE -Wall -Wextra)
-    target_link_libraries(curb_weld_probe PRIVATE engine_core)
 
     # What a road BUILDER hands the engine for a real level (ADR-0089): the
     # carve, the surface, the deck, the kerb band and the nav graph, by the
@@ -1462,7 +1439,6 @@ if(Qt6_FOUND)
     add_executable(editor_app
         src/editor_app/editor_main.cpp
         src/editor_app/property_inspector.cpp
-        src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
         src/editor_app/level_cache_panel.cpp
         src/game/arena_state.cpp
@@ -1551,15 +1527,13 @@ if(Qt6_FOUND)
     endif()
 
     # Headless widget-interaction tests for the generated inspector (the
-    # path that once crashed via a dangling visitor capture) and the City
-    # Planner bridge + panel (P7.3). Offscreen Qt.
+    # path that once crashed via a dangling visitor capture), the bake dialog and
+    # the level cache panel. Offscreen Qt.
     add_executable(editor_qt_tests
         tests/test_property_inspector_qt.cpp
-        tests/test_city_planner_qt.cpp
         tests/test_bake_dialog_qt.cpp
         tests/test_level_cache_panel_qt.cpp
         src/editor_app/property_inspector.cpp
-        src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
         src/editor_app/level_cache_panel.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders

@@ -5,6 +5,7 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"
+#include "engine/procgen/city/roads/road_builder.h"   // roadBuilderName: lanes is the default
 #include "engine/procgen/terrain_field.h"
 #include "log.h"
 
@@ -135,7 +136,7 @@ std::vector<CityEntity> cityEntities(const nlohmann::json& level) {
         nlohmann::json block;
         if (shape == "lanelab") block = ent.contains("lanelab") ? ent["lanelab"] : nlohmann::json::object();
         else if (shape == "road" && ent.contains("road") && ent["road"].is_object() &&
-                 ent["road"].value("builder", std::string()) == "lanes") block = ent["road"];
+                 roadBuilderName(ent["road"]) == "lanes") block = ent["road"];   // (lanes is the default: no key, a city)
         else continue;
         CityEntity e; e.ordinal = static_cast<int>(out.size()); e.entityIndex = idx; e.block = std::move(block);
         e.inlineGraph = e.block.contains("edges"); e.graphPath = e.inlineGraph ? std::string() : e.block.value("graph", std::string());

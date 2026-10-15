@@ -2,7 +2,6 @@
 
 #include "../src/engine/procgen/city/road_constraints.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
-#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/district.h"
 #include <cmath>
 
@@ -105,49 +104,6 @@ TEST_CASE(constraints_radius_grows_with_spokes) {
     CHECK(r16 > r8);
 }
 
-// End to end: the editable road with a busy hub now meshes without blowing up.
-TEST_CASE(constraints_editable_hub_meshes) {
-    RoadEntity net;
-    net.look.defaultWidth = 12.0;
-    net.graph.nodes.push_back(RoadNode{Vec2(0, 0)});
-    const int spokes = 9;
-    for (int i = 0; i < spokes; ++i) {
-        double a = (2.0 * M_PI * i) / spokes;
-        net.graph.nodes.push_back(RoadNode{Vec2(std::cos(a) * 70.0, std::sin(a) * 70.0)});
-        net.graph.addEdge(0, static_cast<int>(net.graph.nodes.size()) - 1, 12.0);
-    }
-    RenderMesh m = buildRoadNetMesh(net, nullptr);
-    CHECK(!m.vertices.empty());
-    CHECK(m.indices.size() % 3 == 0);
-    // The roundabout opens a real island: no road geometry sits at the hub centre.
-    int nearOrigin = 0;
-    for (const Vertex& v : m.vertices)
-        if (std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z) < 5.0) ++nearOrigin;
-    CHECK(nearOrigin == 0);
-}
-
-// Coherence: terrain conform grades to the SAME roundabout the mesh shows, so the hub
-// centre (the island) is left untouched — no conform footprint runs through the origin,
-// where the raw spokes would otherwise all converge.
-TEST_CASE(constraints_conform_clears_the_island) {
-    RoadEntity net;
-    net.look.defaultWidth = 12.0;
-    net.graph.nodes.push_back(RoadNode{Vec2(0, 0)});
-    const int spokes = 8;
-    for (int i = 0; i < spokes; ++i) {
-        double a = (2.0 * M_PI * i) / spokes;
-        net.graph.nodes.push_back(RoadNode{Vec2(std::cos(a) * 70.0, std::sin(a) * 70.0)});
-        net.graph.addEdge(0, static_cast<int>(net.graph.nodes.size()) - 1, 12.0);
-    }
-    const RoadGroundFn slope = [](double x, double z) { return 0.05 * x + 0.02 * z; };
-    std::vector<TerrainFlatten> regions = roadNetConformRegions(net, slope);
-    CHECK(!regions.empty());
-    double nearest = 1e30;
-    for (const TerrainFlatten& f : regions)
-        for (const Vec3& p : f.polygon)
-            nearest = std::min(nearest, std::sqrt(p.x * p.x + p.z * p.z));
-    CHECK(nearest > 4.0);     // the island is clear; roads grade around it, not through it
-}
 
 // With auto-roundabouts OFF (the city generator's policy), a busy hub is left untouched — no ring
 // is added (capDegree handles the degree instead), and nodeNeedsRoundabout reports false.
@@ -205,24 +161,6 @@ TEST_CASE(district_blocks_respect_size_bracket) {
     CHECK(violations == 0);
 }
 
-// applyGenerateRecipe turns a "generate" block into the editable net's graph: a connected,
-// degree-capped network (no auto-roundabout) that meshes. The loader and the editor's regenerate
-// (the tuning panel) share this one path. (road-network-v2-plan T2.1)
-TEST_CASE(generate_recipe_builds_capped_net) {
-    RoadEntity net;
-    nlohmann::json g = {{"radius", 120}, {"arterials", 3}, {"block_size_max", 30},
-                        {"block_size_min", 16}, {"seed", 4}};
-    applyGenerateRecipe(net, g, nullptr);
-    CHECK(!net.graph.nodes.empty());
-    // Widths are RESOLVED at construction now: every generated edge carries one.
-    for (const RoadEdge& e : net.graph.edges) CHECK(e.width > 0.0);
-    std::vector<int> deg(net.graph.nodes.size(), 0);
-    for (const RoadEdge& e : net.graph.edges) { ++deg[e.a]; ++deg[e.b]; }
-    int mx = 0; for (int d : deg) mx = std::max(mx, d);
-    CHECK(mx <= RoadRules{}.maxDegree);          // capped: no junction over 4 arms, even post-planarize
-    RenderMesh m = buildRoadNetMesh(net, nullptr);
-    CHECK(!m.vertices.empty());                  // and it meshes
-}
 
 // A generated road's recipe survives an edit: roadRecipeForSave keeps the "generate" block (refreshes
 // only the look) instead of baking the nodes — the grown.json "save should be the same" fix. (T2.1)

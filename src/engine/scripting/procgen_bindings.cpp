@@ -19,9 +19,8 @@
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
-#include "../procgen/city/roads/road_entity.h"   // buildRoadNetLattice (city.solid, S6)
+#include "../procgen/city/roads/road_entity.h"   // RoadEntity, the road builders
 #include "../procgen/city/roads/road_builder.h"   // city.road_builders(): the registry, by name
-#include "../procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../procgen/city/road_crossings.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/city/parcel.h"
@@ -2471,72 +2470,6 @@ int l_city_road_builders(lua_State* L) {
     return 1;
 }
 
-// city.road_mesh(layout, { height=HeightField, sidewalk=, curb=, crosswalks= })
-//   -> mesh. Builds a connected road *surface* from a layout table (the one
-// city.layout returns, or one a recipe edited — added spine edges/nodes).
-//
-// ONE MESHER: this routes through `buildRoadNetLattice`, the same builder every
-// level road uses (road_net.cpp § "ONE MESHER"). It previously wrapped
-// `buildRoadMesh`, an analytic mesher the engine path had already retired — so a
-// Lua scene rendered roads with code that no longer shipped, which is exactly the
-// fork ADR-0042 forbids ("a Lua binding MUST wrap the SAME C++ builder the engine
-// uses, never a fork of its geometry").
-//
-// Honoured keys: `height` (drapes on terrain; absent = flat), `sidewalk`, `curb`,
-// `crosswalks`. The lattice owns carriageway/curb/marking appearance per road
-// class, so the old per-call colour and marking knobs (color, sidewalk_color,
-// curb_color, lane_color, markings, lane_width, plaza, corner_radius, …) no
-// longer apply and are not read — set the road class on the edge instead.
-// `lift` is likewise gone: the engine path never passed one either (the lattice
-// stands its slab proud of the ground itself).
-int l_city_road_mesh(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    RoadGraph g;
-    // Nodes (1-based; the table is {x=,z=} points).
-    lua_getfield(L, 1, "nodes");
-    lua_Integer nn = lua_istable(L, -1) ? luaL_len(L, -1) : 0;
-    std::vector<int> remap(static_cast<std::size_t>(nn));
-    for (lua_Integer i = 1; i <= nn; ++i) {
-        lua_geti(L, -1, i);
-        double x = optField(L, -1, "x", 0.0), z = optField(L, -1, "z", 0.0);
-        remap[static_cast<std::size_t>(i - 1)] = g.addNode(Vec2(x, z), 0.01);
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    // Edges ({a, b, width}, 1-based node indices).
-    lua_getfield(L, 1, "edges");
-    lua_Integer ne = lua_istable(L, -1) ? luaL_len(L, -1) : 0;
-    for (lua_Integer i = 1; i <= ne; ++i) {
-        lua_geti(L, -1, i);
-        int a = static_cast<int>(optField(L, -1, "a", 0));
-        int b = static_cast<int>(optField(L, -1, "b", 0));
-        double w = optField(L, -1, "width", 8.0);
-        if (a >= 1 && a <= nn && b >= 1 && b <= nn)
-            g.addEdge(remap[a - 1], remap[b - 1], static_cast<Real>(w));
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-
-    double sidewalkW = 3.0, curbH = 0.15;
-    bool crosswalks = true;
-    std::function<Real(Real, Real)> heightAt;
-    if (lua_istable(L, 2)) {
-        sidewalkW  = optField(L, 2, "sidewalk", sidewalkW);
-        curbH      = optField(L, 2, "curb", curbH);
-        crosswalks = optBoolField(L, 2, "crosswalks", crosswalks);
-        lua_getfield(L, 2, "height");
-        if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
-            HeightField h = *hf;
-            heightAt = [h](Real x, Real z) { return static_cast<Real>(h(x, z)); };
-        }
-        lua_pop(L, 1);
-    }
-    pushMesh(L, std::make_shared<RenderMesh>(
-                    buildRoadNetLattice(g, heightAt, nullptr, sidewalkW, curbH,
-                                        crosswalks)));
-    return 1;
-}
-
 // city.stroke{ points={{x,z},...}, width= | widths={...}, y=, color={r,g,b},
 //   closed= } -> a flat ribbon mesh: the centerline stroked at the given width(s),
 //   robust for any curve incl. tight bends and hairpins (ADR-0048). The
@@ -2569,135 +2502,6 @@ int l_city_stroke(lua_State* L) {
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
     bool closed = optBoolField(L, 1, "closed", false);
     pushMesh(L, std::make_shared<RenderMesh>(strokeRibbon(pts, hw, y, color, closed)));
-    return 1;
-}
-
-// Read a `spines = { {points={{x,z}...}, width=, closed=}, ... }` field into spines.
-std::vector<UnionSpine> readUnionSpines(lua_State* L, int tbl) {
-    std::vector<UnionSpine> spines;
-    lua_getfield(L, tbl, "spines");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    lua_Integer ns = luaL_len(L, -1);
-    for (lua_Integer si = 1; si <= ns; ++si) {
-        lua_geti(L, -1, si);
-        UnionSpine sp;
-        sp.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
-        sp.closed = optBoolField(L, -1, "closed", false);
-        lua_getfield(L, -1, "points");
-        luaL_checktype(L, -1, LUA_TTABLE);
-        lua_Integer np = luaL_len(L, -1);
-        for (lua_Integer pi = 1; pi <= np; ++pi) {
-            lua_geti(L, -1, pi);
-            sp.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-            lua_pop(L, 1);
-        }
-        lua_pop(L, 1);                                  // points
-        spines.push_back(std::move(sp));
-        lua_pop(L, 1);                                  // spine
-    }
-    lua_pop(L, 1);                                      // spines
-    return spines;
-}
-
-// Spines from either an explicit `spines` list OR a `layout` (a city.layout result):
-// each graph edge becomes a spine, half-width from its width. The bridge that lets the
-// road GENERATORS feed straight into the union/roadbed pipeline.
-std::vector<UnionSpine> readSpinesArg(lua_State* L, int tbl) {
-    lua_getfield(L, tbl, "layout");
-    if (lua_istable(L, -1)) {
-        int layoutIdx = lua_gettop(L);
-        std::vector<Vec2> nodes;
-        lua_getfield(L, layoutIdx, "nodes");
-        if (lua_istable(L, -1)) {
-            lua_Integer nn = luaL_len(L, -1);
-            for (lua_Integer i = 1; i <= nn; ++i) {
-                lua_geti(L, -1, i);
-                nodes.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);                                  // nodes
-        std::vector<UnionSpine> spines;
-        lua_getfield(L, layoutIdx, "edges");
-        if (lua_istable(L, -1)) {
-            lua_Integer ne = luaL_len(L, -1);
-            for (lua_Integer i = 1; i <= ne; ++i) {
-                lua_geti(L, -1, i);
-                int a = static_cast<int>(optField(L, -1, "a", 0)) - 1;   // 1-based -> 0
-                int b = static_cast<int>(optField(L, -1, "b", 0)) - 1;
-                double w = optField(L, -1, "width", 8.0);
-                lua_pop(L, 1);
-                if (a >= 0 && b >= 0 && a < static_cast<int>(nodes.size()) &&
-                    b < static_cast<int>(nodes.size()) && a != b) {
-                    UnionSpine s; s.halfWidth = w * 0.5; s.points = { nodes[a], nodes[b] };
-                    spines.push_back(std::move(s));
-                }
-            }
-        }
-        lua_pop(L, 1);                                  // edges
-        lua_pop(L, 1);                                  // layout
-        return spines;
-    }
-    lua_pop(L, 1);                                      // (no layout)
-    return readUnionSpines(L, tbl);
-}
-
-// city.solid{ spines={...} | layout=..., y=, thickness=, corner_radius=, color=, side_color=,
-//   bottom_color=, max_grade=, height=(heightfield) } -> the welded outline EXTRUDED into a
-//   closed slab with real thickness (deck + walls + underside), riding a smoothed grade-limited
-//   profile over the optional terrain. The volumetric successor to city.weld (one-sided ribbon).
-int l_city_solid(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
-    // Roads-v2 S6: the weld is gone — city.solid now routes through the ONE
-    // road mesher. The spine polylines become a RoadGraph (nodes hash-deduped
-    // at shared positions, so touching spines weld into junctions) and
-    // buildRoadNetLattice builds carriageways, junction pads, curb/sidewalk
-    // band and per-class structure exactly like every level road.
-    const double sidewalkW = optField(L, 1, "sidewalk", 0.0);
-    const double curbH = optField(L, 1, "curb", 0.15);
-    const double topY = optField(L, 1, "y", 0.0);
-    RoadGraph g;
-    std::unordered_map<long long, int> nodeAt;
-    auto key = [](const Vec2& p) {
-        return (static_cast<long long>(std::llround(p.x * 8.0)) << 32) ^
-               (static_cast<long long>(std::llround(p.y * 8.0)) & 0xffffffffLL);
-    };
-    for (const UnionSpine& sp : spines) {
-        const bool hasY = sp.yAbs.size() == sp.points.size();
-        int prev = -1;
-        for (std::size_t i = 0; i < sp.points.size(); ++i) {
-            const long long k = key(sp.points[i]);
-            auto it = nodeAt.find(k);
-            int ni;
-            if (it != nodeAt.end()) ni = it->second;
-            else {
-                RoadNode n;
-                n.pos = sp.points[i];
-                if (hasY) { n.elev = sp.yAbs[i]; n.elevAbsolute = true; }
-                ni = static_cast<int>(g.nodes.size());
-                g.nodes.push_back(n);
-                nodeAt.emplace(k, ni);
-            }
-            if (prev >= 0 && prev != ni) {
-                RoadEdge e;
-                e.a = prev; e.b = ni;
-                e.width = sp.halfWidth * 2.0;
-                e.klass = sp.klass;
-                g.edges.push_back(e);
-            }
-            prev = ni;
-        }
-    }
-    std::function<Real(Real, Real)> ground = [topY](Real, Real) { return topY; };
-    lua_getfield(L, 1, "height");
-    if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
-        HeightField h = *hf;
-        ground = [h, topY](Real x, Real z) { return h(x, z) + topY; };
-    }
-    lua_pop(L, 1);
-    pushMesh(L, std::make_shared<RenderMesh>(
-        buildRoadNetLattice(g, ground, nullptr, sidewalkW, curbH)));
     return 1;
 }
 
@@ -3957,10 +3761,8 @@ void openProcgenLibrary(ScriptVM& vm) {
     static const luaL_Reg kCityFns[] = {
         {"layout", l_city_layout},
         {"lots", l_city_lots},
-        {"road_mesh", l_city_road_mesh},
         {"road_builders", l_city_road_builders},
         {"stroke", l_city_stroke},
-        {"solid", l_city_solid},
         {"resolve", l_city_resolve},
         {nullptr, nullptr},
     };

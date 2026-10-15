@@ -40,7 +40,6 @@ void EditorBridge::detach() {
     editorPtr = nullptr;
     observerMode = false;
     observerSelection = Entity{};
-    planner_.detach();   // its world/entities die with the editor state
     notify(EditorNotice::ModeChanged);
 }
 

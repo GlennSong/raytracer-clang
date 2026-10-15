@@ -11,9 +11,9 @@ class ScriptVM;
 // SHARED LUA MODULES — an opt-in `require` for the procgen sandbox (ADR-0023).
 //
 // The sandbox opens no `package`, so scripts could not include one another and
-// every shared table had to be copy-pasted. assets/scripts/twin_cities.lua says
+// every shared table had to be copy-pasted (the twin-cities script, since retired, said
 // so out loud: "sandbox has no require, so the essentials are ported here rather
-// than shared". assets/scripts/vehicle_classes.lua was written as a shared data
+// than shared"). assets/scripts/vehicle_classes.lua was written as a shared data
 // file and, with no way to load it, was dead on arrival.
 //
 // THIS DOES NOT WEAKEN THE SANDBOX, and the distinction is the whole design:

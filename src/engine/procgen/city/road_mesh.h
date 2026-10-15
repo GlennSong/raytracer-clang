@@ -169,7 +169,7 @@ struct UnionSpine {
 // 0.08 "lift") inside the asphalt — every sim car, parked car, painted bay
 // and signal lens (device: "the simulated cars ... sometimes they are below
 // the road"). This field is the road surface itself, exported by
-// buildRoadNetMesh from the very chains it swept, so a consumer that asks it
+// the road builder from the very surface it built, so a consumer that asks it
 // stands where the mesh is by construction.
 struct RoadDeckField {
     std::vector<UnionSpine> spines;   // yAbs filled: the per-point deck Y the lattice rode
@@ -205,7 +205,7 @@ struct RoadDeckField {
     // Any drawn deck within half-width + margin of (x, z) -- tracks and footways included, which heightAt, heightOn
     // and depthInside leave out (they answer for things on a street): what a tree or a rock stays off.
     bool coversAny(double x, double z, double margin) const;
-    // Spatial hash of pad triangles and spine segments; buildRoadNetMesh
+    // Spatial hash of pad triangles and spine segments; the builder
     // calls it after filling both (call again after editing by hand).
     void buildIndex();
     bool empty() const { return spines.empty() && pads.empty(); }

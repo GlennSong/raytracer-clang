@@ -7209,6 +7209,25 @@ What is still open is phase 4, and it is not plumbing: a lanes city planned from
 to fold in the recipe and the terrain params or an edited recipe loads a stale city). Glenn on
 2026-09-20: "I want metro_v2 as it was" — so metro stays on the lattice until he asks.
 
+**Note (2026-10-14): the lattice retired.** Glenn: "deprecate that old lattice builder ... update those old scenes to
+use the new system and kill it off" (and: island_8 is the one that matters, metro_v2_test a useful test bed). Done:
+- **Levels.** metro_v2_test, piedmont, piedmont_mini, piedmont_roads (sharing piedmont's graph), coast_city, grown and
+  agent_lab are lane-built: `lanes_tool from-level` graphs in assets/lanelab/converted (agent_lab's theta loop by hand),
+  no perimeter freeway where a city never had one, metro_lanes' sidewalks (6 / 5.5 / 5 m): a paved sidewalk narrower
+  than the lot clearance (citysim sidewalk + 0.6 m) makes the lot pass read every block edge as carriageway --
+  metro_v2_test grew 3 buildings at 3.5 m and 1547 at these, piedmont 325 at 4 m and 4625 at these.
+  Retired: 11 unused labs; metropolis, hillcity, metro_hills, living_city (on lanes they showed what the lattice's plan
+  union and terrain drape hid -- near-parallel 24 m arterials overlapping, streets steeper than any class allows) and
+  freeway_lab, their recipes kept in assets/lanelab/sources for tools/lanes_corpus.py; weld_freeway_lab (a proof of the
+  lattice's welder) and city (the citylots producer's level); the Lua road cities (city_radial, city_lua, showcase,
+  twin_cities, lua_city_terrain) with city.road_mesh / city.solid. The web build opens arena.
+- **Code.** procgen/deprecated/roads, lattice_builder.cpp, the citylots producer, the editor's City Planner panel, its
+  Conform-terrain action (G) and its road re-mesh on edit -- interactive road building is shelved as GitHub #103: the
+  lanes builder makes a whole city at a time through the bundle (0.05 s for a lab, ~25 min for the island). The
+  lattice's plan union is also why a road drawn over or under another in the editor cut the other away. Lanes is the
+  default and only builder; the Clipper2/CDT submodules are required; the city pre-pass and the city producer ask the
+  builder (ownsNavGraph) rather than compare a name with the default. About 110 lattice-only test cases went with it.
+
 ## ADR-0090 — A level authors its own districts, and metro_lanes is the first city that needs it
 
 **Status:** Provisional (2026-09-20). **Trigger:** Glenn: "Ideally I'd like to have the lanelab/metro

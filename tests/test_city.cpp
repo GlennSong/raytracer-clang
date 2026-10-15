@@ -11,7 +11,6 @@
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/road_mesh.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"   // buildRoadNetLattice (the ONE mesher)
-#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/city_lots.h"   // LotBuilding, appendLotMassBox
 #include "../src/engine/procgen/city/site_plan.h"
 #include "../src/engine/procgen/city/core_plan.h"   // offsetPolygonEdges (corner closure test)
@@ -126,26 +125,6 @@ TEST_CASE(stroke_ribbon_hairpin_has_a_round_cap) {
     CHECK(!meshCoversXZ(m, 8.0, 0.0));     // but the cap stops at the half-width radius
 }
 
-TEST_CASE(stroke_network_intersection_is_a_clean_junction) {
-    // Two crossing roads (an X): planarize splits them at the crossing into a 4-way
-    // node, and the mesh fills that intersection (centre covered) without any geometry
-    // straying past the arms — a proper junction, not two ribbons overlapping loose.
-    RoadGraph g;
-    int a = g.addNode(Vec2(-40,0)), b = g.addNode(Vec2(40,0));
-    int c = g.addNode(Vec2(0,-40)), d = g.addNode(Vec2(0,40));
-    g.addEdge(a, b, 10); g.addEdge(c, d, 10);
-    RoadGraph pg = planarize(g);
-    CHECK(pg.nodes.size() == 5u);                       // the crossing inserted a node
-    RenderMesh m = buildRoadNetLattice(pg, nullptr, nullptr, 0.0, 0.15, false);
-    CHECK(meshCoversXZ(m, 2.0, 2.0));                   // the intersection is filled
-    // Nothing strays past an arm end (length 40) plus its half-width (5) — the far
-    // ribbon corner sits at sqrt(40^2+5^2) ~ 40.3, so bound by the arm reach + width.
-    double worst = 0;
-    for (const Vertex& v : m.vertices)
-        worst = std::max(worst, std::sqrt(double(v.position.x*v.position.x +
-                                                 v.position.z*v.position.z)));
-    CHECK(worst <= 40.0 + 5.0 + 1e-3);
-}
 
 TEST_CASE(radial_roads_make_rings_and_spokes) {
     // ADR-0044: concentric rings sampled from true ARCS (bounded chord error) +

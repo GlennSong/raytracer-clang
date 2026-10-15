@@ -52,9 +52,9 @@
         "builder": "lanes",
         "graph": "assets/lanelab/converted/piedmont_lanelab.json",
         "sidewalks": {
-          "arterial": 3.5,
-          "collector": 3.5,
-          "local": 3.5
+          "arterial": 6.0,
+          "collector": 5.5,
+          "local": 5.0
         }
       },
       "shape": "road"

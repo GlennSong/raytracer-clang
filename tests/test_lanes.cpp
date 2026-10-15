@@ -399,11 +399,12 @@ TEST_CASE(lanes_a_road_entity_that_names_the_builder_is_the_same_city) {
     CHECK(cityOrdinalForEntity(road.level, idx + 1) == -1);   // nothing else in the level is a city
     CHECK(cp->applies(road) && cp->identity(road).key == cp->identity(lab).key);   // no rebake to migrate
 
-    // A road entity that does NOT name the builder is not a city, and the default still stands.
+    // A road entity that does NOT name the builder gets the default -- lanes, the only builder since the
+    // lattice retired (2026-10-14) -- and so is the same city.
     LevelInputs plain = road; plain.level["entities"][static_cast<std::size_t>(idx)]["road"].erase("builder");
-    CHECK(cityEntities(plain.level).empty());
+    CHECK(cityEntities(plain.level).size() == 1);
     CHECK(engine::roads::roadBuilderName(block) == "lanes");
-    CHECK(engine::roads::roadBuilderName(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]) == "lattice");
+    CHECK(engine::roads::roadBuilderName(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]) == "lanes");
 
     // The OTHER producers must read the level the same way, or the migration would move the
     // bundle DIRECTORY (keyed by the whole applicable set) and silently rebake the city. A
@@ -420,7 +421,7 @@ TEST_CASE(lanes_a_road_entity_that_names_the_builder_is_the_same_city) {
     engine::roads::RoadBuilder* b = engine::roads::roadBuilder("lanes");
     CHECK(b != nullptr); if (!b) return;
     CHECK(b->ownsNavGraph());
-    CHECK(!engine::roads::roadBuilderFor(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]).ownsNavGraph());
+    CHECK(engine::roads::roadBuilderFor(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]).ownsNavGraph());
 }
 
 TEST_CASE(lanes_bundle_glb_view_reads_back_through_the_engine_importer) {

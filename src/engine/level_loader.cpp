@@ -51,9 +51,7 @@
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
 #include "procgen/city/roads/road_entity.h"
 #include "procgen/city/roads/road_builder.h"   // one interface, several road builders
-#include "procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
-#include "procgen/city/citylots_producer.h"   // the lattice city's lot pre-pass as a producer (ADR-0084 C)
 #include "bundle/bake.h"
 #ifdef RT_ROADS_LANES
 #include "procgen/city/roads/lanes/lanes.h"     // the lanes road builder (ADR-0083/0089)
@@ -74,7 +72,6 @@
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/city/corridor_mesh.h"      // freeway corridors (plan §8)
-#include "procgen/deprecated/roads/road_lattice.h"       // swept-lattice freeway mesher
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/street_names.h"  // nameStreets
@@ -733,8 +730,8 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     if (net.look.markings)                           // lane paint via the surface shader
         r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
     // WHICH BUILDER IS DATA (roads module, docs/road-module-plan.md): the road
-    // block's "builder" names it, default "lattice" — the swept lattice every
-    // shipped level is built with. The builder owes the surface, the deck it
+    // block's "builder" names it, default "lanes" -- the one builder since the lattice
+    // retired (2026-10-14). The builder owes the surface, the deck it
     // rides and the kerb band; the mesher's own curb band outlines ride along
     // for the city map, so the sidewalks drawn are the sidewalks built.
     roads::RoadBuildInput buildIn;
@@ -3186,40 +3183,8 @@ static GrownLots growCityLots(
         return g;
     }
 #endif
-    // The lattice city's lot pre-pass comes out of the level's bundle when the `citylots` producer
-    // applies (ADR-0084 milestone C) — the same grow, done once and stored with its parts already
-    // split per render cell. A miss, an unreadable section or RT_NOCACHE falls through to growing here.
-    engine::NetLotResult r;
-    {
-        const auto tl = std::chrono::steady_clock::now();
-        auto since2 = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
-        engine::registerCityLotsProducer();
-        bool fromBundle = false;
-        if (const engine::bundle::BundleProducer* p = engine::bundle::findProducer(engine::kCityLotsProducerName);
-            p && !inputs.levelPath.empty() && p->applies(inputs)) {
-            std::string err;
-            engine::bundle::Obtained o = engine::bundle::obtainForLevel(inputs, engine::kCityLotsProducerName);
-            if (o.bundle) {
-                const bool perCell = engine::lotcache::lotCellSize(*o.bundle, engine::kCityLotsSectionPrefix) > 0.0;
-                if (engine::lotcache::readLotResult(*o.bundle, engine::kCityLotsSectionPrefix, r, &err, /*withParts=*/!perCell) &&
-                    (!perCell || engine::lotcache::listLotCellParts(*o.bundle, engine::kCityLotsSectionPrefix, g.cellParts, &err))) {
-                    g.bundle = o.bundle; fromBundle = true;
-                    LOG_INFO << "[citylots] lots " << o.status << ": " << r.lots.size() << " buildings, " << r.plan.lots.size()
-                             << " lots, " << (g.cellParts.empty() ? std::to_string(r.parts.size()) + " whole parts" : std::to_string(g.cellParts.size()) + " cell parts")
-                             << ", read in " << since2(tl) << " s";
-                    // A warm load grows nothing, so the grow's skyline lines
-                    // never print; the census is computed from the records.
-                    const engine::SkylineCensus sc = engine::skylineCensus(r.lots);
-                    LOG_INFO << sc.line();
-                    LOG_INFO << sc.districtsLine();
-                } else {
-                    r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
-                    LOG_WARN << "[citylots] lots bundle unusable (" << (err.empty() ? o.status : err) << "); growing in place";
-                }
-            }
-        }
-        if (!fromBundle) r = engine::growCity(gin);
-    }
+    // A city not built by the lanes builder grows its lots here, in place (no bundle).
+    engine::NetLotResult r = engine::growCity(gin);
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
@@ -3660,7 +3625,6 @@ bool LevelLoader::load(const std::string& path,
     std::vector<TerrainFlatten> roadFlatten;
     std::vector<engine::RoadEntity> preNets;   // parsed nets, for the lot pre-pass
     std::vector<const json*> preNetEnts;    // matching entity per pre-pass net
-    RenderMesh roadWallMesh;                 // ADR-0075 P1b: retaining/fill walls (world space)
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) == "road") {
@@ -3674,9 +3638,6 @@ bool LevelLoader::load(const std::string& path,
                 // levelGround (natural) gates the metro's terrain-aware layout.
                 if (roadBlock.contains("generate"))
                     applyGenerateRecipe(net, roadBlock["generate"], levelGround);
-                std::vector<TerrainFlatten> r =
-                    roadNetConformRegions(net, levelGround);
-                roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
                 preNets.push_back(std::move(net));
                 preNetEnts.push_back(&ent);
             }
@@ -3860,8 +3821,8 @@ bool LevelLoader::load(const std::string& path,
             // draws. corridorAuthor engineers the ramp centrelines and the
             // at-grade flatten windows; the bake turns the solved corridor
             // into ordinary graph edges of its street net, and THE one road
-            // mesher (buildRoadNetMesh, via roadCache below) builds deck,
-            // ramps, parapets, undersides and portal bents from that graph.
+            // builder builds deck, ramps, parapets, undersides and portal
+            // bents from that graph.
             // The corridor renderer (sweepCorridor + its entity) is deleted;
             // signage returns with the R6 furniture pass.
             engine::CorridorAuthoring au =
@@ -4636,53 +4597,6 @@ bool LevelLoader::load(const std::string& path,
                 }
             }
 #endif
-        }
-        // Retaining/fill walls (ADR-0075 P1b): one world-space entity for every
-        // road's grade-break structures — concrete-grey, with a static MeshCollider
-        // so cars and pedestrians can't walk through a cut face. The terrain batter
-        // grades down to each wall's top; the wall caps the residual step to natural.
-        // Retaining walls (roads-v2.1 R6a): built against the FULLY CARVED
-        // ground — base terrain + road conform + block grading — never the
-        // raw hill. Sampling the base terrain stood walls against blocks the
-        // city had already graded level (hillcity smoke: a wall fencing a
-        // flat lawn). Co-designed with the smoothstep conform: a wall fronts
-        // each DEEP cut face the feather leaves near-vertical, with a
-        // backfill bench capping the feather dip behind it; minWall 3.5
-        // keeps shallow grassy cuts open.
-        {
-            auto wallTp = std::make_shared<TerrainParams>(terrainParams);
-            auto wallNoise = std::make_shared<Noise>(terrainSeed);
-            StructureParams wp;
-            wp.minWall = 3.5;
-            const HeightField wallGround = [wallTp, wallNoise](double x, double z) {
-                return terrainHeight(*wallTp, *wallNoise, x, z);
-            };
-            for (const engine::RoadEntity& pn : preNets) {
-                StructureSet ws = buildRoadWalls(pn, wallGround, wp);
-                if (!ws.empty()) {
-                    LOG_INFO << "[walls] " << ws.walls.size()
-                             << " retaining segments";
-                    MeshBuilder::append(roadWallMesh, ws.mesh);
-                }
-            }
-        }
-        if (!roadWallMesh.vertices.empty()) {
-            Entity we = world.create();
-            world.add<Transform>(we, Transform{});             // mesh is world-space
-            world.add<PrevTransform>(we, PrevTransform{Transform{}});
-            Renderable wr;
-            wr.renderLayer = engine::LayerRoads;
-            wr.material.albedo = Vec3(1, 1, 1);                // grey carried in vertex colour
-            wr.material.roughness = 0.9f;
-            wr.mesh = assets.acquireMesh(roadWallMesh, "road_walls");
-            world.add<Renderable>(we, wr);
-            MeshCollider mc;
-            mc.vertices.reserve(roadWallMesh.vertices.size());
-            for (const Vertex& v : roadWallMesh.vertices) mc.vertices.push_back(v.position);
-            mc.indices = roadWallMesh.indices;
-            mc.friction = 0.9;
-            mc.surface = ColliderSurface::Concrete;
-            world.add<MeshCollider>(we, mc);
         }
         // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly
         // on its graded profile instead of the raw ground it no longer matches.

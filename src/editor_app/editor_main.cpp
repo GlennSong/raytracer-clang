@@ -27,12 +27,10 @@
 #include "../renderer/gamepad_glfw.h"
 #endif
 #include "../log.h"
-#include "city_planner_panel.h"
 #include "bake_dialog.h"
 #include "level_cache_panel.h"
 #include "../engine/bundle/bake.h"
 #include "../engine/bundle/bundle_glb.h"
-#include "../engine/procgen/city/citylots_producer.h"
 #ifdef RT_ROADS_LANES
 #include "../engine/procgen/city/roads/lanes/city_producer.h"
 #include "../engine/procgen/city/roads/lanes/lots_producer.h"
@@ -724,23 +722,6 @@ int main(int argc, char** argv) {
     mainWindow.addDockWidget(Qt::LeftDockWidgetArea, hierarchyDock);
     mainWindow.addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
 
-    // City Planner (P7.3 phase 1): recipe knobs + graph-only Regenerate +
-    // overlay layers + camera presets. Lives under the inspector on the
-    // right; its signals call the bridge directly, same as the inspector.
-    // Scroll-wrapped for the same reason as the inspector: the panel's
-    // natural minimum (~535px of rows) must never become a hard layout
-    // constraint on the shared column.
-    auto* plannerDock = new QDockWidget("City Planner", &mainWindow);
-    auto* plannerPanel = new CityPlannerPanel(bridge);
-    auto* plannerScroll = new QScrollArea(plannerDock);
-    plannerScroll->setWidget(plannerPanel);
-    plannerScroll->setWidgetResizable(true);
-    plannerScroll->setFrameShape(QFrame::NoFrame);
-    plannerDock->setWidget(plannerScroll);
-    mainWindow.addDockWidget(Qt::RightDockWidgetArea, plannerDock);
-    // Explicitly UNDER the inspector in the same column — addDockWidget
-    // alone leaves the arrangement to the dock area's discretion.
-    mainWindow.splitDockWidget(inspectorDock, plannerDock, Qt::Vertical);
 
     // Asset browser: a filesystem view of assets/; double-clicking a level
     // opens it (Play/Stop and open both go through Application::requestState).
@@ -864,10 +845,7 @@ int main(int argc, char** argv) {
     mainWindow.show();
     // Side panels start narrow; the viewport is the star. (resizeDocks only
     // takes effect once the window is realized.)
-    mainWindow.resizeDocks({hierarchyDock, inspectorDock, plannerDock},
-                           {200, 330, 330}, Qt::Horizontal);
-    // Right column: inspector gets the majority; the planner scrolls anyway.
-    mainWindow.resizeDocks({inspectorDock, plannerDock}, {3, 2}, Qt::Vertical);
+    mainWindow.resizeDocks({hierarchyDock, inspectorDock}, {200, 330}, Qt::Horizontal);
     hosted->setNativeHandle(reinterpret_cast<void*>(viewport->winId()));
     {
         const qreal scale = viewport->devicePixelRatioF();
@@ -1516,7 +1494,6 @@ int main(int argc, char** argv) {
     // diagnosis — `clip`/`clip?` proved the hosted overlay's clipboard here.
     // Level bundles (ADR-0084): the remembered output root, the city producer, and the quit hooks.
     if (const std::string root = app.settings().getString("bundleRoot", ""); !root.empty()) engine::bundle::setBundleRoot(root);
-    engine::registerCityLotsProducer();
 #ifdef RT_ROADS_LANES
     engine::roads::lanes::registerCityProducer();
     engine::roads::lanes::registerLotsProducer();
@@ -1570,7 +1547,6 @@ int main(int argc, char** argv) {
     auto refreshChrome = [&]() {
         refreshPad();
         const bool editing = bridge.editable();
-        plannerPanel->refresh();   // grays out while playing; reloads on attach
         playButton->setEnabled(editing);
         stopAction->setEnabled(!editing);
         addButton->setEnabled(editing);

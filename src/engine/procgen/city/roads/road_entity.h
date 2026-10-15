@@ -25,11 +25,11 @@ namespace engine {
 // parallel shape only inside roadNetFromJson/roadNetToJson, so no saved level
 // changes. The terrain sampler (`heightAt`) is no longer stored on the entity
 // at all: it is one load's ephemeral state, so every reader takes it as a
-// parameter, exactly like buildRoadNetLattice always did.
+// parameter.
 
 // ---- presentation: how the road is drawn, not what it is -------------------
 // The road CARVE steps the terrain this far BELOW the drivable profile under
-// the road footprint (roadNetConformRegions); the curb skirt hides the step.
+// the road footprint (the builder's carve); the curb skirt hides the step.
 // The sidewalk slab top is deck + RoadLook::curb, so a lot's paving meets the
 // sidewalk at ground + kRoadConformStep + curb — the lot pass's sidewalkRise.
 constexpr double kRoadConformStep = 0.22;
@@ -146,7 +146,7 @@ RoadGraph roadNetConstrainedGraph(const RoadEntity& road, const RoadGroundFn& he
 std::vector<UnionSpine> roadNetWeldSpines(const RoadGraph& g);
 
 
-// --- editor edit ops (each leaves the road ready for buildRoadNetMesh) ---------
+// --- editor edit ops (each leaves the graph ready for the next bake) ----------
 // The SPEC of edge `ei`: its entry in the graph's spec table when assigned, else
 // a legacy synthesis from the edge's (always-resolved) width + the look's
 // sidewalk/curb — so every edge answers the band model even before its level is

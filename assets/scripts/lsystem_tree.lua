@@ -5,8 +5,7 @@
 -- lines — small enough to read, rotate (mesh.rotate_y / place) and instance.
 --
 -- Returns one model (branches + canopy, baked vertex colour, collidable), so it
--- previews on its own (shape:"script") and twin_cities.lua reuses make_tree to
--- instance a forest. `args.seed` / `args.iterations` tune it.
+-- previews on its own (shape:"script"). `args.seed` / `args.iterations` tune it.
 
 -- Build a tree MESH (branches + canopy), deterministic for `seed`.
 function make_tree(seed, iters)
