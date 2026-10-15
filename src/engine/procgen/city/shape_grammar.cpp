@@ -4765,7 +4765,14 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
     // floor, the sky lobby between the stair that came up and the stair that goes on: no partition over either well.
     const StairRun* leave = runLeaving(runs, ki);
     const StairRun* arrive = runArriving(runs, ki);
-    if (leave && arrive && leave != arrive) return sr;
+    if (leave && arrive && leave != arrive) {
+        // ...furnished as the building's LOUNGE: sofas along the glass, clear of both wells and off the stairs' walls
+        std::vector<std::size_t> blank;
+        if (arrive->sides == spk.plan.size()) blank.push_back(arrive->il.edge);
+        if (leave->sides == spk.plan.size()) blank.push_back(leave->il.edge);
+        sr.rp = transferLoungePlan(spk.plan, params, interiorInset(params), ki, {arrive->il.well, leave->il.well}, blank);
+        return sr;
+    }
     const StairRun* on = runOn(runs, ki);
     const bool stair = on != nullptr && nS > 1;   // (one storey: no stair)
     const Poly2 well = stair ? on->il.well : Poly2{};

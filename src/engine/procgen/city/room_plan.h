@@ -188,6 +188,12 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
                         const std::vector<StoreyPlan>& storeys, int storey, const CorePlan& core,
                         const std::vector<StairRun>& runs, std::size_t entranceEdge);
 
+// A TRANSFER FLOOR'S LOUNGE (issue #105, the stair runs): the open storey between the stair that came up and the
+// stair that goes on, furnished as a lounge -- sofas along the glass on every edge but the two the stairs hug,
+// every strip clear of both wells (`keepOut`). No walls: the floor stays open.
+RoomPlan transferLoungePlan(const Poly2& storeyPlan, const BuildingParams& params, Real inset, int storey,
+                            const std::vector<Poly2>& keepOut, const std::vector<std::size_t>& blankEdges);
+
 // WALKABILITY (Glenn, 2026-09-15: "it might help if there's an algorithm to
 // determine if the entire floor is walkable which could be used for
 // validation, and if not the entire interior needs to be rebuilt"). A coarse

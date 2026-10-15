@@ -497,6 +497,70 @@ static RoomPlan deskRowPlan(const Poly2& planIn, const BuildingParams& params, c
 }
 
 // ------------------------------------------------------------- the house
+RoomPlan transferLoungePlan(const Poly2& planIn, const BuildingParams& params, Real inset, int storey,
+                            const std::vector<Poly2>& keepOut, const std::vector<std::size_t>& blankEdges) {
+    RoomPlan rp;
+    rp.topology = PlateTopology::Ring;
+    rp.office = false;
+    if (storey < 1 || planIn.size() < 3) return rp;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    const std::size_t n = plan.size();
+    const bool concave = !convexPlan(plan);
+    const Real kRowMin = 2.85, kRowMax = kDeskRowMax;
+    for (std::size_t e = 0; e < n; ++e) {
+        if (std::find(blankEdges.begin(), blankEdges.end(), e) != blankEdges.end()) continue;
+        const Vec2 a = plan[e];
+        const Vec2 dv = plan[(e + 1) % n] - a;
+        const Real W = dv.length();
+        if (W < 2.0 * inset + 2.0) continue;
+        const Vec2 d = dv * (1.0 / W);
+        const Vec2 nOut(d.y, -d.x);
+        // how deep the strip may go: half the floor across, less a walk in the middle
+        Real across = 0;
+        for (const Vec2& w : plan) across = std::max(across, dot(w - a, nOut * -1.0));
+        if (concave) {
+            Real into = 1e9;
+            for (int si = 0; si < 5; ++si) {
+                const Real x = inset + 0.5 + std::max(Real(0), W - 2.0 * inset - 1.0) * (si / 4.0);
+                if (x > W) continue;
+                into = std::min(into, depthInto(plan, a + d * x, nOut * -1.0, e));
+            }
+            if (into < 1e8) across = std::min(across, into);
+        }
+        const Real depth = std::min(kRowMax, (across - 2.0 * inset - 2.0) * 0.5);
+        if (depth < kRowMin) continue;
+        auto P = [&](Real x, Real in) { return a + d * x - nOut * in; };
+        // the strip, cut where a well stands in it: the runs of the edge clear of every keep-out
+        std::vector<std::pair<Real, Real>> busy;
+        for (const Poly2& ko : keepOut) {
+            if (ko.size() < 3) continue;
+            Real lo = 1e9, hi = -1e9;
+            bool near = false;
+            for (const Vec2& q : ko) {
+                const Real in = dot(a - q, nOut), x = dot(q - a, d);
+                if (in > -0.5 && in < inset + depth + 0.5) near = true;
+                lo = std::min(lo, x); hi = std::max(hi, x);
+            }
+            if (near && hi > 0 && lo < W) busy.push_back({lo - 0.6, hi + 0.6});
+        }
+        std::sort(busy.begin(), busy.end());
+        Real x0 = inset;
+        auto strip = [&](Real s0, Real s1) {
+            if (s1 - s0 < 3.0) return;
+            Room r;
+            r.edge = e;
+            r.kind = RoomKind::Lounge;
+            r.rect = {P(s0, inset), P(s1, inset), P(s1, inset + depth), P(s0, inset + depth)};
+            rp.rooms.push_back(r);
+        };
+        for (const auto& [b0, b1] : busy) { strip(x0, std::min(b0, W - inset)); x0 = std::max(x0, b1); }
+        strip(x0, W - inset);
+    }
+    (void)params;
+    return rp;
+}
+
 namespace {
 
 constexpr Real kHallW = 1.4;       // clear width of the hall / landing

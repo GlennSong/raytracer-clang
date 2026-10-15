@@ -252,6 +252,39 @@ TEST_CASE(straight_stair_climbs_through_a_setback) {
     CHECK(bad.empty());
 }
 
+// THE TRANSFER FLOOR IS A LOUNGE (issue #105; the open storey between two stair runs was bare): sofas along the
+// glass on every edge but the stairs', every strip clear of both wells, no walls; the furniture lands and the gate
+// stays green.
+TEST_CASE(transfer_floor_is_a_lounge) {
+    const Poly2 plan = rectPlan(24, 20);
+    BuildingParams p = towerParams(16);
+    p.core = 1;
+    p.setbackFloors = 5;
+    p.setbackEvery = 2.0;
+    Poly2 ccw = plan;
+    ensureCCW(ccw);
+    const std::vector<StoreyPlan> sps = storeyPlans(ccw, p);
+    const std::vector<StairRun> runs = stairRuns(ccw, p, entranceEdgeFor(ccw, p), sps);
+    CHECK(runs.size() >= 2);
+    if (runs.size() < 2) return;
+    const int kT = runs[0].k1;
+    const CorePlan core = coreFor(ccw, p, entranceEdgeFor(ccw, p));
+    const StoreyRooms sr = storeyRooms(ccw, p, 0.0, sps, kT, core, runs, entranceEdgeFor(ccw, p));
+    CHECK(!sr.rp.rooms.empty());
+    CHECK(sr.rp.walls.empty());
+    for (const Room& r : sr.rp.rooms) {
+        CHECK(r.kind == RoomKind::Lounge);
+        for (const StairRun& run : {runs[0], runs[1]}) {
+            for (const Vec2& q : r.rect) CHECK(!pointInPolygon(run.il.well, q));
+            for (const Vec2& q : run.il.well) CHECK(!pointInPolygon(r.rect, q));
+        }
+    }
+    const BuildingMesh in = growInterior(ccw, p, 0.0, nullptr, kT, kT + 1);
+    std::printf("    [lounge] transfer storey %d: %zu lounge strips, %zu pieces of furniture\n", kT, sr.rp.rooms.size(), in.furniture.size());
+    CHECK(in.furniture.size() > 4);
+    CHECK(unreachableCells(spaceGraphOf(plan, p, 0.0)).empty());
+}
+
 TEST_CASE(blueprint_svg_draws_every_storey_and_the_roof) {
     const Poly2 plan = rectPlan(40, 40);
     const BuildingParams p = towerParams(12);
