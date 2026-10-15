@@ -164,7 +164,7 @@ Stack stackOf(const Poly2& planIn, const BuildingParams& params) {
     if (plan.size() < 3) return st;
     ensureCCW(plan);
     using Env = BuildingParams::Envelope;
-    if (params.envelope == Env::Twist || params.envelope == Env::Stack) {
+    if (params.envelope == Env::Twist || params.envelope == Env::Stack || params.envelope == Env::Bulge) {
         // THE BASE: the lot plan up to `baseFloors` (storey f0 included), as the taper's.
         const int f0 = std::max(1, params.baseFloors);
         StackEntry base;
@@ -174,6 +174,32 @@ Stack stackOf(const Poly2& planIn, const BuildingParams& params) {
         st.entries.push_back(base);
         if (f0 >= params.floors) return st;
         const OBB2 ob = orientedBoundingBox(plan);
+        if (params.envelope == Env::Bulge) {
+            // THE BULGE: one entry, the plan scaled about its centre by a curve -- 0.8 at its foot, 1.0 at `bulge`
+            // of the height, `taperTop` at the top (never past the plan: scale <= 1 stays inside the lot). Each
+            // storey hangs a little past the one below on the way up and sits back on the way down: Support.
+            StackEntry bu;
+            bu.section = Section::fromLot(plan);
+            bu.k0 = f0 + 1;
+            bu.k1 = params.floors;
+            bu.rel = Relation::Support;
+            bu.xf.pivot = ob.center;
+            bu.xf.u = ob.axis[0];
+            bu.xf.v = ob.axis[1];
+            const Real widest = std::max(Real(0.05), std::min(Real(0.95), params.bulge));
+            // No storey narrower than the core needs (kCoreTierMin, with a margin for a round plan's diagonal): a
+            // lens whose top loses its core loses its stairs too, and a tower that cannot be climbed is not one.
+            const Real shortSide = tierShortSide(plan);
+            const Real minScale = shortSide > 1e-6 ? std::min(Real(1), (kCoreTierMin + 3.0) / shortSide) : Real(1);
+            const Real foot = std::max(Real(0.8), minScale);
+            const Real top = std::max(std::max(Real(0.3), std::min(Real(1), params.taperTop)), minScale);
+            Curve sc;
+            sc.keys = {{0, foot}, {widest, 1.0}, {1, top}};
+            bu.xf.scaleU = sc;
+            bu.xf.scaleV = sc;
+            st.entries.push_back(bu);
+            return st;
+        }
         if (params.envelope == Env::Twist) {
             // THE TWIST: one entry from f0 + 1 to the top, the plan itself (or the box inside it) turning
             // `twistDeg` about its centre over the height, scaled down until every storey stays inside the lot.

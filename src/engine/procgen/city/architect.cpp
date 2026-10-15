@@ -750,6 +750,27 @@ void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "stacked_modules";
 }
 
+// The LENS TOWER (issue #105 step 4, the stack's scale curve; 30 St Mary Axe, Torre Glories): a drum that widens
+// to its waist and narrows to its top, glass, every storey its own facet with a slab band between.
+void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(18, 26) + static_cast<int>(cx.coreness * 22);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Circle;
+    p.envelope = BuildingParams::Envelope::Bulge;
+    p.baseFloors = 1;
+    p.bulge = rng.range(0.38, 0.55);
+    p.taperTop = rng.range(0.45, 0.6);   // (never below what the core needs: the stack raises it on a small drum)
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{5, 60}, {1, 40}});   // a lantern crowns it, or the plain penthouse
+    out.name = "lens_tower";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1488,6 +1509,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"tapered_glass_tower", recipeTaperedGlassTower},
     {"twisted_tower", recipeTwistedTower},
     {"stacked_modules", recipeStackedModules},
+    {"lens_tower", recipeLensTower},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},

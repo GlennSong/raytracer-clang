@@ -10173,7 +10173,10 @@ height (a slice) and its skin; a STACK is sections over storey ranges under keye
 - **The lot bounds the transform.** A twist turns the plan itself (a stadium turns as a stadium), scaled down about
   its centre until every storey lies inside the lot; the box inside an L or a notched lot when the plan cannot turn
   inside itself. Modules shrink along the long axis by the shift so every slid module stays inside the lot.
-- **Owed.** The taper as a scale curve (today's stepped taper stays as the preset), `emitCap` kinds (spire, dome,
+- **A scale curve is the same machinery.** The Bulge envelope scales the plan about its centre storey by storey
+  (0.8 at the foot, full at `bulge` of the height, `taperTop` at the top): the lens tower on the drum massing, drawn
+  with the same facets and slab bands, the core fitted to every storey.
+- **Owed.** Today's stepped taper as a scale curve (its steps stay as the preset), `emitCap` kinds (spire, dome,
   vault, aperture, flared), the drum and the pagoda as presets (`growCylinder`, `growPagoda` retired), ruled curtain
   walls.
 

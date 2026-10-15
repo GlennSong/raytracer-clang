@@ -284,7 +284,13 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             if (L < 2.0) continue;
             const Vec2 c = normalize(B - A);
             const Vec2 nIn(-c.y, c.x);
-            const Real d = std::min(b.depth, L * 0.9);   // the back wall: no deeper than the chord is wide
+            // The back wall: no deeper than the chord is wide, and measured from the PIECE'S chord -- which sits a
+            // sagitta inside the glass -- it stops a corridor short of the core and short of the facing piece (a
+            // lens tower's small storeys: a quarter-drum office whose back wall ran through the core, issue #105).
+            const Real room = depthToCore(A, c, L, nIn * -1.0, core) - kCorridorRing;
+            Real across = 0;
+            for (const Vec2& w : plan) across = std::max(across, dot(w - A, nIn));
+            const Real d = std::min({b.depth, L * 0.9, room, (across - 1.4) * 0.5});
             if (d < kMinDepth) continue;
             Room r;
             r.edge = (b.first + k0) % n;
@@ -1968,11 +1974,13 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
         };
         // THE WINDOWS: perimeter offices off an aisle, or corner offices on the even bands (which own the corners).
         Real openFrom = 0;   // the open plan's depth from the wall's inner face
+        Real cornerBack = 0;   // how deep the corner offices reach (their back wall), 0 for none
         if (perimeter && b.D >= kPerimD + kAisle + kOpenMin) {
             officeRowAt(rp, params, e, b.W, P, b.s0, b.s1, inset, kPerimD);
             openFrom = kPerimD + kAisle;
         } else if (e % 2 == 0 && b.s1 - b.s0 > 2 * kCornerW + 8.0) {
             const Real cd = std::min(b.D - 1.6, Real(5.0));
+            cornerBack = vIn + cd;
             for (int side = 0; side < 2; ++side) {
                 const Real a0 = side == 0 ? b.s0 : b.s1 - kCornerW, a1 = side == 0 ? b.s0 + kCornerW : b.s1;
                 room(a0, a1, vIn, vIn + cd, RoomKind::Office);
@@ -1994,7 +2002,11 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
             if (e == lobbyBand) items = {{RoomKind::Meeting, 4.8}, {RoomKind::Reception, 6.0}, {RoomKind::Meeting, 4.8}};
             else if (e == opposite) items = {{RoomKind::Kitchenette, 5.0}, {RoomKind::Lounge, 5.6}, {RoomKind::Meeting, 6.4}};
             else items = {{RoomKind::Lounge, 5.0}, {RoomKind::Meeting, 4.8}};
-            const Real lo = b.s0 + 2.0, hi = b.s1 - 2.0;
+            // ...and clear of the corner offices where the band is too shallow for the strip to sit behind them (a
+            // small floor: the meeting room ran over the corner office and its door, issue #105's lens tower)
+            const Real v0 = vFront - stripD;
+            const Real keep = cornerBack > v0 + 0.05 ? kCornerW + 0.3 : 2.0;
+            const Real lo = b.s0 + keep, hi = b.s1 - keep;
             Real mid = (lo + hi) * 0.5;
             if (e == lobbyBand) {
                 Real c0 = 1e9, c1 = -1e9;
@@ -2008,9 +2020,8 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
                 while (drop > 0 && items[drop].kind == RoomKind::Reception) --drop;
                 items.erase(items.begin() + static_cast<std::ptrdiff_t>(drop));
             }
-            if (!items.empty()) {
+            if (!items.empty() && hi - lo > 2.0) {
                 Real x = std::clamp(mid - total() * 0.5, lo, hi - total());
-                const Real v0 = vFront - stripD;
                 for (const Item& it : items) {
                     const Real x0 = x, x1 = x + it.w;
                     room(x0, x1, v0, vFront, it.kind);

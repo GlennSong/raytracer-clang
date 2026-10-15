@@ -3,6 +3,7 @@
 // envelopes as the first transforms, every storey inside the lot.
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/mass_stack.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/space_graph.h"
@@ -184,6 +185,52 @@ TEST_CASE(stacked_modules_slide_alternately_and_stay_inside_the_lot) {
     const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
     CHECK(unreachableCells(g).empty());
     std::printf("    [stack] %zu modules, %zu cells, %zu unreachable\n", st.entries.size() - 1, g.cells.size(), unreachableCells(g).size());
+}
+
+TEST_CASE(a_lens_tower_widens_to_its_waist_and_narrows_to_its_top) {
+    Poly2 drum;
+    for (int k = 0; k < 16; ++k) {
+        const Real a2 = 2.0 * 3.14159265358979323846 * k / 16;
+        drum.push_back(Vec2(std::cos(a2), std::sin(a2)) * 18.0);
+    }
+    BuildingParams p = towerParams(30);
+    p.envelope = BuildingParams::Envelope::Bulge;
+    p.baseFloors = 1;
+    p.bulge = 0.45;
+    p.taperTop = 0.4;
+    const Stack st = stackOf(drum, p);
+    CHECK(st.entries.size() == 2 && st.entries.back().varies() && st.entries.back().rel == Relation::Support);
+    const std::vector<StoreyPlan> storeys = storeyPlans(drum, p);
+    CHECK(storeys.size() == 31);
+    auto radius = [&](int k) { return (storeys[static_cast<std::size_t>(k)].plan[0] - centroid(storeys[static_cast<std::size_t>(k)].plan)).length(); };
+    // 0.8 of the drum at its foot, the full drum at the waist, the top no narrower than the core needs (0.4 asked,
+    // 17 m across given); widening up to the waist, narrowing above; every storey inside the lot, the same 16 corners.
+    CHECK(std::fabs(radius(2) - 18.0 * 0.8) < 1e-6);
+    int waist = 2;
+    for (int k = 3; k <= 30; ++k) if (radius(k) > radius(waist)) waist = k;
+    CHECK(std::fabs(radius(waist) - 18.0) < 0.3);
+    CHECK(radius(30) > 18.0 * 0.4 && radius(30) < 18.0 * 0.5);
+    CHECK(2 * radius(30) * std::cos(3.14159265358979323846 / 16) >= 17.0 - 1e-6);
+    for (int k = 3; k <= 30; ++k) {
+        CHECK(storeys[static_cast<std::size_t>(k)].plan.size() == 16);
+        CHECK(inside(drum, storeys[static_cast<std::size_t>(k)].plan));
+        if (k <= waist) CHECK(radius(k) >= radius(k - 1) - 1e-9);
+        else CHECK(radius(k) <= radius(k - 1) + 1e-9);
+        CHECK(storeys[static_cast<std::size_t>(k)].tier == 1);
+    }
+    // The core fits every storey, so the lens is climbed by its lifts and stairs: the gate.
+    CHECK(coreFor(drum, p, entranceEdgeFor(drum, p)).valid);
+    const SpaceGraph g = spaceGraphOf(drum, p, 0.0);
+    for (int c : unreachableCells(g)) {
+        const Cell& cell = g.cells[static_cast<std::size_t>(c)];
+        Vec2 lo, hi;
+        bounds(cell.plan, lo, hi);
+        std::printf("    [lens] unreachable %s %s storey %d (%.1f,%.1f)-(%.1f,%.1f) free %.1f\n", cellKindName(cell.kind), cellUseName(cell.use),
+                    cell.k0, lo.x, lo.y, hi.x, hi.y, cell.freeArea);
+    }
+    CHECK(unreachableCells(g).empty());
+    std::printf("    [lens] foot r %.2f, waist r %.2f at storey %d, top r %.2f; %zu cells, %zu unreachable\n", radius(2), radius(waist), waist,
+                radius(30), g.cells.size(), unreachableCells(g).size());
 }
 
 TEST_CASE(the_stack_is_a_mass_with_slices_bounds_and_a_shell) {
