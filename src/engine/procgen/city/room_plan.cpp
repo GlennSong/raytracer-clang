@@ -158,15 +158,12 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             r.kind = rp.office ? RoomKind::Office : RoomKind::Flat;
             r.rect = {P(ra, dIn), P(rb, dIn), P(rb, dOut), P(ra, dOut)};
             rp.rooms.push_back(r);
-            // The front, with its door a third of the way along (alternating).
             RoomWall front;
             front.a = P(ra, dOut);
             front.b = P(rb, dOut);
             front.doorAt = (rp.rooms.size() % 2) ? 0.35 : 0.65;
             front.glass = params.curtainWall;
             rp.walls.push_back(front);
-            // The partition to the next room. It faces INTO both rooms, so
-            // it is the one that wears the finish.
             if (i + 2 < cuts.size()) {
                 RoomWall side;
                 side.a = P(rb, dIn);
@@ -179,36 +176,179 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         lastW = cuts[cuts.size() - 1] - cuts[cuts.size() - 2];
     };
 
-    // Even edges first: they take the corners.
-    for (std::size_t e = 0; e < n; e += 2) {
-        if (!E[e].rooms) continue;
-        Real fw, lw;
-        lay(e, inset, E[e].W - inset, fw, lw);
-        E[e].cornerStart = fw;
-        E[e].cornerEnd = lw;
+    // THE ARCS (the section's rounded corners, tessellated to chords; Glenn, 2026-10-15: "the corner office was not
+    // the entire rounded section as a walled off space"): a run of two or more chords of one length turning one
+    // way by one angle under 46 degrees, sweeping no more than a half circle (a drum's full ring stays as it was),
+    // is ONE band -- its rooms follow the curve, the outside the chords, the inside the offset curve, the door on
+    // the inner middle, the side walls radial. A plan without such a run lays exactly as before.
+    struct Band { bool arc = false; std::size_t e = 0; std::size_t first = 0, count = 0; Real depth = 0; bool rooms = false; };
+    std::vector<Band> bands;
+    {
+        std::vector<Real> len(n), turn(n);   // turn[i]: from edge i into edge i + 1
+        for (std::size_t i = 0; i < n; ++i) {
+            len[i] = E[i].W;
+            const Vec2 d0 = E[i].d, d1 = E[(i + 1) % n].d;
+            turn[i] = std::atan2(cross(d0, d1), dot(d0, d1));
+        }
+        auto chordLike = [&](std::size_t i, std::size_t j) {   // edge j continues edge i's arc
+            const Real t0 = turn[i], t1 = turn[(j + n - 1) % n];
+            return len[i] > 1e-6 && std::fabs(len[j] - len[i]) < 0.02 * len[i] && t0 > 0.0175 && t0 < 0.80 &&
+                   std::fabs(t1 - t0) < 0.0175;
+        };
+        std::vector<int> group(n, -1);
+        std::vector<Band> arcs;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (group[i] >= 0) continue;
+            // the run from i: edges i, i+1, ... while each continues the last
+            std::size_t count = 1;
+            Real sweep = 0;
+            while (count < n) {
+                const std::size_t j = (i + count) % n;
+                if (group[j] >= 0 || !chordLike((i + count - 1) % n, j)) break;
+                sweep += turn[(i + count - 1) % n];
+                if (sweep > 3.1416 + 0.02) { sweep -= turn[(i + count - 1) % n]; break; }
+                ++count;
+            }
+            if (count < 2) continue;
+            // the run must not continue backwards from i either (i is its true start)
+            if (chordLike((i + n - 1) % n, i) && group[(i + n - 1) % n] < 0 && sweep + turn[(i + n - 1) % n] <= 3.1416 + 0.02) continue;
+            Band b;
+            b.arc = true;
+            b.first = i;
+            b.count = count;
+            for (std::size_t k = 0; k < count; ++k) group[(i + k) % n] = static_cast<int>(arcs.size());
+            arcs.push_back(b);
+        }
+        if (arcs.empty()) {
+            for (std::size_t e = 0; e < n; ++e) { Band b; b.e = e; b.depth = E[e].depth; b.rooms = E[e].rooms; bands.push_back(b); }
+        } else {
+            // the sequence of bands round the plan, starting at the first arc so the arcs lay first (primary)
+            const std::size_t s0 = arcs.front().first;
+            for (std::size_t k = 0; k < n;) {
+                const std::size_t e = (s0 + k) % n;
+                if (group[e] >= 0) {
+                    Band b = arcs[static_cast<std::size_t>(group[e])];
+                    b.depth = 1e9;
+                    for (std::size_t m = 0; m < b.count; ++m) {
+                        const Edge& ed = E[(b.first + m) % n];
+                        b.depth = std::min(b.depth, ed.depth);
+                    }
+                    b.rooms = b.depth >= kMinDepth;
+                    bands.push_back(b);
+                    k += b.count;
+                } else {
+                    Band b; b.e = e; b.depth = E[e].depth; b.rooms = E[e].rooms; bands.push_back(b); ++k;
+                }
+            }
+        }
     }
-    // Odd edges between them: the span starts past the previous edge's
-    // corner room and stops before the next one's; an end partition closes
-    // whatever of the band the corner room's own front does not.
-    for (std::size_t e = 1; e < n; e += 2) {
-        if (!E[e].rooms) continue;
-        const Edge& prev = E[(e + n - 1) % n];
-        const Edge& next = E[(e + 1) % n];
-        // Only a CONVEX corner is shared: there the neighbour's band runs into this one's and takes the corner.
-        // At an INSIDE corner (an L, T or cross plate -- a bundled tower once tubes drop out, buildings M10) the
-        // two bands meet at the corner without crossing; trimming this one by the neighbour's depth left a dead
-        // strip along the wall. Run to the corner instead and close the band with a full end partition.
-        const bool convexStart = cross(prev.d, E[e].d) > 1e-6;
-        const bool convexEnd = cross(E[e].d, next.d) > 1e-6;
-        const Real startAt = prev.rooms && convexStart ? inset + prev.depth : inset;
-        const Real endAt = E[e].W - (next.rooms && convexEnd ? inset + next.depth : inset);
+
+    // A CURVED BAND's rooms: the corner office real towers draw. The glass follows the curve outside; the back
+    // wall is a straight partition parallel to the arc's chord with the door in its middle; the side walls are
+    // perpendicular to that chord. An arc sweeping more than a right angle (a stadium's end) is split into pieces of
+    // a right angle at most, one such room each. The furniture's rectangle is the chord rectangle itself.
+    auto layArc = [&](const Band& b) {
+        const std::size_t m = b.count;
+        std::vector<Vec2> v(m + 1);
+        for (std::size_t k = 0; k <= m; ++k) v[k] = plan[(b.first + k) % n];
+        // the inward offset at every chord vertex: the bisector, mitred (the ends: the chord's own normal)
+        std::vector<Vec2> in(m + 1);
+        for (std::size_t k = 0; k <= m; ++k) {
+            const Vec2 dPrev = k > 0 ? normalize(v[k] - v[k - 1]) : normalize(v[1] - v[0]);
+            const Vec2 dNext = k < m ? normalize(v[k + 1] - v[k]) : normalize(v[m] - v[m - 1]);
+            const Vec2 n0(-dPrev.y, dPrev.x), n1(-dNext.y, dNext.x);   // inward of a CCW chord: its left
+            Vec2 bis = n0 + n1;
+            const Real bl = bis.length();
+            if (bl < 1e-6) { in[k] = n0; continue; }
+            bis = bis * (1.0 / bl);
+            in[k] = bis * (1.0 / std::max(Real(0.5), dot(bis, n0)));
+        }
+        // pieces of at most a right angle
+        std::vector<std::pair<std::size_t, std::size_t>> pieces;   // [k0, k1] vertex ranges
+        {
+            std::size_t k0 = 0;
+            Real sweep = 0;
+            for (std::size_t k = 0; k + 1 < m; ++k) {
+                const Vec2 d0 = normalize(v[k + 1] - v[k]), d1 = normalize(v[k + 2] - v[k + 1]);
+                const Real t = std::atan2(cross(d0, d1), dot(d0, d1));
+                if (sweep + t > 1.5708 + 0.01) { pieces.push_back({k0, k + 1}); k0 = k + 1; sweep = 0; }
+                sweep += t;
+            }
+            pieces.push_back({k0, m});
+        }
+        const Real dIn = inset;
+        for (std::size_t pi = 0; pi < pieces.size(); ++pi) {
+            const std::size_t k0 = pieces[pi].first, k1 = pieces[pi].second;
+            const Vec2 A = v[k0] + in[k0] * dIn, B = v[k1] + in[k1] * dIn;
+            const Real L = (B - A).length();
+            if (L < 2.0) continue;
+            const Vec2 c = normalize(B - A);
+            const Vec2 nIn(-c.y, c.x);
+            const Real d = std::min(b.depth, L * 0.9);   // the back wall: no deeper than the chord is wide
+            if (d < kMinDepth) continue;
+            Room r;
+            r.edge = (b.first + k0) % n;
+            r.kind = rp.office ? RoomKind::Office : RoomKind::Flat;
+            r.rect.push_back(A);
+            for (std::size_t k = k0 + 1; k < k1; ++k) r.rect.push_back(v[k] + in[k] * dIn);
+            r.rect.push_back(B);
+            r.rect.push_back(B + nIn * d);
+            r.rect.push_back(A + nIn * d);
+            r.frame = {A, B, B + nIn * d, A + nIn * d};
+            rp.rooms.push_back(r);
+            RoomWall back;   // the straight partition, the door in its middle
+            back.a = B + nIn * d;
+            back.b = A + nIn * d;
+            back.doorAt = (rp.rooms.size() % 2) ? 0.35 : 0.65;
+            back.glass = params.curtainWall;
+            rp.walls.push_back(back);
+            RoomWall sideA;   // the side at the piece's start (the last piece's end too)
+            sideA.a = A;
+            sideA.b = A + nIn * d;
+            sideA.accent = true;
+            rp.walls.push_back(sideA);
+            if (pi + 1 == pieces.size()) {
+                RoomWall sideB;
+                sideB.a = B;
+                sideB.b = B + nIn * d;
+                sideB.accent = true;
+                rp.walls.push_back(sideB);
+            }
+        }
+    };
+
+    // The straight bands: as before, except beside an ARC, whose corner room's back corner reaches `depth` along
+    // the straight edge from the tangent point -- the straight band starts past it, and walls its first room's
+    // side there.
+    const std::size_t nb = bands.size();
+    std::vector<Real> cornerStart(nb, 0.0), cornerEnd(nb, 0.0);
+    auto layStraight = [&](std::size_t bi, bool primary) {
+        const Band& b = bands[bi];
+        const std::size_t e = b.e;
+        const Band& prevB = bands[(bi + nb - 1) % nb];
+        const Band& nextB = bands[(bi + 1) % nb];
+        const bool prevArc = prevB.arc && prevB.rooms, nextArc = nextB.arc && nextB.rooms;
+        Real startAt = inset, endAt = E[e].W - inset;
+        Real claimStart = inset, claimEnd = inset;   // how far the neighbour's corner room already covers this end
+        if (prevArc) startAt = inset + prevB.depth;
+        if (nextArc) endAt = E[e].W - inset - nextB.depth;
+        if (!primary) {
+            const Vec2 prevD = prevB.arc ? E[(prevB.first + prevB.count - 1) % n].d : E[prevB.e].d;
+            const Vec2 nextD = nextB.arc ? E[nextB.first].d : E[nextB.e].d;
+            const bool convexStart = !prevArc && cross(prevD, E[e].d) > 1e-6;
+            const bool convexEnd = !nextArc && cross(E[e].d, nextD) > 1e-6;
+            if (prevB.rooms && convexStart) { startAt = inset + prevB.depth; claimStart = inset + cornerEnd[(bi + nb - 1) % nb]; }
+            if (nextB.rooms && convexEnd) { endAt = E[e].W - inset - nextB.depth; claimEnd = inset + cornerStart[(bi + 1) % nb]; }
+        }
         Real fw, lw;
         lay(e, startAt, endAt, fw, lw);
-        if (fw <= 0) continue;
+        cornerStart[bi] = fw;
+        cornerEnd[bi] = lw;
+        E[e].cornerStart = fw;
+        E[e].cornerEnd = lw;
+        if (fw <= 0) return;
         auto P = [&](Real x, Real depth) { return E[e].a + E[e].d * x - E[e].nOut * depth; };
         auto endWall = [&](Real x, Real coveredTo) {
-            // The neighbour's corner room covers depth [inset, inset + cornerW]
-            // of this end; close the rest of the band's depth.
             const Real from = std::max(inset, coveredTo), to = inset + E[e].depth;
             if (to - from < 0.3) return;
             RoomWall w;
@@ -216,8 +356,21 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             w.b = P(x, to);
             rp.walls.push_back(w);
         };
-        endWall(startAt, prev.rooms && convexStart ? inset + prev.cornerEnd : inset);
-        endWall(endAt, next.rooms && convexEnd ? inset + next.cornerStart : inset);
+        // a secondary edge's end rooms are always walled at their ends, as before; a primary edge's only beside an arc
+        if (!primary || prevArc) endWall(startAt, claimStart);
+        if (!primary || nextArc) endWall(endAt, claimEnd);
+    };
+    for (std::size_t bi = 0; bi < nb; bi += 2) {
+        const Band& b = bands[bi];
+        if (!b.rooms) continue;
+        if (b.arc) layArc(b);
+        else layStraight(bi, true);
+    }
+    for (std::size_t bi = 1; bi < nb; bi += 2) {
+        const Band& b = bands[bi];
+        if (!b.rooms) continue;
+        if (b.arc) layArc(b);
+        else layStraight(bi, false);
     }
     return rp;
 }

@@ -9,6 +9,9 @@
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/space_graph.h"
 #include "../src/engine/mesh_audit.h"
+#include "../src/engine/procgen/city/core_plan.h"
+#include "../src/engine/procgen/city/furniture.h"
+#include "../src/engine/procgen/city/room_plan.h"
 
 #include <algorithm>
 #include <cmath>
@@ -243,4 +246,73 @@ TEST_CASE(rounded_tower_is_furnished_and_walkable_base_to_roof) {
     CHECK(padCells == 1);
     CHECK(rampPortals == 1);
     CHECK(unreachableCells(gr).empty());
+}
+
+// THE CORNER OFFICE IS THE WHOLE ROUNDED SECTION (Glenn, 2026-10-15): on a rounded plan the ring lays one band along
+// each arc's run of chords -- rooms that follow the curve, their glass the chords, their door on the inner curve --
+// instead of a sliver office per chord; each has a rectangle inside it for the furniture; the floor stays walkable
+// and the building passes the gate.
+TEST_CASE(curved_corner_office_is_one_walled_room) {
+    const Poly2 plan = Section::rect(56, 40).rounded(6.0).tessellate();
+    BuildingParams p;
+    p.floors = 20;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 5;
+    const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    const RoomPlan rp = roomPlan(sps[5].plan, p, core, static_cast<std::size_t>(-1), interiorWallInset(p), 5);
+    int curved = 0, framed = 0, curvedDoors = 0;
+    for (const Room& r : rp.rooms) {
+        if (r.rect.size() <= 4) continue;
+        ++curved;
+        if (r.frame.size() == 4) ++framed;
+        for (std::size_t fi = 0; fi < r.frame.size(); ++fi) {
+            const Vec2& q = r.frame[fi];
+            const bool in = pointInPolygon(r.rect, q + (centroid(r.rect) - q) * 0.01);
+            if (!in) {
+                std::printf("    [curved] room %zu-gon frame corner %zu (%.2f, %.2f) outside; frame", r.rect.size(), fi, q.x, q.y);
+                for (const Vec2& f : r.frame) std::printf(" (%.2f,%.2f)", f.x, f.y);
+                std::printf("; rect");
+                for (const Vec2& v : r.rect) std::printf(" (%.2f,%.2f)", v.x, v.y);
+                std::printf("\n");
+            }
+            CHECK(in);
+        }
+        // a door on a wall that lies on this room's boundary
+        for (const RoomWall& w : rp.walls) {
+            if (w.doorAt < 0) continue;
+            const Vec2 d = w.a + (w.b - w.a) * w.doorAt;
+            Real best = 1e9;
+            for (std::size_t i = 0; i < r.rect.size(); ++i) {
+                const Vec2 a = r.rect[i], b = r.rect[(i + 1) % r.rect.size()];
+                const Vec2 ab = b - a;
+                const Real t = std::max(Real(0), std::min(Real(1), dot(d - a, ab) / std::max(Real(1e-9), ab.lengthSquared())));
+                best = std::min(best, (d - (a + ab * t)).length());
+            }
+            if (best < 0.05) { ++curvedDoors; break; }
+        }
+    }
+    std::printf("    [curved] %zu rooms, %d curved, %d framed, %d with a door on their curve\n", rp.rooms.size(), curved, framed, curvedDoors);
+    CHECK(curved >= 4);
+    CHECK(framed == curved);
+    CHECK(curvedDoors == curved);
+    CHECK(floorIsWalkable(rp, sps[5].plan, core.frame.toWorld({core.length * 0.5, -1.1})));
+    // Furnished inside the curve.
+    std::vector<PlacedPiece> placed;
+    emitFurniture(placed, nullptr, rp, 20.0, p.seed);
+    int inCurved = 0;
+    for (const Room& r : rp.rooms) {
+        if (r.rect.size() <= 4) continue;
+        for (const PlacedPiece& pc : placed) {
+            const Vec2 at(pc.xform.m[0][3], pc.xform.m[2][3]);
+            if (pointInPolygon(r.rect, at)) { ++inCurved; break; }
+        }
+    }
+    std::printf("    [curved] %d of %d curved rooms furnished\n", inCurved, curved);
+    CHECK(inCurved == curved);
+    const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+    CHECK(unreachableCells(g).empty());
 }

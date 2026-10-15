@@ -122,10 +122,12 @@ struct WallFinish {
 WallFinish interiorFinishFor(const BuildingParams& params);
 
 struct Room {
-    Poly2 rect;          // world XZ, CCW
+    Poly2 rect;          // world XZ, CCW -- four corners, or a CURVED room's polygon (the chords of an arc outside, the
+                         // offset arc inside; the ring's corner office on a rounded plan)
     std::size_t edge = 0;   // the plan edge it sits against (ring only)
     RoomKind kind = RoomKind::Office;
     uint8_t style = 0;      // a shop's trade
+    Poly2 frame;         // a curved room's rectangle for the furniture: inside the polygon, along the arc's chord
 };
 
 // AN OPENING IN AN OUTSIDE WALL (Glenn, 2026-10-13: "a tv sitting in front of the front doorway ... a shelf in a store

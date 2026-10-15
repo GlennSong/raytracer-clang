@@ -563,14 +563,16 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
     const uint32_t wood = (hb >> 3) & 3u, style = (hb >> 9) & 3u;
 
     for (const Room& room : rp.rooms) {
-        if (room.rect.size() != 4 || room.kind == RoomKind::Hall) continue;
-        const Vec2 rc = (room.rect[0] + room.rect[2]) * 0.5;
+        // (a CURVED room -- the ring's corner office on a rounded plan -- is furnished inside its frame rectangle)
+        const Poly2& rr = room.rect.size() == 4 ? room.rect : room.frame;
+        if (rr.size() != 4 || room.kind == RoomKind::Hall) continue;
+        const Vec2 rc = (rr[0] + rr[2]) * 0.5;
         const uint32_t hr = mix32(hb ^ static_cast<uint32_t>(std::lround(rc.x * 7.0)) ^
                                   (static_cast<uint32_t>(std::lround(rc.y * 13.0)) << 8));
         const uint32_t fabric = (hb + ((hr >> 5) % 3u)) & 7u;
         Furnisher F{out, colliderOut, {}, y0, fabric | (wood << 3) | (style << 5), {}};
-        F.f.o = room.rect[0];
-        const Vec2 du = room.rect[1] - room.rect[0], dv = room.rect[3] - room.rect[0];
+        F.f.o = rr[0];
+        const Vec2 du = rr[1] - rr[0], dv = rr[3] - rr[0];
         F.f.W = du.length(); F.f.D = dv.length();
         if (F.f.W < 1.8 || F.f.D < 1.8) continue;
         F.f.u = du * (1.0 / F.f.W); F.f.v = dv * (1.0 / F.f.D);
