@@ -357,13 +357,13 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
         }
     }
     // Layers: a sidewalk, shoulder or median edge must sit within kerb height of the lane deck beside it.
-    struct LayerSpec { const PolySet* set; const char* name; double lift; bool anyRoad; };
-    const LayerSpec layers[] = {{&r.pavement.sidewalk, "sidewalk", 0.12, false}, {&r.pavement.shoulder, "shoulder", 0.0, false}, {&r.pavement.median, "median", 0.10, true}};
+    struct LayerSpec { const PolySet* set; const char* name; double lift; bool anyRoad; LayerKind kind; };
+    const LayerSpec layers[] = {{&r.pavement.sidewalk, "sidewalk", 0.12, false, kSidewalkLayer}, {&r.pavement.shoulder, "shoulder", 0.0, false, kShoulderLayer}, {&r.pavement.median, "median", 0.10, true, kMedianLayer}};
     for (const LayerSpec& ls : layers) {
         const std::vector<int> roads = layerRoads(g, ls.anyRoad); if (roads.empty()) continue;
-        const std::vector<char> want = r.heights->edgeFlags(roads);
+        const std::vector<char> want = r.heights->edgeFlags(roads); const std::vector<double> band = layerBands(g, ls.kind);
         {   // triangles the mesher drops for bridging two levels: the condition is worth naming even though the mesh no longer shows it
-            std::vector<Vec2> spanning; (void)layerMeshes(g, *r.heights, *ls.set, roads, &spanning);
+            std::vector<Vec2> spanning; (void)layerMeshes(g, *r.heights, *ls.set, roads, &spanning, &band);
             for (const Vec2& c : spanning) { SurfaceStep st2; st2.at = c; st2.a = ls.name; st2.kind = 2; st2.length = 1.0; out.push_back(st2); }
         }
         auto walk = [&](const Ring& ring, bool hole) {
@@ -379,7 +379,7 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
                     const Vec2 m = a + d * (st / L);
                     {
                         const Vec2 q = m + nrm * (0.35 * away);
-                        const double layerZ = r.heights->layerHeight(want, roads, m);   // once per sample, not once per candidate lane
+                        const double layerZ = r.heights->layerHeight(want, roads, m, &band);   // once per sample, not once per candidate lane
                         int other = -1; double bestZ = 0, bd = 1e300;
                         for (int liI : grid.at(q)) {
                             const size_t li = static_cast<size_t>(liI);

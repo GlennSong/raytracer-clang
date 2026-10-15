@@ -100,7 +100,45 @@ double DeckHeight::layerHeight(const std::vector<int>& roads, const Vec2& p) con
     return layerHeight(edgeFlags(roads), roads, p);
 }
 
-double DeckHeight::layerHeight(const std::vector<char>& want, const std::vector<int>& roads, const Vec2& p) const {
+double DeckHeight::layerHeight(const std::vector<char>& want, const std::vector<int>& roads, const Vec2& p, const std::vector<double>* band) const {
+    // THE LAYER'S OWN LEVEL (Glenn, 2026-10-15: "there's a cut in the sidewalk because of the lane above it"): the
+    // sidewalk outline ran on under a deck, but its vertices there took the deck's height -- the nearest lane in plan
+    // -- and the triangles spanning the two levels were dropped as too steep. A lane deep around p is at another
+    // level; skip it and every lane at its height there.
+    constexpr double kEdge = 0.05;
+    const std::vector<int>* cand = candidates(p);
+    auto usable = [&](int c) { const Lane& l = L_.lanes[static_cast<size_t>(c)]; return !l.isConnector() && l.parent >= 0 && want[static_cast<size_t>(l.parent)]; };
+    auto nearestAtLevel = [&](double ref) {
+        int best = -1; double bd = kIndexReach;
+        for (int c : *cand) {
+            if (!usable(c) || std::fabs(deck(c, p) - ref) >= g_.rules.sameLevelDz) continue;
+            const double d = distanceToLane(c, p, bd); if (d < bd) { bd = d; best = c; }
+        }
+        return best;
+    };
+    if (band && cand) {   // the layer's own road: the nearest lane whose road has this layer's band reaching p
+        int own = -1; double od = std::numeric_limits<double>::infinity();
+        for (int c : *cand) {
+            if (!usable(c)) continue; const double w = (*band)[static_cast<size_t>(L_.lanes[static_cast<size_t>(c)].parent)]; if (w <= 0) continue;
+            const double d = distanceToLane(c, p, w + 2 * kEdge);
+            if (!(d <= w + kEdge) || d >= od || deepInside(c, p, kEdge)) continue;
+            od = d; own = c;
+        }
+        if (own >= 0) { const int best = nearestAtLevel(deck(own, p)); return deck(best >= 0 ? best : own, p); }
+    }
+    std::vector<double> otherLevels;
+    if (cand) for (int c : *cand) if (usable(c) && deepInside(c, p, kEdge)) otherLevels.push_back(deck(c, p));
+    if (!otherLevels.empty()) {
+        int best = -1; double bd = kIndexReach;
+        for (int c : *cand) {
+            if (!usable(c)) continue;
+            const double z = deck(c, p); bool other = false;
+            for (double o : otherLevels) other = other || std::fabs(z - o) < g_.rules.sameLevelDz;
+            if (other) continue;
+            const double d = distanceToLane(c, p, bd); if (d < bd) { bd = d; best = c; }
+        }
+        if (best >= 0) return deck(best, p);
+    }
     const int li = nearestLane(want, p); if (li >= 0) return deck(li, p);
     int best = roads.empty() ? -1 : roads[0]; double bd = 1e300;
     for (int e : roads) { const EdgeSpec& E = g_.edges[static_cast<size_t>(e)]; const double d = project(E.xy, E.s, p).distance; if (d < bd) { bd = d; best = e; } }
@@ -126,6 +164,22 @@ double DeckHeight::distanceToLane(int lane, const Vec2& p, double radius) const 
     double inHole = std::numeric_limits<double>::infinity();
     for (size_t k = 0; k < b.holeRings.size(); ++k) if (pointInRing(b.holeRings[k], p)) inHole = std::min(inHole, b.holes[k].distanceWithin(p, radius));
     return std::isfinite(inHole) ? inHole : 0.0;
+}
+
+bool DeckHeight::deepInside(int lane, const Vec2& p, double margin) const {
+    const Lane& l = L_.lanes[static_cast<size_t>(lane)];
+    if (boundaries_.empty() || boundaries_[static_cast<size_t>(lane)].outers.empty())
+        return grids_[static_cast<size_t>(lane)]->distanceWithin(p, l.w / 2) < l.w / 2 - margin;
+    const Boundary& b = boundaries_[static_cast<size_t>(lane)];
+    for (const SegmentGrid& g : b.outers) if (std::isfinite(g.distanceWithin(p, margin))) return false;   // on the edge
+    for (const SegmentGrid& g : b.holes) if (std::isfinite(g.distanceWithin(p, margin))) return false;
+    bool inside = false;
+    for (size_t k = 0; k < b.outerRings.size() && !inside; ++k) {
+        const Box2& bx = b.outerBoxes[k]; if (p.x < bx.minX || p.x > bx.maxX || p.y < bx.minY || p.y > bx.maxY) continue;
+        inside = pointInRing(b.outerRings[k], p);
+    }
+    for (size_t k = 0; k < b.holeRings.size() && inside; ++k) if (pointInRing(b.holeRings[k], p)) inside = false;
+    return inside;
 }
 
 double DeckHeight::blendTo(double z, const std::vector<int>& partners, const Vec2& p) const {

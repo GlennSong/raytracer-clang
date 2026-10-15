@@ -412,11 +412,11 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
     std::fprintf(stderr, "lanelab: surfaces %zu tris: cdt %.1f s, cover %.1f s, heights %.1f s (%u threads), weld %.1f s, decks %.1f s\n", T.tris.size(), sCdt, sCover, sHeights, nThreads, sWeld, std::chrono::duration<double>(std::chrono::steady_clock::now() - tD0).count());
 }
 
-std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning) {
-    std::vector<FlatMesh> out;
+std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning, const std::vector<double>* band) {
+    std::vector<FlatMesh> out; const std::vector<char> want = H.edgeFlags(roads);
     for (const Polygon2& p : layer) {
         FlatMesh m = triangulatePolygon(p); if (m.tris.empty() || roads.empty()) continue;
-        for (DeckVertex& v : m.verts) v.z = H.layerHeight(roads, v.xy);
+        for (DeckVertex& v : m.verts) v.z = H.layerHeight(want, roads, v.xy, band);
         // a triangle steeper than any road can be (its plane's slope over 0.35, and a quarter metre or more of rise)
         // joins two levels: drop it and rebuild the boundary so the slab's side faces follow the cut. The SLOPE, not
         // rise over the longest edge: a sliver 10 m long and a centimetre wide climbing 1.2 m across its width read
@@ -448,6 +448,15 @@ std::vector<int> layerRoads(const RoadLabGraph& g, bool anyRoad) {
     std::vector<int> roads;
     for (size_t i = 0; i < g.edges.size(); ++i) { const RoadClassSpec& c = g.cls(g.edges[i]); if (g.edges[i].laneCount() > 0 && (anyRoad || c.sidewalk > 0 || c.shoulder > 0 || c.median > 0)) roads.push_back(static_cast<int>(i)); }
     return roads;
+}
+
+std::vector<double> layerBands(const RoadLabGraph& g, LayerKind kind) {
+    std::vector<double> w(g.edges.size(), 0.0);
+    for (size_t i = 0; i < g.edges.size(); ++i) {
+        if (g.edges[i].laneCount() == 0) continue; const RoadClassSpec& c = g.cls(g.edges[i]);
+        w[i] = kind == kSidewalkLayer ? c.sidewalk : kind == kShoulderLayer ? c.shoulder : c.median;
+    }
+    return w;
 }
 
 }  // namespace roads::lanes

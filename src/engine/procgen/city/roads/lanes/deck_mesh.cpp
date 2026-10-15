@@ -804,7 +804,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     const PolySet* layerSet[3] = {&r.pavement.sidewalk, &r.pavement.shoulder, &r.pavement.median};
     const double layerLift[3] = {kSidewalkLift, 0.0, 0.10}, layerThick[3] = {kSidewalkThick, kShoulderThick, kMedianThick};
     std::vector<FlatMesh> layerMesh[3];
-    for (int k = 0; k < 3; ++k) if (!layerRoadsOf[k].empty()) layerMesh[k] = layerMeshes(g, H, *layerSet[k], layerRoadsOf[k]);
+    for (int k = 0; k < 3; ++k) if (!layerRoadsOf[k].empty()) { const std::vector<double> band = layerBands(g, static_cast<LayerKind>(k)); layerMesh[k] = layerMeshes(g, H, *layerSet[k], layerRoadsOf[k], nullptr, &band); }
     struct Drawn { Vec2 a, b, c; double za, zb, zc, thick; };
     std::vector<Drawn> drawn;
     auto addDrawn = [&](const std::vector<DeckVertex>& v, const std::vector<std::array<int, 3>>& tris, double lift, double thick) {

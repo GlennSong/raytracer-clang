@@ -909,8 +909,28 @@ TEST_CASE(lanes_a_sidewalk_runs_on_under_a_bridge) {
             if (r.heights->own(static_cast<int>(li), c) - r.heights->ownRoad(street, c) > 3.0) under += setArea(PolySet{piece});
         }
     }
-    std::printf("    [layers] %s sidewalk under the bridges: %.0f m2\n", scn, under);
+    // ...and its MESH is there too, at street level (Glenn, 2026-10-15: "there's a cut in the sidewalk because of the
+    // lane above it"): the outline ran on under the deck, but each vertex took the height of the nearest lane in
+    // plan -- the deck overhead -- and the triangles spanning the two levels were dropped as too steep
+    double meshed = 0;
+    const std::vector<double> band = layerBands(r.graph, kSidewalkLayer);
+    for (const FlatMesh& m : layerMeshes(r.graph, *r.heights, r.pavement.sidewalk, layerRoads(r.graph, false), nullptr, &band)) {
+        for (const auto& t : m.tris) {
+            const DeckVertex &a = m.verts[static_cast<size_t>(t[0])], &b = m.verts[static_cast<size_t>(t[1])], &c = m.verts[static_cast<size_t>(t[2])];
+            const Vec2 q = (a.xy + b.xy + c.xy) / 3.0; const double z = (a.z + b.z + c.z) / 3.0;
+            bool overhead = false, atStreet = false;
+            for (size_t li = 0; li < r.lanes.lanes.size() && !overhead; ++li) {
+                if (r.pavement.footprints[li].empty() || !contains(r.pavement.footprints[li], q)) continue;
+                overhead = r.heights->own(static_cast<int>(li), q) - z > 3.0;
+            }
+            for (size_t ei = 0; ei < r.graph.edges.size() && overhead && !atStreet; ++ei)
+                atStreet = r.graph.cls(r.graph.edges[ei]).sidewalk > 0 && project(r.graph.edges[ei].xy, r.graph.edges[ei].s, q).distance < 20 && std::fabs(z - r.heights->ownRoad(static_cast<int>(ei), q)) < 0.5;
+            if (overhead && atStreet) meshed += 0.5 * std::fabs(cross(b.xy - a.xy, c.xy - a.xy));
+        }
+    }
+    std::printf("    [layers] %s sidewalk under the bridges: %.0f m2 outlined, %.0f m2 meshed at street level\n", scn, under, meshed);
     CHECK(under > 100.0);
+    CHECK(meshed > 0.9 * under);
   }
 }
 

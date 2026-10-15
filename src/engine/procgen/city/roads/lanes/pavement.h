@@ -57,7 +57,9 @@ struct FlatMesh { std::vector<DeckVertex> verts; std::vector<std::array<int, 3>>
 // `spanning`: centroids of layer triangles that bridged two LEVELS (an elevated ramp's shoulder and the
 // ground street's, one 2D polygon) and were dropped — a layer is a 2D ring set and cannot hold two levels;
 // the drop leaves a gap under the upper deck's edge instead of a wall-sided block (Glenn's ramp cube).
-std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning = nullptr);
+// `band`: this layer's width per edge (layerBands): a vertex stands at the level of the road whose band of THIS
+// layer reaches it, not of whatever lane is nearest in plan (a deck overhead).
+std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning = nullptr, const std::vector<double>* band = nullptr);
 // Lane bounding boxes binned on a coarse grid: a point tests only the lanes whose box covers its cell, in
 // ascending lane order (so "first lane found" answers match a full scan). Shared by the cover pass, the
 // mesher's seam/junction/paint queries and the surface-step audit.
@@ -70,6 +72,9 @@ std::vector<Box2> laneBoxes(const std::vector<PolySet>& footprints);   // bounds
 
 // The roads a layer may borrow heights from: those with the layer's ring (sidewalk/shoulder/median > 0), or every paved road.
 std::vector<int> layerRoads(const RoadLabGraph& g, bool anyRoad);
+// Each edge's width of one layer (0 where it has none): the reach of its sidewalk, shoulder or median band.
+enum LayerKind { kSidewalkLayer = 0, kShoulderLayer = 1, kMedianLayer = 2 };
+std::vector<double> layerBands(const RoadLabGraph& g, LayerKind kind);
 
 }  // namespace roads::lanes
 }  // namespace engine
