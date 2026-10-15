@@ -398,6 +398,13 @@ std::vector<Poly2> coreRoofHoles(const CorePlan& core) {
     return holes;
 }
 
+std::vector<Poly2> coreDeckHoles(const CorePlan& core) {
+    std::vector<Poly2> holes = coreRoofHoles(core);
+    if (!core.valid) return holes;
+    for (const CoreShaft& hw : core.hoistways) holes.push_back(hw.rect());
+    return holes;
+}
+
 void emitCoreBulkhead(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core, Real deckY,
                       const BuildingParams& params, bool walls) {
     if (!core.valid) return;

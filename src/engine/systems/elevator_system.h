@@ -73,6 +73,13 @@ public:
         int floor = 0;      // the cab's storey (0 = ground)
         int selected = 0;   // the storey picked on the panel
         int floors = 0;     // storeys in the building
+        // THE RIDE ON THE PANEL (Glenn, 2026-10-15: "show what floor we're moving to -- right now it says floor 0
+        // of x when you're moving up/down"): in a cab, `floor` is the storey the cab is PASSING while it moves (its
+        // storey at rest), `target` where it is going, `dir` which way (+1 up, -1 down, 0 at rest). At a door,
+        // `cabFloor` is the storey that hoistway's cab is passing, `target` and `dir` its trip.
+        int target = 0;
+        int dir = 0;
+        int cabFloor = 0;
         Real speed = 0;     // the rider's cab, m/s (the hum's level)
         Vec3 anchor{0, 0, 0};   // where the interaction marker goes: the door you stand at, or your cab's door
     };

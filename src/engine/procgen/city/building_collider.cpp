@@ -97,7 +97,8 @@ void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
 
 bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const Poly2& plan,
                          const BuildingParams& params, Real baseY, Real groundY,
-                         const std::vector<DoorSpec>& doors, const std::vector<Poly2>& roofHoles) {
+                         const std::vector<DoorSpec>& doors, const std::vector<Poly2>& deckHoles,
+                         const std::vector<Poly2>& roofHoles) {
     const std::vector<ColliderTier> tiers = colliderTiers(plan, params);
     if (tiers.empty() || plan.size() < 3) return false;
     auto quad = [&](const Vec2& a, const Vec2& b, Real y0, Real y1) {
@@ -112,7 +113,7 @@ bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const P
     for (std::size_t t = 0; t < tiers.size(); ++t) {
         const ColliderTier& ct = tiers[t];
         const bool last = t + 1 == tiers.size();
-        const std::vector<Poly2>& holes = last ? roofHoles : std::vector<Poly2>{};
+        const std::vector<Poly2>& holes = last ? roofHoles : deckHoles;
         if (ct.plan.size() < 3) continue;
         if (t == 0) {
             // The ground tier: the prism as before -- door notches, floor cap, threshold steps -- capped at ITS deck.

@@ -453,6 +453,14 @@ TEST_CASE(character_climbs_the_fire_escape_from_the_yard) {
     p.fireEscape = true;
     RenderMesh collider;
     growInterior(plan, p, 0.0, &collider);
+    // The escape's own collider (fireEscapeCollider): the ladder system's body round the player, resident or
+    // not, since 2026-10-13 -- the interior's collider no longer carries it. Merged here as the two bodies meet.
+    {
+        const RenderMesh escape = fireEscapeCollider(plan, p, 0.0);
+        const uint32_t s0 = static_cast<uint32_t>(collider.vertices.size());
+        collider.vertices.insert(collider.vertices.end(), escape.vertices.begin(), escape.vertices.end());
+        for (uint32_t ix : escape.indices) collider.indices.push_back(s0 + ix);
+    }
     const std::vector<StoreyPlan> st = storeyPlans(plan, p);
     // The escape on the rear (z = -9) face: the back door takes the end bay (x -6..-2), the stair the rest --
     // flights from x -1.8 to 4.9 in the outer strip (z -9.85..-10.55), landings along the wall (z -9.05..-9.85).

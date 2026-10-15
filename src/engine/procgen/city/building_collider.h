@@ -34,12 +34,15 @@ void appendBuildingPrism(std::vector<Vec3>& vertices,
 
 // THE TIERED COLLIDER (architectural toolkit, issue #105, step 1): one prism per tier of a flat-roofed
 // building (shape_grammar.h colliderTiers), the ground tier with its door notches and floor cap, every tier
-// capped at its own roof deck with a parapet ring standing on it, and the top deck cut through by `roofHoles`
-// (the core's stair shafts: the way up onto the roof). Returns false, appending nothing, when the building has
-// no tiers (a pitched roof): the caller keeps the one prism.
+// capped at its own roof deck with a parapet ring standing on it. Each setback deck is cut through by
+// `deckHoles` (the core's every shaft: the stairs and the hoistways climb on through it -- a cap across them
+// is a plane a rider's capsule meets while the kinematic cab goes on without them) and the top deck by
+// `roofHoles` (the stair shafts only: the way up onto the roof; the hoistways end under it). Returns false,
+// appending nothing, when the building has no tiers (a pitched roof): the caller keeps the one prism.
 bool appendBuildingTiers(std::vector<Vec3>& vertices, std::vector<uint32_t>& indices,
                          const Poly2& plan, const BuildingParams& params, Real baseY, Real groundY,
-                         const std::vector<DoorSpec>& doors, const std::vector<Poly2>& roofHoles);
+                         const std::vector<DoorSpec>& doors, const std::vector<Poly2>& deckHoles,
+                         const std::vector<Poly2>& roofHoles);
 
 // Append the reversed copy of every triangle currently in `indices`.
 void mirrorTriangles(std::vector<uint32_t>& indices);

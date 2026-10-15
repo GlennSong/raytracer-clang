@@ -122,29 +122,36 @@ TEST_CASE(tiered_collider_caps_every_deck_and_opens_over_the_stairs) {
         CHECK(std::fabs(tiers[i].y0 - tiers[i - 1].y1) < 1e-9);
         CHECK(area(tiers[i].plan) < area(tiers[i - 1].plan));
     }
-    // The collider: a vertex on every deck, and the top deck's cap misses the stair shafts' centres.
+    // The collider: a vertex on every deck; every setback deck's cap misses the stair AND hoistway shafts'
+    // centres (the cab and the flights climb on through it), the top deck's the stairs' (the hoistways end
+    // under the roof, which stays solid over them).
     const CorePlan core = coreFor(plan, s, entranceEdgeFor(plan, s));
     CHECK(core.valid);
     std::vector<Vec3> V;
     std::vector<uint32_t> I;
     const Real baseY = 3.0;
-    CHECK(appendBuildingTiers(V, I, plan, s, baseY, baseY - 0.2, {}, coreRoofHoles(core)));
+    CHECK(appendBuildingTiers(V, I, plan, s, baseY, baseY - 0.2, {}, coreDeckHoles(core), coreRoofHoles(core)));
     for (const ColliderTier& t : tiers) {
         bool onDeck = false;
         for (const Vec3& v : V) if (std::fabs(v.y - (baseY + t.y1)) < 1e-6) onDeck = true;
         CHECK(onDeck);
     }
-    const Real topY = baseY + tiers.back().y1;
-    for (const CoreStair& st : core.stairs) {
-        const Vec2 c = st.shaft.frame.toWorld({st.shaft.width * 0.5, st.shaft.depth * 0.5});
-        bool covered = false;
+    auto coveredAt = [&](Real y, const Vec2& c) {
         for (std::size_t i = 0; i + 2 < I.size(); i += 3) {
             const Vec3& a = V[I[i]]; const Vec3& b = V[I[i + 1]]; const Vec3& d = V[I[i + 2]];
-            if (std::fabs(a.y - topY) > 1e-6 || std::fabs(b.y - topY) > 1e-6 || std::fabs(d.y - topY) > 1e-6) continue;
+            if (std::fabs(a.y - y) > 1e-6 || std::fabs(b.y - y) > 1e-6 || std::fabs(d.y - y) > 1e-6) continue;
             const Poly2 tri = {{a.x, a.z}, {b.x, b.z}, {d.x, d.z}};
-            if (pointInPolygon(tri, c)) covered = true;
+            if (pointInPolygon(tri, c)) return true;
         }
-        CHECK(!covered);
+        return false;
+    };
+    auto centreOf = [](const CoreShaft& sh) { return sh.frame.toWorld({sh.width * 0.5, sh.depth * 0.5}); };
+    for (std::size_t t = 0; t < tiers.size(); ++t) {
+        const Real y = baseY + tiers[t].y1;
+        const bool last = t + 1 == tiers.size();
+        for (const CoreStair& st : core.stairs) CHECK(!coveredAt(y, centreOf(st.shaft)));
+        for (const CoreShaft& hw : core.hoistways) CHECK(coveredAt(y, centreOf(hw)) == last);
+        if (core.hasService) CHECK(coveredAt(y, centreOf(core.service)));   // the service block is roofed at every deck
     }
     // A pitched roof has no tiers: the caller keeps the one prism.
     BuildingParams g = p;

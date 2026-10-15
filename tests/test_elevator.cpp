@@ -7,6 +7,7 @@
 #include "../src/engine/components.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/physics/physics_world.h"
+#include "../src/engine/procgen/city/building_collider.h"
 #include "../src/engine/procgen/city/building_records.h"
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/systems/elevator_system.h"
@@ -564,4 +565,126 @@ TEST_CASE(a_hall_call_brings_the_cab_in_front_of_it_and_chimes) {
     CHECK(std::fabs(sys.cabY(0, 2) - y4) < 1e-6);   // cab 2 came
     CHECK(sys.cabY(0, 0) < y4 - 1.0);               // cab 0 stayed below
     CHECK(sys.cabY(0, 1) < y4 - 1.0);
+}
+
+// THE DECKS OVER THE SHAFTS (Glenn's walk of toolkit_lab, 2026-10-15: "the elevator threw me off before it got
+// to my floor. It looks like it disappeared"): the tiered collider capped a podium's deck across its whole plan,
+// hoistways and stair shafts included -- a solid plane 10 cm under the first tower storey's floor. The rider's
+// capsule met it; the kinematic cab went on up without them. A podium tower like the lab's, its exterior collider
+// as the level loader builds it, the lobby window's interior, and a walker who calls a cab, boards it, picks the
+// top floor and stands still: the cab carries them through every setback deck to the top.
+TEST_CASE(character_rides_the_cab_through_the_podium_deck) {
+    World world;
+    PhysicsWorld phys;
+    phys.initialize();
+    StubUploader uploader;
+    AssetManager assets(uploader);
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    CityBuildings cb;
+    BuildingRecord r;
+    r.plan = plan;
+    r.baseY = 0;
+    r.groundY = -0.45;
+    r.params.floors = 22;
+    r.params.curtainWall = true;
+    r.params.walkableGround = true;
+    r.params.openDoorway = true;
+    r.params.seed = 5;
+    // The lot pass's podium tower (city_lots.cpp): the street wall's envelope with no first setback and no
+    // steps, the podium its base, the tower its shaft, tiers every six floors up a tall shaft.
+    r.params.envelope = BuildingParams::Envelope::StreetWallSetback;
+    r.params.baseFloors = 3;
+    r.params.setback1 = 0;
+    r.params.stepFloors = 0;
+    r.params.stepDepth = 0;
+    r.params.towerFloor = 3;
+    r.params.towerFrac = 0.4;
+    r.params.setbackFloors = 6;
+    r.params.setbackEvery = 1.5;
+    r.height = r.params.groundHeight + 22 * r.params.floorHeight;
+    r.doors.push_back({Vec2(20, 40), Vec2(0, 1), 2.0, 2.7});
+    r.enterable = true;
+    cb.records.push_back(r);
+    cb.buildIndex();
+    world.add<CityBuildings>(world.create(), std::move(cb));
+    const CorePlan core = coreFor(plan, r.params, entranceEdgeFor(plan, r.params));
+    CHECK(core.valid);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, r.params);
+    const std::vector<ColliderTier> tiers = colliderTiers(plan, r.params);
+    CHECK(tiers.size() >= 2);
+    const int n = static_cast<int>(storeys.size());
+    CHECK(n == 23);
+
+    // The street, the exterior (the tiered collider, two-sided as the loader makes it), the lobby window's interior.
+    phys.addBox(Vec3(60, 0.5, 60), Vec3(20, -0.45, 20), Quat::identity(), BodyMotion::Static);
+    {
+        std::vector<Vec3> V;
+        std::vector<uint32_t> I;
+        CHECK(appendBuildingTiers(V, I, plan, r.params, 0.0, -0.45, r.doors, coreDeckHoles(core),
+                                  coreRoofHoles(core)));
+        mirrorTriangles(I);
+        phys.addMesh(V, I, Vec3(), 0.85);
+    }
+    {
+        RenderMesh collider;
+        growInterior(plan, r.params, 0.0, &collider, 0, 3);
+        std::vector<Vec3> verts;
+        for (const Vertex& v : collider.vertices) verts.push_back(v.position);
+        std::vector<uint32_t> idx = collider.indices;
+        mirrorTriangles(idx);
+        phys.addMesh(verts, idx, Vec3(), 0.85);
+    }
+
+    // The walker in the lobby, in front of hoistway 0's door.
+    const CoreShaft& hw = core.hoistways[0];
+    auto at = [&](Real u, Real v) { const Vec2 w = hw.frame.toWorld({u, v}); return Vec3(w.x, 0, w.y); };
+    const Vec3 start = at(hw.doorX, -1.5);
+    CharacterId c = phys.addCharacter(kPlayerHalf, kPlayerRad, Vec3(start.x, 0.05 + kPlayerFeet, start.z));
+    phys.optimizeBroadPhase();
+    const Real dt = 1.0 / 60.0;
+    ElevatorSystem sys(nullptr);
+    auto stepAll = [&](const Vec3& vel, bool call, int pick) {
+        phys.moveCharacter(c, vel, dt);
+        sys.step(world, &phys, assets, phys.characterPosition(c), dt, call, pick, kPlayerFeet);
+        phys.update(dt);
+    };
+    auto toward = [&](const Vec3& target) {
+        const Vec3 q = phys.characterPosition(c);
+        const Real dx = target.x - q.x, dz = target.z - q.z;
+        const Real len = std::sqrt(dx * dx + dz * dz);
+        return len < 0.05 ? Vec3() : Vec3(dx / len * 1.2, 0, dz / len * 1.2);
+    };
+    for (int i = 0; i < 30; ++i) stepAll(Vec3(), false, 0);
+    // Call, wait for the doors, board.
+    stepAll(Vec3(), true, 0);
+    CHECK(sys.status().atDoor);
+    for (int i = 0; i < 100; ++i) stepAll(Vec3(), false, 0);
+    const Vec3 inCab = at(hw.width * 0.5, 1.0);
+    for (int i = 0; i < 240; ++i) stepAll(toward(inCab), false, 0);
+    CHECK(sys.status().inCab);
+    // The top floor, and stand still.
+    stepAll(Vec3(), false, 100000);
+    CHECK(sys.status().selected == n - 1);
+    stepAll(Vec3(), true, 0);
+    const Real target = storeys.back().y0 + 0.05;
+    const Real deckY = tiers.front().y1;   // the podium's deck: the first plane the ride crosses
+    Real maxGap = 0;   // the rider's feet off the cab's floor, at worst
+    bool arrived = false;
+    int steps = 0;
+    for (; steps < 60 * 60; ++steps) {
+        stepAll(Vec3(), false, 0);
+        const Real feet = phys.characterPosition(c).y - kPlayerFeet;
+        maxGap = std::max(maxGap, std::fabs(feet - sys.cabY(0, 0)));
+        if (std::fabs(sys.cabY(0, 0) - target) < 1e-6 && !sys.status().moving) { arrived = true; break; }
+    }
+    const Vec3 q = phys.characterPosition(c);
+    std::printf("    [deck-ride] arrived=%d after %d steps: walker y=%.2f cab y=%.2f (top slab %.2f, podium deck %.2f, "
+                "worst gap %.2f)\n", arrived ? 1 : 0, steps, q.y, sys.cabY(0, 0), target, deckY, maxGap);
+    CHECK(arrived);
+    CHECK(q.y > deckY);                                       // carried through the podium's deck...
+    CHECK(std::fabs(q.y - (target + kPlayerFeet)) < 0.35);    // ...to the top, riding ON the cab
+    CHECK(maxGap < 0.6);                                      // never left behind on the way
+    CHECK(sys.status().inCab);
+    CHECK(sys.status().floor == n - 1);
+    phys.shutdown();
 }

@@ -207,9 +207,10 @@ void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
     }
     {   // `elevator?` on the control channel
         char buf[160];
-        std::snprintf(buf, sizeof buf, "inCab=%d atDoor=%d moving=%d floor=%d selected=%d floors=%d banks=%zu",
+        std::snprintf(buf, sizeof buf,
+                      "inCab=%d atDoor=%d moving=%d floor=%d selected=%d floors=%d banks=%zu target=%d dir=%d cabFloor=%d",
                       status_.inCab ? 1 : 0, status_.atDoor ? 1 : 0, status_.moving ? 1 : 0, status_.floor,
-                      status_.selected, status_.floors, banks_.size());
+                      status_.selected, status_.floors, banks_.size(), status_.target, status_.dir, status_.cabFloor);
         ctx.settings.setString("elevator.status", buf);
     }
     callEdge_ = false;
@@ -645,14 +646,31 @@ void ElevatorSystem::step(World& world, PhysicsWorld* phys, AssetManager& assets
     }
     status_.floors = n;
     status_.selected = b.selected;
+    auto passing = [&](const Cab& cab) {   // the storey a moving cab's floor is nearest: the indicator's number
+        int k = 0;
+        for (std::size_t s = 1; s < b.storeyY.size(); ++s)
+            if (std::fabs(b.storeyY[s] - cab.y) < std::fabs(b.storeyY[static_cast<std::size_t>(k)] - cab.y))
+                k = static_cast<int>(s);
+        return k;
+    };
     if (inCab >= 0) {
         const Cab& cab = b.cabs[static_cast<std::size_t>(inCab)];
-        status_.floor = cab.floor;
         status_.moving = cab.state == CabState::Moving;
+        status_.floor = status_.moving ? passing(cab) : cab.floor;
+        status_.cabFloor = status_.floor;
+        status_.target = cab.target;
+        status_.dir = status_.moving ? cab.dir : 0;
         status_.speed = cab.vel;
     } else {
         status_.floor = f;
         status_.moving = anyMoving;
+        if (atDoor >= 0) {
+            const Cab& cab = b.cabs[static_cast<std::size_t>(atDoor)];
+            const bool travelling = cab.state == CabState::Moving;
+            status_.cabFloor = travelling ? passing(cab) : cab.floor;
+            status_.target = cab.target;
+            status_.dir = travelling ? cab.dir : 0;
+        }
     }
 }
 
@@ -666,7 +684,7 @@ void ElevatorSystem::render(FrameContext& ctx) {
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
     if (status_.inCab) {
         ImGui::Text("ELEVATOR   floor %d of %d", status_.floor, status_.floors - 1);
-        if (status_.moving) ImGui::Text("moving to %d", status_.selected);
+        if (status_.moving) ImGui::Text("going %s to floor %d", status_.dir < 0 ? "down" : "up", status_.target);
         else {
             ImGui::Text("floor %d", status_.selected);
             if (ctx.actions.gamepadInUse())
@@ -676,6 +694,12 @@ void ElevatorSystem::render(FrameContext& ctx) {
         }
     } else {
         ImGui::Text("ELEVATOR   floor %d", status_.floor);
+        if (status_.dir != 0) {   // the cab you called, on its way: where it is and whether it is yours yet
+            const bool coming = status_.dir > 0 ? status_.floor > status_.cabFloor : status_.floor < status_.cabFloor;
+            ImGui::Text("cab at %d, %s %s", status_.cabFloor, coming ? "coming" : "going", status_.dir < 0 ? "down" : "up");
+        } else if (status_.cabFloor != status_.floor) {
+            ImGui::Text("cab at %d", status_.cabFloor);
+        }
     }
     ImGui::End();
 #else

@@ -5977,12 +5977,18 @@ bool LevelLoader::load(const std::string& path,
                     bool tiered = false;
                     if (!garage && units.size() == 1) {
                         const engine::BuildingUnit& u = units.front();
-                        std::vector<engine::Poly2> roofHoles;
-                        if (engine::coreReachesRoof(u.params))
-                            roofHoles = engine::coreRoofHoles(
-                                engine::coreFor(u.plan, u.params, engine::entranceEdgeFor(u.plan, u.params)));
+                        // The core's shafts cut every setback deck; the stairs' shafts cut the roof where
+                        // the core reaches it.
+                        std::vector<engine::Poly2> deckHoles, roofHoles;
+                        if (engine::wantsCore(u.params)) {
+                            const engine::CorePlan core =
+                                engine::coreFor(u.plan, u.params, engine::entranceEdgeFor(u.plan, u.params));
+                            deckHoles = engine::coreDeckHoles(core);
+                            if (engine::coreReachesRoof(u.params)) roofHoles = engine::coreRoofHoles(core);
+                        }
                         tiered = engine::appendBuildingTiers(buildingsMc.vertices, buildingsMc.indices, u.plan,
-                                                             u.params, u.baseY, lb.groundY, doorCuts, roofHoles);
+                                                             u.params, u.baseY, lb.groundY, doorCuts, deckHoles,
+                                                             roofHoles);
                     }
                     if (!garage && !tiered)
                     engine::appendBuildingPrism(

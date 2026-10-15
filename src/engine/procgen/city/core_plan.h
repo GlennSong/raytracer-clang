@@ -125,6 +125,10 @@ constexpr Real kBulkheadH = 2.9;
 bool coreReachesRoof(const BuildingParams& params);
 // The roof slab's holes: the stairs' shafts (the top flights rise through them).
 std::vector<Poly2> coreRoofHoles(const CorePlan& core);
+// A setback deck's holes: every shaft of the core -- the stairs AND the hoistways -- where the core climbs on
+// through the deck. A collider that caps a deck across the whole plan puts a plane through the shafts (Glenn's
+// walk of toolkit_lab, 2026-10-15: "the elevator threw me off before it got to my floor").
+std::vector<Poly2> coreDeckHoles(const CorePlan& core);
 // The bulkhead on the deck at `deckY` (world): the outer ring with the stair doors only, the lid, the stairs' shaft
 // skins inside it, and each stair's roof landing with the well guarded. `walls` false emits colliders only (the
 // exterior mesh carries the walls, as emitCoreShaftWalls does for the storeys).
