@@ -1001,6 +1001,39 @@ TEST_CASE(procgen_script_reads_a_space_graph) {
     CHECK(vm.getGlobalNumber("entrance_is_hall", v)); CHECK(v == 1);
 }
 
+TEST_CASE(procgen_script_reads_a_circulation_plan) {
+    // THE CIRCULATION from Lua (circulation.h, issue #105 step 3): a tower's shafts, its one bank and one zone as
+    // the core preset lays them out -- the same plan the elevator and the space graph read.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        c = building.circulation{ plan = {{-20,-20},{20,-20},{20,20},{-20,20}}, recipe = 'glass_tower', seed = 5, coreness = 0.8 }
+        valid = c.valid and 1 or 0
+        n_shafts, n_banks, n_zones, sky = #c.shafts, #c.banks, #c.zones, c.sky_lobby
+        stairs, lifts, service, doors = 0, 0, 0, 0
+        for _, s in ipairs(c.shafts) do
+            if s.kind == 'stair' then stairs = stairs + 1 elseif s.kind == 'hoistway' then lifts = lifts + 1 elseif s.kind == 'service' then service = service + 1 end
+            if s.door_w > 0 then doors = doors + 1 end
+        end
+        bank_lifts = #c.banks[1].shafts
+        zone_top = c.zones[1].top
+        inside = (c.shafts[1].x0 >= c.x0 - 1e-6 and c.shafts[1].x1 <= c.x1 + 1e-6) and 1 or 0
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("valid", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("stairs", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("lifts", v)); CHECK(v >= 1);
+    double lifts = v;
+    CHECK(vm.getGlobalNumber("service", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("doors", v)); CHECK(v == 2 + lifts);
+    CHECK(vm.getGlobalNumber("n_banks", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("bank_lifts", v)); CHECK(v == lifts);
+    CHECK(vm.getGlobalNumber("n_zones", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("zone_top", v)); CHECK(v >= 7);
+    CHECK(vm.getGlobalNumber("sky", v)); CHECK(v == 0);
+    CHECK(vm.getGlobalNumber("inside", v)); CHECK(v == 1);
+}
+
 TEST_CASE(procgen_script_draws_a_section) {
     // THE SECTION from Lua (section.h, issue #105 step 2a): a rectangle, the drum's n-gon, a lot, an inset.
     ScriptVM vm;

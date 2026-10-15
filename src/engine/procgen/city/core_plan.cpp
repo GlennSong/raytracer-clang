@@ -1,4 +1,5 @@
 #include "core_plan.h"
+#include "circulation.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
 #include <cmath>
@@ -6,19 +7,8 @@
 namespace engine {
 
 namespace {
-constexpr Real kWall = 0.15;       // shaft wall thickness
-constexpr Real kHoistW = 2.4;      // hoistway along the bank
-constexpr Real kHoistD = 2.6;      // hoistway into the core
-constexpr Real kStairW = 2.6;      // two 1.2 m flights + the 0.2 m spine
-constexpr Real kLanding = 1.5;
-constexpr Real kCorridor = 2.2;    // ring the core needs inside every tier: 1.5 m clear past the inner wall skin
-// THE ENGINE'S OWN CLEAR OPENING, not a local literal. metro_v2_test's player
-// capsule is halfHeight 0.8 + radius 0.3 = 2.2 m tall, so a 2.1 m core door
-// had to be CROUCHED through while the building's own entrance (2.7 m) did
-// not (Glenn, 2026-09-16: "the cabs are too short to enter... I have to duck
-// and crawl"). Every lab level uses a 1.4 m capsule, which is why no test
-// and no walk of mine ever hit it.
-constexpr Real kDoorH = human::DOOR_HEIGHT;
+// The dimensions are the preset's (circulation.h): the layout lives there, the drawing here.
+constexpr Real kWall = kShaftWall;
 constexpr Real kSlab = 0.25;       // slab thickness (growInterior's)
 
 Poly2 rectOf(const SiteFrame& f, Real u0, Real v0, Real u1, Real v1) {
@@ -50,104 +40,14 @@ bool wantsCore(const BuildingParams& params) {
     return params.floors >= 4;
 }
 
-CorePlan corePlan(const Poly2& planIn, const std::vector<MassTier>& tiers,
-                  const BuildingParams& params, std::size_t entranceEdge) {
-    CorePlan cp;
-    Poly2 base = planIn;
-    if (base.size() < 3 || tiers.empty()) return cp;
-    ensureCCW(base);
-    const Poly2& top = tiers.back().plan;   // the smallest tier: every tier below contains it
-    if (top.size() < 3) return cp;
-    const OBB2 ob = orientedBoundingBox(top);
-    const Vec2 centre = ob.center;
-    // The lobby is toward the entrance edge: the door wall faces it.
-    const std::size_t e = entranceEdge % base.size();
-    Vec2 toDoor = (base[e] + base[(e + 1) % base.size()]) * 0.5 - centre;
-    if (toDoor.length() < 1e-6) toDoor = Vec2(0, -1);
-    toDoor = normalize(toDoor);
-    const Real runMax = halfFlightRun(std::max(params.groundHeight, params.floorHeight));
-    const Real depth = kLanding + runMax + kLanding;
-    // The core plus its corridor ring must lie inside the base and every
-    // tier: sampled along the ring's EDGES (a metre apart, corners included),
-    // not just its corners — an L-shaped or notched plan passes the corner
-    // test with a notch cutting straight through the bank.
-    auto fitsAll = [&](const SiteFrame& f, Real L, Real D) {
-        const Real m = kCorridor;
-        const Vec2 c[4] = {{-m, -m}, {L + m, -m}, {L + m, D + m}, {-m, D + m}};
-        std::vector<Vec2> samples;
-        for (int i = 0; i < 4; ++i) {
-            const Vec2 a = c[i], b = c[(i + 1) % 4];
-            const int n = std::max(1, static_cast<int>(std::ceil((b - a).length())));
-            for (int j = 0; j < n; ++j) samples.push_back(f.toWorld(a + (b - a) * (static_cast<Real>(j) / n)));
-        }
-        for (const Vec2& q : samples)
-            if (!pointInPolygon(base, q)) return false;
-        for (const MassTier& t : tiers) {
-            if (t.plan.size() < 3) return false;
-            for (const Vec2& q : samples)
-                if (!pointInPolygon(t.plan, q)) return false;
-        }
-        return true;
-    };
-    for (int n = hoistwaysFor(params.floors); n >= 1; --n) {
-        const Real L = kStairW + kWall + n * kHoistW + (n - 1) * kWall + kWall + kStairW;
-        for (int orient = 0; orient < 2; ++orient) {
-            const Vec2 au = ob.axis[orient];
-            const Vec2 av0 = ob.axis[1 - orient];
-            const Vec2 av = dot(av0, toDoor) > 0 ? av0 * -1.0 : av0;   // v points AWAY from the door
-            SiteFrame f;
-            f.u = au;
-            f.v = av;
-            f.origin = centre - au * (L * 0.5) - av * (depth * 0.5);
-            if (!fitsAll(f, L, depth)) continue;
-            cp.valid = true;
-            cp.frame = f;
-            cp.length = L;
-            cp.depth = depth;
-            auto shaftAt = [&](Real u0, Real v0, Real w, Real d) {
-                CoreShaft s;
-                s.frame.origin = f.toWorld({u0, v0});
-                s.frame.u = f.u;
-                s.frame.v = f.v;
-                s.width = w;
-                s.depth = d;
-                return s;
-            };
-            auto stairAt = [&](Real u0) {
-                CoreStair st;
-                st.shaft = shaftAt(u0, 0, kStairW, depth);
-                st.shaft.doorX = kStairW * 0.5;
-                st.shaft.doorWidth = 0.95;
-                st.shaft.doorHeight = kDoorH;
-                st.landing = kLanding;
-                return st;
-            };
-            cp.stairs.push_back(stairAt(0));
-            Real u = kStairW + kWall;
-            for (int i = 0; i < n; ++i) {
-                CoreShaft h = shaftAt(u, 0, kHoistW, kHoistD);
-                h.doorX = kHoistW * 0.5;
-                h.doorWidth = 1.1;
-                h.doorHeight = kDoorH;
-                cp.hoistways.push_back(h);
-                u += kHoistW + kWall;
-            }
-            cp.stairs.push_back(stairAt(u));
-            const Real sv0 = kHoistD + kWall;
-            if (depth - sv0 > 1.0) {
-                cp.service = shaftAt(kStairW + kWall, sv0, n * kHoistW + (n - 1) * kWall, depth - sv0);
-                cp.service.doorWidth = 0;
-                cp.hasService = true;
-            }
-            return cp;
-        }
-    }
-    return cp;
+// THE CORE IS THE PRESET (issue #105 step 3a): corePreset lays the shafts out, this reads them back. Every
+// cored building is byte-identical to the layout that lived here until 2026-10-15.
+CorePlan corePlan(const Poly2& plan, const std::vector<MassTier>& tiers, const BuildingParams& params, std::size_t entranceEdge) {
+    return asCorePlan(corePreset(plan, tiers, params, entranceEdge));
 }
 
 CorePlan coreFor(const Poly2& plan, const BuildingParams& params, std::size_t entranceEdge) {
-    if (!wantsCore(params) || plan.size() < 3) return {};
-    return corePlan(plan, massStack(plan, params), params, entranceEdge);
+    return asCorePlan(circulationFor(plan, params, entranceEdge));
 }
 
 std::vector<Poly2> coreSlabHoles(const CorePlan& core) {

@@ -16,6 +16,7 @@
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/city/space_graph.h"
+#include "../procgen/city/circulation.h"
 #include "../procgen/city/section.h"
 #include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
@@ -1404,6 +1405,72 @@ int l_building_space_graph(lua_State* L) {
         lua_pushlstring(L, svg.data(), svg.size());
         lua_setfield(L, -2, "svg");
     }
+    return 1;
+}
+
+// building.circulation{ plan = {{x,z}, ...}, <params> | recipe = "name", seed = n, coreness = c }
+//   -> { valid, x0, z0, x1, z1 (the block), sky_lobby (0 = none),
+//        shafts = { {kind, x0, z0, x1, z1, storey, top, door_x, door_z, door_w, bank (0 = none)} ... },
+//        banks = { {shafts = {indices}, lobby_edge} ... }, zones = { {bank, storey, top} ... } }
+// THE CIRCULATION of a building (circulation.h, issue #105 step 3): its shafts, banks and zones as the preset lays
+// them out -- the same plan the core emitters, the elevator and the space graph read. Indices are 1-based.
+int l_building_circulation(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.circulation: `plan` needs three or more points");
+    const CirculationPlan c = circulationFor(plan, p, entranceEdgeFor(plan, p));
+    lua_newtable(L);
+    lua_pushboolean(L, c.valid); lua_setfield(L, -2, "valid");
+    auto box = [&](const Poly2& poly) {
+        Vec2 lo(0, 0), hi(0, 0);
+        if (poly.size() >= 3) bounds(poly, lo, hi);
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+    };
+    if (c.valid) box(c.rect());
+    lua_pushinteger(L, c.skyLobby + 1); lua_setfield(L, -2, "sky_lobby");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < c.shafts.size(); ++i) {
+        const Shaft& s = c.shafts[i];
+        static const char* const kKind[] = {"hoistway", "stair", "service", "scenic", "escalator", "ramp", "vomitory"};
+        lua_newtable(L);
+        lua_pushstring(L, kKind[static_cast<int>(s.kind)]); lua_setfield(L, -2, "kind");
+        box(s.rect());
+        lua_pushinteger(L, s.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, s.k1); lua_setfield(L, -2, "top");
+        const Vec2 df = s.doorFoot();
+        lua_pushnumber(L, df.x); lua_setfield(L, -2, "door_x");
+        lua_pushnumber(L, df.y); lua_setfield(L, -2, "door_z");
+        lua_pushnumber(L, s.doorW); lua_setfield(L, -2, "door_w");
+        lua_pushinteger(L, s.bank + 1); lua_setfield(L, -2, "bank");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "shafts");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < c.banks.size(); ++i) {
+        const Bank& b = c.banks[i];
+        lua_newtable(L);
+        lua_newtable(L);
+        for (std::size_t j = 0; j < b.shafts.size(); ++j) { lua_pushinteger(L, b.shafts[j] + 1); lua_rawseti(L, -2, static_cast<lua_Integer>(j + 1)); }
+        lua_setfield(L, -2, "shafts");
+        lua_pushinteger(L, static_cast<lua_Integer>(b.lobbyEdge) + 1); lua_setfield(L, -2, "lobby_edge");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "banks");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < c.zones.size(); ++i) {
+        const Zone& z = c.zones[i];
+        lua_newtable(L);
+        lua_pushinteger(L, z.bank + 1); lua_setfield(L, -2, "bank");
+        lua_pushinteger(L, z.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, z.k1); lua_setfield(L, -2, "top");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "zones");
     return 1;
 }
 
@@ -3867,6 +3934,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"grow_plan_parts", l_building_grow_plan_parts},
         {"space_graph", l_building_space_graph},
         {"section", l_building_section},
+        {"circulation", l_building_circulation},
         {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},

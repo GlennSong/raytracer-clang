@@ -1,4 +1,5 @@
 #include "space_graph.h"
+#include "circulation.h"
 
 #include "core_plan.h"
 #include <algorithm>
@@ -186,16 +187,15 @@ Real distToOutline(const Vec2& p, const Poly2& poly) {
     return best;
 }
 
-// The flight's riser and tread as the core climbs (core_plan.h).
-void stepped(FloorSurface& f, Real storeyH, Real tread, const Vec2& up) {
+}  // namespace
+
+void steppedFloor(FloorSurface& f, Real storeyH, Real tread, const Vec2& up) {
     f.kind = FloorSurface::Kind::Stepped;
     const int risers = std::max(1, halfFlightRisers(storeyH));
     f.rise = storeyH * 0.5 / risers;
     f.run = tread;
     f.grade = up;
 }
-
-}  // namespace
 
 SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real baseY, const std::vector<RoofItem>* roof) {
     SpaceGraph g;
@@ -207,7 +207,8 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
     const std::size_t entranceEdge = entranceEdgeFor(plan, params);
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
     const std::vector<StairRun> runs = stairRuns(plan, params, entranceEdge, storeys);
-    const CorePlan core = coreFor(plan, params, entranceEdge);
+    CirculationPlan circ = circulationFor(plan, params, entranceEdge);
+    const CorePlan core = asCorePlan(circ);
     const int nS = static_cast<int>(storeys.size());
     g.storeys = nS;
     if (nS == 0) { g.modelled = false; return g; }
@@ -442,45 +443,7 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
                 }
             }
         }
-        const Real groundY = baseY + storeys.front().y0 + 0.05;
-        auto doorSpan = [&](const CoreShaft& sh, Vec2& p0, Vec2& p1) {
-            p0 = sh.frame.toWorld({sh.doorX - sh.doorWidth * 0.5, 0});
-            p1 = sh.frame.toWorld({sh.doorX + sh.doorWidth * 0.5, 0});
-        };
-        for (const CoreStair& s : core.stairs) {
-            Cell c;
-            c.kind = CellKind::Stair;
-            c.plan = s.shaft.rect();
-            c.floor.y0 = groundY;
-            c.floor.origin = s.shaft.frame.toWorld({s.shaft.width * 0.5, s.landing});
-            stepped(c.floor, storeys.front().h, s.tread, s.shaft.frame.v);
-            c.height = (baseY + top.y0 + top.h) - groundY + (roofExit ? kBulkheadH : 0.0);
-            c.freeArea = area(c.plan);
-            c.k0 = 0;
-            c.k1 = roofExit ? nS : nS - 1;
-            c.tier = 0;
-            const int sc = add(c);
-            Vec2 p0, p1;
-            doorSpan(s.shaft, p0, p1);
-            for (int k = 0; k < nS; ++k) doorPortal(hallOf[static_cast<std::size_t>(k)], sc, Portal::Kind::Stair, p0, p1, s.shaft.doorHeight, k);
-            if (roofExit) doorPortal(sc, g.roof, Portal::Kind::Stair, p0, p1, s.shaft.doorHeight, nS);
-        }
-        for (const CoreShaft& hw : core.hoistways) {
-            Cell c;
-            c.kind = CellKind::Lift;
-            c.plan = hw.rect();
-            c.floor.y0 = groundY;
-            c.floor.origin = hw.frame.toWorld({hw.width * 0.5, hw.depth * 0.5});
-            c.height = (baseY + top.y0 + top.h) - groundY;
-            c.freeArea = area(c.plan);
-            c.k0 = 0;
-            c.k1 = nS - 1;
-            c.tier = 0;
-            const int lc = add(c);
-            Vec2 p0, p1;
-            doorSpan(hw, p0, p1);
-            for (int k = 0; k < nS; ++k) doorPortal(hallOf[static_cast<std::size_t>(k)], lc, Portal::Kind::Lift, p0, p1, hw.doorHeight, k);
-        }
+        circ.addTo(g, storeys, baseY, hallOf, roofExit);
     } else if (nS > 1) {
         // THE STRAIGHT STAIR (ADR-0080), run by run (stairRuns): hall to hall up each run's well, the next run's
         // first flight leaving the storey the last arrived at.

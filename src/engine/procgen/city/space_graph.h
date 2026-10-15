@@ -29,6 +29,8 @@ struct FloorSurface {
     Real rise = 0, run = 0;   // Stepped: one row (a flight's riser and tread), climbing along `grade`'s direction
     Real yAt(const Vec2& p) const;
 };
+// A flight's riser and tread as a stair climbs (halfFlightRisers): the surface of a stair shaft cell.
+void steppedFloor(FloorSurface& f, Real storeyH, Real tread, const Vec2& up);
 
 enum class CellKind : uint8_t { Hall, Room, Stair, Lift, Roof, Pad };   // Pad: a helipad, a floor over the roof deck
 
