@@ -69,8 +69,10 @@ struct BuildingRecipe {
                      // 12-30 m back from the avenue, the front of the lot a
                      // paved PLAZA with pools, planters and benches
                      // (skyscrapers v2, ADR-0086 point 5)
-        Section      // THE TOOLKIT'S SECTION (section.h, issue #105): the plan is `section` fitted to the lot's
+        Section,     // THE TOOLKIT'S SECTION (section.h, issue #105): the plan is `section` fitted to the lot's
                      // rectangle, shrink-to-fit like the drum -- rounded corners, a stadium, and the shapes to come
+        Complex      // THE TOOLKIT'S COMPLEX (cells.h, issue #105 step 5): cells on one frame sharing faces --
+                     // `complex` says which (a bundle of tubes); each cell is grown as its own unit
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow
@@ -89,6 +91,12 @@ struct BuildingRecipe {
         enum class Kind : uint8_t { None, Rounded, Stadium } kind = Kind::None;
         Real radius = 0;        // Rounded: the corner radius (m), clamped to what the site can give
     } section;
+    // Complex massing (cells.h): BundledTubes -- nx by ny tubes on the lot's box, each its own height (the Sears
+    // Tower's nine), fewer where a tube would be too narrow for a core.
+    struct ComplexSpec {
+        enum class Kind : uint8_t { None, BundledTubes } kind = Kind::None;
+        int nx = 3, ny = 3;
+    } complex;
 };
 
 // LANDMARK archetypes: placed by the PLANNER (best-lot picks with quotas —

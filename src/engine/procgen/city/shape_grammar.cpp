@@ -657,7 +657,7 @@ namespace {
 // facadeLayout and the emitters read it as Residential everywhere else.
 // StairDoor: the wall a stair hugs (Solid: no panes behind the flights) with ONE door, just short of the flight's
 // foot -- a campus hall's door onto its quad, whose rear wall is its stair's (stairWallDoorX).
-enum class FacadeMode { Residential, Retail, Entrance, Solid, Rear, StairDoor };
+enum class FacadeMode { Residential, Retail, Entrance, Solid, Rear, StairDoor, PartyDoor };   // PartyDoor: a party wall, blank but for the doorway in its middle bay (cells.h)
 
 // A curtain-wall storey (ADR-0040 Pass B): a continuous glass skin, not punched
 // windows — an opaque spandrel band hiding the floor slab, vision glass above,
@@ -895,6 +895,7 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     const bool rear = mode == FacadeMode::Rear;
     if (rear) mode = FacadeMode::Residential;
     const bool stairDoor = mode == FacadeMode::StairDoor;
+    const bool partyDoor = mode == FacadeMode::PartyDoor;
     if (stairDoor) mode = FacadeMode::Solid;
     L.bays = std::max(1, static_cast<int>(std::lround(fr.width / std::max(p.bayWidth, Real(0.5)))));
     L.bw = fr.width / L.bays;
@@ -1004,6 +1005,11 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
             o.entrance = true;
             o.backDoor = true;
         }
+        // the party wall's doorway: the middle bay, the same bay the cell behind cuts (one layout, one bay width)
+        if (partyDoor && fr.width >= 1.6 && b == centreBay) {
+            o.entrance = true;
+            o.backDoor = true;
+        }
         o.wx0 = o.x0 + margin; o.wx1 = o.x1 - margin;       // window/opening span
         if (group > 1) {
             // GROUPED windows (M3): a slim mullion inside the group, a broad pier at its ends.
@@ -1024,7 +1030,7 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
         // mid-storey, so every reader (the facade, its far tier, the inner wall) fills the bay with wall unchanged.
         // ...and a BIG BOX's walls are blank but for its doors (the sign and the entry glazing dress the front), as is
         // a campus hall's stair wall but for its quad door (no pane behind the flights)
-        if (!o.entrance && (fr.width < 1.2 || o.wx1 - o.wx0 < 0.55 || p.bigBox || stairDoor)) {
+        if (!o.entrance && (fr.width < 1.2 || o.wx1 - o.wx0 < 0.55 || p.bigBox || stairDoor || partyDoor)) {
             const Real mid = (o.x0 + o.x1) * 0.5;
             o.wx0 = o.wx1 = mid;
             o.sill = o.head = fh * 0.5;
@@ -1056,21 +1062,34 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
 // exterior, its far tier, the interior's colliders and its shops.
 }  // namespace (the two below are declared in the header)
 
-bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e) {
+// The party wall edge `e` lies on, -1 for none.
+static int partyWallOf(const Poly2& plan, const BuildingParams& params, std::size_t e) {
     const std::size_t n = plan.size();
-    if (params.partyWalls == 0 || n < 3) return false;
+    if (params.partyWalls == 0 || n < 3) return -1;
     const Vec2 a = plan[e % n], b = plan[(e + 1) % n];
     const Vec2 d = b - a;
     const Real len = d.length();
-    if (len < 1e-6) return false;
+    if (len < 1e-6) return -1;
     const Vec2 nrm(d.y / len, -d.x / len);   // CCW plan: outward
-    for (int k = 0; k < std::min<int>(params.partyWalls, 2); ++k) {
+    for (int k = 0; k < std::min<int>(params.partyWalls, 4); ++k) {
         const Vec2 N = params.partyN[k];
         if (dot(nrm, N) < 0.98) continue;
         if (std::fabs(dot(a, N) - params.partyAt[k]) < 0.35 && std::fabs(dot(b, N) - params.partyAt[k]) < 0.35)
-            return true;
+            return k;
     }
-    return false;
+    return -1;
+}
+
+bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey) {
+    const int k = partyWallOf(plan, params, e);
+    if (k < 0) return false;
+    if (storey >= 0 && params.partyTop[k] > 0 && storey > params.partyTop[k]) return false;   // above the neighbour's roof
+    return true;
+}
+
+bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t e) {
+    const int k = partyWallOf(plan, params, e);
+    return k >= 0 && ((params.partyDoors >> k) & 1u) != 0;
 }
 
 // Where along a stair's wall (from its first corner, CCW) the stair-wall door stands: a metre short of the flight's
@@ -1123,8 +1142,9 @@ namespace {
 static FacadeMode groundModeFor(const Poly2& plan, const BuildingParams& params, std::size_t e,
                                 std::size_t entranceEdge) {
     if (e == entranceEdge && params.groundBays > 0) return FacadeMode::Solid;
-    // A PARTY WALL has nothing in it: the neighbour stands against it.
-    if (e != entranceEdge && partyEdge(plan, params, e)) return FacadeMode::Solid;
+    // A PARTY WALL has nothing in it: the neighbour stands against it -- but for the doorway through to a cell
+    // behind it (a bundle's inner tube: partyDoors).
+    if (e != entranceEdge && partyEdge(plan, params, e)) return partyDoorEdge(plan, params, e) ? FacadeMode::PartyDoor : FacadeMode::Solid;
     const FacadeMode base = params.solidFacade ? FacadeMode::Solid
                           : params.groundRetail ? FacadeMode::Retail
                                                 : FacadeMode::Residential;
@@ -4745,7 +4765,7 @@ std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams
     upperP.pilasters = false;
     const FacadeMode upMode = params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
     for (std::size_t e = 0; e < splan.size(); ++e) {
-        if (storey > 0 && partyEdge(splan, params, e)) continue;
+        if (storey > 0 && partyEdge(splan, params, e, storey)) continue;
         const FaceRect fr = planEdgeRect(splan, e, y0, h);
         if (fr.width < 1e-6) continue;
         auto at = [&](Real x) { const Vec3 p = fr.at(x, 0) + fr.n * -inset; return Vec2(p.x, p.z); };
@@ -5027,7 +5047,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         for (std::size_t e = 0; e < spk.plan.size(); ++e) {
             const FaceRect fr =
                 planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
-            if (partyEdge(spk.plan, params, e)) {   // the party wall: painted plaster, no windows
+            if (partyEdge(spk.plan, params, e, static_cast<int>(k))) {   // the party wall: painted plaster, no windows
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
                               interiorInset(params), interiorPaintFor(params), false);
                 continue;
@@ -6088,7 +6108,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         // ...except a campus hall's, whose quad door is in it: the facade lays it out blank but for that door
         if (mode == FacadeMode::StairDoor) stairEdge = false;
         // A PARTY WALL is the same blank wall, at every detail level (attached buildings).
-        const bool party = i != entranceEdge && partyEdge(plan, params, i);
+        const bool party = i != entranceEdge && partyEdge(plan, params, i) && !partyDoorEdge(plan, params, i);
         if (stairEdge || party) {
             const FaceRect bfr = planEdgeRect(plan, i, y, gh);
             RenderMesh bw;
@@ -6420,7 +6440,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                     wallColor);
                 continue;
             }
-            if (partyEdge(cur, params, e)) {   // a party wall: blank to the roof
+            if (partyEdge(cur, params, e, i + 1)) {   // a party wall: blank to the roof, or to the lower neighbour's
                 const FaceRect bfr = planEdgeRect(cur, e, y, fh);
                 RenderMesh bw;
                 MeshBuilder::emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0), bfr.at(bfr.width, bfr.height),

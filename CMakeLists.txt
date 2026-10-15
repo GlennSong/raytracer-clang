@@ -137,6 +137,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/circulation.cpp
     src/engine/procgen/city/mass.cpp
     src/engine/procgen/city/mass_stack.cpp
+    src/engine/procgen/city/cells.cpp
     src/engine/procgen/city/section.cpp
     src/engine/procgen/city/face.cpp
     src/engine/procgen/city/room_plan.cpp
@@ -821,6 +822,7 @@ add_executable(run_tests
     tests/test_space_graph.cpp
     tests/test_circulation.cpp
     tests/test_mass_stack.cpp
+    tests/test_cells.cpp
     tests/test_section.cpp
     tests/test_room_plan.cpp
     tests/test_ladders.cpp

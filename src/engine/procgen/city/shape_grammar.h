@@ -666,9 +666,15 @@ struct BuildingParams {
     // plan edge lying on one is a blank wall, ground to roof, inside and out. backDoor: the rear edge's middle bay
     // is a plain service door. fireEscape: a steel fire escape climbs the rear face -- a landing at every floor,
     // a flight between landings, a drop ladder over the yard. Set by the lot pass (city_lots), never by recipes.
+    // ...up to FOUR since the complex (cells.h, issue #105 step 5: a tube in a bundle touches four neighbours):
+    // `partyTop[k]` is the last storey the wall is blank on (0 = to the roof: an attached building; a taller cell
+    // keeps its windows above a lower neighbour's roof), and bit k of `partyDoors` puts a doorway in the wall's
+    // middle bay on the ground storey, through to the cell behind it (a bundle's inner tube is entered that way).
     uint8_t partyWalls = 0;
-    Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
-    Real  partyAt[2] = {0, 0};
+    Vec2  partyN[4] = {Vec2(0, 0), Vec2(0, 0), Vec2(0, 0), Vec2(0, 0)};
+    Real  partyAt[4] = {0, 0, 0, 0};
+    int16_t partyTop[4] = {0, 0, 0, 0};
+    uint8_t partyDoors = 0;
     bool  backDoor = false;
     bool  fireEscape = false;
     // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
@@ -735,7 +741,10 @@ std::vector<ParkingStall> garageStallsOf(const Poly2& plan, const BuildingParams
 bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, Vec2& out);
 
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
-bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
+// ...on `storey` (-1: on any storey): a wall that stops at a lower neighbour's top is no party wall above it.
+bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey = -1);
+// Edge `e` is a party wall with a doorway through it (partyDoors): the facade cuts the door, blank otherwise.
+bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
 // plan.size() when there is none.
 // A building whose bay doors stand OPEN (rolled up, each bay a way in): a fire station's (its engines), a factory's

@@ -18,6 +18,7 @@
 #include "../procgen/city/space_graph.h"
 #include "../procgen/city/circulation.h"
 #include "../procgen/city/mass_stack.h"
+#include "../procgen/city/cells.h"
 #include "../procgen/city/section.h"
 #include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
@@ -985,19 +986,21 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
     if (lua_istable(L, -1)) {
         p.partyWalls = 0;
         const int n = static_cast<int>(lua_rawlen(L, -1));
-        for (int i = 1; i <= n && p.partyWalls < 2; ++i) {
+        for (int i = 1; i <= n && p.partyWalls < 4; ++i) {
             lua_rawgeti(L, -1, i);
             if (lua_istable(L, -1)) {
-                Real v[3] = {0, 0, 0};
-                for (int j = 0; j < 3; ++j) {
+                Real v[5] = {0, 0, 0, 0, 0};   // nx, nz, at [, top storey [, door 1/0]] (cells.h)
+                for (int j = 0; j < 5; ++j) {
                     lua_rawgeti(L, -1, j + 1);
-                    v[j] = lua_isnumber(L, -1) ? static_cast<Real>(lua_tonumber(L, -1)) : Real(0);
+                    v[j] = lua_isnumber(L, -1) ? static_cast<Real>(lua_tonumber(L, -1)) : (lua_isboolean(L, -1) && lua_toboolean(L, -1) ? Real(1) : Real(0));
                     lua_pop(L, 1);
                 }
                 const Vec2 nn(v[0], v[1]);
                 if (nn.length() > 1e-6) {
                     p.partyN[p.partyWalls] = normalize(nn);
                     p.partyAt[p.partyWalls] = v[2];
+                    p.partyTop[p.partyWalls] = static_cast<int16_t>(std::max(Real(0), v[3]));
+                    if (v[4] != 0) p.partyDoors = static_cast<uint8_t>(p.partyDoors | (1u << p.partyWalls));
                     ++p.partyWalls;
                 }
             }
@@ -1473,6 +1476,79 @@ int l_building_mass(lua_State* L) {
         }
         lua_setfield(L, -2, "slices");
     }
+    return 1;
+}
+
+// building.cells{ box = {{x,z}, {x,z}, {x,z}, {x,z}}, tubes = {nx, ny}, floors = {n, ...}, <params> | recipe = "name", ... }
+//   -> { cells = { {x0, z0, x1, z1, floors, outer, connected, face_x, face_z, party, doors} ... },
+//        adjacencies = { {a, b, top, openings} ... } }
+// THE COMPLEX (cells.h, issue #105 step 5): a bundle of tubes on a box, their shared faces and the way into each.
+int l_building_cells(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    Poly2 box;
+    lua_getfield(L, 1, "box");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); box.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1))); lua_pop(L, 2); }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    if (box.size() != 4) {
+        if (plan.size() < 3) return luaL_error(L, "building.cells: `box` needs four corners (or a `plan` to box)");
+        const OBB2 ob = orientedBoundingBox(plan);
+        box = {ob.center - ob.axis[0] * ob.half[0] - ob.axis[1] * ob.half[1], ob.center + ob.axis[0] * ob.half[0] - ob.axis[1] * ob.half[1],
+               ob.center + ob.axis[0] * ob.half[0] + ob.axis[1] * ob.half[1], ob.center - ob.axis[0] * ob.half[0] + ob.axis[1] * ob.half[1]};
+    }
+    int nx = 2, ny = 2;
+    lua_getfield(L, 1, "tubes");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); nx = static_cast<int>(lua_tointeger(L, -2)); ny = static_cast<int>(lua_tointeger(L, -1)); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    std::vector<int> floors;
+    lua_getfield(L, 1, "floors");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) { lua_rawgeti(L, -1, i); floors.push_back(static_cast<int>(lua_tointeger(L, -1))); lua_pop(L, 1); }
+    }
+    lua_pop(L, 1);
+    const Complex cx = bundledTubes(box, p, nx, ny, floors);
+    lua_newtable(L);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < cx.cells.size(); ++i) {
+        const CellFrame& c = cx.cells[i];
+        Vec2 lo(0, 0), hi(0, 0);
+        if (c.plan.size() >= 3) bounds(c.plan, lo, hi);
+        lua_newtable(L);
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+        lua_pushinteger(L, c.params.floors); lua_setfield(L, -2, "floors");
+        lua_pushboolean(L, c.outerFace); lua_setfield(L, -2, "outer");
+        lua_pushboolean(L, c.connected); lua_setfield(L, -2, "connected");
+        lua_pushnumber(L, c.params.faceDir.x); lua_setfield(L, -2, "face_x");
+        lua_pushnumber(L, c.params.faceDir.z); lua_setfield(L, -2, "face_z");
+        lua_pushinteger(L, c.params.partyWalls); lua_setfield(L, -2, "party");
+        lua_pushinteger(L, c.params.partyDoors); lua_setfield(L, -2, "doors");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "cells");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < cx.adj.size(); ++i) {
+        const Adjacency& ad = cx.adj[i];
+        lua_newtable(L);
+        lua_pushinteger(L, ad.a + 1); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, ad.b + 1); lua_setfield(L, -2, "b");
+        lua_pushinteger(L, ad.k1); lua_setfield(L, -2, "top");
+        lua_pushinteger(L, static_cast<lua_Integer>(ad.openings.size())); lua_setfield(L, -2, "openings");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "adjacencies");
     return 1;
 }
 
@@ -4004,6 +4080,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"section", l_building_section},
         {"circulation", l_building_circulation},
         {"mass", l_building_mass},
+        {"cells", l_building_cells},
         {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},

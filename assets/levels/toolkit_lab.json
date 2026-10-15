@@ -70,7 +70,7 @@
   "citysim": {
     "buildLots": true,
     "wholeBlocks": true,
-    "recipe": "twisted_tower",
+    "recipe": "bundled_tubes",
     "coreness": 0.25,
     "seed": 7,
     "sidewalk": 4.0,

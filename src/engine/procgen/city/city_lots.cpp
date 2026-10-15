@@ -9,6 +9,7 @@
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "section.h"         // the toolkit's section massing (issue #105)
+#include "cells.h"           // the toolkit's complex: a bundle of tubes (issue #105 step 5)
 #include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
 #include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
@@ -5998,6 +5999,65 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     if (clear) { plan = rim; ensureCCW(plan); break; }
                     w *= 0.9;
                     d *= 0.9;
+                }
+            }
+            // THE BUNDLE (cells.h, issue #105 step 5): nx by ny tubes on the lot's box, each its own height, the
+            // touching faces shared as party walls that stop at the lower tube's roof, the inner tubes entered
+            // through their neighbours' lobbies. Each tube is grown as its own unit, as the rowhouses are.
+            if (planOk && rec.massing == BuildingRecipe::Massing::Complex &&
+                rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::BundledTubes) {
+                const OBB2 sb = orientedBoundingBox(plan);
+                Real len = 2 * sb.half[0], dep = 2 * sb.half[1];
+                const Vec2 u = sb.axis[0], v = sb.axis[1];
+                bool boxOk = false;
+                for (int attempt = 0; attempt < 8; ++attempt) {
+                    bool fits = true;
+                    for (int sx = -1; sx <= 1 && fits; sx += 2)
+                        for (int sy = -1; sy <= 1; sy += 2) {
+                            const Vec2 corner = sb.center + u * (len * 0.5 * sx) + v * (dep * 0.5 * sy);
+                            if ((roads && !clearOfRoads(corner)) || !pointInPolygon(plan, corner)) { fits = false; break; }
+                        }
+                    if (fits) { boxOk = true; break; }
+                    len *= 0.92;
+                    dep *= 0.92;
+                }
+                int nx = std::max(1, rec.complex.nx), ny = std::max(1, rec.complex.ny);
+                while (nx > 1 && len / nx < kCoreTierMin + 1.0) --nx;   // every tube wide enough for its core
+                while (ny > 1 && dep / ny < kCoreTierMin + 1.0) --ny;
+                if (boxOk && nx * ny >= 2) {
+                    const Poly2 box{sb.center - u * (len * 0.5) - v * (dep * 0.5), sb.center + u * (len * 0.5) - v * (dep * 0.5),
+                                    sb.center + u * (len * 0.5) + v * (dep * 0.5), sb.center - u * (len * 0.5) + v * (dep * 0.5)};
+                    // the heights: the Sears pattern -- a rank per tube by the seed, one tube certain to reach the top
+                    std::vector<int> floors(static_cast<std::size_t>(nx * ny));
+                    const Real ranks[4] = {0.5, 0.64, 0.8, 1.0};
+                    uint32_t hh = bp.seed * 2654435761u + 17u;
+                    for (std::size_t k = 0; k < floors.size(); ++k) {
+                        hh = hh * 1664525u + 1013904223u;
+                        floors[k] = std::max(4, static_cast<int>(bp.floors * ranks[(hh >> 13) & 3u]));
+                    }
+                    floors[static_cast<std::size_t>((hh >> 20) % floors.size())] = bp.floors;
+                    Complex cx = bundledTubes(box, bp, nx, ny, floors);
+                    b.groundY = padPlaneFor(plan, Vec2(bp.faceDir.x, bp.faceDir.z));
+                    const Real bundleBase = p.ground ? b.groundY + plinth : baseYFor(plan);
+                    for (CellFrame& cell : cx.cells) {
+                        BuildingParams upar = cell.params;
+                        if (wantsDoorway(cell.plan, upar)) upar.openDoorway = true;
+                        BuildingMesh um = growPlanBuilding(cell.plan, upar, bundleBase);
+                        collectUnit(b, cell.plan, upar, bundleBase, um);
+                        mergeParts(outParts, um);
+                        if (outFlatParts) mergeParts(outFlatParts, growPlanBuilding(cell.plan, upar, bundleBase, FacadeDetail::Flat));
+                        b.height = std::max(b.height, um.height);
+                    }
+                    b.site = sb.center;
+                    b.baseY = bundleBase;
+                    b.width = len;
+                    b.depth = dep;
+                    b.yaw = std::atan2(u.y, u.x);
+                    b.plan = box;
+                    emitFoundation(b.plan, b.groundY, b.baseY);
+                    pruneTreeSpotsIntoRoad(b.treeSpots);
+                    out.push_back(std::move(b));
+                    continue;
                 }
             }
             // ROWHOUSES (device: "town homes ... packed side by side"): the

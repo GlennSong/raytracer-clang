@@ -10180,3 +10180,30 @@ height (a slice) and its skin; a STACK is sections over storey ranges under keye
   vault, aperture, flared), the drum and the pagoda as presets (`growCylinder`, `growPagoda` retired), ruled curtain
   walls.
 
+## ADR-0176 — The complex: cells that share faces, each grown as its own building
+
+Step 5 of the toolkit plan (issue #105, ADR-0174): buildings made of several masses -- the Sears Tower's bundled
+tubes, courtyards, wings -- without a mesh boolean.
+
+- **A complex is cells side by side; its slice is their slices.** `Complex : Mass` holds `CellFrame`s (a mass in a
+  frame with its own params) and the `Adjacency` list `resolve` finds: two cells' edges on one line, facing each
+  other, overlapping by two metres or more. Nothing is cut out of anything: each cell is grown as the plan building
+  it is, by the lot pass as a unit (the rowhouses' path), and the shared faces are its party walls.
+- **The party walls carry the complex.** `BuildingParams` takes up to four (a tube in a bundle touches four), each
+  with `partyTop` -- the last storey it is blank on, so the taller cell keeps its windows above the lower one's
+  roof -- and `partyDoors`, a doorway through the wall's middle bay on the ground storey. `partyEdge(plan, params,
+  edge, storey)` answers per storey; every reader that knows its storey asks with it. With two walls, no tops and
+  no doors this is exactly the attached-buildings model of before: the census is identical.
+- **Every cell has a way in.** `connectLobbies`: a cell with an outer face enters from it (its `faceDir` turned to
+  that face, the one nearest the street); one with none is entered through a connected neighbour on the ground
+  storey -- its entrance faces the shared wall, and the neighbour's wall takes the doorway (`FacadeMode::PartyDoor`:
+  blank but for the middle bay, the same bay the entrance cuts, since one layout rule lays both). Two coincident
+  doorways in two coincident walls: each unit's facade, collider, interior and graph keep their own door, and the
+  gate holds per cell.
+- **The bundle is the first preset.** `bundledTubes`: nx by ny rectangles on the lot's box, each a stack of its own
+  floors -- the Sears pattern, a rank per tube by the seed, one tube at the full height -- fewer tubes where one
+  would be narrower than its core. The lab grew six on its lot, all enterable, all gated.
+- **Owed.** The rowhouse strip and the mall as presets of the complex (byte-identical), courtyards (a section hole
+  the growers read), bridges between cells above the ground, a `growComplex` that grows the cells as one, openings
+  between cells above the lobby (sky bridges inside a bundle).
+

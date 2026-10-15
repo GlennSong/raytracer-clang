@@ -771,6 +771,27 @@ void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "lens_tower";
 }
 
+// The BUNDLED TUBES (issue #105 step 5, the first complex; the Sears Tower): glass tubes on one frame, nine on a
+// roomy lot, each its own height, the taller keeping their windows above the lower ones' roofs, an inner tube
+// entered through a neighbour's lobby.
+void recipeBundledTubes(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(22, 30) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::BundledTubes;
+    out.complex.nx = cx.roomy ? 3 : 2;
+    out.complex.ny = cx.roomy ? 3 : 2;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 5.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 50}, {7, 30}, {8, 20}});   // a flat top: the tubes' roofs are walked
+    out.name = "bundled_tubes";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1510,6 +1531,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"twisted_tower", recipeTwistedTower},
     {"stacked_modules", recipeStackedModules},
     {"lens_tower", recipeLensTower},
+    {"bundled_tubes", recipeBundledTubes},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},
