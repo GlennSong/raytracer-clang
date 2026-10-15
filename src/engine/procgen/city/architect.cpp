@@ -792,6 +792,24 @@ void recipeBundledTubes(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "bundled_tubes";
 }
 
+// The COURTYARD BLOCK (issue #105 step 5, the complex's second preset; the European perimeter block): brick or
+// stucco wings round an open court, the corners their own houses, every cell its own door on the street.
+void recipeCourtyardBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(4, 6) + (cx.roomy ? 1 : 0);
+    p.groundRetail = rng.unit() < 0.5;
+    dress(p, rng.unit() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Courtyard;
+    out.complex.depth = rng.range(14.5, 16.5);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 1.2;
+    out.placeType = "home";
+    masonryDepth(p, 0.1, {{1, 70}, {2, 30}});
+    out.name = "courtyard_block";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1532,6 +1550,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"stacked_modules", recipeStackedModules},
     {"lens_tower", recipeLensTower},
     {"bundled_tubes", recipeBundledTubes},
+    {"courtyard_block", recipeCourtyardBlock},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},

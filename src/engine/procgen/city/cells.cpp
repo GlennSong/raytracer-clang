@@ -124,19 +124,28 @@ void Complex::resolve(Real tol, Real minRun) {
 
 void Complex::connectLobbies(const Vec2& faceDir) {
     const std::size_t n = cells.size();
+    // the complex's own boundary: the box round every cell; a face on it is a street face
+    Poly2 all;
+    for (const CellFrame& c : cells) all.insert(all.end(), c.plan.begin(), c.plan.end());
+    const OBB2 hull = all.size() >= 3 ? orientedBoundingBox(all) : OBB2{};
+    auto onBoundary = [&](const Vec2& m) {
+        const Vec2 r = m - hull.center;
+        const Real x = std::fabs(dot(r, hull.axis[0])), y = std::fabs(dot(r, hull.axis[1]));
+        return std::fabs(x - hull.half[0]) < 0.3 || std::fabs(y - hull.half[1]) < 0.3;
+    };
     for (std::size_t i = 0; i < n; ++i) {
         CellFrame& c = cells[i];
-        c.connected = c.outerFace;
-        if (!c.outerFace) continue;
-        // the entrance on the outer face nearest the street: faceDir turned to that face's normal
+        c.streetFace = false;
+        // the entrance on the street face nearest the street: faceDir turned to that face's normal
         Real best = -2;
         Vec2 bestN(faceDir.x, faceDir.y);
-        for (std::size_t e = 0; e < c.plan.size(); ++e) {
+        for (std::size_t e = 0; e < c.plan.size() && c.outerFace; ++e) {
             const Vec2 a = c.plan[e], b = c.plan[(e + 1) % c.plan.size()];
             const Real L = (b - a).length();
             if (L < 3.0) continue;
             const Vec2 d = (b - a) * (1.0 / L);
             const Vec2 nrm(d.y, -d.x);
+            if (!onBoundary((a + b) * 0.5)) continue;   // a court face: outer, but it opens onto nothing
             Real cov = 0;   // covered by a neighbour?
             for (const Adjacency& ad : adj) {
                 const bool mine = (ad.a == static_cast<int>(i) && dot(ad.n, nrm) > 0.98) || (ad.b == static_cast<int>(i) && dot(ad.n, nrm) < -0.98);
@@ -144,10 +153,12 @@ void Complex::connectLobbies(const Vec2& faceDir) {
                 cov += (ad.p1 - ad.p0).length();
             }
             if (L - cov < 3.0) continue;
+            c.streetFace = true;
             const Real score = dot(nrm, faceDir);
             if (score > best) { best = score; bestN = nrm; }
         }
-        c.params.faceDir = Vec3(bestN.x, 0, bestN.y);
+        c.connected = c.streetFace;
+        if (c.streetFace) c.params.faceDir = Vec3(bestN.x, 0, bestN.y);
     }
     // the rest, through a connected neighbour, nearest the street first
     for (bool changed = true; changed;) {
@@ -214,6 +225,45 @@ Complex bundledTubes(const Poly2& boxIn, const BuildingParams& params, int nx, i
             c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
             cx.cells.push_back(c);
         }
+    cx.resolve();
+    cx.connectLobbies(Vec2(params.faceDir.x, params.faceDir.z));
+    return cx;
+}
+
+Complex courtyardWings(const Poly2& boxIn, const BuildingParams& params, Real depth, const std::vector<int>& floorsPerWing, Real minCourt) {
+    Complex cx;
+    Poly2 box = boxIn;
+    if (box.size() != 4 || depth < 4.0) return cx;
+    ensureCCW(box);
+    const Vec2 o = box[0];
+    const Vec2 ex = box[1] - box[0], ey = box[3] - box[0];
+    const Real W = ex.length(), H = ey.length();
+    if (W - 2 * depth < minCourt || H - 2 * depth < minCourt) return cx;
+    const Vec2 ux = ex * (1.0 / W), uy = ey * (1.0 / H);
+    auto rect = [&](Real x0, Real y0, Real x1, Real y1) {
+        Poly2 r{o + ux * x0 + uy * y0, o + ux * x1 + uy * y0, o + ux * x1 + uy * y1, o + ux * x0 + uy * y1};
+        ensureCCW(r);
+        return r;
+    };
+    // the wings (south, east, north, west) then the corners (SW, SE, NE, NW)
+    const Poly2 plans[8] = {rect(depth, 0, W - depth, depth),          rect(W - depth, depth, W, H - depth),
+                            rect(depth, H - depth, W - depth, H),      rect(0, depth, depth, H - depth),
+                            rect(0, 0, depth, depth),                  rect(W - depth, 0, W, depth),
+                            rect(W - depth, H - depth, W, H),          rect(0, H - depth, depth, H)};
+    for (int i = 0; i < 8; ++i) {
+        CellFrame c;
+        c.plan = plans[i];
+        c.params = params;
+        if (!floorsPerWing.empty()) c.params.floors = std::max(1, floorsPerWing[std::min(static_cast<std::size_t>(i), floorsPerWing.size() - 1)]);
+        c.params.partyWalls = 0;
+        c.params.partyDoors = 0;
+        c.frame.origin = c.plan[0];
+        c.frame.u = ux;
+        c.frame.v = uy;
+        c.role = i < 4 ? "wing" : "corner";
+        c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
+        cx.cells.push_back(c);
+    }
     cx.resolve();
     cx.connectLobbies(Vec2(params.faceDir.x, params.faceDir.z));
     return cx;

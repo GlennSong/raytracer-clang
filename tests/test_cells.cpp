@@ -137,3 +137,66 @@ TEST_CASE(the_complex_is_a_mass_of_its_cells) {
     const RenderMesh shell = m.shell(0, Vec3(0.5, 0.5, 0.5));
     CHECK(!shell.vertices.empty() && shell.indices.size() % 3 == 0);
 }
+
+TEST_CASE(a_courtyard_block_is_eight_cells_round_an_open_court) {
+    const Poly2 box = {{-30, -22}, {30, -22}, {30, 22}, {-30, 22}};
+    BuildingParams p = towerParams(5);
+    p.curtainWall = false;
+    const Complex cx = courtyardWings(box, p, 15.0, {5, 5, 5, 5, 6, 5, 6, 5});
+    CHECK(cx.cells.size() == 8);
+    CHECK(cx.adj.size() == 8);   // every corner shares a whole edge with each of its two wings
+    Real built = 0;
+    for (std::size_t i = 0; i < cx.cells.size(); ++i) {
+        const CellFrame& c = cx.cells[i];
+        CHECK(c.params.partyWalls == 2);
+        CHECK(c.outerFace && c.streetFace && c.connected);
+        // every entrance on the block's own boundary, never onto the court: the south wing faces -z, the north +z,
+        // the east +x, the west -x, the corners the street side nearest `faceDir` (+z)
+        const Vec2 want[8] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}, {0, -1}, {0, -1}, {0, 1}, {0, 1}};
+        if (i < 4) CHECK(std::fabs(c.params.faceDir.x - want[i].x) < 1e-6 && std::fabs(c.params.faceDir.z - want[i].y) < 1e-6);
+        else CHECK(std::fabs(std::fabs(c.params.faceDir.z) - 1.0) < 1e-6 || std::fabs(std::fabs(c.params.faceDir.x) - 1.0) < 1e-6);
+        CHECK(c.params.partyDoors == 0);   // every cell has its own street door
+        built += area(c.plan);
+        // a party wall is a WHOLE edge: an edge along a party plane has both its ends on it (an edge meeting the
+        // plane end-on touches it at one corner, which is not a wall on it)
+        for (std::size_t e = 0; e < c.plan.size(); ++e) {
+            const Vec2 a = c.plan[e], b = c.plan[(e + 1) % c.plan.size()];
+            const Vec2 d = normalize(b - a);
+            for (int k = 0; k < c.params.partyWalls; ++k) {
+                const Vec2 N = c.params.partyN[k];
+                if (std::fabs(dot(d, N)) > 1e-6) continue;   // not along the plane
+                const bool aOn = std::fabs(dot(a, N) - c.params.partyAt[k]) < 1e-6, bOn = std::fabs(dot(b, N) - c.params.partyAt[k]) < 1e-6;
+                CHECK(aOn == bOn);
+            }
+        }
+    }
+    CHECK(std::fabs(built - (60.0 * 44.0 - 30.0 * 14.0)) < 1e-6);   // the block less its court
+    // The taller corners' walls stop at their wings' roofs; the wings' walls run to their own.
+    const CellFrame& sw = cx.cells[4];
+    CHECK(sw.params.floors == 6);
+    for (int k = 0; k < sw.params.partyWalls; ++k) CHECK(sw.params.partyTop[k] == 5);
+    const CellFrame& south = cx.cells[0];
+    for (int k = 0; k < south.params.partyWalls; ++k) CHECK(south.params.partyTop[k] == 0);
+    // Every cell walks; a wing's court face has windows (an outer face, no neighbour on it).
+    for (const CellFrame& c : cx.cells) CHECK(unreachableCells(spaceGraphOf(c.plan, c.params, 0.0)).empty());
+    // ...and every cell GROWN has its entrance (the lot pass collects it from the facade's attach: no door, not
+    // enterable, and the lab's corners came out shut)
+    for (int retail = 0; retail < 2; ++retail)
+        for (std::size_t i = 0; i < cx.cells.size(); ++i) {
+            const CellFrame& c = cx.cells[i];
+            BuildingParams gp = c.params;
+            gp.groundRetail = retail != 0;   // shops on the ground or not, the lobby door stays
+            const BuildingMesh bm = growPlanBuilding(c.plan, gp, 0.0);
+            int doors = 0;
+            for (const AttachPoint& ap : bm.attaches) doors += ap.tag == "entrance";
+            std::printf("    [court] cell %zu (%s) face (%.0f, %.0f) shops %d: %d entrance(s)\n", i, c.role.c_str(), gp.faceDir.x, gp.faceDir.z, retail, doors);
+            CHECK(doors >= 1);
+        }
+    int partyEdges = 0;
+    for (std::size_t e = 0; e < south.plan.size(); ++e) partyEdges += partyEdge(south.plan, south.params, e);
+    CHECK(partyEdges == 2);
+    // Too small for a court: nothing.
+    CHECK(courtyardWings({{0, 0}, {36, 0}, {36, 30}, {0, 30}}, p, 15.0, {5}).cells.empty());
+    std::printf("    [court] 8 cells, %zu shared faces, built %.0f m2 round a %.0f x %.0f court\n", cx.adj.size(), built, 60.0 - 30.0, 44.0 - 30.0);
+}
+

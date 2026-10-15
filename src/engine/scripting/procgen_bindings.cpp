@@ -1479,7 +1479,7 @@ int l_building_mass(lua_State* L) {
     return 1;
 }
 
-// building.cells{ box = {{x,z}, {x,z}, {x,z}, {x,z}}, tubes = {nx, ny}, floors = {n, ...}, <params> | recipe = "name", ... }
+// building.cells{ box = {{x,z}, {x,z}, {x,z}, {x,z}}, tubes = {nx, ny} | court = depth, floors = {n, ...}, <params> | recipe = "name", ... }
 //   -> { cells = { {x0, z0, x1, z1, floors, outer, connected, face_x, face_z, party, doors} ... },
 //        adjacencies = { {a, b, top, openings} ... } }
 // THE COMPLEX (cells.h, issue #105 step 5): a bundle of tubes on a box, their shared faces and the way into each.
@@ -1516,7 +1516,8 @@ int l_building_cells(lua_State* L) {
         for (int i = 1; i <= n; ++i) { lua_rawgeti(L, -1, i); floors.push_back(static_cast<int>(lua_tointeger(L, -1))); lua_pop(L, 1); }
     }
     lua_pop(L, 1);
-    const Complex cx = bundledTubes(box, p, nx, ny, floors);
+    const double court = optField(L, 1, "court", 0.0);   // court = <wing depth>: a courtyard block instead of tubes
+    const Complex cx = court > 0 ? courtyardWings(box, p, static_cast<Real>(court), floors) : bundledTubes(box, p, nx, ny, floors);
     lua_newtable(L);
     lua_newtable(L);
     for (std::size_t i = 0; i < cx.cells.size(); ++i) {

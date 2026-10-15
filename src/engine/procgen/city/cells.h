@@ -45,8 +45,9 @@ struct CellFrame {
     Real baseY = 0;
     std::string role;
     Poly2 plan;                // the base outline, world CCW (the mass's base slice)
-    bool outerFace = false;    // an edge no neighbour stands against (resolve)
-    bool connected = false;    // reachable from the street: its own outer face, or an opening from a connected cell
+    bool outerFace = false;    // an edge no neighbour stands against (resolve): a street face, or a court's
+    bool streetFace = false;   // an outer face on the complex's own boundary (connectLobbies): where a door can open
+    bool connected = false;    // reachable from the street: its own street face, or an opening from a connected cell
 };
 
 struct Complex : Mass {
@@ -61,10 +62,11 @@ struct Complex : Mass {
     // `minRun` is an adjacency; each cell's params take the wall as a party wall (up to four), blank up to the
     // lower cell's top storey. Sets every cell's `outerFace`.
     void resolve(Real tol = 0.25, Real minRun = 2.0);
-    // A WAY IN FOR EVERY CELL: a cell with an outer face enters from it (its `faceDir` turned to that face, the one
-    // nearest the street's `faceDir`); a cell without one is entered through a shared wall from a connected
-    // neighbour -- the neighbour's wall takes a doorway in its middle bay (partyDoors), the cell's entrance faces it.
-    // Sets every cell's `connected`.
+    // A WAY IN FOR EVERY CELL: a cell with a STREET face -- an outer face on the complex's own boundary (a face
+    // onto an enclosed court is outer but opens onto nothing) -- enters from it (its `faceDir` turned to that
+    // face, the one nearest the street's `faceDir`); a cell without one is entered through a shared wall from a
+    // connected neighbour -- the neighbour's wall takes a doorway in its middle bay (partyDoors), the cell's
+    // entrance faces it. Sets every cell's `streetFace` and `connected`.
     void connectLobbies(const Vec2& faceDir);
 };
 
@@ -72,6 +74,13 @@ struct Complex : Mass {
 // stack of its own floors (`floorsPerCell`, row-major, y rows of x cells; short lists repeat the last), the touching
 // faces shared, every cell with a way in. The base params are `params`.
 Complex bundledTubes(const Poly2& box, const BuildingParams& params, int nx, int ny, const std::vector<int>& floorsPerCell);
+
+// THE COURTYARD BLOCK: eight cells round an open court on `box` -- four corners `depth` square and four wings
+// `depth` deep between them, every cell with a street face, the corners shared with the wings at their ends (no
+// edge half shared: a party wall is a whole edge). `floorsPerWing`: the four wings then the four corners, in
+// order (south wing, east, north, west; SW corner, SE, NE, NW); short lists repeat the last. The court must keep
+// `minCourt` across, or the result is empty.
+Complex courtyardWings(const Poly2& box, const BuildingParams& params, Real depth, const std::vector<int>& floorsPerWing, Real minCourt = 8.0);
 
 }  // namespace engine
 

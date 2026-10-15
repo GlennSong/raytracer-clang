@@ -10203,7 +10203,12 @@ tubes, courtyards, wings -- without a mesh boolean.
 - **The bundle is the first preset.** `bundledTubes`: nx by ny rectangles on the lot's box, each a stack of its own
   floors -- the Sears pattern, a rank per tube by the seed, one tube at the full height -- fewer tubes where one
   would be narrower than its core. The lab grew six on its lot, all enterable, all gated.
-- **Owed.** The rowhouse strip and the mall as presets of the complex (byte-identical), courtyards (a section hole
-  the growers read), bridges between cells above the ground, a `growComplex` that grows the cells as one, openings
-  between cells above the lobby (sky bridges inside a bundle).
+- **The courtyard block is the second preset, and it taught the model's one rule.** A party wall is a WHOLE edge
+  (the plane test takes both ends), so four wings round a court cannot share half an edge with each other: the
+  corners are cells of their own, eight cells in all, each with its own street face. A cell of a complex opens
+  whatever its height -- the lot pass's walk-up limit (three storeys without a core) predates the stair runs that
+  climb every storey, and the gate proves each cell.
+- **Owed.** The rowhouse strip and the mall as presets of the complex (byte-identical), a courtyard as a section
+  hole (one ring plan, one building), bridges between cells above the ground, a `growComplex` that grows the cells
+  as one, openings between cells above the lobby (sky bridges inside a bundle), the heights as a recipe descriptor.
 

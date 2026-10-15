@@ -93,9 +93,11 @@ struct BuildingRecipe {
     } section;
     // Complex massing (cells.h): BundledTubes -- nx by ny tubes on the lot's box, each its own height (the Sears
     // Tower's nine), fewer where a tube would be too narrow for a core.
+    // Courtyard -- four wings `depth` deep round an open court, the corners their own cells (a perimeter block).
     struct ComplexSpec {
-        enum class Kind : uint8_t { None, BundledTubes } kind = Kind::None;
+        enum class Kind : uint8_t { None, BundledTubes, Courtyard } kind = Kind::None;
         int nx = 3, ny = 3;
+        Real depth = 15.0;
     } complex;
 };
 

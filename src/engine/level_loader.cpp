@@ -5939,6 +5939,11 @@ bool LevelLoader::load(const std::string& path,
                                 if (ob.type == "park" ||
                                     ob.type == "green" || ob.plan.size() < 3)
                                     continue;
+                                // A COMPLEX's doors open into its own lot by design (cells.h, issue #105 step 5):
+                                // a bundle's inner tube is entered through its neighbour's lobby (two coincident
+                                // doorways, each unit's own notch), a courtyard's shops open onto the court. The
+                                // lot's plan is the whole block; its units collide one by one.
+                                if (&ob == &lb && units.size() > 1) continue;
                                 if (engine::pointInPolygon(ob.plan, outP)) {
                                     clear = false;
                                     if (std::getenv("RT_PRINT_DEMOTED"))

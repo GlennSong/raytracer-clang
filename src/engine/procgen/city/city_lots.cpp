@@ -6005,7 +6005,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // touching faces shared as party walls that stop at the lower tube's roof, the inner tubes entered
             // through their neighbours' lobbies. Each tube is grown as its own unit, as the rowhouses are.
             if (planOk && rec.massing == BuildingRecipe::Massing::Complex &&
-                rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::BundledTubes) {
+                rec.complex.kind != BuildingRecipe::ComplexSpec::Kind::None) {
                 const OBB2 sb = orientedBoundingBox(plan);
                 Real len = 2 * sb.half[0], dep = 2 * sb.half[1];
                 const Vec2 u = sb.axis[0], v = sb.axis[1];
@@ -6021,29 +6021,43 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     len *= 0.92;
                     dep *= 0.92;
                 }
+                const bool courtyard = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Courtyard;
                 int nx = std::max(1, rec.complex.nx), ny = std::max(1, rec.complex.ny);
                 while (nx > 1 && len / nx < kCoreTierMin + 1.0) --nx;   // every tube wide enough for its core
                 while (ny > 1 && dep / ny < kCoreTierMin + 1.0) --ny;
-                if (boxOk && nx * ny >= 2) {
+                // a courtyard's wings: deep enough for a core, the court at least 8 m across
+                const Real wingDepth = std::max(kCoreTierMin + 0.5, std::min(rec.complex.depth, (std::min(len, dep) - 8.0) * 0.5));
+                const bool courtOk = courtyard && std::min(len, dep) - 2 * wingDepth >= 8.0;
+                if (boxOk && (courtyard ? courtOk : nx * ny >= 2)) {
                     const Poly2 box{sb.center - u * (len * 0.5) - v * (dep * 0.5), sb.center + u * (len * 0.5) - v * (dep * 0.5),
                                     sb.center + u * (len * 0.5) + v * (dep * 0.5), sb.center - u * (len * 0.5) + v * (dep * 0.5)};
-                    // the heights: the Sears pattern -- a rank per tube by the seed, one tube certain to reach the top
-                    std::vector<int> floors(static_cast<std::size_t>(nx * ny));
+                    // the heights: the Sears pattern -- a rank per tube by the seed, one tube certain to reach the top;
+                    // a courtyard's wings the block's floors, a corner now and then a storey taller
+                    std::vector<int> floors(static_cast<std::size_t>(courtyard ? 8 : nx * ny));
                     const Real ranks[4] = {0.5, 0.64, 0.8, 1.0};
                     uint32_t hh = bp.seed * 2654435761u + 17u;
                     for (std::size_t k = 0; k < floors.size(); ++k) {
                         hh = hh * 1664525u + 1013904223u;
-                        floors[k] = std::max(4, static_cast<int>(bp.floors * ranks[(hh >> 13) & 3u]));
+                        floors[k] = courtyard ? bp.floors + ((k >= 4 && ((hh >> 9) & 3u) == 0) ? 1 : 0)
+                                              : std::max(4, static_cast<int>(bp.floors * ranks[(hh >> 13) & 3u]));
                     }
-                    floors[static_cast<std::size_t>((hh >> 20) % floors.size())] = bp.floors;
-                    Complex cx = bundledTubes(box, bp, nx, ny, floors);
+                    if (!courtyard) floors[static_cast<std::size_t>((hh >> 20) % floors.size())] = bp.floors;
+                    Complex cx = courtyard ? courtyardWings(box, bp, wingDepth, floors) : bundledTubes(box, bp, nx, ny, floors);
                     b.groundY = padPlaneFor(plan, Vec2(bp.faceDir.x, bp.faceDir.z));
                     const Real bundleBase = p.ground ? b.groundY + plinth : baseYFor(plan);
                     for (CellFrame& cell : cx.cells) {
                         BuildingParams upar = cell.params;
-                        if (wantsDoorway(cell.plan, upar)) upar.openDoorway = true;
+                        // A complex's cells OPEN (the toolkit's rule: a form ships as a building walked base to roof,
+                        // and the gate proves each cell): a cell too small for a core climbs by its straight stair,
+                        // whatever its height -- the old walk-up limit (three storeys without a core) was written
+                        // before the stair runs climbed every storey.
+                        if (upar.walkableGround || wantsDoorway(cell.plan, upar)) upar.openDoorway = true;
                         BuildingMesh um = growPlanBuilding(cell.plan, upar, bundleBase);
                         collectUnit(b, cell.plan, upar, bundleBase, um);
+                        if (std::getenv("RT_CELLS_DEBUG"))
+                            std::fprintf(stderr, "[cells] %s floors %d face (%.2f, %.2f) retail %d open %d party %d doors %zu enterable %d area %.0f\n", cell.role.c_str(), upar.floors,
+                                         upar.faceDir.x, upar.faceDir.z, upar.groundRetail ? 1 : 0, upar.openDoorway ? 1 : 0, upar.partyWalls, b.units.back().doors.size(),
+                                         b.units.back().enterable ? 1 : 0, area(cell.plan));
                         mergeParts(outParts, um);
                         if (outFlatParts) mergeParts(outFlatParts, growPlanBuilding(cell.plan, upar, bundleBase, FacadeDetail::Flat));
                         b.height = std::max(b.height, um.height);
