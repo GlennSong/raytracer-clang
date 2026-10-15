@@ -151,6 +151,15 @@ void appendRoofItems(std::vector<Vec3>& V, std::vector<uint32_t>& I, const std::
     for (const RoofItem& ri : items) {
         if (ri.footprint.size() < 3 || ri.h <= 0) continue;
         const Real y1 = ri.y0 + ri.h;
+        if (ri.kind == RoofItem::Kind::Ramp && ri.footprint.size() == 4) {
+            // the slope from the foot edge on the deck to the top edge on the pad: the way up
+            const Vec2 &A = ri.footprint[0], &B = ri.footprint[1], &Cc = ri.footprint[2], &D = ri.footprint[3];
+            const uint32_t s = static_cast<uint32_t>(V.size());
+            V.push_back(Vec3(A.x, ri.y0, A.y)); V.push_back(Vec3(B.x, ri.y0, B.y));
+            V.push_back(Vec3(Cc.x, y1, Cc.y)); V.push_back(Vec3(D.x, y1, D.y));
+            I.insert(I.end(), {s, s + 1, s + 2, s, s + 2, s + 3});
+            continue;
+        }
         if (ri.kind == RoofItem::Kind::Sloped && ri.footprint.size() == 4) {
             // the glass slope itself, rising from its first edge on the deck to its third edge `h` up, the tall
             // back face under that edge, and the two triangular flanks: the deck beneath stays floor

@@ -247,7 +247,9 @@ struct FurnishedUnit {
 // the building's stream, so nothing can re-plan it later), carried by the building unit and its record, cached
 // with the lot. A Screen or a Frame is a ring of wall along its footprint's edges, not a solid.
 struct RoofItem {
-    enum class Kind : uint8_t { Access, Tank, Hvac, Mast, Lantern, Screen, Frame, Pyramid, Sloped, Helipad };
+    enum class Kind : uint8_t { Access, Tank, Hvac, Mast, Lantern, Screen, Frame, Pyramid, Sloped, Helipad, Ramp };
+    // A Helipad is a raised pad (its top a floor `h` over the deck); a Ramp climbs onto it: its footprint's first
+    // edge is the foot on the deck, its third edge the top, `h` up.
     Kind kind = Kind::Hvac;
     Poly2 footprint;
     Real y0 = 0, h = 0;
@@ -607,6 +609,10 @@ struct BuildingParams {
     // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop). spire/dome win over it.
     // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse".
     uint8_t top = 0;
+    // THE HELIPAD (issue #105, the roof cell's contents): a raised pad with a ramp on a tall tower's open roof --
+    // 0 auto (18 floors and up, half of them by the seed, where the roof has the room), 1 never, 2 always.
+    // Lua: helipad = true | false.
+    uint8_t helipad = 0;
     // MASONRY DEPTH (buildings M3): windowGroup 1-3 -- windows in pairs or triples, a slim mullion between them and
     // a broad pier between groups; verticals -- full-height piers proud of the wall at every group, the spandrel
     // panels between storeys recessed and darker (Rockefeller Center, the Empire State). Lua: window_group = 2,

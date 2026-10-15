@@ -2048,29 +2048,6 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             items.push_back({2, aw, ad, Real(2.2), Real(1.8)});
         }
     }
-    if (items.empty()) return;
-
-    std::vector<RoofCell> cells{{inset, inset, uw, ud}};
-    while (cells.size() < items.size()) {
-        std::size_t bi = 0;                                 // split the biggest cell
-        for (std::size_t i = 1; i < cells.size(); ++i)
-            if (cells[i].w * cells[i].d > cells[bi].w * cells[bi].d) bi = i;
-        RoofCell c = cells[bi];
-        if (std::max(c.w, c.d) < 4.5) break;                // roof full: extras skipped
-        const Real t = rng.range(0.4, 0.6);
-        RoofCell a = c, b = c;
-        if (c.w >= c.d) { a.w = c.w * t; b.u = c.u + a.w; b.w = c.w - a.w; }
-        else            { a.d = c.d * t; b.v = c.v + a.d; b.d = c.d - a.d; }
-        cells[bi] = a;
-        cells.push_back(b);
-    }
-    // Biggest item takes the biggest cell.
-    std::sort(items.begin(), items.end(), [](const CrownItem& a, const CrownItem& b) {
-        return a.w * a.d > b.w * b.d;
-    });
-    std::sort(cells.begin(), cells.end(), [](const RoofCell& a, const RoofCell& b) {
-        return a.w * a.d > b.w * b.d;
-    });
 
     // --- emitters (verbatim geometry from the old placement code, seated at a
     // planned cell instead of a rejection-sampled spot) ---
@@ -2157,6 +2134,127 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         emitDisc(out, tc, tr, tankBase + th, 14, PartId::Wood, woodCol * 1.05, true);
         return legH + th;
     };
+
+    // THE HELIPAD: a 1 m pad with a white ring and an H, four lamps at its corners, and a RAMP down to the deck
+    // on the side facing the roof's middle. Records its own two items: the pad (a floor a metre up) and the ramp
+    // (a slope from its foot edge on the deck to its top edge on the pad).
+    auto emitHelipad = [&](Real u, Real v, Real w2, Real d2, const Vec3& n2) {
+        const Real ph = 1.0;
+        const Vec3 po = footOrigin + r * u + f * v;
+        const Vec3 padCol(0.30, 0.31, 0.33), mark(0.92, 0.92, 0.90);
+        emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f}, Vec3(w2, ph, d2)}, PartId::Concrete, padCol);
+        Vec3 c = po + r * (w2 * 0.5) + f * (d2 * 0.5);
+        c.y = 0;
+        const Real R = std::min(w2, d2) * 0.36;
+        emitDisc(out, c, R, roofY + ph + 0.02, 24, PartId::Detail, mark, true);
+        emitDisc(out, c, R - 0.35, roofY + ph + 0.03, 24, PartId::Detail, padCol, true);
+        const Real hh = R * 0.9, hw = R * 0.6, bar = 0.3, my = roofY + ph + 0.04;
+        const Vec3 hO = c - r * (hw * 0.5) - f * (hh * 0.5);
+        emitBox(out, Scope{Vec3(hO.x, my, hO.z), {r, up, f}, Vec3(bar, 0.02, hh)}, PartId::Detail, mark);
+        emitBox(out, Scope{Vec3(hO.x, my, hO.z) + r * (hw - bar), {r, up, f}, Vec3(bar, 0.02, hh)}, PartId::Detail, mark);
+        emitBox(out, Scope{Vec3(hO.x, my, hO.z) + f * (hh * 0.5 - bar * 0.5), {r, up, f}, Vec3(hw, 0.02, bar)}, PartId::Detail, mark);
+        for (int cx = 0; cx <= 1; ++cx)
+            for (int cz = 0; cz <= 1; ++cz) {
+                const Vec3 q = po + r * (0.3 + (w2 - 0.6) * cx) + f * (0.3 + (d2 - 0.6) * cz);
+                out.attaches.push_back({Vec3(q.x, roofY + ph + 0.12, q.z), up, "beacon"});
+            }
+        // the ramp, down the side `n2` points to
+        const bool alongR = std::fabs(dot(n2, r)) > 0.5;
+        const Vec3 tang = alongR ? f : r;
+        const Vec3 fc = po + r * (w2 * 0.5) + f * (d2 * 0.5) + n2 * ((alongR ? w2 : d2) * 0.5);   // the pad face's middle
+        const Real run = 4.0, half = 0.8;
+        const Vec3 A = fc + n2 * run - tang * half, B = fc + n2 * run + tang * half, Cc = fc + tang * half, D = fc - tang * half;
+        const Vec3 foot[4] = {Vec3(A.x, roofY, A.z), Vec3(B.x, roofY, B.z), Vec3(Cc.x, roofY, Cc.z), Vec3(D.x, roofY, D.z)};
+        const Vec3 head[4] = {Vec3(A.x, roofY + 0.03, A.z), Vec3(B.x, roofY + 0.03, B.z), Vec3(Cc.x, roofY + ph, Cc.z), Vec3(D.x, roofY + ph, D.z)};
+        MeshBuilder::emitBlock(partMesh(out, PartId::Concrete), foot, head, padCol * 0.9);
+        RoofItem pad;
+        pad.kind = RoofItem::Kind::Helipad;
+        for (const Vec3 q : {po, po + r * w2, po + r * w2 + f * d2, po + f * d2}) pad.footprint.push_back(Vec2(q.x, q.z));
+        ensureCCW(pad.footprint);
+        pad.y0 = roofY;
+        pad.h = ph;
+        out.roof.push_back(pad);
+        RoofItem ramp;
+        ramp.kind = RoofItem::Kind::Ramp;
+        ramp.footprint = {Vec2(A.x, A.z), Vec2(B.x, B.z), Vec2(Cc.x, Cc.z), Vec2(D.x, D.z)};   // foot edge first, top edge third
+        ramp.y0 = roofY;
+        ramp.h = ph;
+        out.roof.push_back(ramp);
+    };
+
+    // THE HELIPAD takes one END of the roof's long axis, clear of the bulkhead, 10-16 m square across the depth,
+    // its ramp down whichever side has the 4 m run (toward the middle first, else across the depth); the plant's
+    // cells get the rest of the roof. Always, never, or half of the towers from 18 floors by their seed (no dice:
+    // the stream stays as it was for every other roof).
+    const bool wantPad = p.helipad == 2 || (p.helipad == 0 && p.floors >= 18 && (((p.seed * 2654435761u) >> 7) & 1u) != 0);
+    Real cellU0 = inset, cellU1 = width - inset;
+    if (wantPad && ud >= 12.5) {
+        Real koU0 = 1e9, koU1 = -1e9;   // the bulkhead's span along r
+        if (keepOut)
+            for (const Vec2& q : *keepOut) {
+                const Real du = dot(Vec3(q.x, 0, q.y) - footOrigin, r);
+                koU0 = std::min(koU0, du);
+                koU1 = std::max(koU1, du);
+            }
+        struct End { Real u0, u1; bool start; };
+        const End ends[2] = {{inset, keepOut ? koU0 - 0.5 : width - inset, true}, {keepOut ? koU1 + 0.5 : inset, width - inset, false}};
+        bool done = false;
+        for (const End& e : ends) {
+            if (done) break;
+            const Real span = e.u1 - e.u0;
+            const Real ps = std::min(Real(16.0), std::min(span - 0.5, ud - 0.5));
+            if (ps < 10.0) continue;   // (a compact pad at the least: a 40 m roof round a 12 m bulkhead leaves 11 m ends)
+            const Real u0 = e.start ? e.u0 + 0.25 : e.u1 - 0.25 - ps;
+            // the ramp: along the roof toward its middle when the end has the run, else across the depth
+            struct Try { Vec3 n2; Real v0; bool alongU; };
+            std::vector<Try> tries;
+            if (span >= ps + 4.5) tries.push_back({r * (e.start ? 1.0 : -1.0), inset + (ud - ps) * 0.5, true});
+            // centred across the depth with the ramp down one side (clear of a rounded corner), else hugging the
+            // far side with the ramp toward the middle
+            if ((ud - ps) * 0.5 >= 4.5) { tries.push_back({f, inset + (ud - ps) * 0.5, false}); tries.push_back({f * -1.0, inset + (ud - ps) * 0.5, false}); }
+            if (ud >= ps + 4.5) { tries.push_back({f, inset + 0.25, false}); tries.push_back({f * -1.0, depth - inset - 0.25 - ps, false}); }
+            for (const Try& t : tries) {
+                const Vec3 po = footOrigin + r * u0 + f * t.v0;
+                if (!onRoof(po, ps, ps)) continue;
+                // the ramp's foot, 4 m out from the pad's face, 1.6 m wide: on the roof and off the bulkhead too
+                const Vec3 face = po + r * (ps * 0.5) + f * (ps * 0.5) + t.n2 * (ps * 0.5);
+                const Vec3 tang = t.alongU ? f : r;
+                if (!onRoof(face + t.n2 * 4.0 - tang * 0.8, 0.0, 0.0) || !onRoof(face + t.n2 * 4.0 + tang * 0.8, 0.0, 0.0)) continue;
+                emitHelipad(u0, t.v0, ps, ps, t.n2);
+                if (t.alongU) { if (e.start) cellU0 = u0 + ps + 4.0 + 1.0; else cellU1 = u0 - 4.0 - 1.0; }
+                else { if (e.start) cellU0 = u0 + ps + 1.0; else cellU1 = u0 - 1.0; }
+                done = true;
+                break;
+            }
+        }
+    }
+    if (items.empty()) return;
+    if (cellU1 - cellU0 < 3.5) return;   // the pad took the roof: no plant
+
+    // (the whole roof when no pad took an end: `uw` itself, bit for bit -- (width - inset) - inset is an ulp off it,
+    // and an ulp moved the plant on eighteen roofs)
+    const bool padTook = cellU0 != inset || cellU1 != width - inset;
+    std::vector<RoofCell> cells{{cellU0, inset, padTook ? cellU1 - cellU0 : uw, ud}};
+    while (cells.size() < items.size()) {
+        std::size_t bi = 0;                                 // split the biggest cell
+        for (std::size_t i = 1; i < cells.size(); ++i)
+            if (cells[i].w * cells[i].d > cells[bi].w * cells[bi].d) bi = i;
+        RoofCell c = cells[bi];
+        if (std::max(c.w, c.d) < 4.5) break;                // roof full: extras skipped
+        const Real t = rng.range(0.4, 0.6);
+        RoofCell a = c, b = c;
+        if (c.w >= c.d) { a.w = c.w * t; b.u = c.u + a.w; b.w = c.w - a.w; }
+        else            { a.d = c.d * t; b.v = c.v + a.d; b.d = c.d - a.d; }
+        cells[bi] = a;
+        cells.push_back(b);
+    }
+    // Biggest item takes the biggest cell.
+    std::sort(items.begin(), items.end(), [](const CrownItem& a, const CrownItem& b) {
+        return a.w * a.d > b.w * b.d;
+    });
+    std::sort(cells.begin(), cells.end(), [](const RoofCell& a, const RoofCell& b) {
+        return a.w * a.d > b.w * b.d;
+    });
 
     const std::size_t nPlace = std::min(items.size(), cells.size());
     for (std::size_t i = 0; i < nPlace; ++i) {

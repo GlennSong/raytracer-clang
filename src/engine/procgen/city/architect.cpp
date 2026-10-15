@@ -582,6 +582,7 @@ void recipeRoundedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.massing = BuildingRecipe::Massing::Section;
     out.section.kind = BuildingRecipe::SectionSpec::Kind::Rounded;
     out.section.radius = 5.0 + 3.0 * rng.unit();
+    p.helipad = 2;   // the pad on its roof, the ramp up to it: the roof cell's first contents of its own
     out.placeType = "office";
     if (p.curtainWall) glassStyle(p, rng, true);
     towerTop(p, {{1, 50}, {2, 30}, {3, 20}});   // a flat top: the roof is walked (the bulkhead's doors)

@@ -1023,6 +1023,9 @@ static void readTopField(lua_State* L, int idx, BuildingParams& p) {
         for (int i = 0; i < 9; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
     }
     lua_pop(L, 1);
+    lua_getfield(L, idx, "helipad");   // true: a pad on the roof; false: never; unset: the tall-tower rule
+    if (lua_isboolean(L, -1)) p.helipad = lua_toboolean(L, -1) ? 2 : 1;
+    lua_pop(L, 1);
 }
 
 

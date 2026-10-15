@@ -158,6 +158,63 @@ TEST_CASE(roof_items_are_recorded_and_walled) {
     world.shutdown();
 }
 
+// THE HELIPAD'S RAMP, WALKED (issue #105; Glenn: "Helicopter pads?"): a tall tower's roof carries a pad a metre up
+// with a ramp down to the deck; the grow records both, the collider makes the ramp a slope and the pad a floor, and
+// a walker on the deck walks up the ramp onto the pad.
+TEST_CASE(character_walks_the_ramp_onto_the_helipad) {
+    BuildingParams p;
+    p.floors = 24;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.helipad = 2;
+    p.seed = 9;
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 32}, {0, 32}};
+    const BuildingMesh bm = growPlanBuilding(plan, p, 0.0);
+    const RoofItem* pad = nullptr;
+    const RoofItem* ramp = nullptr;
+    for (const RoofItem& ri : bm.roof) {
+        if (ri.kind == RoofItem::Kind::Helipad) pad = &ri;
+        if (ri.kind == RoofItem::Kind::Ramp) ramp = &ri;
+    }
+    CHECK(pad != nullptr);
+    CHECK(ramp != nullptr);
+    if (!pad || !ramp) return;
+    const std::vector<ColliderTier> tiers = colliderTiers(plan, p);
+    CHECK(!tiers.empty());
+    const Real deckY = tiers.back().y1;
+    CHECK(std::fabs(pad->y0 - deckY) < 0.2);
+    PhysicsWorld world;
+    world.initialize();
+    std::vector<Vec3> V;
+    std::vector<uint32_t> I;
+    CHECK(appendBuildingTiers(V, I, plan, p, 0.0, -0.45, {}, {}, {}));
+    appendRoofItems(V, I, bm.roof);
+    mirrorTriangles(I);
+    world.addMesh(V, I, Vec3(), 0.85);
+    // On the deck 1.5 m before the ramp's foot, then up it to the pad's centre.
+    const Vec2 footMid = (ramp->footprint[0] + ramp->footprint[1]) * 0.5, topMid = (ramp->footprint[2] + ramp->footprint[3]) * 0.5;
+    const Vec2 away = normalize(footMid - topMid);
+    const Vec2 start = footMid + away * 1.5;
+    CharacterId ch = world.addCharacter(0.8, 0.3, Vec3(start.x, deckY + 1.1 + 0.05, start.y));
+    world.optimizeBroadPhase();
+    walk(world, ch, Vec3(), 60);
+    CHECK_APPROX(world.characterPosition(ch).y, deckY + 1.1, 0.2);
+    const Vec2 target = centroid(pad->footprint);
+    for (int i = 0; i < 1200; ++i) {
+        const Vec3 q = world.characterPosition(ch);
+        const Vec2 d = target - Vec2(q.x, q.z);
+        if (d.length() < 0.3) break;
+        const Vec2 v = normalize(d) * 1.2;
+        world.moveCharacter(ch, Vec3(v.x, 0, v.y), 1.0 / 60.0);
+    }
+    const Vec3 pos = world.characterPosition(ch);
+    std::printf("    [helipad] deck %.2f, pad top %.2f: walker at (%.2f, %.2f, %.2f)\n", deckY, pad->y0 + pad->h, pos.x, pos.y, pos.z);
+    CHECK(pointInPolygon(pad->footprint, Vec2(pos.x, pos.z)));
+    CHECK_APPROX(pos.y, pad->y0 + pad->h + 1.1, 0.25);
+    world.shutdown();
+}
+
 // THE TIERED COLLIDER (architectural toolkit, issue #105, step 1): a setback tower collides tier by tier, each
 // deck capped where the grammar draws it, the top deck cut through over the core's stairs; a plain tower is
 // one tier capped at its roof deck (5 cm over the last ceiling), not at its parapet's top.

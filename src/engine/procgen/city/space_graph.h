@@ -30,7 +30,7 @@ struct FloorSurface {
     Real yAt(const Vec2& p) const;
 };
 
-enum class CellKind : uint8_t { Hall, Room, Stair, Lift, Roof };
+enum class CellKind : uint8_t { Hall, Room, Stair, Lift, Roof, Pad };   // Pad: a helipad, a floor over the roof deck
 
 struct Cell {
     CellKind kind = CellKind::Hall;

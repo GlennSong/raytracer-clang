@@ -223,4 +223,24 @@ TEST_CASE(rounded_tower_is_furnished_and_walkable_base_to_roof) {
     CHECK(ext.degenerate == 0);
     CHECK(in.inward == 0);
     CHECK(in.degenerate == 0);
+    // The roof's contents in the graph: the HVAC units as holes in the deck, the helipad a cell of its own with a
+    // ramp portal from the roof, the gate still green.
+    const BuildingMesh ext2 = growPlanBuilding(plan, p, 0.0);
+    int hvac = 0, pads = 0, ramps = 0;
+    for (const RoofItem& ri : ext2.roof) {
+        if (ri.kind == RoofItem::Kind::Hvac) ++hvac;
+        if (ri.kind == RoofItem::Kind::Helipad) ++pads;
+        if (ri.kind == RoofItem::Kind::Ramp) ++ramps;
+    }
+    const SpaceGraph gr = spaceGraphOf(plan, p, 0.0, &ext2.roof);
+    int padCells = 0, rampPortals = 0;
+    for (const Cell& c : gr.cells) if (c.kind == CellKind::Pad) ++padCells;
+    for (const Portal& po : gr.portals) if (po.kind == Portal::Kind::Ramp) ++rampPortals;
+    std::printf("    [rounded] roof: %d hvac, %d pad(s), %d ramp(s); graph: %d pad cells, %d ramp portals, %zu unreachable\n", hvac, pads, ramps,
+                padCells, rampPortals, unreachableCells(gr).size());
+    CHECK(pads == 1);
+    CHECK(ramps == 1);
+    CHECK(padCells == 1);
+    CHECK(rampPortals == 1);
+    CHECK(unreachableCells(gr).empty());
 }

@@ -37,6 +37,7 @@ const char* cellKindName(CellKind k) {
         case CellKind::Stair: return "stair";
         case CellKind::Lift: return "lift";
         case CellKind::Roof: return "roof";
+        case CellKind::Pad: return "pad";
     }
     return "?";
 }
@@ -402,14 +403,44 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             if (roof)   // the tanks, the HVAC, the masts' bases, a lantern: not floor (a Screen is the edge, not a hole)
                 for (const RoofItem& ri : *roof) {
                     if (ri.kind == RoofItem::Kind::Screen || ri.kind == RoofItem::Kind::Frame || ri.kind == RoofItem::Kind::Sloped ||
-                        ri.footprint.size() < 3)
-                        continue;   // (a sloped glass top stands over the deck, not on it)
+                        ri.kind == RoofItem::Kind::Ramp || ri.footprint.size() < 3)
+                        continue;   // (a sloped glass top stands over the deck, not on it; a ramp is the way onto a pad)
                     r.holes.push_back(ri.footprint);
                     r.freeArea -= area(ri.footprint);
                 }
             r.k0 = r.k1 = nS;
             r.tier = top.tier;
             g.roof = add(r);
+            // THE HELIPAD: a floor of its own a metre over the deck, reached by its ramp -- a Ramp portal from the
+            // roof cell at the ramp's top edge.
+            if (roof) {
+                std::vector<int> pads;
+                for (const RoofItem& ri : *roof) {
+                    if (ri.kind != RoofItem::Kind::Helipad || ri.footprint.size() < 3) continue;
+                    Cell pc;
+                    pc.kind = CellKind::Pad;
+                    pc.plan = ri.footprint;
+                    pc.floor.y0 = ri.y0 + ri.h;
+                    pc.floor.origin = centroid(ri.footprint);
+                    pc.height = 0;
+                    pc.freeArea = area(ri.footprint);
+                    pc.k0 = pc.k1 = nS;
+                    pc.tier = top.tier;
+                    pads.push_back(add(pc));
+                }
+                for (const RoofItem& ri : *roof) {
+                    if (ri.kind != RoofItem::Kind::Ramp || ri.footprint.size() != 4) continue;
+                    const Vec2 topMid = (ri.footprint[2] + ri.footprint[3]) * 0.5;
+                    int best = -1;
+                    Real bestD = 1e9;
+                    for (int pi : pads) {
+                        const Real d = distToOutline(topMid, g.cells[static_cast<std::size_t>(pi)].plan);
+                        if (d < bestD) { bestD = d; best = pi; }
+                    }
+                    if (best < 0 || bestD > 1.0) continue;
+                    doorPortal(g.roof, best, Portal::Kind::Ramp, ri.footprint[2], ri.footprint[3], ri.h, nS);
+                }
+            }
         }
         const Real groundY = baseY + storeys.front().y0 + 0.05;
         auto doorSpan = [&](const CoreShaft& sh, Vec2& p0, Vec2& p1) {
@@ -496,6 +527,7 @@ const char* useFill(const Cell& c) {
     if (c.kind == CellKind::Stair) return "#d9c48f";
     if (c.kind == CellKind::Lift) return "#9fb8d9";
     if (c.kind == CellKind::Roof) return "#e8e8e8";
+    if (c.kind == CellKind::Pad) return "#c9d6e3";
     if (c.kind == CellKind::Hall) return "#f7f4ec";
     switch (c.use) {
         case RoomKind::Shop: return "#f2b9a0";
