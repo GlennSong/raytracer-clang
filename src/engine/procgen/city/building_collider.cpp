@@ -138,6 +138,43 @@ bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const P
     return true;
 }
 
+void appendRoofItems(std::vector<Vec3>& V, std::vector<uint32_t>& I, const std::vector<RoofItem>& items) {
+    auto quad = [&](const Vec2& a, const Vec2& b, Real y0, Real y1) {
+        if (y1 - y0 < 1e-4 || (b - a).lengthSquared() < 1e-8) return;
+        const uint32_t s = static_cast<uint32_t>(V.size());
+        V.push_back(Vec3(a.x, y0, a.y));
+        V.push_back(Vec3(b.x, y0, b.y));
+        V.push_back(Vec3(b.x, y1, b.y));
+        V.push_back(Vec3(a.x, y1, a.y));
+        I.insert(I.end(), {s, s + 1, s + 2, s, s + 2, s + 3});
+    };
+    for (const RoofItem& ri : items) {
+        if (ri.footprint.size() < 3 || ri.h <= 0) continue;
+        const Real y1 = ri.y0 + ri.h;
+        if (ri.kind == RoofItem::Kind::Sloped && ri.footprint.size() == 4) {
+            // the glass slope itself, rising from its first edge on the deck to its third edge `h` up, the tall
+            // back face under that edge, and the two triangular flanks: the deck beneath stays floor
+            const Vec2 &A = ri.footprint[0], &B = ri.footprint[1], &Cc = ri.footprint[2], &D = ri.footprint[3];
+            const uint32_t s = static_cast<uint32_t>(V.size());
+            V.push_back(Vec3(A.x, ri.y0, A.y)); V.push_back(Vec3(B.x, ri.y0, B.y));
+            V.push_back(Vec3(Cc.x, y1, Cc.y)); V.push_back(Vec3(D.x, y1, D.y));
+            V.push_back(Vec3(Cc.x, ri.y0, Cc.y)); V.push_back(Vec3(D.x, ri.y0, D.y));
+            I.insert(I.end(), {s, s + 1, s + 2, s, s + 2, s + 3});           // the slope
+            I.insert(I.end(), {s + 4, s + 5, s + 3, s + 4, s + 3, s + 2});   // the back face
+            I.insert(I.end(), {s + 1, s + 4, s + 2});                        // the flanks
+            I.insert(I.end(), {s + 5, s, s + 3});
+            continue;
+        }
+        for (std::size_t i = 0; i < ri.footprint.size(); ++i)
+            quad(ri.footprint[i], ri.footprint[(i + 1) % ri.footprint.size()], ri.y0, y1);
+        if (ri.kind == RoofItem::Kind::Screen || ri.kind == RoofItem::Kind::Frame) continue;   // a ring, open above
+        const uint32_t s = static_cast<uint32_t>(V.size());
+        for (const Vec2& q : ri.footprint) V.push_back(Vec3(q.x, y1, q.y));
+        for (const auto& tri : triangulateIndices(ri.footprint, {}))
+            I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]), s + static_cast<uint32_t>(tri[2])});
+    }
+}
+
 void mirrorTriangles(std::vector<uint32_t>& I) {
     const std::size_t oneSided = I.size();
     I.reserve(oneSided * 2);

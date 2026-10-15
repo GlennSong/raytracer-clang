@@ -240,11 +240,25 @@ struct FurnishedUnit {
     Real y0 = 0;              // its floor
 };
 
+// WHAT STANDS ON THE ROOF (the roof cell's contents, issue #105): every piece the crown and the tower top set on the
+// deck -- the access box, the water tanks, the HVAC units, a mast's base, a lantern, a glass screen's ring -- with
+// its footprint on the deck (world XZ, CCW) and its height, so the collider walls it, the space graph keeps the
+// deck's free floor round it and the blueprint draws it. Recorded by the grow (the crown rolls its own dice from
+// the building's stream, so nothing can re-plan it later), carried by the building unit and its record, cached
+// with the lot. A Screen or a Frame is a ring of wall along its footprint's edges, not a solid.
+struct RoofItem {
+    enum class Kind : uint8_t { Access, Tank, Hvac, Mast, Lantern, Screen, Frame, Pyramid, Sloped, Helipad };
+    Kind kind = Kind::Hvac;
+    Poly2 footprint;
+    Real y0 = 0, h = 0;
+};
+
 struct BuildingMesh {
     std::vector<RenderMesh> parts;     // one per non-empty PartId, materialIndex set
     std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
     std::vector<FurnishedUnit> units;     // the shop rooms among them (PlacedPiece::unit)
     std::vector<AttachPoint> attaches;
+    std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding / growBuilding)
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;
 

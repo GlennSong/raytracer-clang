@@ -5995,6 +5995,10 @@ bool LevelLoader::load(const std::string& path,
                         buildingsMc.vertices, buildingsMc.indices, lb.plan,
                         base, top, lb.baseY + 0.05, doorCuts,
                         lb.baseY - lb.groundY);
+                    // WHAT STANDS ON THE ROOF collides (the tanks, the HVAC, the masts' bases, a lantern, a screen's
+                    // ring): the items the grow recorded, walled on the deck they stand on.
+                    for (const engine::BuildingUnit& u : units)
+                        engine::appendRoofItems(buildingsMc.vertices, buildingsMc.indices, u.roof);
                     // A PAVED lot (ADR-0086) is a walkable slab to its lot
                     // line: the plate the lot pass drew at paveY gets the
                     // same prism treatment (top cap at the plate, sides down
@@ -6011,6 +6015,7 @@ bool LevelLoader::load(const std::string& path,
                                                  u.enterable, lb.recipe,
                                                  lb.type, lb.district});
                         cityB.records.back().beacons = u.beacons;
+                        cityB.records.back().roof = u.roof;
                     }
                     // Record the exact prism for the collider debug layer.
                     colliderPrisms.push_back({lb.plan, base, top, lb.district, lb.type});

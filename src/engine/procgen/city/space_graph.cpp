@@ -196,7 +196,7 @@ void stepped(FloorSurface& f, Real storeyH, Real tread, const Vec2& up) {
 
 }  // namespace
 
-SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real baseY) {
+SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real baseY, const std::vector<RoofItem>* roof) {
     SpaceGraph g;
     Poly2 plan = planIn;
     if (plan.size() < 3) { g.modelled = false; return g; }
@@ -399,6 +399,14 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             r.floor.origin = centroid(top.plan);
             r.height = 0;
             r.freeArea = area(r.plan) - area(coreRect);
+            if (roof)   // the tanks, the HVAC, the masts' bases, a lantern: not floor (a Screen is the edge, not a hole)
+                for (const RoofItem& ri : *roof) {
+                    if (ri.kind == RoofItem::Kind::Screen || ri.kind == RoofItem::Kind::Frame || ri.kind == RoofItem::Kind::Sloped ||
+                        ri.footprint.size() < 3)
+                        continue;   // (a sloped glass top stands over the deck, not on it)
+                    r.holes.push_back(ri.footprint);
+                    r.freeArea -= area(ri.footprint);
+                }
             r.k0 = r.k1 = nS;
             r.tier = top.tier;
             g.roof = add(r);

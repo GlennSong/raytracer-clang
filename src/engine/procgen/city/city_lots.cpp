@@ -3607,6 +3607,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             else if (ap.tag == "beacon")
                 u.beacons.push_back(ap.position);
         }
+        u.roof = um.roof;
         // The SHOPS' street doors and the BACK door after the building's own entrance: doors.front() stays the
         // front door (the citysim's place entrance); every door gets its collider gap and its leaf.
         for (const AttachPoint& ap : um.attaches)

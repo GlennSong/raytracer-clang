@@ -94,6 +94,70 @@ TEST_CASE(no_exit_through_a_wall_from_inside) {
     world.shutdown();
 }
 
+// WHAT STANDS ON THE ROOF COLLIDES (issue #105; the gap left open since the lab's first walk): the grow records
+// every tank, HVAC unit and access box the crown sets on the deck, the collider walls them, and a walker on the
+// deck stops at the first one's face instead of walking through it.
+TEST_CASE(roof_items_are_recorded_and_walled) {
+    BuildingParams p;
+    p.floors = 10;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 11;
+    const Poly2 plan = {{0, 0}, {30, 0}, {30, 24}, {0, 24}};
+    BuildingMesh bm;
+    uint32_t seed = 11;
+    for (; seed < 40 && bm.roof.empty(); ++seed) { p.seed = seed; bm = growPlanBuilding(plan, p, 0.0); }
+    std::printf("    [roof] seed %u: %zu items on the roof\n", p.seed, bm.roof.size());
+    CHECK(!bm.roof.empty());
+    if (bm.roof.empty()) return;
+    const RoofItem& it = bm.roof.front();
+    CHECK(it.footprint.size() >= 3);
+    CHECK(it.h > 1.0);
+    for (const Vec2& q : it.footprint) CHECK(pointInPolygon(plan, q));
+    const std::vector<ColliderTier> tiers = colliderTiers(plan, p);
+    CHECK(!tiers.empty());
+    if (tiers.empty()) return;
+    const Real deckY = tiers.back().y1;
+    CHECK(std::fabs(it.y0 - deckY) < 0.2);   // on the deck the collider caps
+    PhysicsWorld world;
+    world.initialize();
+    std::vector<Vec3> V;
+    std::vector<uint32_t> I;
+    CHECK(appendBuildingTiers(V, I, plan, p, 0.0, -0.45, {}, {}, {}));
+    appendRoofItems(V, I, bm.roof);
+    mirrorTriangles(I);
+    world.addMesh(V, I, Vec3(), 0.85);
+    // On the deck, 3 m from the item's centre on the side with room, walking at it.
+    const Vec2 c = centroid(it.footprint);
+    Vec2 from = c;
+    Real best = -1;
+    for (const Vec2 dir : {Vec2(1, 0), Vec2(-1, 0), Vec2(0, 1), Vec2(0, -1)}) {
+        // out of the item's own footprint first, then the clear run of deck beyond its face
+        Real dOut = -1, run = 0;
+        for (Real d = 0.25; d < 14.0; d += 0.25) {
+            const Vec2 q = c + dir * d;
+            if (dOut < 0) { if (!pointInPolygon(it.footprint, q)) dOut = d; else continue; }
+            bool clear = pointInPolygon(plan, q);
+            for (const RoofItem& o : bm.roof) if (clear && &o != &it && pointInPolygon(o.footprint, q)) clear = false;
+            if (!clear) break;
+            run = d - dOut;
+        }
+        if (dOut >= 0 && run > best) { best = run; from = c + dir * (dOut + std::min(run - 0.6, Real(3.0))); }
+    }
+    CHECK(best >= 2.0);
+    CharacterId ch = world.addCharacter(0.8, 0.3, Vec3(from.x, deckY + 1.1 + 0.05, from.y));
+    world.optimizeBroadPhase();
+    walk(world, ch, Vec3(), 60);
+    CHECK_APPROX(world.characterPosition(ch).y, deckY + 1.1, 0.2);
+    const Vec2 toward = normalize(c - from);
+    walk(world, ch, Vec3(toward.x * 1.2, 0, toward.y * 1.2), 600);
+    const Vec3 pos = world.characterPosition(ch);
+    std::printf("    [roof] walked from (%.1f, %.1f) at the item's centre (%.1f, %.1f): stopped at (%.2f, %.2f, %.2f)\n", from.x, from.y, c.x, c.y, pos.x, pos.y, pos.z);
+    CHECK(!pointInPolygon(it.footprint, Vec2(pos.x, pos.z)));   // stopped at its face, not inside it
+    CHECK_APPROX(pos.y, deckY + 1.1, 0.3);                       // and did not climb it
+    world.shutdown();
+}
+
 // THE TIERED COLLIDER (architectural toolkit, issue #105, step 1): a setback tower collides tier by tier, each
 // deck capped where the grammar draws it, the top deck cut through over the core's stairs; a plain tower is
 // one tier capped at its roof deck (5 cm over the last ceiling), not at its parapet's top.

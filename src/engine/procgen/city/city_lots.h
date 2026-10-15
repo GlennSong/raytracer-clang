@@ -65,6 +65,7 @@ struct BuildingUnit {
     std::vector<DoorSpec> doors;
     bool enterable = false;   // grown with openDoorway (LotParams::enterableAt)
     std::vector<Vec3> beacons;   // aviation lamp centres (world), from the grammar's "beacon" attaches
+    std::vector<RoofItem> roof;  // what stands on the roof (BuildingMesh::roof): walled by the collider
 };
 
 struct LotBuilding {

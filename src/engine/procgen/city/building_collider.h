@@ -44,6 +44,11 @@ bool appendBuildingTiers(std::vector<Vec3>& vertices, std::vector<uint32_t>& ind
                          const std::vector<DoorSpec>& doors, const std::vector<Poly2>& deckHoles,
                          const std::vector<Poly2>& roofHoles);
 
+// WHAT STANDS ON THE ROOF (BuildingMesh::roof, RoofItem): every item walled from its base up its height -- a
+// closed prism for a tank, an HVAC unit, an access box, a mast's base, a lantern, a pyramid; a ring of wall for a
+// Screen or a Frame post row. A walker on the deck meets what they see.
+void appendRoofItems(std::vector<Vec3>& vertices, std::vector<uint32_t>& indices, const std::vector<RoofItem>& items);
+
 // Append the reversed copy of every triangle currently in `indices`.
 void mirrorTriangles(std::vector<uint32_t>& indices);
 

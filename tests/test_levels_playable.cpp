@@ -759,7 +759,7 @@ TEST_CASE(level_blueprints_and_graph_gate) {
             const BuildingRecord& r = cbp->records[i];
             if (!r.enterable || r.plan.size() < 3) continue;
             ++enterable;
-            const SpaceGraph g = spaceGraphOf(r.plan, r.params, r.baseY);
+            const SpaceGraph g = spaceGraphOf(r.plan, r.params, r.baseY, &r.roof);
             if (!g.modelled) continue;
             ++modelled;
             const std::vector<int> bad = unreachableCells(g);

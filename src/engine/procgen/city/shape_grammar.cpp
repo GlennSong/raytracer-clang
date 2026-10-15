@@ -2016,14 +2016,14 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     // lots) carves the parapet-inset rect into cells, and every piece of
     // equipment gets its OWN cell — roof access exactly 1, water tanks 1-2,
     // HVAC units 1-4 by roof size. Items centre in their cell with jitter.
-    struct RoofItem { int kind; Real w, d, minW, minD; };   // 0 access, 1 tank, 2 hvac
+    struct CrownItem { int kind; Real w, d, minW, minD; };   // 0 access, 1 tank, 2 hvac
     struct RoofCell { Real u, v, w, d; };
     const Real inset = 0.7;                                 // parapet clearance
     const Real uw = width - 2 * inset, ud = depth - 2 * inset;
     if (uw < 3.5 || ud < 3.5) return;
     const Real roofArea = uw * ud;
 
-    std::vector<RoofItem> items;
+    std::vector<CrownItem> items;
     if (p.floors >= 4 && width > 5 && depth > 5 && !keepOut) {   // roof access: 1, unless the core's bulkhead IS it
         const Real bw = std::min(std::max(width * 0.28, Real(3.0)), Real(5.0));
         const Real bd = std::min(std::max(depth * 0.24, Real(2.4)), Real(3.8));
@@ -2065,7 +2065,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         cells.push_back(b);
     }
     // Biggest item takes the biggest cell.
-    std::sort(items.begin(), items.end(), [](const RoofItem& a, const RoofItem& b) {
+    std::sort(items.begin(), items.end(), [](const CrownItem& a, const CrownItem& b) {
         return a.w * a.d > b.w * b.d;
     });
     std::sort(cells.begin(), cells.end(), [](const RoofCell& a, const RoofCell& b) {
@@ -2074,7 +2074,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
 
     // --- emitters (verbatim geometry from the old placement code, seated at a
     // planned cell instead of a rejection-sampled spot) ---
-    auto emitAccess = [&](Real u, Real v, Real bw, Real bd) {
+    auto emitAccess = [&](Real u, Real v, Real bw, Real bd) -> Real {
         const Real bh = rng.range(2.8, 3.3);
         Vec3 po = footOrigin + r * u + f * v;
         emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f}, Vec3(bw, bh, bd)},
@@ -2094,8 +2094,9 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         emitBox(out, Scope{Vec3(doorO.x, roofY, doorO.z), {tang, up, n2},
                            Vec3(1.0, 2.1, 0.06)},
                 PartId::Detail, darkPanel);
+        return bh;
     };
-    auto emitHvac = [&](Real u, Real v, Real aw, Real ad) {
+    auto emitHvac = [&](Real u, Real v, Real aw, Real ad) -> Real {
         const Real ah = rng.range(1.5, 2.1);
         const Vec3 casing = materialFor(PartId::Metal, p.wallColor).albedo;
         const Vec3 louvre(0.30, 0.31, 0.33);
@@ -2136,8 +2137,9 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                                                     (2.0 * frad) * 0.92);
             }
         }
+        return ah;
     };
-    auto emitTank = [&](Real u, Real v, Real w2, Real d2) {
+    auto emitTank = [&](Real u, Real v, Real w2, Real d2) -> Real {
         const Real tr = std::max(Real(0.9), (std::min(w2, d2) - 1.0) * 0.5);
         const Real th = rng.range(2.6, 3.4), legH = rng.range(1.6, 2.4);
         Vec3 tc = footOrigin + r * (u + w2 * 0.5) + f * (v + d2 * 0.5);
@@ -2153,11 +2155,12 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             }
         emitTube(out, tc, tr, tankBase, tankBase + th, 14, PartId::Wood, woodCol);
         emitDisc(out, tc, tr, tankBase + th, 14, PartId::Wood, woodCol * 1.05, true);
+        return legH + th;
     };
 
     const std::size_t nPlace = std::min(items.size(), cells.size());
     for (std::size_t i = 0; i < nPlace; ++i) {
-        const RoofItem& it = items[i];
+        const CrownItem& it = items[i];
         const RoofCell& c = cells[i];
         const Real clear = 0.5;
         const Real w2 = std::min(it.w, c.w - clear);
@@ -2169,9 +2172,15 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             const Real v = c.v + (c.d - d2) * rng.range(0.2, 0.8);
             Vec3 po = footOrigin + r * u + f * v;
             if (!onRoof(po, w2, d2)) continue;              // L-plan notch: jitter again
-            if (it.kind == 0) emitAccess(u, v, w2, d2);
-            else if (it.kind == 1) emitTank(u, v, w2, d2);
-            else emitHvac(u, v, w2, d2);
+            const Real ih = it.kind == 0 ? emitAccess(u, v, w2, d2) : it.kind == 1 ? emitTank(u, v, w2, d2) : emitHvac(u, v, w2, d2);
+            // THE ROOF ITEM (BuildingMesh::roof): its seat and its height, for the collider and the space graph
+            RoofItem ri;
+            ri.kind = it.kind == 0 ? RoofItem::Kind::Access : it.kind == 1 ? RoofItem::Kind::Tank : RoofItem::Kind::Hvac;
+            for (const Vec3 q : {po, po + r * w2, po + r * w2 + f * d2, po + f * d2}) ri.footprint.push_back(Vec2(q.x, q.z));
+            ensureCCW(ri.footprint);
+            ri.y0 = roofY;
+            ri.h = ih;
+            out.roof.push_back(ri);
             placed = true;
         }
     }
@@ -2816,7 +2825,18 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
         out.attaches.push_back({at + Vec3(0, 0.25, 0), up, "beacon"});
     };
     // A mast: three stacked, narrowing boxes and a beacon at the tip.
+    auto record = [&](RoofItem::Kind kind, Poly2 fp, Real y0, Real hgt) {
+        if (fp.size() < 3 || hgt <= 0) return;
+        ensureCCW(fp);
+        RoofItem ri;
+        ri.kind = kind;
+        ri.footprint = std::move(fp);
+        ri.y0 = y0;
+        ri.h = hgt;
+        out.roof.push_back(ri);
+    };
     auto mast = [&](const Vec2& at, Real y0, Real hgt, Real w, const Vec3& col) {
+        record(RoofItem::Kind::Mast, Poly2{at + Vec2(-w * 0.5, -w * 0.5), at + Vec2(w * 0.5, -w * 0.5), at + Vec2(w * 0.5, w * 0.5), at + Vec2(-w * 0.5, w * 0.5)}, y0, hgt);
         Real y = y0;
         const Real seg[3] = {0.45, 0.35, 0.20}, wid[3] = {1.0, 0.7, 0.4};
         for (int k = 0; k < 3; ++k) {
@@ -2830,6 +2850,7 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
     };
     // The glass screen around a plan, `H` tall: glass outside, a dark back inside, a mullion every bay, a cap.
     auto screen = [&](const Poly2& pl, Real y0, Real H) {
+        record(RoofItem::Kind::Screen, pl, y0, H);
         for (std::size_t e = 0; e < pl.size(); ++e) {
             const Vec2 a = pl[e], b = pl[(e + 1) % pl.size()];
             const Real W = (b - a).length();
@@ -2865,6 +2886,7 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
             // Low edge on -S, high edge on +S.
             const Vec3 A = Y(o - L - S, roofY), B = Y(o + L - S, roofY), C = Y(o + L + S, roofY), D = Y(o - L + S, roofY);
             const Vec3 Cu = C + up * H, Du = D + up * H;
+            record(RoofItem::Kind::Sloped, Poly2{o - L - S, o + L - S, o + L + S, o - L + S}, roofY, H);
             quad(glassM, A, B, Cu, Du, glass);                 // the slope
             quad(glassM, C, D, Du, Cu, glass);                 // the tall back face
             MeshBuilder::emitTri(glassM, B, C, Cu, normalize(cross(C - B, Cu - B)), glass);
@@ -2886,6 +2908,7 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
             const Real H = shortW * (0.55 + 0.25 * ((h & 0xffu) / 255.0));
             Poly2 lo = offsetPlan(top, 0.4), hi = top;
             for (Vec2& v : hi) v = c2 + (v - c2) * 0.14;
+            record(RoofItem::Kind::Pyramid, lo, roofY, H);
             const bool glow = ((h >> 8) & 1u) != 0;
             // A masonry tower's pyramid is METAL -- verdigris copper, bright copper or slate -- not glass.
             static const Vec3 kRoofMetal[3] = {{0.45, 0.72, 0.60}, {0.80, 0.45, 0.28}, {0.30, 0.32, 0.36}};
@@ -2909,6 +2932,7 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
             const Poly2 lan = offsetPlan(top, std::max(Real(2.0), shortW * 0.18));
             if (lan.size() < 3 || std::fabs(area(lan)) < 20) return 0;
             const Real H = fh * 2.0;
+            record(RoofItem::Kind::Lantern, lan, roofY, H);
             for (std::size_t e = 0; e < lan.size(); ++e) {
                 const Vec2 a = lan[e], b = lan[(e + 1) % lan.size()];
                 quad(litM, Y(a, roofY), Y(b, roofY), Y(b, roofY + H), Y(a, roofY + H), Vec3(0.95, 0.92, 0.85));
@@ -2927,7 +2951,11 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
                 const Vec2 a = ring[e], b = ring[(e + 1) % ring.size()];
                 const Real W = (b - a).length();
                 const int n = std::max(1, static_cast<int>(std::lround(W / 4.5)));
-                for (int k = 0; k < n; ++k) post(a + (b - a) * (static_cast<Real>(k) / n), roofY, H, w);
+                for (int k = 0; k < n; ++k) {
+                    const Vec2 pq = a + (b - a) * (static_cast<Real>(k) / n);
+                    post(pq, roofY, H, w);
+                    record(RoofItem::Kind::Frame, Poly2{pq + Vec2(-w * 0.5, -w * 0.5), pq + Vec2(w * 0.5, -w * 0.5), pq + Vec2(w * 0.5, w * 0.5), pq + Vec2(-w * 0.5, w * 0.5)}, roofY, H);
+                }
                 // The ring beam along the edge.
                 const Vec2 d = normalize(b - a), nn(-d.y, d.x);
                 const Vec2 a0 = a + nn * (w * 0.5), b0 = b + nn * (w * 0.5), a1 = a - nn * (w * 0.5), b1 = b - nn * (w * 0.5);
@@ -6653,11 +6681,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         } else {
             // THE TOP (buildings M2) -- both tiers: it is the skyline. The penthouse stays behind a screen and
             // wherever no top stands; a sloped, faceted, lantern, frame or mast top houses the plant itself.
-            const Real topRise = emitTowerTop(out, cur, y + 0.05, y - baseY, params, wallColor, full, rectish);
+            // A ROOF THE STAIRS REACH is a floor (the roof exit, core_plan.h): a top that covers the deck (sloped,
+            // faceted, lantern) or rings it shut (the mast's plinth) gives way to the screen, which leaves the
+            // deck open behind its glass -- a bulkhead under a glass slope was no exit.
+            BuildingParams topParams = params;
+            if (roofExit && (params.top == 3 || params.top == 4 || params.top == 5 || params.top == 8)) topParams.top = 2;
+            const Real topRise = emitTowerTop(out, cur, y + 0.05, y - baseY, topParams, wallColor, full, rectish);
             roofRise = std::max(roofRise, topRise);
             // Flat (LOD1) keeps spire/dome/steeple — they are the skyline —
             // but skips the penthouse + roof-furniture pack.
-            if (full && (topRise <= 0 || params.top == 2 || params.top == 7)) {
+            if (full && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
                 // the bulkhead's footprint, a little wider, keeps the plant off the roof access
                 const Poly2 bulk = roofExit ? offsetPlan(ecore.rect(), -0.75) : Poly2{};
                 emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,

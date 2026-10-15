@@ -90,7 +90,9 @@ std::vector<StoreyPlan> storeyView(const SpaceGraph& g, Real baseY);
 // hoistway as one shaft spanning every storey, the roof deck when the core reaches it. Portals: the room planner's
 // doors, the facade's street doors (storey 0), the shaft doors on every storey (Stair / Lift), the bulkhead's stair
 // doors onto the roof, the straight stair's flights (hall to hall), a mall's escalators and glass lift.
-SpaceGraph spaceGraphOf(const Poly2& plan, const BuildingParams& params, Real baseY);
+// `roof`: what stands on the roof (a record's RoofItems), cut from the roof cell's free floor when given.
+SpaceGraph spaceGraphOf(const Poly2& plan, const BuildingParams& params, Real baseY,
+                        const std::vector<RoofItem>* roof = nullptr);
 
 // THE BLUEPRINT SHEET: every storey drawn -- halls, rooms by use, shafts, doors, stair and lift doors -- the
 // unreachable cells hatched red, as one SVG document.

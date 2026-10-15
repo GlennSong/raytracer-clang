@@ -17,7 +17,7 @@ constexpr std::size_t kBuildingParamsSize = 520;   // v13: storeFloors, dineFloo
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 13, kLotsVersion = 13, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 13, kLotsVersion = 14, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -95,6 +95,8 @@ void putLots(BinWriter& w, const std::vector<LotBuilding>& lots) {
             w.put<uint32_t>(static_cast<uint32_t>(u.doors.size())); for (const DoorSpec& d : u.doors) { putVec2(w, d.foot); putVec2(w, d.normal); w.put<double>(d.width); w.put<double>(d.height); putBool(w, d.back); putBool(w, d.open); }
             putBool(w, u.enterable);
             w.put<uint32_t>(static_cast<uint32_t>(u.beacons.size())); for (const Vec3& b : u.beacons) putVec3(w, b);
+            w.put<uint32_t>(static_cast<uint32_t>(u.roof.size()));   // (format 14: the roof's items)
+            for (const RoofItem& ri : u.roof) { w.put<uint8_t>(static_cast<uint8_t>(ri.kind)); putPoly(w, ri.footprint); w.put<double>(ri.y0); w.put<double>(ri.h); }
         }
         // Site plan (format 3): the lot's ground around the building, by kind.
         w.put<uint32_t>(static_cast<uint32_t>(lb.open.size()));
@@ -132,6 +134,8 @@ bool getLots(BinReader& r, std::vector<LotBuilding>& lots) {
             if (!getBool(r, u.enterable)) return false;
             uint32_t nb = 0; if (!r.get(nb)) return false; u.beacons.resize(nb);
             for (Vec3& b : u.beacons) if (!getVec3(r, b)) return false;
+            uint32_t nr = 0; if (!r.get(nr)) return false; u.roof.resize(nr);
+            for (RoofItem& ri : u.roof) { uint8_t k = 0; if (!r.get(k) || !getPoly(r, ri.footprint) || !r.get(ri.y0) || !r.get(ri.h)) return false; ri.kind = static_cast<RoofItem::Kind>(k); }
         }
         uint32_t no = 0; if (!r.get(no)) return false; lb.open.resize(no);
         for (OpenSpace& o : lb.open) { uint8_t k = 0; if (!r.get(k) || !getPoly(r, o.poly)) return false; o.kind = static_cast<OpenKind>(k); }
