@@ -28,7 +28,7 @@
       ],
       "road": {
         "builder": "lanes",
-        "graph": "assets/lanelab/converted/piedmont_roads_lanelab.json",
+        "graph": "assets/lanelab/converted/piedmont_lanelab.json",
         "sidewalks": {
           "arterial": 3.5,
           "collector": 3.5,
