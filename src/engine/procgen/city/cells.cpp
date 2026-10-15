@@ -124,14 +124,20 @@ void Complex::resolve(Real tol, Real minRun) {
 
 void Complex::connectLobbies(const Vec2& faceDir) {
     const std::size_t n = cells.size();
-    // the complex's own boundary: the box round every cell; a face on it is a street face
+    // the complex's own boundary: the convex hull round every cell; a face on it is a street face (a bundle's and
+    // a courtyard's outer faces lie on their box; a ring's outer chords on its polygon; a court's faces on neither)
     Poly2 all;
     for (const CellFrame& c : cells) all.insert(all.end(), c.plan.begin(), c.plan.end());
-    const OBB2 hull = all.size() >= 3 ? orientedBoundingBox(all) : OBB2{};
+    const Poly2 hull = all.size() >= 3 ? convexHull(all) : Poly2{};
     auto onBoundary = [&](const Vec2& m) {
-        const Vec2 r = m - hull.center;
-        const Real x = std::fabs(dot(r, hull.axis[0])), y = std::fabs(dot(r, hull.axis[1]));
-        return std::fabs(x - hull.half[0]) < 0.3 || std::fabs(y - hull.half[1]) < 0.3;
+        for (std::size_t i = 0; i < hull.size(); ++i) {
+            const Vec2 a = hull[i], b = hull[(i + 1) % hull.size()];
+            const Vec2 ab = b - a;
+            const Real L2 = ab.lengthSquared();
+            const Real t = L2 > 1e-12 ? std::max(Real(0), std::min(Real(1), dot(m - a, ab) / L2)) : Real(0);
+            if ((m - (a + ab * t)).length() < 0.3) return true;
+        }
+        return false;
     };
     for (std::size_t i = 0; i < n; ++i) {
         CellFrame& c = cells[i];
@@ -261,6 +267,40 @@ Complex courtyardWings(const Poly2& boxIn, const BuildingParams& params, Real de
         c.frame.u = ux;
         c.frame.v = uy;
         c.role = i < 4 ? "wing" : "corner";
+        c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
+        cx.cells.push_back(c);
+    }
+    cx.resolve();
+    cx.connectLobbies(Vec2(params.faceDir.x, params.faceDir.z));
+    return cx;
+}
+
+Complex ringCells(const Poly2& outlineIn, const BuildingParams& params, Real depth, const std::vector<int>& floorsPerCell, Real minCourt) {
+    Complex cx;
+    Poly2 outer = outlineIn;
+    if (outer.size() < 3 || depth < 4.0) return cx;
+    ensureCCW(outer);
+    const Poly2 inner = offsetPlanPublic(outer, depth);
+    if (inner.size() != outer.size() || area(inner) < 1.0) return cx;
+    {
+        const OBB2 ib = orientedBoundingBox(inner);
+        if (2 * std::min(ib.half[0], ib.half[1]) < minCourt) return cx;
+    }
+    const std::size_t n = outer.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        CellFrame c;
+        c.plan = {outer[i], outer[(i + 1) % n], inner[(i + 1) % n], inner[i]};
+        ensureCCW(c.plan);
+        if (area(c.plan) < 20.0) continue;
+        c.params = params;
+        if (!floorsPerCell.empty()) c.params.floors = std::max(1, floorsPerCell[std::min(i, floorsPerCell.size() - 1)]);
+        c.params.partyWalls = 0;
+        c.params.partyDoors = 0;
+        const Vec2 d = normalize(outer[(i + 1) % n] - outer[i]);
+        c.frame.origin = outer[i];
+        c.frame.u = d;
+        c.frame.v = Vec2(-d.y, d.x);
+        c.role = "segment";
         c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
         cx.cells.push_back(c);
     }

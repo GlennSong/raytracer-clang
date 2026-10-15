@@ -856,6 +856,26 @@ void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "twisted_taper";
 }
 
+// The RING BLOCK (issue #105 step 5, the complex's third preset; Apple Park): a low glass ring of cells round a
+// court, a dozen segments or so, each with its door on the outside.
+void recipeRingBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(3, 5) + (cx.roomy ? 1 : 0);
+    p.groundRetail = false;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Ring;
+    out.complex.sides = rng.irange(10, 16);
+    out.complex.depth = rng.range(12.0, 14.0);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 1.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 100}});
+    out.name = "ring_block";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1599,6 +1619,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"courtyard_block", recipeCourtyardBlock},
     {"leaning_tower", recipeLeaningTower},
     {"twisted_taper", recipeTwistedTaper},
+    {"ring_block", recipeRingBlock},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},

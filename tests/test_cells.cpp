@@ -200,3 +200,33 @@ TEST_CASE(a_courtyard_block_is_eight_cells_round_an_open_court) {
     std::printf("    [court] 8 cells, %zu shared faces, built %.0f m2 round a %.0f x %.0f court\n", cx.adj.size(), built, 60.0 - 30.0, 44.0 - 30.0);
 }
 
+TEST_CASE(a_ring_of_cells_round_a_court_enters_every_segment_from_outside) {
+    Poly2 ngon;
+    for (int k = 0; k < 12; ++k) {
+        const Real a2 = 2.0 * 3.14159265358979323846 * (k + 0.5) / 12;
+        ngon.push_back(Vec2(std::cos(a2), std::sin(a2)) * 30.0);
+    }
+    BuildingParams p = towerParams(4);
+    const Complex cx = ringCells(ngon, p, 12.0, {4});
+    CHECK(cx.cells.size() == 12);
+    CHECK(cx.adj.size() == 12);   // every radial face shared whole
+    Real built = 0;
+    for (std::size_t i = 0; i < cx.cells.size(); ++i) {
+        const CellFrame& c = cx.cells[i];
+        CHECK(c.plan.size() == 4);
+        CHECK(c.params.partyWalls == 2);
+        CHECK(c.outerFace && c.streetFace && c.connected);
+        CHECK(c.params.partyDoors == 0);
+        // the entrance faces outward: along the cell's own radial direction, not into the court
+        const Vec2 radial = normalize(centroid(c.plan));
+        CHECK(dot(Vec2(c.params.faceDir.x, c.params.faceDir.z), radial) > 0.9);
+        built += area(c.plan);
+        CHECK(unreachableCells(spaceGraphOf(c.plan, c.params, 0.0)).empty());
+    }
+    const Poly2 inner = offsetPlanPublic(ngon, 12.0);
+    CHECK(std::fabs(built - (area(ngon) - area(inner))) < 1e-6);
+    // Too deep for its court: nothing.
+    CHECK(ringCells(ngon, p, 28.0, {4}).cells.empty());
+    std::printf("    [ring] 12 segments, %.0f m2 built round a court of %.0f m2\n", built, area(inner));
+}
+

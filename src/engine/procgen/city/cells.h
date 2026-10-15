@@ -82,6 +82,12 @@ Complex bundledTubes(const Poly2& box, const BuildingParams& params, int nx, int
 // `minCourt` across, or the result is empty.
 Complex courtyardWings(const Poly2& box, const BuildingParams& params, Real depth, const std::vector<int>& floorsPerWing, Real minCourt = 8.0);
 
+// THE RING: one cell per edge of a convex `outline` (CCW), each the trapezoid between that edge and the outline
+// offset `depth` inward, neighbours sharing their radial faces whole -- a round block round a court (Apple Park on
+// a sixteen-gon; four cells with mitred corners on a rectangle). `floorsPerCell` per edge (short lists repeat the
+// last). Empty when the court inside would be narrower than `minCourt`.
+Complex ringCells(const Poly2& outline, const BuildingParams& params, Real depth, const std::vector<int>& floorsPerCell, Real minCourt = 6.0);
+
 }  // namespace engine
 
 #endif

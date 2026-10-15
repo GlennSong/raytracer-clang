@@ -1481,7 +1481,7 @@ int l_building_mass(lua_State* L) {
     return 1;
 }
 
-// building.cells{ box = {{x,z}, {x,z}, {x,z}, {x,z}}, tubes = {nx, ny} | court = depth, floors = {n, ...}, <params> | recipe = "name", ... }
+// building.cells{ box = {{x,z}, {x,z}, {x,z}, {x,z}}, tubes = {nx, ny} | court = depth | ring = sides, depth = d, floors = {n, ...}, <params> | recipe = "name", ... }
 //   -> { cells = { {x0, z0, x1, z1, floors, outer, connected, face_x, face_z, party, doors} ... },
 //        adjacencies = { {a, b, top, openings} ... } }
 // THE COMPLEX (cells.h, issue #105 step 5): a bundle of tubes on a box, their shared faces and the way into each.
@@ -1519,7 +1519,20 @@ int l_building_cells(lua_State* L) {
     }
     lua_pop(L, 1);
     const double court = optField(L, 1, "court", 0.0);   // court = <wing depth>: a courtyard block instead of tubes
-    const Complex cx = court > 0 ? courtyardWings(box, p, static_cast<Real>(court), floors) : bundledTubes(box, p, nx, ny, floors);
+    const double ringN = optField(L, 1, "ring", 0.0);    // ring = <sides> (with depth = d): a ring of cells on the box's inscribed polygon
+    Complex cx;
+    if (ringN >= 3) {
+        const OBB2 ob = orientedBoundingBox(box);
+        const Real R = std::min(ob.half[0], ob.half[1]);
+        Poly2 ngon;
+        for (int k = 0; k < static_cast<int>(ringN); ++k) {
+            const Real a2 = 2.0 * 3.14159265358979323846 * (k + 0.5) / ringN;
+            ngon.push_back(ob.center + ob.axis[0] * (std::cos(a2) * R) + ob.axis[1] * (std::sin(a2) * R));
+        }
+        cx = ringCells(ngon, p, static_cast<Real>(optField(L, 1, "depth", 12.0)), floors);
+    } else {
+        cx = court > 0 ? courtyardWings(box, p, static_cast<Real>(court), floors) : bundledTubes(box, p, nx, ny, floors);
+    }
     lua_newtable(L);
     lua_newtable(L);
     for (std::size_t i = 0; i < cx.cells.size(); ++i) {

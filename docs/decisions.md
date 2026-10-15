@@ -10212,6 +10212,10 @@ tubes, courtyards, wings -- without a mesh boolean.
   corners are cells of their own, eight cells in all, each with its own street face. A cell of a complex opens
   whatever its height -- the lot pass's walk-up limit (three storeys without a core) predates the stair runs that
   climb every storey, and the gate proves each cell.
+- **The ring is the third preset.** One trapezoid cell per edge of a convex outline, between the edge and the
+  outline offset inward by the depth; neighbours share their radial faces whole. A round block round a court on
+  a twelve-gon; four mitred cells on a rectangle. It fixed the street-face rule: a face on the complex's convex
+  hull (a ring's outer chords are on no box).
 - **Owed.** The rowhouse strip and the mall as presets of the complex (byte-identical), a courtyard as a section
   hole (one ring plan, one building), bridges between cells above the ground, a `growComplex` that grows the cells
   as one, openings between cells above the lobby (sky bridges inside a bundle), the heights as a recipe descriptor.
