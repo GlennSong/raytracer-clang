@@ -341,16 +341,19 @@ void stairStorey(CoreMeshes& out, RenderMesh* col, const CoreStair& st, Real y0,
 // the service block behind), facing out, the doors cut into its front wall.
 // One skin for the whole core, so the slots between neighbouring shafts are
 // sealed by construction.
-void coreRing(CoreMeshes& out, RenderMesh* col, const CorePlan& core, Real y0, Real h, const Vec3& paint) {
+// `target` is the mesh the ring's faces go to (the storeys' drywall; the bulkhead's shell); `hoistwayDoors` false
+// cuts the stairs' doors only (the bulkhead: no hoistway opens onto the roof).
+void coreRing(RenderMesh& target, RenderMesh* col, const CorePlan& core, Real y0, Real h, const Vec3& paint,
+              bool hoistwayDoors = true) {
     const Real w = kWall, L = core.length, D = core.depth;
     const SiteFrame& f = core.frame;
     auto W = [&](Real u, Real v) { const Vec2 p = f.toWorld({u, v}); return Vec3(p.x, 0, p.y); };
     const Vec3 nFront(-f.v.x, 0, -f.v.y), nBack(f.v.x, 0, f.v.y);
     const Vec3 nRight(f.u.x, 0, f.u.y), nLeft(-f.u.x, 0, -f.u.y);
     // The sides and the back: whole.
-    wallQuad(out.drywall, col, W(L + w, -w), W(L + w, D + w), y0, y0 + h, nRight, paint);
-    wallQuad(out.drywall, col, W(L + w, D + w), W(-w, D + w), y0, y0 + h, nBack, paint);
-    wallQuad(out.drywall, col, W(-w, D + w), W(-w, -w), y0, y0 + h, nLeft, paint);
+    wallQuad(target, col, W(L + w, -w), W(L + w, D + w), y0, y0 + h, nRight, paint);
+    wallQuad(target, col, W(L + w, D + w), W(-w, D + w), y0, y0 + h, nBack, paint);
+    wallQuad(target, col, W(-w, D + w), W(-w, -w), y0, y0 + h, nLeft, paint);
     // The front: full-height pieces between the doors, a lintel band over each.
     struct Hole { Real u0, u1, top; };
     std::vector<Hole> holes;
@@ -360,16 +363,16 @@ void coreRing(CoreMeshes& out, RenderMesh* col, const CorePlan& core, Real y0, R
         holes.push_back({su + s.doorX - s.doorWidth * 0.5, su + s.doorX + s.doorWidth * 0.5,
                          std::min(s.doorHeight, h - 0.3)});
     };
-    for (const CoreShaft& hw : core.hoistways) door(hw);
+    if (hoistwayDoors) for (const CoreShaft& hw : core.hoistways) door(hw);
     for (const CoreStair& st : core.stairs) door(st.shaft);
     std::sort(holes.begin(), holes.end(), [](const Hole& a, const Hole& b) { return a.u0 < b.u0; });
     Real u = -w;
     for (const Hole& hole : holes) {
-        if (hole.u0 > u + 1e-4) wallQuad(out.drywall, col, W(u, -w), W(hole.u0, -w), y0, y0 + h, nFront, paint);
-        wallQuad(out.drywall, col, W(hole.u0, -w), W(hole.u1, -w), y0 + hole.top, y0 + h, nFront, paint);
+        if (hole.u0 > u + 1e-4) wallQuad(target, col, W(u, -w), W(hole.u0, -w), y0, y0 + h, nFront, paint);
+        wallQuad(target, col, W(hole.u0, -w), W(hole.u1, -w), y0 + hole.top, y0 + h, nFront, paint);
         u = hole.u1;
     }
-    if (L + w > u + 1e-4) wallQuad(out.drywall, col, W(u, -w), W(L + w, -w), y0, y0 + h, nFront, paint);
+    if (L + w > u + 1e-4) wallQuad(target, col, W(u, -w), W(L + w, -w), y0, y0 + h, nFront, paint);
 }
 
 void emitCoreShaftWalls(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,
@@ -378,10 +381,51 @@ void emitCoreShaftWalls(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan
     const Real y0 = baseY + sp.y0, h = sp.h;
     const Vec3 paint = interiorPaintFor(params);
     const Vec3 shaftDark(0.34, 0.34, 0.36);
-    coreRing(out, colliderOut, core, y0, h, paint);
+    coreRing(out.drywall, colliderOut, core, y0, h, paint);
     for (const CoreShaft& hw : core.hoistways) shaftWalls(out, colliderOut, core, hw, y0, h, paint, shaftDark);
     for (const CoreStair& st : core.stairs) shaftWalls(out, colliderOut, core, st.shaft, y0, h, paint, paint);
     if (core.hasService) shaftWalls(out, colliderOut, core, core.service, y0, h, paint, paint);
+}
+
+bool coreReachesRoof(const BuildingParams& params) {
+    return params.openDoorway && params.roofStyle == BuildingParams::RoofStyle::Flat && wantsCore(params);
+}
+
+std::vector<Poly2> coreRoofHoles(const CorePlan& core) {
+    std::vector<Poly2> holes;
+    if (!core.valid) return holes;
+    for (const CoreStair& s : core.stairs) holes.push_back(s.shaft.rect());
+    return holes;
+}
+
+void emitCoreBulkhead(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core, Real deckY,
+                      const BuildingParams& params, bool walls) {
+    if (!core.valid) return;
+    const Vec3 paint = interiorPaintFor(params);
+    const Vec3 shellCol = params.trimColor * 0.85;   // the crown's old access box wore this
+    const Real floorTone = 0.85 + 0.45 * (((params.seed >> 4) & 0xffu) / 255.0);
+    const Vec3 floorCol = floorFinishFor(params).albedo * floorTone;
+    const Vec3 stairCol = stairFinishFor(params).albedo * floorTone;
+    const Real h = kBulkheadH;
+    // The walls -- the ring's outside faces are the SHELL (what the roof sees), the stairs' skins inside it are
+    // drywall, the lid a slab a wall thickness past the core -- are the exterior mesh's, permanent (`walls`); the
+    // streamed interior adds their colliders and each stair's roof landing with the guard across its well (the
+    // top storey's own rule), the same split emitCoreShaftWalls / emitCoreStorey make for the storeys.
+    const Real w = kWall;
+    const Poly2 lid = rectOf(core.frame, -w, -w, core.length + w, core.depth + w);
+    if (walls) {
+        coreRing(out.shell, nullptr, core, deckY, h, shellCol, /*hoistwayDoors=*/false);
+        for (const CoreStair& st : core.stairs) shaftWalls(out, nullptr, core, st.shaft, deckY, h, paint, paint);
+        MeshBuilder::emitPlanPrism(out.shell, lid, {}, deckY + h, deckY + h + 0.15, shellCol * 0.8);
+        return;
+    }
+    CoreMeshes scratch;
+    coreRing(scratch.shell, colliderOut, core, deckY, h, shellCol, /*hoistwayDoors=*/false);
+    for (const CoreStair& st : core.stairs) shaftWalls(scratch, colliderOut, core, st.shaft, deckY, h, paint, paint);
+    if (colliderOut) MeshBuilder::emitPlanPrism(*colliderOut, lid, {}, deckY + h, deckY + h + 0.15, shellCol);
+    for (const CoreStair& st : core.stairs)
+        stairStorey(out, colliderOut, st, deckY - 0.05, h, /*flightsUp=*/false, /*landing=*/true, floorCol,
+                    stairCol, paint);
 }
 
 void emitCoreStorey(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,

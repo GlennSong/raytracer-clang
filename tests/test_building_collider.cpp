@@ -7,7 +7,10 @@
 #include "test_framework.h"
 #include "../src/engine/physics/physics_world.h"
 #include "../src/engine/procgen/city/building_collider.h"
+#include "../src/engine/procgen/city/core_plan.h"
+#include "../src/engine/procgen/city/shape_grammar.h"
 
+#include <cmath>
 #include <vector>
 
 using namespace engine;
@@ -89,4 +92,62 @@ TEST_CASE(no_exit_through_a_wall_from_inside) {
     walk(world, c, Vec3(1.6, 0, 0), 420);
     CHECK(world.characterPosition(c).x < 19.9);
     world.shutdown();
+}
+
+// THE TIERED COLLIDER (architectural toolkit, issue #105, step 1): a setback tower collides tier by tier, each
+// deck capped where the grammar draws it, the top deck cut through over the core's stairs; a plain tower is
+// one tier capped at its roof deck (5 cm over the last ceiling), not at its parapet's top.
+TEST_CASE(tiered_collider_caps_every_deck_and_opens_over_the_stairs) {
+    BuildingParams p;
+    p.floors = 12;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 5;
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    {
+        const std::vector<ColliderTier> one = colliderTiers(plan, p);
+        CHECK(one.size() == 1);
+        const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+        CHECK(std::fabs(one.front().y1 - (sps.back().y0 + sps.back().h + 0.05)) < 1e-9);
+        CHECK(std::fabs(one.front().parapet - p.parapet) < 1e-9);
+    }
+    BuildingParams s = p;
+    s.setbackFloors = 4;
+    s.setbackEvery = 2.0;
+    const std::vector<ColliderTier> tiers = colliderTiers(plan, s);
+    CHECK(tiers.size() >= 2);
+    for (std::size_t i = 1; i < tiers.size(); ++i) {
+        CHECK(tiers[i].y0 > tiers[i - 1].y0);
+        CHECK(std::fabs(tiers[i].y0 - tiers[i - 1].y1) < 1e-9);
+        CHECK(area(tiers[i].plan) < area(tiers[i - 1].plan));
+    }
+    // The collider: a vertex on every deck, and the top deck's cap misses the stair shafts' centres.
+    const CorePlan core = coreFor(plan, s, entranceEdgeFor(plan, s));
+    CHECK(core.valid);
+    std::vector<Vec3> V;
+    std::vector<uint32_t> I;
+    const Real baseY = 3.0;
+    CHECK(appendBuildingTiers(V, I, plan, s, baseY, baseY - 0.2, {}, coreRoofHoles(core)));
+    for (const ColliderTier& t : tiers) {
+        bool onDeck = false;
+        for (const Vec3& v : V) if (std::fabs(v.y - (baseY + t.y1)) < 1e-6) onDeck = true;
+        CHECK(onDeck);
+    }
+    const Real topY = baseY + tiers.back().y1;
+    for (const CoreStair& st : core.stairs) {
+        const Vec2 c = st.shaft.frame.toWorld({st.shaft.width * 0.5, st.shaft.depth * 0.5});
+        bool covered = false;
+        for (std::size_t i = 0; i + 2 < I.size(); i += 3) {
+            const Vec3& a = V[I[i]]; const Vec3& b = V[I[i + 1]]; const Vec3& d = V[I[i + 2]];
+            if (std::fabs(a.y - topY) > 1e-6 || std::fabs(b.y - topY) > 1e-6 || std::fabs(d.y - topY) > 1e-6) continue;
+            const Poly2 tri = {{a.x, a.z}, {b.x, b.z}, {d.x, d.z}};
+            if (pointInPolygon(tri, c)) covered = true;
+        }
+        CHECK(!covered);
+    }
+    // A pitched roof has no tiers: the caller keeps the one prism.
+    BuildingParams g = p;
+    g.roofStyle = BuildingParams::RoofStyle::Gable;
+    CHECK(colliderTiers(plan, g).empty());
 }

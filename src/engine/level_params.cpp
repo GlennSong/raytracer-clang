@@ -360,6 +360,10 @@ void readLotGrowParams(const json& cityJson,
     lots.midRadius = cityJson.value("midtownRadius", 135.0);
     lots.plinth = cityJson.value("plinth", lots.plinth);   // base height above the pad
     lots.hubRadius = cityJson.value("hubRadius", lots.hubRadius);
+    // A lab's lot (LotParams::wholeBlocks / recipe / recipeCoreness): one site per block, a named recipe.
+    lots.wholeBlocks = cityJson.value("wholeBlocks", lots.wholeBlocks);
+    lots.recipe = cityJson.value("recipe", lots.recipe);
+    lots.recipeCoreness = cityJson.value("coreness", lots.recipeCoreness);
     // Level-authored parcel grain ("parcel", 8km-city P3): piedmont-scale metros
     // lay 150 m+ blocks, so the level can ask for bigger lots. Six knobs only;
     // absent = the compiled-in district tuning, untouched (city_lots rescales

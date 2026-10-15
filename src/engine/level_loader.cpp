@@ -48,6 +48,7 @@
 #include "procgen/city/shop_signs.h"  // ...its name on its fascia (stage 2)
 #include "procgen/city/shape_grammar.h"   // shopFrontsOf
 #include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
+#include "procgen/city/core_plan.h"          // coreReachesRoof / coreRoofHoles (the roof exit)
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
 #include "procgen/city/roads/road_entity.h"
 #include "procgen/city/roads/road_builder.h"   // one interface, several road builders
@@ -5969,7 +5970,21 @@ bool LevelLoader::load(const std::string& path,
                         if (u.params.parkingDecks && u.plan.size() >= 3 &&
                             engine::garageColliderOf(u.plan, u.params, lb.baseY, buildingsMc.vertices, buildingsMc.indices))
                             garage = true;
-                    if (!garage)
+                    // ONE BUILDING, ITS TIERS (architectural toolkit, issue #105, step 1): a flat-roofed single
+                    // unit collides tier by tier -- every setback deck and the roof deck walkable where the
+                    // exterior draws them, the parapets standing, the top cut through over the core's stairs
+                    // (the roof exit). Strips and compounds keep the one prism.
+                    bool tiered = false;
+                    if (!garage && units.size() == 1) {
+                        const engine::BuildingUnit& u = units.front();
+                        std::vector<engine::Poly2> roofHoles;
+                        if (engine::coreReachesRoof(u.params))
+                            roofHoles = engine::coreRoofHoles(
+                                engine::coreFor(u.plan, u.params, engine::entranceEdgeFor(u.plan, u.params)));
+                        tiered = engine::appendBuildingTiers(buildingsMc.vertices, buildingsMc.indices, u.plan,
+                                                             u.params, u.baseY, lb.groundY, doorCuts, roofHoles);
+                    }
+                    if (!garage && !tiered)
                     engine::appendBuildingPrism(
                         buildingsMc.vertices, buildingsMc.indices, lb.plan,
                         base, top, lb.baseY + 0.05, doorCuts,

@@ -3887,7 +3887,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         // exactly — a real city square, not a leftover parcel.
         if ((bf.tag == DistrictTag::Commercial ||
              bf.tag == DistrictTag::Residential) &&
-            area(foot) < 2600.0) {
+            area(foot) < 2600.0 && !p.wholeBlocks) {   // (a lab's block is its building, never a square)
             Hash blockRng(mix(bf.pp.seed, 0xB10Cu));
             if (blockRng.unit() < 0.10) {
                 OBB2 gb = orientedBoundingBox(foot);
@@ -4038,7 +4038,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 LOG_INFO << "[citylots] whole block SKIPPED (relief " << (hi - lo) << " m across its edge) "
                          << static_cast<int>(blockA) << " m2 at " << static_cast<int>(centroid(foot).x) << " "
                          << static_cast<int>(centroid(foot).y);
-            if (viable <= 2 && viableA < Real(0.5) * blockA && blockA >= kWholeBlockMinArea &&
+            // ...or a LAB'S lot (LotParams::wholeBlocks): every block is one site, whatever the parcel walk made
+            const bool unfillable = viable <= 2 && viableA < Real(0.5) * blockA && blockA >= kWholeBlockMinArea;
+            if ((unfillable || p.wholeBlocks) &&
                 2 * std::min(fb.half[0], fb.half[1]) >= kWholeBlockMinShort && !padOnCarriageway(foot) &&
                 seatable && hasStreet) {
                 Lot whole;
@@ -5400,6 +5402,18 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                     coreness,
                                     p.archetypeBook.empty() ? nullptr
                                                             : &p.archetypeBook);
+            // A LAB'S NAMED RECIPE (LotParams::recipe, citysim.recipe): the architect's own recipe by name on this
+            // lot, grown as a lineup grows it (its dice, the slenderness cap on this plan), at the lot's coreness
+            // or the one the level asks for. A sculpted site (a store, a depot, a campus, a paseo) keeps its own.
+            if (!p.recipe.empty() && !lot.bigBox && !lot.depot && !lot.campus && !lot.paseo) {
+                BuildingRecipe named;
+                const Real cz = p.recipeCoreness >= 0 ? std::clamp(p.recipeCoreness, Real(0), Real(1)) : coreness;
+                if (architectRecipeByName(p.recipe, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u), cz,
+                                          shortSide, area(site), named))
+                    rec = std::move(named);
+                else
+                    LOG_ERROR << "[citylots] citysim.recipe '" << p.recipe << "' is not an architect recipe";
+            }
             // THE SHOP MIX (~/.claude/plans/nightlife-and-malls.md): a residential street's everyday shops, a high
             // street's eating and drinking, and -- round each town's NIGHTLIFE STRIP -- low-rise buildings of bars,
             // restaurants and clubs (Glenn: "these all don't need to be located on skyscrapers").

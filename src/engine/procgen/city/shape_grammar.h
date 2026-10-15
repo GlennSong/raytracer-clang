@@ -289,6 +289,20 @@ struct StoreyPlan {
 std::vector<StoreyPlan> storeyPlans(const Poly2& plan,
                                     const BuildingParams& params);
 
+// THE COLLIDER'S TIERS (architectural toolkit, issue #105, step 1): the storey stack grouped by tier, each a
+// prism the walker meets -- walls from `y0` to `y1`, a walkable cap at `y1` (the tier's roof deck: a setback's
+// slab top 5 cm under the next tier's floor, the main roof's slab top 5 cm over the last ceiling), a parapet
+// `parapet` tall on that deck. Relative to baseY. ONE prism from the ground to the parapet (the old collider)
+// buried a podium tower's podium roof under an invisible box 90 m tall and put "the roof" a parapet above the
+// deck; the decks are where the exterior draws them, so a walker stands on what they see. Flat roofs only
+// (empty otherwise: the caller keeps the old prism).
+struct ColliderTier {
+    Poly2 plan;
+    Real y0 = 0, y1 = 0;
+    Real parapet = 0;
+};
+std::vector<ColliderTier> colliderTiers(const Poly2& plan, const BuildingParams& params);
+
 // The MASS STACK (ADR-0086 point 5): the tiers a building is built from — one
 // plan per tier and the floor it starts at, the base first — derived from the
 // plan and the params alone, so the exterior massing, the interior and any

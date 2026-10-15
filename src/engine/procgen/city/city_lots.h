@@ -258,6 +258,15 @@ struct LotParams {
     // shell + ceiling) and is marked BuildingUnit::enterable. The loader
     // passes the player spawn; a level can name more later.
     std::vector<Vec2> enterableAt;
+    // A LAB'S LOT (toolkit_lab, issue #105 -- Glenn, 2026-10-15: "a building in a lot. No town just one
+    // building in a lot"): every block is ONE site, no parcel walk (citysim.wholeBlocks), and `recipe` (when
+    // set) is the architect recipe every such site grows, by name, the way a lineup grows it -- not the
+    // district's roll or the block landmark (citysim.recipe). `recipeCoreness` (0..1) stands in for the
+    // lot's own coreness when >= 0 (citysim.coreness), so a lab can ask for a 20-storey tower rather
+    // than the 56 a downtown centre rolls.
+    bool wholeBlocks = false;
+    std::string recipe;
+    Real recipeCoreness = -1;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the

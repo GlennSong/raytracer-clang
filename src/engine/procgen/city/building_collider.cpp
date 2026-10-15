@@ -1,13 +1,16 @@
 #include "building_collider.h"
 
-#include "road_mesh.h"   // triangulatePolygon
+#include "road_mesh.h"       // triangulatePolygon
+#include "shape_grammar.h"   // colliderTiers
+#include "triangulate.h"     // triangulateIndices (a cap with holes)
 #include <algorithm>
 
 namespace engine {
 
 void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
                          const Poly2& plan, Real base, Real top, Real floorY,
-                         const std::vector<DoorSpec>& doors, Real plinth) {
+                         const std::vector<DoorSpec>& doors, Real plinth,
+                         const std::vector<Poly2>& roofHoles) {
     if (plan.size() < 3) return;
     const std::size_t n = plan.size();
     auto quad = [&](const Vec2& a, const Vec2& b, Real y0, Real y1) {
@@ -54,6 +57,16 @@ void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
     // drawn Ground slab had no physics, so anything inside stood on the
     // terrain pad 0.5 m below the floor it could see).
     for (const Real y : {top, floorY}) {
+        // The roof cap keeps its holes (the stairs rise through them); the floor cap is whole.
+        if (y == top && !roofHoles.empty()) {
+            const uint32_t s = static_cast<uint32_t>(V.size());
+            for (const Vec2& q : plan) V.push_back(Vec3(q.x, y, q.y));
+            for (const Poly2& hole : roofHoles) for (const Vec2& q : hole) V.push_back(Vec3(q.x, y, q.y));
+            for (const auto& tri : triangulateIndices(plan, roofHoles))
+                I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]),
+                                   s + static_cast<uint32_t>(tri[2])});
+            continue;
+        }
         for (const auto& tri : triangulatePolygon(plan)) {
             const uint32_t s = static_cast<uint32_t>(V.size());
             for (int k = 0; k < 3; ++k)
@@ -80,6 +93,48 @@ void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
                 quad(corners[k], corners[(k + 1) % 4], stepY - plinth, stepY);
         }
     }
+}
+
+bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const Poly2& plan,
+                         const BuildingParams& params, Real baseY, Real groundY,
+                         const std::vector<DoorSpec>& doors, const std::vector<Poly2>& roofHoles) {
+    const std::vector<ColliderTier> tiers = colliderTiers(plan, params);
+    if (tiers.empty() || plan.size() < 3) return false;
+    auto quad = [&](const Vec2& a, const Vec2& b, Real y0, Real y1) {
+        if (y1 - y0 < 1e-4 || (b - a).lengthSquared() < 1e-8) return;
+        const uint32_t s = static_cast<uint32_t>(V.size());
+        V.push_back(Vec3(a.x, y0, a.y));
+        V.push_back(Vec3(b.x, y0, b.y));
+        V.push_back(Vec3(b.x, y1, b.y));
+        V.push_back(Vec3(a.x, y1, a.y));
+        I.insert(I.end(), {s, s + 1, s + 2, s, s + 2, s + 3});
+    };
+    for (std::size_t t = 0; t < tiers.size(); ++t) {
+        const ColliderTier& ct = tiers[t];
+        const bool last = t + 1 == tiers.size();
+        const std::vector<Poly2>& holes = last ? roofHoles : std::vector<Poly2>{};
+        if (ct.plan.size() < 3) continue;
+        if (t == 0) {
+            // The ground tier: the prism as before -- door notches, floor cap, threshold steps -- capped at ITS deck.
+            appendBuildingPrism(V, I, ct.plan, baseY - 0.5, baseY + ct.y1, baseY + 0.05, doors,
+                                baseY - groundY, holes);
+        } else {
+            // An upper tier: plain walls from the deck below to its own, and its cap.
+            for (std::size_t i = 0; i < ct.plan.size(); ++i)
+                quad(ct.plan[i], ct.plan[(i + 1) % ct.plan.size()], baseY + ct.y0, baseY + ct.y1);
+            const uint32_t s = static_cast<uint32_t>(V.size());
+            for (const Vec2& q : ct.plan) V.push_back(Vec3(q.x, baseY + ct.y1, q.y));
+            for (const Poly2& hole : holes) for (const Vec2& q : hole) V.push_back(Vec3(q.x, baseY + ct.y1, q.y));
+            for (const auto& tri : triangulateIndices(ct.plan, holes))
+                I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]),
+                                   s + static_cast<uint32_t>(tri[2])});
+        }
+        // The parapet on the deck: a ring a walker meets at the edge (mirrorTriangles makes it two-sided).
+        if (ct.parapet > 0)
+            for (std::size_t i = 0; i < ct.plan.size(); ++i)
+                quad(ct.plan[i], ct.plan[(i + 1) % ct.plan.size()], baseY + ct.y1, baseY + ct.y1 + ct.parapet);
+    }
+    return true;
 }
 
 void mirrorTriangles(std::vector<uint32_t>& I) {

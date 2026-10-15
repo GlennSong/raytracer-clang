@@ -1975,19 +1975,27 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
 static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                       Real depth, const Vec3& r, const Vec3& f, Real roofY,
                       const BuildingParams& p, Rng& rng,
-                      const Poly2* topPlan = nullptr) {
+                      const Poly2* topPlan = nullptr, const Poly2* keepOut = nullptr) {
     const Vec3 up(0, 1, 0);
     // The roof may be an L / U / courtyard PLAN, not its oriented box — a crown
     // element seated by box coordinates alone can hang over the notch (device:
     // "a giant block that doesn't fit properly with the rooftop"). When the
     // caller passes the top plan, every element proves its corners are ON it.
+    // `keepOut` is the core's BULKHEAD (core_plan.h emitCoreBulkhead): the real
+    // roof access, which no tank or HVAC unit may stand on or over.
     auto onRoof = [&](const Vec3& o, Real w2, Real d2) {
-        if (!topPlan) return true;
+        Poly2 item;
         for (int cx = 0; cx <= 1; ++cx)
             for (int cz = 0; cz <= 1; ++cz) {
                 Vec3 q = o + r * (w2 * cx) + f * (d2 * cz);
-                if (!pointInPolygon(*topPlan, Vec2(q.x, q.z))) return false;
+                if (topPlan && !pointInPolygon(*topPlan, Vec2(q.x, q.z))) return false;
+                if (keepOut && pointInPolygon(*keepOut, Vec2(q.x, q.z))) return false;
+                item.push_back(Vec2(q.x, q.z));
             }
+        if (keepOut) {   // ...nor may the bulkhead's corners land inside the item (the item straddling it)
+            std::swap(item[2], item[3]);   // the corner order above is a Z, not a ring
+            for (const Vec2& k : *keepOut) if (pointInPolygon(item, k)) return false;
+        }
         return true;
     };
     // ROOF PLANT subgrammar (device: "what is that gray block supposed to
@@ -2014,7 +2022,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     const Real roofArea = uw * ud;
 
     std::vector<RoofItem> items;
-    if (p.floors >= 4 && width > 5 && depth > 5) {          // roof access: always 1
+    if (p.floors >= 4 && width > 5 && depth > 5 && !keepOut) {   // roof access: 1, unless the core's bulkhead IS it
         const Real bw = std::min(std::max(width * 0.28, Real(3.0)), Real(5.0));
         const Real bd = std::min(std::max(depth * 0.24, Real(2.4)), Real(3.8));
         items.push_back({0, bw, bd, Real(2.4), Real(2.0)});
@@ -3599,6 +3607,33 @@ std::vector<StoreyPlan> storeyPlans(const Poly2& planIn,
     return out;
 }
 
+std::vector<ColliderTier> colliderTiers(const Poly2& planIn, const BuildingParams& params) {
+    std::vector<ColliderTier> out;
+    if (params.roofStyle != BuildingParams::RoofStyle::Flat) return out;
+    const std::vector<StoreyPlan> sps = storeyPlans(planIn, params);
+    if (sps.empty()) return out;
+    int tier = -1;
+    for (const StoreyPlan& sp : sps) {
+        if (sp.tier != tier) {
+            ColliderTier t;
+            t.plan = sp.plan;
+            t.y0 = out.empty() ? Real(0) : out.back().y1;
+            out.push_back(std::move(t));
+            tier = sp.tier;
+        }
+        out.back().y1 = sp.y0 + sp.h;
+    }
+    // A setback's deck is its slab top 5 cm under the next tier's floor (growPlanBuilding caps the tier below at
+    // y - 0.05 with a 0.55 parapet); the main roof's deck is the roof slab's top 5 cm over the last ceiling.
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const bool last = i + 1 == out.size();
+        out[i].y1 += last ? Real(0.05) : Real(-0.05);
+        out[i].parapet = last ? params.parapet : Real(0.55);
+        if (i + 1 < out.size()) out[i + 1].y0 = out[i].y1;
+    }
+    return out;
+}
+
 InteriorLayout interiorLayout(const Poly2& planIn, const BuildingParams& params,
                               std::size_t entranceEdge) {
     InteriorLayout il;
@@ -4640,7 +4675,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     if (kB == nS) {
         const StoreyPlan& topSp = storeys.back();
         const Real cy2 = baseY + topSp.y0 + topSp.h - 0.25;
-        for (const auto& t : triangulateWithHoles(topSp.plan, {})) {
+        // ...except where the core's stairs rise through it to the roof (the roof exit, core_plan.h).
+        const std::vector<Poly2> topHoles =
+            (core.valid && coreReachesRoof(params)) ? coreRoofHoles(core) : std::vector<Poly2>{};
+        for (const auto& t : triangulateWithHoles(topSp.plan, topHoles)) {
             MeshBuilder::emitTri(mesh, Vec3(t[0].x, cy2, t[0].y),
                                  Vec3(t[2].x, cy2, t[2].y),
                                  Vec3(t[1].x, cy2, t[1].y), Vec3(0, -1, 0),
@@ -5011,9 +5049,16 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // The shaft walls themselves are the exterior mesh's (permanent, full
         // height — emitCoreShaftWalls in growPlanBuilding); here only their
         // colliders, for the storeys streamed.
+        // THE ROOF EXIT (core_plan.h): the top storey's flights climb on to the deck, where the bulkhead's
+        // colliders and the roof landings stream with the top storey.
+        const bool roofExit = coreReachesRoof(params);
         for (int ki = kA; ki < kB; ++ki)
             emitCoreStorey(cm, colliderOut, core, storeys[static_cast<std::size_t>(ki)], baseY,
-                           params, ki + 1 < nS, ki >= 1, false);
+                           params, ki + 1 < nS || roofExit, ki >= 1, false);
+        if (roofExit && kB == nS) {
+            const StoreyPlan& topSp = storeys.back();
+            emitCoreBulkhead(cm, colliderOut, core, baseY + topSp.y0 + topSp.h + 0.05, params, false);
+        }
         // LOBBY DRESSING (M5; #60): the desk, its top and two planters, placed by lobbyDressing.
         if (kA == 0) {
             const Real yF = baseY + 0.07;   // on the lobby overlay
@@ -6041,8 +6086,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     // the lobby, from a stairwell looking down and from a riding cab no
     // matter which storeys the interior has streamed. The streamed interior
     // adds their colliders, the flights, landings and doors.
+    CorePlan ecore;   // the core, when the building is enterable and one fits; the roof exit below reads it too
     if (full && params.openDoorway && wantsCore(params)) {
-        const CorePlan ecore = coreFor(plan, params, entranceEdge);
+        ecore = coreFor(plan, params, entranceEdge);
         if (ecore.valid) {
             CoreMeshes cm;
             // EVERY storey, the top one included: storeyPlans returns
@@ -6314,8 +6360,24 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         }
     } else {
         if (full && params.stringCourse && !params.curtainWall) sweptCornice(cur, y - 0.45, 1.25);
-        emitPlanSlab(out, cur, y + 0.05, 0.2, PartId::Roof,
-                     materialFor(PartId::Roof, wallColor).albedo);
+        // THE ROOF EXIT (architectural toolkit, issue #105, step 1): where the core reaches the roof, the slab
+        // is cut through over the stairs' shafts (the mesh library's plan prism walls the cuts) and the core's
+        // BULKHEAD stands on the deck over the core, its stair doors opening onto the roof -- a real door, not
+        // the crown's painted one. Full detail only: the LOD twin keeps its whole slab.
+        const bool roofExit = full && ecore.valid && coreReachesRoof(params);
+        if (roofExit) {
+            RenderMesh slab;
+            MeshBuilder::emitPlanPrism(slab, cur, coreRoofHoles(ecore), y - 0.15, y + 0.05,
+                                       materialFor(PartId::Roof, wallColor).albedo);
+            appendToPart(out, PartId::Roof, slab);
+            CoreMeshes bk;
+            emitCoreBulkhead(bk, nullptr, ecore, y + 0.05, params, true);
+            appendToPart(out, PartId::Interior, bk.drywall);
+            appendToPart(out, PartId::Trim, bk.shell);
+        } else {
+            emitPlanSlab(out, cur, y + 0.05, 0.2, PartId::Roof,
+                         materialFor(PartId::Roof, wallColor).albedo);
+        }
         if (params.parapet > 0) {
             // The lip continues the FACADE material (a brick building has a
             // brick parapet) with a trim coping; glass/solid facades keep the
@@ -6493,9 +6555,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             roofRise = std::max(roofRise, topRise);
             // Flat (LOD1) keeps spire/dome/steeple — they are the skyline —
             // but skips the penthouse + roof-furniture pack.
-            if (full && (topRise <= 0 || params.top == 2 || params.top == 7))
+            if (full && (topRise <= 0 || params.top == 2 || params.top == 7)) {
+                // the bulkhead's footprint, a little wider, keeps the plant off the roof access
+                const Poly2 bulk = roofExit ? offsetPlan(ecore.rect(), -0.75) : Poly2{};
                 emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
-                          y + 0.05, params, rng, &cur);
+                          y + 0.05, params, rng, &cur, roofExit && bulk.size() >= 3 ? &bulk : nullptr);
+            }
         }
     }
     out.attaches.push_back({Vec3(centroid(cur).x, y + roofRise, centroid(cur).y),

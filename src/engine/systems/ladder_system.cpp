@@ -54,7 +54,12 @@ void LadderSystem::update(FrameContext& ctx) {
         if (cb && !cb->records.empty()) {
             for (const BuildingRecord& r : cb->records) {
                 LadderSpec l;
-                if (roofLadderFor(r.plan, r.params, r.baseY, r.baseY + r.height, l)) lad->fixed.push_back(l);
+                // The ladder climbs the ground tier's wall to ITS deck (a podium's roof, a plain tower's roof deck)
+                // -- where the collider now caps the tier (colliderTiers) -- not to the parapet's top, and not
+                // up the podium's face to a tower roof 90 m over it.
+                const std::vector<ColliderTier> tiers = colliderTiers(r.plan, r.params);
+                const Real roofY = tiers.empty() ? r.baseY + r.height : r.baseY + tiers.front().y1;
+                if (roofLadderFor(r.plan, r.params, r.baseY, roofY, l)) lad->fixed.push_back(l);
             }
             lad->built = true;
             LOG_INFO << "[ladders] " << lad->fixed.size() << " roof ladders";
