@@ -10040,6 +10040,16 @@ face over the same API, the lot cache's building meshes under rt_bake --audit.
   rule could build the 0.9 m step under the shoulder. A seam now skips only where what is drawn beyond reaches as deep
   (lanes 10-14.5).
 
+- **Layers cut at their own level; nothing grows through a deck (2026-10-15, lanes 10-15.1).** Glenn on island_8_nature:
+  a palm "going through the elevated train deck", and "where the elevated train deck goes over the sidewalk it removes
+  that part of the sidewalk underneath it". The second was the lattice's mistake in the lanes pavement: shoulders and
+  sidewalks were every band minus every lane, hull and median IN PLAN. Each road's band is now cut piece by piece, only
+  by what stands within sameLevelDz of it there (lanes_a_sidewalk_runs_on_under_a_bridge: 150 m2 of sidewalk under the
+  light-rail lab's track, 450 under the ring city's ring; 0 under RT_LAYERS_FLAT=1, the old cut). The first: street
+  trees kept their trunks off the carriageway and never looked up. DrawnRoad::overhead (heights) asks whether anything
+  drawn stands over a tree's canopy (0.3 of its height round the trunk, half a metre over the foot to its top); a street
+  tree's pit stays empty and a lot tree is not planted there. Both at load: the trees need no re-bake.
+
 ## ADR-0173 — The mesh library v1: every producer on one set of words
 
 Glenn, 2026-10-13: "Mesh library is priority one" — "a common library of triangulation techniques, tristrips, how to

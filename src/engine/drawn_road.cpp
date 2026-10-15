@@ -70,6 +70,27 @@ bool DrawnRoad::topAt(double x, double z, double* y, double ceiling) const {
     return found;
 }
 
+bool DrawnRoad::overhead(double x, double z, double footY, double topY, double radius) const {
+    const Vec2 p(x, z);
+    const int cx0 = static_cast<int>(std::floor((x - radius) / kCell)), cx1 = static_cast<int>(std::floor((x + radius) / kCell));
+    const int cz0 = static_cast<int>(std::floor((z - radius) / kCell)), cz1 = static_cast<int>(std::floor((z + radius) / kCell));
+    for (int cx = cx0; cx <= cx1; ++cx)
+        for (int cz = cz0; cz <= cz1; ++cz) {
+            auto it = cells.find(cellKey(cx, cz));
+            if (it == cells.end()) continue;
+            for (int ti : it->second) {
+                if (static_cast<std::size_t>(ti) >= heights.size()) continue;
+                const std::array<float, 3>& h = heights[static_cast<std::size_t>(ti)];
+                const double lo = std::min({h[0], h[1], h[2]}), hi = std::max({h[0], h[1], h[2]});
+                if (hi < footY + 0.5 || lo > topY) continue;   // under the foot (its own pavement), or clear above
+                const Tri& t = tris[static_cast<std::size_t>(ti)];
+                if (inTri(t, x, z) || segDist(p, t.a, t.b) < radius || segDist(p, t.b, t.c) < radius || segDist(p, t.c, t.a) < radius)
+                    return true;
+            }
+        }
+    return false;
+}
+
 bool DrawnRoad::covers(double x, double z) const {
     auto it = cells.find(cellKey(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
     if (it == cells.end()) return false;

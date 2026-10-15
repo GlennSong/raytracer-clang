@@ -36,6 +36,11 @@ struct DrawnRoad {
     // The highest drawn surface at (x, z) at or below `ceiling` -- the sidewalk a street tree's pit is cut in, not
     // the viaduct over it. False where nothing is drawn (walls have no area in plan) or nothing has heights.
     bool topAt(double x, double z, double* y, double ceiling = 1e30) const;
+    // Does anything drawn stand OVER a thing at (x, z) whose foot is at footY and top at topY, within `radius` in plan
+    // -- a deck or a track a tree would grow up through (Glenn, 2026-10-15: "a tree going through the elevated train
+    // deck")? A surface counts from half a metre over the foot (not the pavement it stands on) to the top. Heights
+    // required (gatherDrawnRoad(world, true)).
+    bool overhead(double x, double z, double footY, double topY, double radius) const;
     // Is (x, z) on a drawn road triangle?
     bool covers(double x, double z) const;
     // ...or within `margin` metres of one (a trunk radius, a canopy allowance).

@@ -290,6 +290,19 @@ static Collider buildCollider(const std::string& shape, const json& sizeJ,
 // hillside. Empty without a CDLOD terrain. BY POINTER: the closure is copied into every streamed chunk's preparer,
 // and a by-value config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks was 44 GB
 // and the OOM killer (2026-09-29).
+// THE STREET TREES' HEIGHTS (real_tree.h): each street species at its own street height.
+static double streetTreeHeight(engine::StreetSpecies sp) {
+    switch (sp) {
+        case engine::StreetSpecies::RoyalPalm: return 15.0;
+        case engine::StreetSpecies::CoconutPalm: return 12.0;
+        case engine::StreetSpecies::Monkeypod: return 11.0;
+        case engine::StreetSpecies::Poinciana: return 8.5;
+        case engine::StreetSpecies::Jacaranda: return 9.5;
+        case engine::StreetSpecies::Plumeria: return 5.5;
+        default: return 9.0;
+    }
+}
+
 static std::function<Real(Real, Real)> cdlodDrawnGround(World& world) {
     std::function<Real(Real, Real)> g;
     world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
@@ -5744,7 +5757,7 @@ bool LevelLoader::load(const std::string& path,
             if (!dressingGround && entityGround)
                 dressingGround = [g = entityGround](Real x, Real z) { return g(x, z); };
             // The road as drawn, for the lot trees below (drawn_road.h).
-            const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world);
+            const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world, /*withHeights=*/true);
             int lotTreesOnRoad = 0;
             std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
@@ -5757,7 +5770,8 @@ bool LevelLoader::load(const std::string& path,
             // vegetation like trees and grass"): a few shared varieties, one mesh
             // upload each, reused across every planted lot.
             struct TreeKit { MeshHandle bark, leaves;
-                             RenderMaterial barkMat, leafMat; };
+                             RenderMaterial barkMat, leafMat;
+                             double height = 9.0; };   // the grown model's top, for what may stand over it
             std::vector<TreeKit> treeKits;
             auto treeKit = [&](std::size_t variety) -> const TreeKit& {
                 while (treeKits.size() <= variety) {
@@ -5775,6 +5789,9 @@ bool LevelLoader::load(const std::string& path,
                     TreeKit k;
                     const std::string key = "lotTree:" + std::to_string(i);
                     k.bark = assets.acquireMesh(tm.branches, key + ":bark");
+                    k.height = 0.0;
+                    for (const RenderMesh* mm : {&tm.branches, &tm.leaves})
+                        for (const Vertex& v : mm->vertices) k.height = std::max(k.height, static_cast<double>(v.position.y));
                     k.barkMat.albedo = Vec3(1, 1, 1);
                     k.barkMat.roughness = 1.0f;
                     BarkMaps bm = barkMaps(barkStyleFromName("oak"), 128, seed);
@@ -6246,6 +6263,8 @@ bool LevelLoader::load(const std::string& path,
                     tPos.y = dressingGround ? dressingGround(tPos.x, tPos.z)
                                             : (entityGround ? entityGround(tPos.x, tPos.z) : 0.0);
                     const TreeKit& kit = treeKit(th % 3u);
+                    // ...and never up through what is drawn over it (a track, a viaduct): see the street trees
+                    if (lotRoad.overhead(tPos.x, tPos.z, tPos.y, tPos.y + kit.height * scale, 0.3 * kit.height * scale)) { ++lotTreesOnRoad; return; }
                     Transform tt;
                     tt.position = tPos;
                     tt.scale = Vec3(scale, scale, scale);
@@ -7099,8 +7118,10 @@ bool LevelLoader::load(const std::string& path,
         // stood street trees 0.38 m over the grass (scenery_is_planted_on_the_ground, 2026-10-14: ~450 trees). So a
         // foot stands on the drawn road's top under it -- the highest no more than a metre over the rule's answer,
         // so a street under a viaduct keeps its own pavement -- and where nothing was drawn, on the drawn terrain.
+        std::shared_ptr<const engine::DrawnRoad> drawnRoads;   // (with heights: the street trees look up, below)
         if (furnGround && carvedGround) {
             auto drawn = std::make_shared<const engine::DrawnRoad>(engine::gatherDrawnRoad(world, /*withHeights=*/true));
+            drawnRoads = drawn;
             if (!drawn->empty()) {
                 std::function<Real(Real, Real)> terrain = cdlodDrawnGround(world);
                 if (!terrain) terrain = carvedGround;
@@ -7186,7 +7207,22 @@ bool LevelLoader::load(const std::string& path,
                             return c;
                         };
                     }
-                    return engine::planStreetFurniture(nav, furnGround, fp);
+                    engine::StreetFurniturePlan planned = engine::planStreetFurniture(nav, furnGround, fp);
+                    // A STREET TREE GROWS CLEAR OF WHAT IS DRAWN OVER IT (Glenn, 2026-10-15: "a tree going through the
+                    // elevated train deck"): the planter keeps a trunk off the carriageway, but a 15 m palm on the
+                    // sidewalk under a track or a viaduct grew up through the deck. A pit with anything drawn over its
+                    // canopy (0.3 of the tree's height round the trunk, half a metre over the pavement to its top)
+                    // stays empty.
+                    if (drawnRoads && !drawnRoads->empty()) {
+                        const std::size_t before = planned.trees.size();
+                        planned.trees.erase(std::remove_if(planned.trees.begin(), planned.trees.end(), [&](const engine::StreetTree& st) {
+                            const double h = streetTreeHeight(st.species) * st.scale;
+                            return drawnRoads->overhead(st.base.x, st.base.z, st.base.y, st.base.y + h, 0.3 * h);
+                        }), planned.trees.end());
+                        if (planned.trees.size() != before)
+                            LOG_INFO << "[furniture] " << (before - planned.trees.size()) << " street trees left out under decks and tracks";
+                    }
+                    return planned;
                 }();
             if (!fplan.unpoledApproaches.empty()) {
                 std::string at;
@@ -7429,17 +7465,7 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<StreetTreeKit> kits(static_cast<std::size_t>(kKinds * kVariants));
                 std::vector<char> used(static_cast<std::size_t>(kKinds), 0);
                 for (const engine::StreetTree& st : fplan.trees) used[static_cast<std::size_t>(st.species) % used.size()] = 1;
-                auto streetHeight = [](engine::StreetSpecies sp) {
-                    switch (sp) {
-                        case engine::StreetSpecies::RoyalPalm: return 15.0;
-                        case engine::StreetSpecies::CoconutPalm: return 12.0;
-                        case engine::StreetSpecies::Monkeypod: return 11.0;
-                        case engine::StreetSpecies::Poinciana: return 8.5;
-                        case engine::StreetSpecies::Jacaranda: return 9.5;
-                        case engine::StreetSpecies::Plumeria: return 5.5;
-                        default: return 9.0;
-                    }
-                };
+                auto streetHeight = streetTreeHeight;
                 for (int kd = 0; kd < kKinds; ++kd) {
                     if (!used[static_cast<std::size_t>(kd)]) continue;
                     const engine::StreetSpecies ss = static_cast<engine::StreetSpecies>(kd);

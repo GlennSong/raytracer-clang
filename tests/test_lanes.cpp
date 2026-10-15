@@ -889,6 +889,31 @@ TEST_CASE(lanes_every_deck_triangle_faces_its_normal) {
     CHECK(total.inward == 0);
 }
 
+// A STREET'S SIDEWALK RUNS ON UNDER A BRIDGE (Glenn, 2026-10-15: "where the elevated train deck goes over the sidewalk
+// it removes that part of the sidewalk underneath it"). Shoulders and sidewalks were cut by every lane in PLAN; now
+// only by what stands at their level. Under the light-rail lab's raised track and the ring city's ring, a street's
+// sidewalk must lie inside the bridge lanes' footprints, metres under them (none did with the plan-only cut, which
+// RT_LAYERS_FLAT=1 still gives: 0, 0 and 0; 150, 450 and 301 m2 at the interchange now).
+TEST_CASE(lanes_a_sidewalk_runs_on_under_a_bridge) {
+  for (const char* scn : {"light_rail_lab", "ring_city"}) {
+    const Result& r = scene(scn);
+    double under = 0;
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        for (const Polygon2& piece : intersectSets(r.pavement.sidewalk, r.pavement.footprints[li])) {
+            if (piece.outer.size() < 3) continue;
+            Vec2 c; for (const Vec2& q : piece.outer) c += q; c = c / static_cast<double>(piece.outer.size());
+            int street = -1;
+            for (size_t ei = 0; ei < r.graph.edges.size(); ++ei)
+                if (r.graph.cls(r.graph.edges[ei]).sidewalk > 0 && project(r.graph.edges[ei].xy, r.graph.edges[ei].s, c).distance < 20) street = static_cast<int>(ei);
+            if (street < 0) continue;
+            if (r.heights->own(static_cast<int>(li), c) - r.heights->ownRoad(street, c) > 3.0) under += setArea(PolySet{piece});
+        }
+    }
+    std::printf("    [layers] %s sidewalk under the bridges: %.0f m2\n", scn, under);
+    CHECK(under > 100.0);
+  }
+}
+
 // NOTHING ELEVATED IS SEE-THROUGH FROM BELOW (Glenn, 2026-10-13: "the elevated freeway/rail undercarriage when viewed
 // from below can be seen through"). engine::auditUndersides over every lab graph with a deck: every walkable surface
 // more than 2 m over the ground has something facing down within 3 m under it. The island's bake had 8512 open (rt_bake
@@ -929,9 +954,12 @@ TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
     size_t eyes = 0, through = 0;
     // KNOWN, small (a regression past them fails): 4 at the interchange, 5 at the valley's ramp ends. They were 27 and
     // 10 while the slab's sides merged within a centimetre of their edge: a look up at a slab's corner went through the
-    // crack between the step face and the soffit (2026-10-14: merged within 2 mm now).
-    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 0}, {"light_rail_lab", 0},
-                                                 {"rail_loop", 0}, {"system_interchange", 4}, {"valley_viaduct", 5}};
+    // crack between the step face and the soffit (2026-10-14: merged within 2 mm now). Shoulders and sidewalks cut per
+    // road at their own level (2026-10-15) tessellate differently, which moves the eyes (one per walkable top): the same
+    // slab-corner ties sample as 1 on the relief crossing and 6 at the interchange -- the geometry along each new look is
+    // identical under RT_LAYERS_FLAT=1 (RT_SEE_THROUGH_RAY).
+    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 1}, {"light_rail_lab", 0},
+                                                 {"rail_loop", 0}, {"system_interchange", 6}, {"valley_viaduct", 5}};
     for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange", "valley_viaduct"}) {
         const Result& r = scene(scn);
         const std::vector<NamedMesh> meshes = buildMeshes(r);
@@ -945,6 +973,12 @@ TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
         std::printf("\n");
         for (const auto& [m, n] : u.byHitMesh) std::printf("      backs of %-12s %6zu\n", m.c_str(), n);
         if (std::getenv("RT_SEE_THROUGH_SAMPLES")) for (const std::string& smp : u.samples) std::printf("      %s\n", smp.c_str());
+        // RT_SEE_THROUGH_RAY="scene,ox,oy,oz,dx,dy,dz": every face along one look in that scene (mesh_audit printRay)
+        if (const char* ray = std::getenv("RT_SEE_THROUGH_RAY")) {
+            char name[64]; double v[6];
+            if (std::sscanf(ray, "%63[^,],%lf,%lf,%lf,%lf,%lf,%lf", name, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 7 && std::string(name) == scn)
+                printRay(refs, Vec3(v[0], v[1], v[2]), Vec3(v[3], v[4], v[5]));
+        }
         // RT_SEE_THROUGH_SECTION="scene,x0,z0,x1,z1,step": what stands over each point of a line in that scene
         if (const char* sec = std::getenv("RT_SEE_THROUGH_SECTION")) {
             char name[64]; double a0, b0, a1, b1, st;
