@@ -706,6 +706,50 @@ void recipeTaperedGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "tapered_glass_tower";
 }
 
+// The TWISTED TOWER (issue #105 step 4, the stack's first transform; Turning Torso, Cayan Tower): a stadium or a
+// rounded slab turning up to a quarter turn over its height about its own centre, glass, every storey its own facet
+// with a slab band between -- the plan itself turns, scaled down only as far as the lot makes it.
+void recipeTwistedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(14, 20) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Section;
+    out.section.kind = rng.unit() < 0.5 ? BuildingRecipe::SectionSpec::Kind::Stadium : BuildingRecipe::SectionSpec::Kind::Rounded;
+    out.section.radius = 4.0 + 3.0 * rng.unit();
+    p.envelope = BuildingParams::Envelope::Twist;
+    p.baseFloors = 1;
+    p.twistDeg = rng.range(45.0, 90.0);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 60}, {2, 40}});   // a flat top: the roof is walked
+    out.name = "twisted_tower";
+}
+
+// The STACKED MODULES (issue #105 step 4, Relation::Support; 56 Leonard, the Jenga tower): a rectangular tower in
+// modules of a few storeys, every other one slid along the long axis past the one below -- terraces on the ledges,
+// soffits under the overhangs.
+void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(12, 18) + static_cast<int>(cx.coreness * 24);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Stack;
+    p.baseFloors = rng.irange(1, 2);
+    p.stepFloors = rng.irange(3, 5);
+    p.stackShift = rng.range(2.5, 4.5);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 3.5 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 70}, {2, 30}});
+    out.name = "stacked_modules";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1442,6 +1486,8 @@ const NamedRecipe kRecipeRegistry[] = {
     {"sky_exposure_tower", recipeSkyExposureTower},
     {"tower_on_base", recipeTowerOnBase},
     {"tapered_glass_tower", recipeTaperedGlassTower},
+    {"twisted_tower", recipeTwistedTower},
+    {"stacked_modules", recipeStackedModules},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},

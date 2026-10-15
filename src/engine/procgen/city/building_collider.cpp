@@ -120,9 +120,11 @@ bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const P
             appendBuildingPrism(V, I, ct.plan, baseY - 0.5, baseY + ct.y1, baseY + 0.05, doors,
                                 baseY - groundY, holes);
         } else {
-            // An upper tier: plain walls from the deck below to its own, and its cap.
+            // An upper tier: plain walls from the deck below to its own, and its cap (none where the storey above
+            // continues the tier on a turned outline: the walls meet the next walls, mass_stack.h).
             for (std::size_t i = 0; i < ct.plan.size(); ++i)
                 quad(ct.plan[i], ct.plan[(i + 1) % ct.plan.size()], baseY + ct.y0, baseY + ct.y1);
+            if (!ct.deck) continue;
             const uint32_t s = static_cast<uint32_t>(V.size());
             for (const Vec2& q : ct.plan) V.push_back(Vec3(q.x, baseY + ct.y1, q.y));
             for (const Poly2& hole : holes) for (const Vec2& q : hole) V.push_back(Vec3(q.x, baseY + ct.y1, q.y));
@@ -130,10 +132,20 @@ bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const P
                 I.insert(I.end(), {s + static_cast<uint32_t>(tri[0]), s + static_cast<uint32_t>(tri[1]),
                                    s + static_cast<uint32_t>(tri[2])});
         }
-        // The parapet on the deck: a ring a walker meets at the edge (mirrorTriangles makes it two-sided).
+        // The parapet on the deck: a ring a walker meets at the edge (mirrorTriangles makes it two-sided) -- in
+        // metre pieces, the ones under an overhanging tier above left out (they would wall its room).
         if (ct.parapet > 0)
-            for (std::size_t i = 0; i < ct.plan.size(); ++i)
-                quad(ct.plan[i], ct.plan[(i + 1) % ct.plan.size()], baseY + ct.y1, baseY + ct.y1 + ct.parapet);
+            for (std::size_t i = 0; i < ct.plan.size(); ++i) {
+                const Vec2 a = ct.plan[i], b = ct.plan[(i + 1) % ct.plan.size()];
+                if (last) { quad(a, b, baseY + ct.y1, baseY + ct.y1 + ct.parapet); continue; }
+                const Poly2& above = tiers[t + 1].plan;
+                const int n = std::max(1, static_cast<int>(std::ceil((b - a).length())));
+                for (int k = 0; k < n; ++k) {
+                    const Vec2 p0 = a + (b - a) * (static_cast<Real>(k) / n), p1 = a + (b - a) * (static_cast<Real>(k + 1) / n);
+                    if (above.size() >= 3 && pointInPolygon(above, (p0 + p1) * 0.5)) continue;
+                    quad(p0, p1, baseY + ct.y1, baseY + ct.y1 + ct.parapet);
+                }
+            }
     }
     return true;
 }

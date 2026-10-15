@@ -17,6 +17,7 @@
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/city/space_graph.h"
 #include "../procgen/city/circulation.h"
+#include "../procgen/city/mass_stack.h"
 #include "../procgen/city/section.h"
 #include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
@@ -1353,6 +1354,14 @@ static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
 // THE SPACE GRAPH of a building (space_graph.h, issue #105) and its gate, from Lua: the same adapter the tests and the
 // blueprint sheets use, so a recipe script can ask whether what it grew is walkable base to top. Cell and portal
 // indices are 1-based; `svg = true` adds the blueprint sheet.
+// A flag field: `name = true` or a non-zero number.
+static bool flagField(lua_State* L, int idx, const char* name) {
+    lua_getfield(L, idx, name);
+    const bool on = lua_isboolean(L, -1) ? lua_toboolean(L, -1) != 0 : (lua_isnumber(L, -1) && lua_tonumber(L, -1) != 0);
+    lua_pop(L, 1);
+    return on;
+}
+
 int l_building_space_graph(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     BuildingParams p;
@@ -1400,10 +1409,67 @@ int l_building_space_graph(lua_State* L) {
     lua_newtable(L);
     for (std::size_t i = 0; i < bad.size(); ++i) { lua_pushinteger(L, bad[i] + 1); lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1)); }
     lua_setfield(L, -2, "unreachable");
-    if (optField(L, 1, "svg", 0.0) != 0.0) {
+    if (flagField(L, 1, "svg")) {
         const std::string svg = blueprintSvg(g, "building", bad);
         lua_pushlstring(L, svg.data(), svg.size());
         lua_setfield(L, -2, "svg");
+    }
+    return 1;
+}
+
+// building.mass{ plan = {{x,z}, ...}, <params> | recipe = "name", seed = n, coreness = c, slices = true }
+//   -> { height, storeys, entries = { {storey, top, relation, varies, x0, z0, x1, z1} ... },
+//        slices = { {storey, tier, plan = {{x,z}, ...}} ... } (with slices = true) }
+// THE MASS (mass.h, mass_stack.h, issue #105 step 4): a building's stack -- its sections over storey ranges under
+// their transforms (the envelopes: setbacks, the taper, a twist, slid modules) -- and the storey outlines it slices
+// to, the same ones every grower reads. Indices are 1-based, storeys 0-based (0 = the ground).
+int l_building_mass(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.mass: `plan` needs three or more points");
+    const Stack st = stackOf(plan, p);
+    lua_newtable(L);
+    lua_pushnumber(L, st.height()); lua_setfield(L, -2, "height");
+    lua_pushinteger(L, st.floors + 1); lua_setfield(L, -2, "storeys");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < st.entries.size(); ++i) {
+        const StackEntry& e = st.entries[i];
+        static const char* const kRel[] = {"nest", "flush", "support"};
+        lua_newtable(L);
+        lua_pushinteger(L, e.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, e.k1); lua_setfield(L, -2, "top");
+        lua_pushstring(L, kRel[static_cast<int>(e.rel)]); lua_setfield(L, -2, "relation");
+        lua_pushboolean(L, e.varies()); lua_setfield(L, -2, "varies");
+        Vec2 lo(0, 0), hi(0, 0);
+        const Poly2 outline = e.section.tessellate();
+        if (outline.size() >= 3) bounds(outline, lo, hi);
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "entries");
+    if (flagField(L, 1, "slices")) {
+        const std::vector<StoreyPlan> storeys = sliceStoreys(st, p);
+        lua_newtable(L);
+        for (std::size_t k = 0; k < storeys.size(); ++k) {
+            lua_newtable(L);
+            lua_pushinteger(L, static_cast<lua_Integer>(k)); lua_setfield(L, -2, "storey");
+            lua_pushinteger(L, storeys[k].tier); lua_setfield(L, -2, "tier");
+            lua_newtable(L);
+            for (std::size_t i = 0; i < storeys[k].plan.size(); ++i) {
+                lua_newtable(L);
+                lua_pushnumber(L, storeys[k].plan[i].x); lua_rawseti(L, -2, 1);
+                lua_pushnumber(L, storeys[k].plan[i].y); lua_rawseti(L, -2, 2);
+                lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+            }
+            lua_setfield(L, -2, "plan");
+            lua_rawseti(L, -2, static_cast<lua_Integer>(k + 1));
+        }
+        lua_setfield(L, -2, "slices");
     }
     return 1;
 }
@@ -3935,6 +4001,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"space_graph", l_building_space_graph},
         {"section", l_building_section},
         {"circulation", l_building_circulation},
+        {"mass", l_building_mass},
         {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},

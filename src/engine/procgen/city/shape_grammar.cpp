@@ -1,4 +1,5 @@
 #include "shape_grammar.h"
+#include "mass_stack.h"
 #include "face.h"
 #include "section.h"
 #include "trades.h"   // a shop unit's trade: one table for the facade, its interior and its place
@@ -3133,6 +3134,26 @@ static std::vector<ExposedRun> exposedRuns(const Poly2& lowerIn, const Poly2& up
 
 // One straight PARAPET RUN: an upstand `h` tall on the edge a->b of a CCW plan (the interior on its left), its
 // coping on top. The open-run sibling of emitPlanParapet's closed ring.
+// The pieces of `runs` outside `upper` (an overhanging tier's plate): each run cut into metre pieces, the ones
+// whose middle lies inside the plate dropped.
+static std::vector<ExposedRun> runsOutside(const std::vector<ExposedRun>& runs, const Poly2& upper) {
+    std::vector<ExposedRun> out;
+    for (const ExposedRun& r : runs) {
+        const Real L = (r.b - r.a).length();
+        const int n = std::max(1, static_cast<int>(std::ceil(L)));
+        Vec2 start = r.a;
+        bool open = false;
+        for (int i = 0; i < n; ++i) {
+            const Vec2 p0 = r.a + (r.b - r.a) * (static_cast<Real>(i) / n), p1 = r.a + (r.b - r.a) * (static_cast<Real>(i + 1) / n);
+            const bool outside = !pointInPolygon(upper, (p0 + p1) * 0.5);
+            if (outside && !open) { start = p0; open = true; }
+            if (!outside && open) { out.push_back({start, p0}); open = false; }
+        }
+        if (open) out.push_back({start, r.b});
+    }
+    return out;
+}
+
 static void emitParapetRun(BuildingMesh& out, const Vec2& a, const Vec2& b, Real roofY, Real h, const Vec3& wallCol,
                            PartId wallPart, const Vec3& copingCol) {
     const Real L = (b - a).length();
@@ -3519,10 +3540,12 @@ bool tierInsetOk(const Poly2& outer, const Poly2& inner) {
     return true;
 }
 
+}  // namespace
+
 // ---- the NYC-variety envelopes' plan vocabulary (skyscrapers NYC variety M1) ----------------------------
-// The narrowest a tier may get: the core (a hoistway bank, two stairs and a corridor round them, ~12.3 x
-// 10.5 m) is placed in the TOP tier and must fit every tier, or the building loses its door.
-constexpr Real kCoreTierMin = 14.0;
+// The narrowest a tier may get (kCoreTierMin, shape_grammar.h): the core (a hoistway bank, two stairs and a
+// corridor round them, ~12.3 x 10.5 m) is placed in the TOP tier and must fit every tier, or the building loses
+// its door.
 Real tierShortSide(const Poly2& p) { const OBB2 b = orientedBoundingBox(p); return 2 * std::min(b.half[0], b.half[1]); }
 // `inner` stands on `outer`: every vertex inside it (nudged 2% to its centroid, so a shared edge counts),
 // smaller, and big enough to be a floor at all.
@@ -3536,7 +3559,7 @@ bool tierNestedIn(const Poly2& outer, const Poly2& inner) {
 }
 // A box on `ob`'s axes: half extents hw (axis 0) x hd (axis 1), its centre moved `shift` along the axes, its
 // corners chamfered by `cut` (an octagon; < 0.3 m none).
-Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0)) {
+Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut, Vec2 shift) {
     const Vec2 c = ob.center + ob.axis[0] * shift.x + ob.axis[1] * shift.y, a0 = ob.axis[0], a1 = ob.axis[1];
     Poly2 p;
     if (cut < 0.3) {
@@ -3561,9 +3584,18 @@ bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd) {
     }
     return false;
 }
-}  // namespace
 
-std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& params) {
+// THE STACK IS THE SOURCE (issue #105 step 4a, mass_stack.h): the tiers and the storey stack are the stack's
+// entries and slices; with identity transforms they are what the two functions below produced until today.
+std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params) {
+    return stackOf(plan, params).tiers();
+}
+
+std::vector<StoreyPlan> storeyPlans(const Poly2& plan, const BuildingParams& params) {
+    return sliceStoreys(stackOf(plan, params), params);
+}
+
+std::vector<MassTier> envelopeTiers(const Poly2& planIn, const BuildingParams& params) {
     std::vector<MassTier> out;
     Poly2 plan = planIn;
     if (plan.size() < 3) return out;
@@ -3711,28 +3743,12 @@ std::vector<MassTier> massStack(const Poly2& planIn, const BuildingParams& param
     return out;
 }
 
-std::vector<StoreyPlan> storeyPlans(const Poly2& planIn,
-                                    const BuildingParams& params) {
-    std::vector<StoreyPlan> out;
-    Poly2 plan = planIn;
-    if (plan.size() < 3) return out;
-    ensureCCW(plan);
-    out.push_back({plan, 0, params.groundHeight, 0});
-    const std::vector<MassTier> tiers = massStack(plan, params);
-    Poly2 cur = plan;
-    Real y = params.groundHeight;
-    int tier = 0;
-    std::size_t next = 1;
-    for (int i = 0; i < params.floors; ++i) {
-        while (next < tiers.size() && tiers[next].floor0 <= i) {
-            cur = tiers[next].plan;
-            ++tier;
-            ++next;
-        }
-        out.push_back({cur, y, params.floorHeight, tier});
-        y += params.floorHeight;
-    }
-    return out;
+// The same outline, point for point (a storey that continues its tier unchanged).
+static bool samePlan(const Poly2& a, const Poly2& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (a[i].x != b[i].x || a[i].y != b[i].y) return false;
+    return true;
 }
 
 std::vector<ColliderTier> colliderTiers(const Poly2& planIn, const BuildingParams& params) {
@@ -3741,20 +3757,30 @@ std::vector<ColliderTier> colliderTiers(const Poly2& planIn, const BuildingParam
     const std::vector<StoreyPlan> sps = storeyPlans(planIn, params);
     if (sps.empty()) return out;
     int tier = -1;
+    std::vector<bool> opensTier;   // per collider tier: it begins a new storey tier (a setback), not a turned storey
     for (const StoreyPlan& sp : sps) {
-        if (sp.tier != tier) {
+        const bool newTier = sp.tier != tier;
+        if (newTier || !samePlan(sp.plan, out.back().plan)) {
             ColliderTier t;
             t.plan = sp.plan;
             t.y0 = out.empty() ? Real(0) : out.back().y1;
             out.push_back(std::move(t));
+            opensTier.push_back(newTier);
             tier = sp.tier;
         }
         out.back().y1 = sp.y0 + sp.h;
     }
     // A setback's deck is its slab top 5 cm under the next tier's floor (growPlanBuilding caps the tier below at
-    // y - 0.05 with a 0.55 parapet); the main roof's deck is the roof slab's top 5 cm over the last ceiling.
+    // y - 0.05 with a 0.55 parapet); the main roof's deck is the roof slab's top 5 cm over the last ceiling. A
+    // turned storey's top (the next collider tier continues the same storey tier) is no deck: walls meet walls.
     for (std::size_t i = 0; i < out.size(); ++i) {
         const bool last = i + 1 == out.size();
+        if (!last && !opensTier[i + 1]) {
+            out[i].deck = false;
+            out[i].parapet = 0;
+            out[i + 1].y0 = out[i].y1;
+            continue;
+        }
         out[i].y1 += last ? Real(0.05) : Real(-0.05);
         out[i].parapet = last ? params.parapet : Real(0.55);
         if (i + 1 < out.size()) out[i + 1].y0 = out[i].y1;
@@ -6352,15 +6378,32 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             if (full) cornerPosts(cur, tierY0, y - tierY0);
             bool flush = false;
             const std::vector<ExposedRun> runs = exposedRuns(cur, sp.plan, flush);
-            if (!flush)
+            // AN OVERHANG (mass_stack.h, Relation::Support -- the Stack envelope's slid modules): the tier above
+            // hangs past the one below. Its floor plate is drawn whole, the underside the SOFFIT over the street;
+            // the parapet below keeps to the runs outside the plate (a ring would run through the room above).
+            const bool overhang = !tierNestedIn(cur, sp.plan) && area(sp.plan) > 1.0;
+            if (!flush && !overhang)
                 emitPlanParapet(out, offsetPlan(cur, 0.02), y, 0.55,
                                 materialFor(PartId::Trim, wallColor).albedo,
                                 PartId::Trim,
                                 materialFor(PartId::Trim, wallColor).albedo * 0.9);
             else
-                for (const ExposedRun& r : runs)
+                for (const ExposedRun& r : (overhang ? runsOutside(runs, sp.plan) : runs))
                     emitParapetRun(out, r.a, r.b, y, 0.55, materialFor(PartId::Trim, wallColor).albedo,
                                    PartId::Trim, materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            if (overhang)
+                emitPlanSlab(out, sp.plan, y, 0.4, PartId::Trim, materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            cur = sp.plan;
+            tierY0 = y;
+        } else if (i > 0 && !samePlan(sp.plan, cur)) {
+            // A TURNED OR SCALED STOREY (mass_stack.h: a keyed transform in the entry -- the Twist envelope): no
+            // setback. A SLAB BAND, the union of the two outlines, closes the seam: its top the ledge where the
+            // storey below sticks out, its underside the soffit where this one does. The facade is faceted storey
+            // by storey, as a built twisted tower's is (Cayan Tower, Turning Torso); the corner posts close with it.
+            if (full) cornerPosts(cur, tierY0, y - tierY0);
+            const Poly2 band = Section::fromLot(cur).unite(Section::fromLot(sp.plan)).tessellate();
+            emitPlanSlab(out, band.size() >= 3 ? band : sp.plan, y, 0.3, PartId::Trim,
+                         materialFor(PartId::Trim, wallColor).albedo * 0.9);
             cur = sp.plan;
             tierY0 = y;
         }

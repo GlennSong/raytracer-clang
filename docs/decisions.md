@@ -10143,3 +10143,37 @@ to replace or retire the current building looks ... we want more variety".
   LIST by name for whatever it finds next; it is empty.
 - **Rules.** Non-prismatic masses are always glass. Every word lands in C++ and Lua together (ADR-0042:
   `building.space_graph`). A ledger row before each module. No one-off functions: a new shape is grammar words.
+
+## ADR-0175 — The stack is the source of the storey stack; turned storeys are facets with slab bands
+
+Glenn, 2026-10-15: "Can we work on the building grammar, that's more important" -- step 4 of the toolkit plan
+(issue #105, ADR-0174) ahead of the circulation's zones. The grammar's massing words: a MASS gives its outline at a
+height (a slice) and its skin; a STACK is sections over storey ranges under keyed transforms.
+
+- **The stack is the source.** `massStack` and `storeyPlans` are the stack's tiers and slices (`stackOf`, then
+  `Stack::tiers` / `sliceStoreys`); the code that was `massStack` is `envelopeTiers`, the preset's input. With
+  identity transforms the slices are the old storeys point for point and tier for tier (the every-recipe census is
+  identical; `the_stack_preset_slices_to_todays_storeys_bit_for_bit`). A new form is a transform or a relation on an
+  entry, never new tier code; a new mass source (a sweep, an implicit form, a mesh) is a `Mass` whose slices feed
+  every planner, facade, collider and census untouched.
+- **A turned or scaled storey is a facet, not a ruled face.** The Twist envelope's storeys each take their own flat
+  facade on their own outline, and a SLAB BAND -- the union of the two outlines (Clipper2 through `Section::unite`),
+  0.3 m deep, its top at the storey line -- closes every seam: a ledge where the storey below sticks out, a soffit
+  where this one does. That is how built twisted towers read (Cayan Tower, Turning Torso: flat panels storey by
+  storey, a visible slab line between), and the facade emitters are planar. A ruled curtain wall between differing
+  outlines (`emitShell` as a facade) is owed, not required. The collider between two such storeys is walls meeting
+  walls: no deck, no parapet (`ColliderTier::deck`). A turned storey is NOT a setback: `tier` stays the entry's, so
+  the cap-and-parapet rule fires only where the entry changes.
+- **Support is an overhang.** A `Relation::Support` entry (the Stack envelope's slid modules) hangs past the one
+  below. Its floor plate is drawn whole, the underside the soffit; the deck below keeps its parapet only on the runs
+  outside the plate (`runsOutside`; the collider clips the same way) -- a ring would wall the room above.
+- **The core fits every storey it climbs through.** `massStack` lists one tier per turned storey (a constant slide
+  is one tier), so `corePreset`'s fit tests the core's corridor ring against each outline; where none fits, the
+  building keeps the straight stair runs, as before.
+- **The lot bounds the transform.** A twist turns the plan itself (a stadium turns as a stadium), scaled down about
+  its centre until every storey lies inside the lot; the box inside an L or a notched lot when the plan cannot turn
+  inside itself. Modules shrink along the long axis by the shift so every slid module stays inside the lot.
+- **Owed.** The taper as a scale curve (today's stepped taper stays as the preset), `emitCap` kinds (spire, dome,
+  vault, aperture, flared), the drum and the pagoda as presets (`growCylinder`, `growPagoda` retired), ruled curtain
+  walls.
+

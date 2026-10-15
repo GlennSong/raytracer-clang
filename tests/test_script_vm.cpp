@@ -1034,6 +1034,40 @@ TEST_CASE(procgen_script_reads_a_circulation_plan) {
     CHECK(vm.getGlobalNumber("inside", v)); CHECK(v == 1);
 }
 
+TEST_CASE(procgen_script_reads_a_mass_and_its_slices) {
+    // THE MASS from Lua (mass_stack.h, issue #105 step 4): a twisted tower's stack -- the base entry and the turning
+    // one -- and its storey slices, each turned on from the last.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        m = building.mass{ plan = {{-20,-16},{20,-16},{20,16},{-20,16}}, floors = 20, envelope = 'twist', twist_deg = 90,
+                           base_floors = 1, curtain_wall = true, slices = true }
+        n_entries, storeys, height = #m.entries, m.storeys, m.height
+        base_nests = (m.entries[1].relation == 'nest') and 1 or 0
+        twist_supported = (m.entries[2].relation == 'support') and 1 or 0
+        twist_varies = m.entries[2].varies and 1 or 0
+        twist_from = m.entries[2].storey
+        local function dir(pl) return pl[2][1] - pl[1][1], pl[2][2] - pl[1][2] end
+        turning = 1
+        for k = 4, #m.slices do
+            local ax, az = dir(m.slices[k-1].plan)
+            local bx, bz = dir(m.slices[k].plan)
+            if ax * bz - az * bx <= 0 then turning = 0 end   -- each storey's first edge turned on from the last
+        end
+        top_tier = m.slices[#m.slices].tier
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("n_entries", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("storeys", v)); CHECK(v == 21);
+    CHECK(vm.getGlobalNumber("twist_varies", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("twist_from", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("turning", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("top_tier", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("height", v)); CHECK(v > 60);
+    CHECK(vm.getGlobalNumber("twist_supported", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("base_nests", v)); CHECK(v == 1);
+}
+
 TEST_CASE(procgen_script_draws_a_section) {
     // THE SECTION from Lua (section.h, issue #105 step 2a): a rectangle, the drum's n-gon, a lot, an inset.
     ScriptVM vm;

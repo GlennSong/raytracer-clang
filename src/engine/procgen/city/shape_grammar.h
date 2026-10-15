@@ -337,6 +337,10 @@ struct ColliderTier {
     Poly2 plan;
     Real y0 = 0, y1 = 0;
     Real parapet = 0;
+    // Its top is a DECK (a setback's, or the roof): capped, the parapet on it. False where the storey above
+    // continues the same entry on a turned or scaled outline (mass_stack.h): walls only, the slab band is the
+    // exterior's.
+    bool deck = true;
 };
 std::vector<ColliderTier> colliderTiers(const Poly2& plan, const BuildingParams& params);
 
@@ -350,6 +354,18 @@ struct MassTier {
     int floor0 = 0;   // the first floor (above the ground storey) this tier serves
 };
 std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params);
+// THE ENVELOPES' TIERS (skyscrapers v2 / NYC variety): what massStack was until the stack (mass_stack.h) took it
+// as its first preset -- the uniform setbacks, the street wall and its steps, the sky exposure plane, the taper,
+// the slab, the feathered pencil. massStack and storeyPlans read the stack; this is the stack's input.
+std::vector<MassTier> envelopeTiers(const Poly2& plan, const BuildingParams& params);
+// The tiers' plan vocabulary: a box on an OBB's axes (half extents, a corner cut, a shift along the axes), the
+// biggest such box inside a plan, whether a tier stands on the one below, a plan's short side, and the narrowest
+// a tier may be for the core to fit (14 m).
+Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0));
+bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd);
+bool tierNestedIn(const Poly2& outer, const Poly2& inner);
+Real tierShortSide(const Poly2& p);
+constexpr Real kCoreTierMin = 14.0;
 
 // The street-facing edge index of a CCW plan — the edge the door lands on.
 // Shared by growPlanBuilding, interiorLayout callers and growInterior so no
