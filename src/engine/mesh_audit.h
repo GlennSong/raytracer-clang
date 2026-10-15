@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -113,6 +114,8 @@ struct UndersideAudit {
     std::map<std::string, std::pair<size_t, size_t>> byMaterial;   // hanging, open
     std::map<std::pair<int, int>, size_t> openBySquare;            // floor(x / 100), floor(z / 100)
     Vec3 firstOpen{0, 0, 0};
+    struct Open { std::string mesh; Vec3 at; double ground; Vec3 a, b, c; };
+    std::vector<Open> all;   // every open top's centre, for sampling a cluster (rt_bake RT_UNDERSIDE_SAMPLES)
 };
 struct NamedMeshRef { std::string name; const RenderMesh* mesh; };
 inline UndersideAudit auditUndersides(const std::vector<NamedMeshRef>& all, const std::function<bool(const std::string&)>& walk,
@@ -164,6 +167,7 @@ inline UndersideAudit auditUndersides(const std::vector<NamedMeshRef>& all, cons
                 if (under(d, c.x, c.z, y) && y < c.y + 0.05 && (y > c.y - depth || y < gy + 0.05)) { covered = true; break; }
         if (covered) continue;
         if (r.open++ == 0) r.firstOpen = c;
+        r.all.push_back({*mat, c, gy, t.a, t.b, t.c});
         ++r.byMaterial[*mat].second;
         ++r.openBySquare[{static_cast<int>(std::floor(c.x / 100)), static_cast<int>(std::floor(c.z / 100))}];
     }
@@ -270,14 +274,15 @@ struct SeeThroughAudit {
 };
 inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, const std::function<bool(const std::string&)>& walk,
                                        const std::function<double(double, double)>& ground, double hang = 2.0, double reach = 80.0) {
-    struct Tri { Vec3 a, b, c; const std::string* mesh; };
+    struct Tri { Vec3 a, b, c; const std::string* mesh; size_t id; };
     std::map<std::pair<int, int>, std::vector<Tri>> grid;   // every triangle by 4 m bucket (plan bbox)
+    size_t nextId = 0;
     std::vector<Vec3> tops;
     for (const NamedMeshRef& nm : all) {
         const RenderMesh& m = *nm.mesh;
         const bool isWalk = walk(nm.name);
         for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
-            const Tri tri{m.vertices[m.indices[t]].position, m.vertices[m.indices[t + 1]].position, m.vertices[m.indices[t + 2]].position, &nm.name};
+            const Tri tri{m.vertices[m.indices[t]].position, m.vertices[m.indices[t + 1]].position, m.vertices[m.indices[t + 2]].position, &nm.name, nextId++};
             const Vec3 f = cross(tri.c - tri.a, tri.b - tri.a);
             if (f.lengthSquared() < 1e-12) continue;
             for (int i = static_cast<int>(std::floor(std::min({tri.a.x, tri.b.x, tri.c.x}) / 4)); i <= static_cast<int>(std::floor(std::max({tri.a.x, tri.b.x, tri.c.x}) / 4)); ++i)
@@ -315,6 +320,38 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
             }
         return face;
     };
+    // THE WINDING along o + d t, t in (eps, reach): +1 for every back the ray crosses (leaving a solid), -1 for every
+    // front (entering one). Above zero, o is inside something -- and unlike "the first face met is a back" it stays
+    // right where closed solids overlap: a pier standing up into a box girder's webs meets a web's FRONT first
+    // from inside the pier (the island's see-through samples, 2026-10-14).
+    auto winding = [&](const Vec3& o, const Vec3& d) {
+        int w = 0;
+        std::set<size_t> met;   // a triangle spans several buckets
+        const Vec3 e = o + d * reach;
+        const int i0 = static_cast<int>(std::floor(std::min(o.x, e.x) / 4)), i1 = static_cast<int>(std::floor(std::max(o.x, e.x) / 4));
+        const int k0 = static_cast<int>(std::floor(std::min(o.z, e.z) / 4)), k1 = static_cast<int>(std::floor(std::max(o.z, e.z) / 4));
+        for (int i = i0; i <= i1; ++i)
+            for (int k = k0; k <= k1; ++k) {
+                auto it = grid.find({i, k});
+                if (it == grid.end()) continue;
+                for (const Tri& t : it->second) {
+                    const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
+                    const double det = dot(e1, p);
+                    if (std::fabs(det) < 1e-12) continue;
+                    const double inv = 1.0 / det;
+                    const Vec3 s = o - t.a;
+                    const double u = dot(s, p) * inv;
+                    if (u < 0 || u > 1) continue;
+                    const Vec3 q = cross(s, e1);
+                    const double v = dot(d, q) * inv;
+                    if (v < 0 || u + v > 1) continue;
+                    const double tt = dot(e2, q) * inv;
+                    if (tt <= 1e-4 || tt >= reach || !met.insert(t.id).second) continue;
+                    w += dot(cross(t.c - t.a, t.b - t.a), d) > 0 ? 1 : -1;
+                }
+            }
+        return w;
+    };
     SeeThroughAudit r;
     std::vector<Vec3> dirs;   // (straight up is the eye test below)
     for (int k = 0; k < 8; ++k) {
@@ -338,7 +375,7 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
             const Vec3 d(std::cos(a), 0, std::sin(a));
             double t;
             const Vec3 face = cast(eye, d, t);
-            if (face.lengthSquared() > 0 && dot(face, d) > 0) ++enclosed;
+            if ((face.lengthSquared() > 0 && dot(face, d) > 0) || winding(eye, d) > 0) ++enclosed;
         }
         bool floorBehind = false;
         {

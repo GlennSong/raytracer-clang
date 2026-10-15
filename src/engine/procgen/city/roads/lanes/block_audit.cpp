@@ -377,7 +377,7 @@ std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lot
         // the drawn mesh 2026-10-14: 34 walls buried up to 1.3 m on six levels). Where the plan leaves the
         // clipped pad, the plan is a pad too, at the same plane; inside a road's own footprint the road's plane
         // still rules (applyFlatten: an inside beats any feather), so nothing rises through the pavement.
-        if (lb.plan.size() >= 3) {
+        if (lb.plan.size() >= 3 && !pieces.empty()) {   // (a lot with no pad in any block raises nothing)
             bool held = true;
             for (const Vec2& v : lb.plan) {
                 bool in = false;

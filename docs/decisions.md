@@ -10007,6 +10007,16 @@ Owed (the mesh library): one triangulator (the road ear-clipper beside earcut), 
 MeshBuilder::lathe, a box-in-a-frame primitive for trackBox and the shape grammar's emitBox, the Lua mesh.* as a thin
 face over the same API, the lot cache's building meshes under rt_bake --audit.
 
+- **Where the decks judge the ground, and what "inside" means (2026-10-14, lanes 10-14.4).** The island's biggest
+  open-underside clusters were asphalt 2-3 m over the grass with no soffit: the slab's underside rule asked the grid
+  BILINEARLY, and on cells twisted between a deck-pinned node and the earthwork hold dug beside it that stood a metre
+  and more above the two triangles the terrain draws -- the deck read "at grade". `GroundGrid::sampleDrawn` (the
+  gridCell diagonal) is what the deck mesher and the lanes audits now ask. And the see-through audit's inside test
+  became a winding count along each level look (+1 a back crossed, -1 a front): a pier standing up into a twin-web
+  girder meets a web's front first from inside the pier, so "the first face is a back" had the eye outside -- 89 of
+  the island's 579 looks. rt_bake --audit: RT_UNDERSIDE_SAMPLES=N prints open tops (with corners and the ground under
+  each) in the worst squares.
+
 ## ADR-0173 — The mesh library v1: every producer on one set of words
 
 Glenn, 2026-10-13: "Mesh library is priority one" — "a common library of triangulation techniques, tristrips, how to

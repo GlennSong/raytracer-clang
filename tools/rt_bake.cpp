@@ -211,6 +211,25 @@ int audit(const std::string& dir) {
         refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform" || n == "concrete"; },
         groundAt);
     engine::printUndersideAudit(u, 20);
+    // RT_UNDERSIDE_SAMPLES=N: N open tops in each of the five worst squares
+    if (const char* ns = std::getenv("RT_UNDERSIDE_SAMPLES")) {
+        const size_t n = std::strtoul(ns, nullptr, 10);
+        std::vector<std::pair<size_t, std::pair<int, int>>> w;
+        for (const auto& [k, c] : u.openBySquare) w.push_back({c, k});
+        std::sort(w.rbegin(), w.rend());
+        for (size_t i = 0; i < w.size() && i < 5; ++i) {
+            std::printf("    [undersides] samples around x %d, z %d\n", w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
+            size_t k = 0;
+            for (const auto& o : u.all)
+                if (k < n && static_cast<int>(std::floor(o.at.x / 100)) == w[i].second.first &&
+                    static_cast<int>(std::floor(o.at.z / 100)) == w[i].second.second) {
+                    std::printf("      %s top at %.2f %.2f %.2f, %.1f m over the ground; corners", o.mesh.c_str(), o.at.x, o.at.y, o.at.z, o.at.y - o.ground);
+                    for (const engine::Vec3& q : {o.a, o.b, o.c}) std::printf(" (%.2f %.2f %.2f | ground %.2f)", q.x, q.y, q.z, groundAt(q.x, q.z));
+                    std::printf("\n");
+                    ++k;
+                }
+        }
+    }
     // SEE-THROUGH FROM AN ANGLE: from a person standing under each deck, looking up at 45 deg all round
     const engine::SeeThroughAudit st = engine::auditSeeThrough(
         refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform"; },

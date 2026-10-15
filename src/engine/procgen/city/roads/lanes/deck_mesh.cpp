@@ -751,9 +751,12 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     const RoadLabGraph& g = r.graph; const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
     RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail, ballast, sleepers, rails, platform;
     RenderMesh canopy, stationSteel, stationLamp;
-    // The ground under a deck, for the underside rule (slab): the conformed grid, or 0 on a flat level.
+    // The ground under a deck, for the underside rule (slab): the conformed grid AS DRAWN (its two triangles a
+    // cell, not the bilinear patch), or 0 on a flat level. Bilinear stood a metre and more above the drawn ground
+    // on cells twisted between a deck-pinned node and the hold dug beside it, so a deck 2.3 m over the grass was
+    // judged "at grade" and built with no underside (the island audit's open undersides, 2026-10-14).
     const std::function<double(const Vec2&)> groundUnder = [&r](const Vec2& q) {
-        return r.hasTerrain ? r.terrain.sample(q.x, q.y) : 0.0;
+        return r.hasTerrain ? r.terrain.sampleDrawn(q.x, q.y) : 0.0;
     };
     // decks with lane-local UVs
     // A boundary edge is only a deck EDGE if the pavement ends there. A weld crack is also "used by one
