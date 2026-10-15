@@ -107,12 +107,18 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
     for (const auto& e : boundary) {
         const DeckVertex& a = verts[static_cast<size_t>(e.first)]; const DeckVertex& b = verts[static_cast<size_t>(e.second)];
         Vec2 d = b.xy - a.xy; if (d.length() < 1e-9) continue; Vec2 out = Vec2(d.y, -d.x) / d.length();   // interior on the left => outward is the right normal
-        if (seam && (*seam)(a.xy, b.xy, 0.5 * (a.z + b.z) + lift)) continue;                          // an internal seam: the asphalt continues at this level, no side face
+        // an internal seam: the pavement continues at this level, no side face -- UNLESS what is drawn beyond is a
+        // thinner slab (a carriageway's 1.2 m against its shoulder's 0.3): the lane's footprint takes in its
+        // shoulder, so the seam test skipped the 0.9 m step under it, and from below you looked up into the
+        // carriageway slab and out through the road's culled top (the island's see-through audit, 2026-10-14)
+        const bool seamed = seam && (*seam)(a.xy, b.xy, 0.5 * (a.z + b.z) + lift);
         const double topA = a.z + lift, topB = b.z + lift;
         double botA = topA - thick, botB = topB - thick;
         double coverTopA = topA, coverTopB = topB;   // where this side's exposed part ends, up
+        if (seamed && !hidden) continue;
         if (hidden) {
             const double under = (*hidden)((a.xy + b.xy) * 0.5 + out * 0.15, 0.5 * (topA + topB));
+            if (seamed && (std::isnan(under) || 0.5 * (topA + topB) - under >= thick - 0.02)) continue;
             if (!std::isnan(under)) {   // a neighbour stands at the top: only the step below its underside shows
                 const double drop = 0.5 * (topA + topB) - under;   // how deep the neighbour reaches
                 if (drop >= thick - 0.02) continue;

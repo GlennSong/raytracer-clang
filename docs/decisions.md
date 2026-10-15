@@ -10015,7 +10015,11 @@ face over the same API, the lot cache's building meshes under rt_bake --audit.
   became a winding count along each level look (+1 a back crossed, -1 a front): a pier standing up into a twin-web
   girder meets a web's front first from inside the pier, so "the first face is a back" had the eye outside -- 89 of
   the island's 579 looks. rt_bake --audit: RT_UNDERSIDE_SAMPLES=N prints open tops (with corners and the ground under
-  each) in the worst squares.
+  each) in the worst squares. The rebake took the island's open undersides 265 -> 12 (asphalt 253 -> 0) and left the
+  see-through looks where they were: those were the one-way strip again, at a SEAM -- the carriageway's lane footprint
+  takes in its shoulder, so the seam test ("the pavement continues at this level") skipped the side before the side
+  rule could build the 0.9 m step under the shoulder. A seam now skips only where what is drawn beyond reaches as deep
+  (lanes 10-14.5).
 
 ## ADR-0173 — The mesh library v1: every producer on one set of words
 
