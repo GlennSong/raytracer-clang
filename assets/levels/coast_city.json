@@ -86,30 +86,13 @@
         0
       ],
       "road": {
-        "generate": {
-          "kind": "metro",
-          "radius": 230,
-          "hotspots": 5,
-          "block_size": 74,
-          "artery_width": 13,
-          "street_width": 7,
-          "seed": 5,
-          "center": {
-            "x": 200,
-            "z": -200
-          }
-        },
-        "width": 7.0,
-        "sidewalk": 3.5,
-        "curb": 0.16,
-        "corner_radius": 3.0,
-        "lift": 0.08,
-        "markings": true,
-        "color": [
-          0.09,
-          0.09,
-          0.1
-        ]
+        "builder": "lanes",
+        "graph": "assets/lanelab/converted/coast_city_lanelab.json",
+        "sidewalks": {
+          "arterial": 3.5,
+          "collector": 3.5,
+          "local": 3.5
+        }
       }
     }
   ],

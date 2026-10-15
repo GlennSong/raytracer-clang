@@ -28,67 +28,13 @@
     0.0
    ],
    "road": {
-    "color": [
-     0.09,
-     0.09,
-     0.1
-    ],
-    "corner_radius": 3.0,
-    "crosswalks": true,
-    "curb": 0.16,
-    "generate": {
-     "ambient_per_500": 5,
-     "artery_width": 17,
-     "backbone": "arterial",
-     "block_size": 220,
-     "collector_width": 13,
-     "corridor_freeways": false,
-     "corridor_spacing": 240,
-     "curviness": 0.25,
-     "freeway_width": 17,
-     "freeways": true,
-     "influence": 800,
-     "interchange_spacing": 600,
-     "kill_radius": 300,
-     "kind": "metro",
-     "loop_max": 1300,
-     "loop_min": 550,
-     "max_slope": 0.32,
-     "merge_radius": 200,
-     "min_block_edge": 150,
-     "min_road_clearance": 0.9,
-     "min_road_len": 30,
-     "seed": 7,
-     "seg_length": 120,
-     "sites": [
-      {
-       "block_size": 220,
-       "center": {
-        "x": 0,
-        "z": 0
-       },
-       "density": 1.0,
-       "hotspots": 6,
-       "radius": 700
-      },
-      {
-       "block_size": 180,
-       "center": {
-        "x": 950,
-        "z": -200
-       },
-       "density": 0.6,
-       "hotspots": 2,
-       "kind_bias": "oldtown",
-       "radius": 250
-      }
-     ],
-     "street_width": 12.0
-    },
-    "lift": 0.08,
-    "markings": true,
-    "sidewalk": 3.5,
-    "width": 12.0
+    "builder": "lanes",
+    "graph": "assets/lanelab/converted/piedmont_mini_lanelab.json",
+    "sidewalks": {
+     "arterial": 3.5,
+     "collector": 3.5,
+     "local": 3.5
+    }
    },
    "shape": "road"
   }

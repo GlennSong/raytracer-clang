@@ -46,51 +46,13 @@
         0.0
       ],
       "road": {
-        "color": [
-          0.09,
-          0.09,
-          0.1
-        ],
-        "corner_radius": 3.0,
-        "crosswalks": true,
-        "curb": 0.16,
-        "generate": {
-          "ambient_per_500": 40,
-          "artery_width": 17,
-          "beach_rise": 2.5,
-          "block_size": 180,
-          "collector_width": 13,
-          "corridor_freeways": false,
-          "corridor_spacing": 200,
-          "curviness": 0.2,
-          "district_len": 900,
-          "fabric": "mix",
-          "fabric_core_len": 100,
-          "freeway_width": 22,
-          "gate_spacing": 900,
-          "hotspots": 9,
-          "influence": 700,
-          "interchange_spacing": 700,
-          "kill_radius": 260,
-          "kind": "metro",
-          "loop_max": 1100,
-          "loop_min": 450,
-          "max_slope": 0.32,
-          "merge_radius": 170,
-          "min_block_edge": 120,
-          "min_road_clearance": 0.9,
-          "min_road_len": 30,
-          "radius": 1075,
-          "sea_level": -5.0,
-          "seed": 9,
-          "seg_length": 100,
-          "skeleton": "footprint",
-          "street_width": 12.0
-        },
-        "lift": 0.08,
-        "markings": true,
-        "sidewalk": 3.5,
-        "width": 7.0
+        "builder": "lanes",
+        "graph": "assets/lanelab/converted/metro_v2_test_lanelab.json",
+        "sidewalks": {
+          "arterial": 3.5,
+          "collector": 3.5,
+          "local": 3.5
+        }
       },
       "shape": "road"
     }
