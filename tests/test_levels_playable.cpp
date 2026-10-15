@@ -411,23 +411,13 @@ LevelFacts inspect(const std::string& name) {
         world.each<CityPlanDebug>([&](Entity, CityPlanDebug& plan) {
             if (plan.prisms.empty()) return;
             Noise noise(cfg.seed);
-            const double leafSize =
-                (2.0 * cfg.worldHalf) /
-                static_cast<double>(1 << (cfg.numLods - 1));
-            const double leafStep = leafSize / std::max(1, cfg.gridRes);
-            const double dilate = leafStep * 1.45;
+            // THE DRAWN GROUND: the leaf mesh's triangle under the point (lodSurfaceHeight), as the
+            // dressing and scenery gates measure. This used to be a model of it -- the field dilated
+            // by a cell, then the lower of that and any road plane within 1.6 cells -- and the model
+            // was the gap: river_town's riverside lot read a 10.1 m drop at a corner where the mesh
+            // drops 7.8 (2026-10-14).
             auto meshGround = [&](double x, double z) {
-                double y = terrainHeight(cfg.params, noise, x, z, dilate);
-                if (cfg.params.flattenIndex) {
-                    const double rp =
-                        roadPlaneNear(*cfg.params.flattenIndex,
-                                      cfg.params.flatten, x, z, leafStep * 1.6);
-                    if (rp < 1e29 &&
-                        !padPlaneAbove(*cfg.params.flattenIndex,
-                                       cfg.params.flatten, x, z, rp, dilate))
-                        y = std::min(y, rp);
-                }
-                return y;
+                return lodSurfaceHeight(cfg.params, noise, x, z, cfg.worldHalf, cfg.numLods, cfg.gridRes);
             };
             // plinth from the level JSON (the prism base = baseY - 0.5).
             double plinth = 0.15;

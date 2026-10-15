@@ -371,7 +371,28 @@ std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lot
         // their blocks). Clipped to the block inset by the feather, the ramp still ends at the
         // block line — behind the sidewalk, never in the road — and neighbours meet at their lot line.
         const TerrainFlatten raw = lotPadFlatten(lb, 2.2 + falloff, falloff);
-        for (std::vector<Vec3>& poly : insideBlock(raw.polygon, inside, falloff, /*shrinkSelf=*/false)) out.push_back(makeFlattenPad(std::move(poly), lb.groundY, falloff));
+        std::vector<std::vector<Vec3>> pieces = insideBlock(raw.polygon, inside, falloff, /*shrinkSelf=*/false);
+        // ...BUT THE PAD HOLDS ITS WALLS. A building standing within a feather of its block line had that wall
+        // on the ramp, and where the street side is higher the ramp climbed it (floorplan census, measured on
+        // the drawn mesh 2026-10-14: 34 walls buried up to 1.3 m on six levels). Where the plan leaves the
+        // clipped pad, the plan is a pad too, at the same plane; inside a road's own footprint the road's plane
+        // still rules (applyFlatten: an inside beats any feather), so nothing rises through the pavement.
+        if (lb.plan.size() >= 3) {
+            bool held = true;
+            for (const Vec2& v : lb.plan) {
+                bool in = false;
+                for (const std::vector<Vec3>& pc : pieces) {
+                    Poly2 ring; for (const Vec3& q : pc) ring.push_back(Vec2(q.x, q.z));
+                    if (pointInPolygon(ring, v)) { in = true; break; }
+                }
+                if (!in) { held = false; break; }
+            }
+            if (!held) {
+                std::vector<Vec3> walls; for (const Vec2& v : lb.plan) walls.push_back(Vec3(v.x, 0, v.y));
+                pieces.push_back(std::move(walls));
+            }
+        }
+        for (std::vector<Vec3>& poly : pieces) out.push_back(makeFlattenPad(std::move(poly), lb.groundY, falloff));
     }
     return out;
 }
