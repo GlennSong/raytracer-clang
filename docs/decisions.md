@@ -10176,6 +10176,10 @@ height (a slice) and its skin; a STACK is sections over storey ranges under keye
 - **A scale curve is the same machinery.** The Bulge envelope scales the plan about its centre storey by storey
   (0.8 at the foot, full at `bulge` of the height, `taperTop` at the top): the lens tower on the drum massing, drawn
   with the same facets and slab bands, the core fitted to every storey.
+- **The curves compose.** Rotation, scale and slide are three curves on one entry, so the Curves envelope takes
+  all of a recipe's `twistDeg`, `bulge` / `taperTop` and `lean` at once -- a leaning tower, a twisted taper, a
+  leaning twist -- where Twist and Bulge stay as the single-curve presets they were proven as. A lean keeps the
+  top on the lot by squeezing the section along the lean's axis by the lean, then the twist's shrink-to-fit.
 - **Owed.** Today's stepped taper as a scale curve (its steps stay as the preset), `emitCap` kinds (spire, dome,
   vault, aperture, flared), the drum and the pagoda as presets (`growCylinder`, `growPagoda` retired), ruled curtain
   walls.

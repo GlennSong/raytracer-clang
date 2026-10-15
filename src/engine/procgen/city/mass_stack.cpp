@@ -164,7 +164,7 @@ Stack stackOf(const Poly2& planIn, const BuildingParams& params) {
     if (plan.size() < 3) return st;
     ensureCCW(plan);
     using Env = BuildingParams::Envelope;
-    if (params.envelope == Env::Twist || params.envelope == Env::Stack || params.envelope == Env::Bulge) {
+    if (params.envelope == Env::Twist || params.envelope == Env::Stack || params.envelope == Env::Bulge || params.envelope == Env::Curves) {
         // THE BASE: the lot plan up to `baseFloors` (storey f0 included), as the taper's.
         const int f0 = std::max(1, params.baseFloors);
         StackEntry base;
@@ -174,6 +174,47 @@ Stack stackOf(const Poly2& planIn, const BuildingParams& params) {
         st.entries.push_back(base);
         if (f0 >= params.floors) return st;
         const OBB2 ob = orientedBoundingBox(plan);
+        if (params.envelope == Env::Curves) {
+            // THE CURVES COMPOSED: one entry turning `twistDeg`, scaled by the bulge curve (foot 0.8, full at
+            // `bulge`, `taperTop` at the top) or, with no bulge, straight from full to `taperTop`, and leaning
+            // `lean` of its height along the plan's long axis -- the section shrunk along that axis by the lean
+            // and scaled down until every storey stays inside the lot.
+            StackEntry cv;
+            cv.k0 = f0 + 1;
+            cv.k1 = params.floors;
+            cv.rel = Relation::Support;
+            const int la = ob.longAxis();
+            cv.xf.pivot = ob.center;
+            cv.xf.u = ob.axis[la];
+            cv.xf.v = ob.axis[1 - la];
+            if (params.twistDeg != 0) cv.xf.rot = Curve::linear(0, params.twistDeg);
+            const Real shortSide = tierShortSide(plan);
+            const Real minScale = shortSide > 1e-6 ? std::min(Real(1), (kCoreTierMin + 3.0) / shortSide) : Real(1);
+            const Real top = std::max(std::max(Real(0.3), std::min(Real(1), params.taperTop)), minScale);
+            Curve sc;
+            if (params.bulge > 0) sc.keys = {{0, std::max(Real(0.8), minScale)}, {std::max(Real(0.05), std::min(Real(0.95), params.bulge)), 1.0}, {1, top}};
+            else if (top < 1) sc = Curve::linear(1, top);
+            if (!sc.keys.empty()) { cv.xf.scaleU = sc; cv.xf.scaleV = sc; }
+            const Real height = (params.floors - f0) * params.floorHeight;
+            const Real leanM = std::max(Real(-0.3), std::min(Real(0.3), params.lean)) * height;
+            if (leanM != 0) cv.xf.slideU = Curve::linear(-leanM * 0.5, leanM * 0.5);
+            // the section: the plan squeezed along the long axis by the lean, then scaled down to fit when it turns
+            Poly2 shape;
+            for (const Vec2& q : plan) {
+                const Vec2 r = q - ob.center;
+                const Real x = dot(r, ob.axis[la]), y = dot(r, ob.axis[1 - la]);
+                const Real sx = ob.half[la] > 1e-6 ? std::max(Real(0.4), (ob.half[la] - std::fabs(leanM) * 0.5) / ob.half[la]) : Real(1);
+                shape.push_back(ob.center + ob.axis[la] * (x * sx) + ob.axis[1 - la] * y);
+            }
+            bool placed = false;
+            for (Real s = 1.0; s >= 0.58 && !placed; s -= 0.04) {
+                cv.section = scaledAbout(shape, ob.center, s);
+                if (tierShortSide(cv.section.tessellate()) < kCoreTierMin * 0.8) break;
+                if (entryInside(plan, cv, ob.center)) placed = true;
+            }
+            if (placed) st.entries.push_back(cv);
+            return st;
+        }
         if (params.envelope == Env::Bulge) {
             // THE BULGE: one entry, the plan scaled about its centre by a curve -- 0.8 at its foot, 1.0 at `bulge`
             // of the height, `taperTop` at the top (never past the plan: scale <= 1 stays inside the lot). Each

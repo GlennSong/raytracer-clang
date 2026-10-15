@@ -233,6 +233,51 @@ TEST_CASE(a_lens_tower_widens_to_its_waist_and_narrows_to_its_top) {
                 radius(30), g.cells.size(), unreachableCells(g).size());
 }
 
+TEST_CASE(the_curves_compose_a_lean_a_twist_and_a_taper_inside_the_lot) {
+    const Poly2 plan = {{-20, -14}, {20, -14}, {20, 14}, {-20, 14}};
+    BuildingParams p = towerParams(24);
+    p.envelope = BuildingParams::Envelope::Curves;
+    p.baseFloors = 1;
+    p.lean = 0.18;
+    p.twistDeg = 30;
+    p.taperTop = 0.7;
+    p.bulge = 0;
+    const Stack st = stackOf(plan, p);
+    CHECK(st.entries.size() == 2 && st.entries.back().varies() && st.entries.back().rel == Relation::Support);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+    CHECK(storeys.size() == 25);
+    // Every storey inside the lot; the centroid walks along x from -lean/2 to +lean/2 of the height; the top is
+    // smaller than the foot; the top turned 30 degrees from the foot.
+    const Real height = (24 - 1) * p.floorHeight;
+    Real lastX = -1e9;
+    for (int k = 2; k <= 24; ++k) {
+        const Poly2& sp = storeys[static_cast<std::size_t>(k)].plan;
+        CHECK(inside(plan, sp));
+        const Real cx = centroid(sp).x;
+        CHECK(cx > lastX);
+        lastX = cx;
+    }
+    CHECK(std::fabs((centroid(storeys[24].plan).x - centroid(storeys[2].plan).x) - 0.18 * height) < 0.05);
+    CHECK(area(storeys[24].plan) < area(storeys[2].plan) * 0.6);
+    const Vec2 d0 = normalize(storeys[2].plan[1] - storeys[2].plan[0]), d1 = normalize(storeys[24].plan[1] - storeys[24].plan[0]);
+    CHECK(std::fabs(std::acos(std::max(Real(-1), std::min(Real(1), dot(d0, d1)))) * 180.0 / 3.14159265358979323846 - 30.0) < 1.0);
+    const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+    CHECK(unreachableCells(g).empty());
+    // A pure lean keeps the plan's shape: the same width at every storey, shifted.
+    BuildingParams q = p;
+    q.twistDeg = 0;
+    q.taperTop = 1;
+    const std::vector<StoreyPlan> leaning = storeyPlans(plan, q);
+    Vec2 lo2, hi2, lo24, hi24;
+    bounds(leaning[2].plan, lo2, hi2);
+    bounds(leaning[24].plan, lo24, hi24);
+    CHECK(std::fabs((hi2.x - lo2.x) - (hi24.x - lo24.x)) < 1e-6);
+    CHECK(hi24.x <= 20 + 1e-6 && lo2.x >= -20 - 1e-6);
+    std::printf("    [curves] lean %.2f m over %.1f m, top %.0f%% of the foot's area, turned %.0f deg; %zu cells, %zu unreachable\n",
+                centroid(storeys[24].plan).x - centroid(storeys[2].plan).x, height, 100.0 * area(storeys[24].plan) / area(storeys[2].plan),
+                std::acos(dot(d0, d1)) * 180.0 / 3.14159265358979323846, g.cells.size(), unreachableCells(g).size());
+}
+
 TEST_CASE(the_stack_is_a_mass_with_slices_bounds_and_a_shell) {
     const Poly2 plan = {{-12, -10}, {12, -10}, {12, 10}, {-12, 10}};
     BuildingParams p = towerParams(10);

@@ -810,6 +810,52 @@ void recipeCourtyardBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "courtyard_block";
 }
 
+// The LEANING TOWER (issue #105 step 4, the curves composed; Gate of Europe, Capital Gate): a glass slab leaning
+// a sixth of its height along the lot, now and then with a turn in it as well.
+void recipeLeaningTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(16, 22) + static_cast<int>(cx.coreness * 24);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Curves;
+    p.baseFloors = 1;
+    p.lean = (rng.unit() < 0.5 ? 1.0 : -1.0) * rng.range(0.12, 0.2);
+    p.twistDeg = rng.unit() < 0.3 ? rng.range(20.0, 40.0) : 0.0;
+    p.taperTop = 1.0;
+    p.bulge = 0.0;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 50}, {2, 30}, {6, 20}});
+    out.name = "leaning_tower";
+}
+
+// The TWISTED TAPER (the curves composed): a rounded tower turning a quarter and narrowing to two thirds at the top.
+void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(18, 26) + static_cast<int>(cx.coreness * 36);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Section;
+    out.section.kind = BuildingRecipe::SectionSpec::Kind::Rounded;
+    out.section.radius = 5.0 + 3.0 * rng.unit();
+    p.envelope = BuildingParams::Envelope::Curves;
+    p.baseFloors = 1;
+    p.twistDeg = rng.range(60.0, 90.0);
+    p.taperTop = rng.range(0.6, 0.75);
+    p.bulge = 0.0;
+    p.lean = 0.0;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.5 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 50}, {5, 30}, {8, 20}});
+    out.name = "twisted_taper";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1551,6 +1597,8 @@ const NamedRecipe kRecipeRegistry[] = {
     {"lens_tower", recipeLensTower},
     {"bundled_tubes", recipeBundledTubes},
     {"courtyard_block", recipeCourtyardBlock},
+    {"leaning_tower", recipeLeaningTower},
+    {"twisted_taper", recipeTwistedTaper},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},

@@ -1145,6 +1145,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
                    : e == "twist" ? E::Twist
                    : e == "stack" ? E::Stack
                    : e == "bulge" ? E::Bulge
+                   : e == "curves" ? E::Curves
                                   : E::None;
     }
     lua_pop(L, 1);
@@ -1165,6 +1166,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.twistDeg    = static_cast<Real>(optField(L, idx, "twist_deg", p.twistDeg));
     p.stackShift  = static_cast<Real>(optField(L, idx, "stack_shift", p.stackShift));
     p.bulge       = static_cast<Real>(optField(L, idx, "bulge", p.bulge));
+    p.lean        = static_cast<Real>(optField(L, idx, "lean", p.lean));
     p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
     p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));
     p.spandrelFrac = static_cast<Real>(optField(L, idx, "spandrel", p.spandrelFrac));

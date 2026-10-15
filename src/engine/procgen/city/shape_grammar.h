@@ -590,7 +590,10 @@ struct BuildingParams {
     //   Bulge              the plan scaled storey by storey about its centre (mass_stack.h, a scale curve): 0.8 of
     //                      itself at `baseFloors`, widest (1.0) at `bulge` of the height, `taperTop` of itself at
     //                      the top -- the lens tower (30 St Mary Axe, Torre Glories) on a drum.
-    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack, Bulge };
+    //   Curves             the three composed (mass_stack.h): the plan turning `twistDeg`, scaled by the bulge
+    //                      curve where `bulge` > 0 (else straight to `taperTop`), and LEANING `lean` of its height
+    //                      along the plan's long axis (Gate of Europe), the whole kept inside the lot.
+    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack, Bulge, Curves };
     Envelope envelope = Envelope::None;
     int   baseFloors = 5;
     Real  setback1 = 6.0;
@@ -605,6 +608,7 @@ struct BuildingParams {
     Real  twistDeg = 0.0;        // Twist: total rotation over the height (degrees)
     Real  stackShift = 0.0;      // Stack: each tier's offset from the one below (m)
     Real  bulge = 0.45;          // Bulge: where the mass is widest, as a fraction of its height above the base
+    Real  lean = 0.0;            // Curves: the top's offset along the plan's long axis, as a fraction of the height (signed)
     // THE CURTAIN STYLE (skyscrapers NYC variety M2): glassTint 0 auto grey, 1 blue, 2 green, 3 bronze, 4 smoke,
     // 5 silver (reflective), 6 clear; mullionTone 0 steel, 1 bronze, 2 black, 3 silver, 4 white; fins: a vertical
     // fin every `fins` bays (0 none); curtainBay the mullion spacing (m); spandrelFrac the opaque band's share of
