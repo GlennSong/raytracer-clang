@@ -16,6 +16,7 @@
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
 #include "../procgen/city/space_graph.h"
+#include "../procgen/city/section.h"
 #include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
@@ -1400,6 +1401,52 @@ int l_building_space_graph(lua_State* L) {
         lua_pushlstring(L, svg.data(), svg.size());
         lua_setfield(L, -2, "svg");
     }
+    return 1;
+}
+
+// building.section{ rect = {w, d} | ngon = {n, r} | lot = {{x,z}, ...}, centre = {x, z}, inset = d }
+//   -> { plan = {{x,z}, ...}, edges = n }
+// THE SECTION (section.h, issue #105 step 2a): a building outline as edges -- the rectangle, the drum's n-gon, a
+// lot's plan -- offset by `inset`, tessellated to the plan every other building word takes.
+int l_building_section(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Vec2 centre(0, 0);
+    lua_getfield(L, 1, "centre");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); centre = Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    Section s;
+    lua_getfield(L, 1, "rect");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); s = Section::rect(lua_tonumber(L, -2), lua_tonumber(L, -1), centre); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "ngon");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); s = Section::ngon(static_cast<int>(lua_tointeger(L, -2)), lua_tonumber(L, -1), centre); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "lot");
+    if (lua_istable(L, -1)) {
+        Poly2 plan;
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); plan.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1))); lua_pop(L, 2); }
+            lua_pop(L, 1);
+        }
+        s = Section::fromLot(plan);
+    }
+    lua_pop(L, 1);
+    if (s.empty()) return luaL_error(L, "building.section: give rect = {w, d}, ngon = {n, r} or lot = {{x,z}, ...}");
+    const Real inset = static_cast<Real>(optField(L, 1, "inset", 0.0));
+    if (inset != 0.0) s = s.offset(inset);
+    const Poly2 plan = s.tessellate();
+    lua_newtable(L);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        lua_newtable(L);
+        lua_pushnumber(L, plan[i].x); lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, plan[i].y); lua_rawseti(L, -2, 2);
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "plan");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.outer.size())); lua_setfield(L, -2, "edges");
     return 1;
 }
 
@@ -3785,6 +3832,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"grow_parts", l_building_grow_parts},
         {"grow_plan_parts", l_building_grow_plan_parts},
         {"space_graph", l_building_space_graph},
+        {"section", l_building_section},
         {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},

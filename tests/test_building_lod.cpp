@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
+#include <string>
 #include <tuple>
 
 using namespace engine;
@@ -254,8 +256,10 @@ TEST_CASE(building_mesh_hash_census_every_recipe) {
     const Poly2 lPlan = {{-14, -12}, {14, -12}, {14, 0}, {0, 0}, {0, 12}, {-14, 12}};
     const Poly2 rect40 = {{-20, -20}, {20, -20}, {20, 20}, {-20, 20}};
     int lines = 0;
+    const char* only = std::getenv("RT_CENSUS_ONLY");   // one recipe (a hunt under valgrind)
     for (int i = 0; i < architectRecipeCount(); ++i) {
         const char* name = architectRecipeName(i);
+        if (only && std::string(only) != name) continue;
         for (uint32_t seed : {3u, 17u}) {
             BuildingRecipe r;
             if (!architectRecipeByName(name, seed, 0.6, 24, 600, r)) continue;
@@ -270,6 +274,40 @@ TEST_CASE(building_mesh_hash_census_every_recipe) {
                 std::printf("    [census] %-22s seed %2u %-6s ext=%016llx tris=%zu  int=%016llx tris=%zu\n", name, seed, planNames[pi],
                             static_cast<unsigned long long>(he), et, static_cast<unsigned long long>(hi), it);
                 ++lines;
+                // RT_CENSUS_PARTS=<recipe>: that recipe's exterior, part by part (hunting a run-to-run difference)
+                if (const char* want = std::getenv("RT_CENSUS_PARTS"); want && std::string(want) == name) {
+                    const BuildingMesh bm = growPlanBuilding(*plans[pi], r.params, 1.5);
+                    for (const RenderMesh& part : bm.parts) {
+                        BuildingMesh one;
+                        one.parts.push_back(part);
+                        std::size_t pv, pt;
+                        const uint64_t ph = hashOf(one, pv, pt);
+                        // ...and the same positions sorted: equal here but not above means the ORDER varies
+                        std::vector<std::tuple<double, double, double>> ps;
+                        for (const Vertex& vx : part.vertices) ps.emplace_back(vx.position.x, vx.position.y, vx.position.z);
+                        std::sort(ps.begin(), ps.end());
+                        uint64_t sh = 1469598103934665603ull;
+                        for (const auto& [x, y, z] : ps)
+                            for (double d : {x, y, z}) { sh ^= static_cast<uint64_t>(static_cast<int64_t>(std::llround(d * 4096.0))); sh *= 1099511628211ull; }
+                        std::printf("    [census-part] %s seed %u %s part %d hash=%016llx sorted=%016llx verts=%zu tris=%zu\n", name, seed, planNames[pi],
+                                    part.materialIndex, static_cast<unsigned long long>(ph), static_cast<unsigned long long>(sh), pv, pt);
+                        // RT_CENSUS_DUMP=<file>: that part's triangles (part RT_CENSUS_DUMP_PART, default 20), sorted, one a line
+                        if (const char* dumpTo = std::getenv("RT_CENSUS_DUMP"); dumpTo && part.materialIndex == (std::getenv("RT_CENSUS_DUMP_PART") ? std::atoi(std::getenv("RT_CENSUS_DUMP_PART")) : 20)) {
+                            std::vector<std::string> tris;
+                            for (std::size_t t = 0; t + 2 < part.indices.size(); t += 3) {
+                                char line[256];
+                                const Vec3& a = part.vertices[part.indices[t]].position;
+                                const Vec3& b = part.vertices[part.indices[t + 1]].position;
+                                const Vec3& c = part.vertices[part.indices[t + 2]].position;
+                                std::snprintf(line, sizeof line, "%s %u %s (%.3f %.3f %.3f) (%.3f %.3f %.3f) (%.3f %.3f %.3f)", name, seed, planNames[pi],
+                                              a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+                                tris.emplace_back(line);
+                            }
+                            std::sort(tris.begin(), tris.end());
+                            if (FILE* f = std::fopen(dumpTo, "a")) { for (const std::string& l : tris) std::fprintf(f, "%s\n", l.c_str()); std::fclose(f); }
+                        }
+                    }
+                }
             }
         }
     }

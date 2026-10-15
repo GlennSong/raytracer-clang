@@ -1000,3 +1000,25 @@ TEST_CASE(procgen_script_reads_a_space_graph) {
     CHECK(vm.getGlobalNumber("roof", v)); CHECK(v > 0);
     CHECK(vm.getGlobalNumber("entrance_is_hall", v)); CHECK(v == 1);
 }
+
+TEST_CASE(procgen_script_draws_a_section) {
+    // THE SECTION from Lua (section.h, issue #105 step 2a): a rectangle, the drum's n-gon, a lot, an inset.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        r = building.section{ rect = {24, 20} }
+        g = building.section{ ngon = {16, 11}, centre = {3.5, -2} }
+        l = building.section{ lot = {{-14,-12},{14,-12},{14,0},{0,0},{0,12},{-14,12}}, inset = 0.55 }
+        rn, gn, ln = #r.plan, #g.plan, #l.plan
+        rx, lx = r.plan[1][1], l.plan[1][1]
+        h = building.space_graph{ plan = l.plan, recipe = 'glass_tower', seed = 5, coreness = 0.8 }
+        hb = #h.unreachable
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("rn", v)); CHECK(v == 4);
+    CHECK(vm.getGlobalNumber("gn", v)); CHECK(v == 16);
+    CHECK(vm.getGlobalNumber("ln", v)); CHECK(v == 6);
+    CHECK(vm.getGlobalNumber("rx", v)); CHECK_APPROX(v, -12.0, 1e-9);
+    CHECK(vm.getGlobalNumber("lx", v)); CHECK_APPROX(v, -13.45, 1e-6);
+    CHECK(vm.getGlobalNumber("hb", v)); CHECK(v == 0);
+}

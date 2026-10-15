@@ -755,6 +755,11 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
 BuildingMesh growPlanBuilding(const Poly2& plan, const BuildingParams& params,
                               Real baseY = 0.0,
                               FacadeDetail detail = FacadeDetail::Full);
+// THE SECTION ENTRY (section.h, issue #105 step 2a): the building a section outlines -- its tessellation is the plan
+// growPlanBuilding reads, corner for corner, so a section of lines grows byte for byte what its plan grows.
+struct Section;
+BuildingMesh growSectionBuilding(const Section& section, const BuildingParams& params, Real baseY = 0.0,
+                                 FacadeDetail detail = FacadeDetail::Full);
 
 // The default material for a part class (PBR; ADR-0017/0032). Recipes may override.
 RenderMaterial materialFor(PartId id, const Vec3& wallColor);

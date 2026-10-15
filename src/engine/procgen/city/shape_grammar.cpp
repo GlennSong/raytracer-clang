@@ -1,4 +1,6 @@
 #include "shape_grammar.h"
+#include "face.h"
+#include "section.h"
 #include "trades.h"   // a shop unit's trade: one table for the facade, its interior and its place
 #include "core_plan.h"
 #include "room_plan.h"
@@ -2426,16 +2428,16 @@ Poly2 offsetPlan(const Poly2& poly, Real d) {
 }
 
 // One plan edge as a facade rectangle: outward for CCW is the RIGHT of a->b.
+// A plan edge's face rectangle: Face::ofEdge (face.h, the toolkit's flat face) in the shape every facade word takes.
 FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {
-    Vec2 a = pl[i], b = pl[(i + 1) % pl.size()];
-    Vec2 d = normalize(b - a);
+    const Face f = Face::ofEdge(pl, i, y, h);
     FaceRect fr;
-    fr.bl = Vec3(a.x, y, a.y);
-    fr.h = Vec3(d.x, 0, d.y);
-    fr.v = Vec3(0, 1, 0);
-    fr.n = Vec3(d.y, 0, -d.x);
-    fr.width = (b - a).length();
-    fr.height = h;
+    fr.bl = f.bl;
+    fr.h = f.h;
+    fr.v = f.v;
+    fr.n = f.n;
+    fr.width = f.width;
+    fr.height = f.height;
     return fr;
 }
 
@@ -4569,7 +4571,8 @@ std::vector<ShopRoomRect> shopRoomsOf(const Poly2& planIn, const BuildingParams&
     const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
     if (storeys.empty() || (storeys.size() < 2 && !params.groundRetail)) return out;
     const CorePlan core = coreFor(plan, params, entranceEdge);
-    const StairRun* r0 = runLeaving(stairRuns(plan, params, entranceEdge, storeys), 0);   // (as growInterior: one storey, no stair)
+    const std::vector<StairRun> runs = stairRuns(plan, params, entranceEdge, storeys);   // (a local: the run pointer below is into it)
+    const StairRun* r0 = runLeaving(runs, 0);   // (as growInterior: one storey, no stair)
     const RoomPlan rp = shopRoomPlan(storeys[0].plan, params, entranceEdge, baseY + storeys[0].y0, storeys[0].h, core,
                                      r0 ? r0->il.well : Poly2{}, r0 ? r0->il.stairFoot : Vec2(1e30, 1e30));
     for (const Room& r : rp.rooms)
@@ -5736,6 +5739,10 @@ bool mallSignOf(const Poly2& planIn, const BuildingParams& params, Vec2& centre,
     return true;
 }
 
+BuildingMesh growSectionBuilding(const Section& section, const BuildingParams& params, Real baseY, FacadeDetail detail) {
+    return growPlanBuilding(section.tessellate(), params, baseY, detail);
+}
+
 BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                               Real baseY, FacadeDetail detail) {
     BuildingMesh out;
@@ -6046,8 +6053,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         const CorePlan gcore = coreFor(plan, params, entranceEdge);
         std::vector<Poly2> holes;
         if (gcore.valid) holes = coreSlabHoles(gcore);   // the shafts (M5)
-        else if (const StairRun* ar = runArriving(stairRuns(plan, params, entranceEdge, storeyPlans(plan, params)), 1))
-            holes.push_back(ar->il.well);
+        else {
+            // (the runs live in a local: a pointer into stairRuns' temporary read freed memory -- a zero corner in
+            // the well hole, one run in three, found by the every-recipe census the day it was written)
+            const std::vector<StairRun> runs = stairRuns(plan, params, entranceEdge, storeyPlans(plan, params));
+            if (const StairRun* ar = runArriving(runs, 1)) holes.push_back(ar->il.well);
+        }
         if (params.bigBox == 6) holes = mallLevel(plan, params, 1).holes;   // the mall's atria, open to the floor above
         const Real cy = y + gh - 0.25;
         const Vec3 icol = materialFor(PartId::Interior, wallColor).albedo;
@@ -6192,6 +6203,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             appendToPart(out, PartId::Interior, cm.drywall);
         }
     }
+    const std::vector<StairRun> stairs = stairRuns(plan, params, entranceEdge, storeys);   // the blank stair walls up the tiers
     Poly2 cur = plan;
     Real tierY0 = y;
     for (int i = 0; i < params.floors; ++i) {
@@ -6247,7 +6259,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 // the stair's blank wall on this storey: the run that owns it (the ground's, or one moved inboard)
                 bool stairEdgeU = false;
                 if (params.openDoorway) {
-                    const StairRun* sr = runOn(stairRuns(plan, params, entranceEdge, storeys), i + 1);
+                    const StairRun* sr = runOn(stairs, i + 1);
                     stairEdgeU = sr && sr->sides == cur.size() && e == sr->il.edge;
                 }
                 if (stairEdgeU) {
