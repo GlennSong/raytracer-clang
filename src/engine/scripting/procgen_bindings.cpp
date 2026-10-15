@@ -1407,7 +1407,9 @@ int l_building_space_graph(lua_State* L) {
     return 1;
 }
 
-// building.section{ rect = {w, d} | ngon = {n, r} | lot = {{x,z}, ...}, centre = {x, z}, inset = d, rounded = r, tol = t }
+// building.section{ rect = {w, d} | ngon = {n, r} | lot = {{x,z}, ...}, centre = {x, z}, inset = d,
+//                   chamfer = {corner, c}, notch = {edge, a0, a1, depth}, subtract = { rect = {w, d} | ngon = {n, r}, centre = {x, z} },
+//                   rounded = r, tol = t }
 //   -> { plan = {{x,z}, ...}, edges = n }   (rounded: every corner a quarter arc of radius r, tessellated within tol)
 // THE SECTION (section.h, issue #105 step 2a): a building outline as edges -- the rectangle, the drum's n-gon, a
 // lot's plan -- offset by `inset`, tessellated to the plan every other building word takes.
@@ -1439,6 +1441,33 @@ int l_building_section(lua_State* L) {
     if (s.empty()) return luaL_error(L, "building.section: give rect = {w, d}, ngon = {n, r} or lot = {{x,z}, ...}");
     const Real inset = static_cast<Real>(optField(L, 1, "inset", 0.0));
     if (inset != 0.0) s = s.offset(inset);
+    // the surgery, in this order: a chamfer, a notch, a subtraction (each a table), then the rounding
+    lua_getfield(L, 1, "chamfer");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); s = s.chamfer(static_cast<std::size_t>(lua_tointeger(L, -2)), lua_tonumber(L, -1)); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "notch");
+    if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); lua_rawgeti(L, -3, 3); lua_rawgeti(L, -4, 4);
+        s = s.notch(static_cast<std::size_t>(lua_tointeger(L, -4)), lua_tonumber(L, -3), lua_tonumber(L, -2), lua_tonumber(L, -1));
+        lua_pop(L, 4);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "subtract");   // { rect = {w, d}, centre = {x, z} } or { ngon = {n, r}, centre = {x, z} }
+    if (lua_istable(L, -1)) {
+        Vec2 c2(0, 0);
+        lua_getfield(L, -1, "centre");
+        if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); c2 = Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)); lua_pop(L, 2); }
+        lua_pop(L, 1);
+        Section cut;
+        lua_getfield(L, -1, "rect");
+        if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); cut = Section::rect(lua_tonumber(L, -2), lua_tonumber(L, -1), c2); lua_pop(L, 2); }
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "ngon");
+        if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); cut = Section::ngon(static_cast<int>(lua_tointeger(L, -2)), lua_tonumber(L, -1), c2); lua_pop(L, 2); }
+        lua_pop(L, 1);
+        if (!cut.empty()) s = s.subtract(cut);
+    }
+    lua_pop(L, 1);
     const Real roundedR = static_cast<Real>(optField(L, 1, "rounded", 0.0));   // corner radius: arcs
     if (roundedR > 0.0) s = s.rounded(roundedR);
     const Poly2 plan = s.tessellate(static_cast<Real>(optField(L, 1, "tol", 0.25)));

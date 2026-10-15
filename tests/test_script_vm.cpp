@@ -1022,3 +1022,18 @@ TEST_CASE(procgen_script_draws_a_section) {
     CHECK(vm.getGlobalNumber("lx", v)); CHECK_APPROX(v, -13.45, 1e-6);
     CHECK(vm.getGlobalNumber("hb", v)); CHECK(v == 0);
 }
+
+TEST_CASE(procgen_script_cuts_a_section) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        l = building.section{ rect = {24, 20}, notch = {0, 0, 8, 6} }
+        c = building.section{ rect = {24, 20}, chamfer = {2, 3} }
+        s = building.section{ rect = {40, 24}, subtract = { rect = {6, 4}, centre = {0, -10} }, rounded = 0 }
+        ln, cn, sn = #l.plan, #c.plan, #s.plan
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("ln", v)); CHECK(v == 7);
+    CHECK(vm.getGlobalNumber("cn", v)); CHECK(v == 5);
+    CHECK(vm.getGlobalNumber("sn", v)); CHECK(v == 8);
+}

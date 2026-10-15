@@ -316,3 +316,77 @@ TEST_CASE(curved_corner_office_is_one_walled_room) {
     const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
     CHECK(unreachableCells(g).empty());
 }
+
+TEST_CASE(section_notch_and_chamfer_are_exact_surgery) {
+    // A bite out of a rectangle's first edge: an L of six corners, its area the rectangle's less the bite's.
+    const Section L = Section::rect(24, 20).notch(0, 0.0, 8.0, 6.0);
+    const Poly2 lp = L.tessellate();
+    CHECK(lp.size() == 7);   // (the bite starts at the corner: five new corners replace one edge's end, one line left)
+    CHECK(isCCW(lp));
+    CHECK_APPROX(area(lp), 24.0 * 20.0 - 8.0 * 6.0, 1e-9);
+    const Section C = Section::rect(24, 20).chamfer(2, 3.0);
+    const Poly2 cp = C.tessellate();
+    CHECK(cp.size() == 5);
+    CHECK_APPROX(area(cp), 24.0 * 20.0 - 0.5 * 3.0 * 3.0, 1e-9);
+}
+
+TEST_CASE(section_subtract_is_the_notch_within_a_millimetre) {
+    // Clipper2 on a millimetre grid: a corner rectangle cut away gives the same L as the exact notch.
+    const Section bite = Section::rect(8, 6, Vec2(-12 + 4, -10 + 3));
+    const Section L = Section::rect(24, 20).subtract(bite);
+    const Poly2 lp = L.tessellate();
+    CHECK(lp.size() == 6);
+    CHECK(isCCW(lp));
+    CHECK_APPROX(area(lp), 24.0 * 20.0 - 8.0 * 6.0, 0.05);
+    CHECK(L.holes.empty());
+    // A hole stays a hole.
+    const Section lightwell = Section::rect(24, 20).subtract(Section::rect(6, 6));
+    CHECK(lightwell.holes.size() == 1);
+    CHECK_APPROX(area(lightwell.tessellate()), 24.0 * 20.0, 0.05);
+    CHECK_APPROX(area(lightwell.holesTessellated().front()), 36.0, 0.05);
+}
+
+TEST_CASE(section_boolean_retags_arcs) {
+    // A rounded slab minus a bite in one straight side: Clipper hands back chords; the four corners are arcs again.
+    const Section rounded = Section::rect(40, 24).rounded(5.0);
+    const Section cut = rounded.subtract(Section::rect(6, 4, Vec2(0, -12 + 2)));
+    int arcs = 0, lines = 0;
+    for (const Edge& e : cut.outer) (e.kind == Edge::Kind::Arc ? arcs : lines)++;
+    std::printf("    [retag] %d arcs, %d lines after the cut (%zu chords in)\n", arcs, lines, rounded.tessellate(0.1).size());
+    // the ring is closed and in order: every edge's end is the next edge's start
+    for (std::size_t i = 0; i < cut.outer.size(); ++i) {
+        const Edge& e = cut.outer[i];
+        const Edge& f = cut.outer[(i + 1) % cut.outer.size()];
+        CHECK((e.b - f.a).length() < 1e-6);
+    }
+    CHECK(lines == 8);
+    CHECK(arcs == 4);
+    for (const Edge& e : cut.outer)
+        if (e.kind == Edge::Kind::Arc) {
+            std::printf("    [retag] arc a(%.3f %.3f) b(%.3f %.3f) chord %.3f bulge %.4f len %.4f (true sag %.4f)\n", e.a.x, e.a.y, e.b.x, e.b.y,
+                        (e.b - e.a).length(), e.bulge, e.length(), 5.0 - std::sqrt(25.0 - 12.5));
+            CHECK_APPROX(e.length(), 5.0 * 3.14159265358979323846 * 0.5, 0.05);
+        }
+    CHECK_APPROX(area(cut.tessellate(0.05)), area(rounded.tessellate(0.05)) - 24.0, 0.5);
+    // ...and a plain rectangle's corners are not arcs.
+    CHECK(Section::retagArcs(Section::rect(24, 20).tessellate()).outer.size() == 4);
+    for (const Edge& e : Section::retagArcs(Section::rect(24, 20).tessellate()).outer) CHECK(e.kind == Edge::Kind::Line);
+}
+
+TEST_CASE(tessellate_for_bays_gives_one_even_bay_per_chord) {
+    const Section s = Section::rect(56, 40).rounded(8.0);
+    const Poly2 p = s.tessellateForBays(2.0);   // (a 2 m bay: six chords a quarter where the tolerance asks four)
+    const Poly2 q = s.tessellate();
+    CHECK(p.size() > q.size());   // more chords than the tolerance alone asks
+    // every chord of the arcs about a bay long
+    const Tessellation t = s.tessellation();
+    (void)t;
+    int chords = 0;
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const Real L = (p[(i + 1) % p.size()] - p[i]).length();
+        if (L > 20.0) continue;   // a straight side
+        ++chords;
+        CHECK(L > 2.0 * 0.7 && L < 2.0 * 1.3);
+    }
+    CHECK(chords >= 20);
+}

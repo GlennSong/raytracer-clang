@@ -5991,7 +5991,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                        ? d * 0.5
                                        : std::min(rec.section.radius, std::min(w, d) * 0.3);
                     const Section sec = Section::rect(w, d).rounded(r).transformed(cc, sb.axis[la], sb.axis[sa2]);
-                    const Poly2 rim = sec.tessellate();
+                    const Poly2 rim = sec.tessellateForBays(rec.params.bayWidth);   // one even facade bay per chord
                     bool clear = rim.size() >= 3;
                     for (const Vec2& v : rim)
                         if ((roads && !clearOfRoads(v)) || !pointInPolygon(plan, v)) { clear = false; break; }

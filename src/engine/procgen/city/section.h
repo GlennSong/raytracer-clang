@@ -39,6 +39,9 @@ struct Section {
     Poly2 tessellate(Real tol = 0.25) const;
     Tessellation tessellation(Real tol = 0.25) const;
     std::vector<Poly2> holesTessellated(Real tol = 0.25) const;
+    // FOR A BUILDING: an arc's chords sized to the facade's bay, so every chord is one even bay (the facade lays
+    // its bays per chord) -- as many chords as the bay asks or the tolerance needs, whichever is more.
+    Poly2 tessellateForBays(Real bay, Real tol = 0.25) const;
 
     // The words.
     static Section rect(Real w, Real d, const Vec2& centre = Vec2(0, 0));       // CCW from the (-w/2, -d/2) corner
@@ -50,6 +53,19 @@ struct Section {
     // what the edges can give). A rectangle rounded by half its depth is a STADIUM: two semicircular ends.
     Section rounded(Real r) const;
     Section transformed(const Vec2& origin, const Vec2& u, const Vec2& v) const;   // local (x, y) -> origin + u x + v y
+    // RECTILINEAR SURGERY, exact: a corner cut `c` along both its edges; a notch `depth` deep into edge `e`
+    // between `a0` and `a1` along it (a bite out of the outline; the L, the T, the lightwell from the side).
+    Section chamfer(std::size_t corner, Real c) const;
+    Section notch(std::size_t edge, Real a0, Real a1, Real depth) const;
+    // BOOLEANS by Clipper2 on the tessellations: the result's largest outline (its holes kept as holes), with the
+    // chord runs that lie on an arc re-tagged as arcs (retagArcs), so a rounded slab minus a bite keeps its corners
+    // round. `tol` is the tessellation the booleans run on.
+    Section unite(const Section& other, Real tol = 0.1) const;
+    Section subtract(const Section& other, Real tol = 0.1) const;
+    Section intersect(const Section& other, Real tol = 0.1) const;
+    // A run of equal chords turning one way by one angle under 46 degrees, sweeping at most a half circle, is one
+    // arc again (the ring planner and the facade read arcs; Clipper gives chords).
+    static Section retagArcs(const Poly2& outline);
 };
 
 }  // namespace engine
