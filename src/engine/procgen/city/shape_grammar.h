@@ -358,6 +358,9 @@ std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params)
 // as its first preset -- the uniform setbacks, the street wall and its steps, the sky exposure plane, the taper,
 // the slab, the feathered pencil. massStack and storeyPlans read the stack; this is the stack's input.
 std::vector<MassTier> envelopeTiers(const Poly2& plan, const BuildingParams& params);
+// THE WAVE'S FLOOR PLATES (Envelope::Wave, implicit.h): per storey, the field's contour at its floor line, the slab
+// that runs past the straight glass; empty on other envelopes and below the base storeys.
+std::vector<Poly2> wavePlates(const Poly2& plan, const BuildingParams& params);
 // The tiers' plan vocabulary: a box on an OBB's axes (half extents, a corner cut, a shift along the axes), the
 // biggest such box inside a plan, whether a tier stands on the one below, a plan's short side, and the narrowest
 // a tier may be for the core to fit (14 m).
@@ -593,7 +596,10 @@ struct BuildingParams {
     //   Curves             the three composed (mass_stack.h): the plan turning `twistDeg`, scaled by the bulge
     //                      curve where `bulge` > 0 (else straight to `taperTop`), and LEANING `lean` of its height
     //                      along the plan's long axis (Gate of Europe), the whole kept inside the lot.
-    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack, Bulge, Curves };
+    //   Wave               an IMPLICIT form (implicit.h): the plan extruded and waved `wave` metres across its
+    //                      long axis over `waveLen` along the facade, the wave climbing a cycle per `waveLen` of
+    //                      height -- an undulating skin (Aqua Tower), each storey the field's own outline.
+    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack, Bulge, Curves, Wave };
     Envelope envelope = Envelope::None;
     int   baseFloors = 5;
     Real  setback1 = 6.0;
@@ -609,6 +615,8 @@ struct BuildingParams {
     Real  stackShift = 0.0;      // Stack: each tier's offset from the one below (m)
     Real  bulge = 0.45;          // Bulge: where the mass is widest, as a fraction of its height above the base
     Real  lean = 0.0;            // Curves: the top's offset along the plan's long axis, as a fraction of the height (signed)
+    Real  wave = 0.0;            // Wave: the skin's amplitude (m)
+    Real  waveLen = 20.0;        // Wave: its wavelength along the facade and up the building (m)
     // THE CURTAIN STYLE (skyscrapers NYC variety M2): glassTint 0 auto grey, 1 blue, 2 green, 3 bronze, 4 smoke,
     // 5 silver (reflective), 6 clear; mullionTone 0 steel, 1 bronze, 2 black, 3 silver, 4 white; fins: a vertical
     // fin every `fins` bays (0 none); curtainBay the mullion spacing (m); spandrelFrac the opaque band's share of
@@ -632,8 +640,9 @@ struct BuildingParams {
     uint8_t signage = 0;
     uint8_t uplights = 0;
     // THE TOP (buildings M2): what stands on a flat roof against the sky -- 0/1 the mechanical penthouse, 2 screen,
-    // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop). spire/dome win over it.
-    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse".
+    // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop), 9 NONE -- the deck bare,
+    // no plant, for the cells of a complex that share one crown (cells.h). spire/dome win over it.
+    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse" | "none".
     uint8_t top = 0;
     // THE HELIPAD (issue #105, the roof cell's contents): a raised pad with a ramp on a tall tower's open roof --
     // 0 auto (18 floors and up, half of them by the seed, where the roof has the room), 1 never, 2 always.

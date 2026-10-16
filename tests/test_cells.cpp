@@ -177,6 +177,10 @@ TEST_CASE(a_courtyard_block_is_eight_cells_round_an_open_court) {
     for (int k = 0; k < sw.params.partyWalls; ++k) CHECK(sw.params.partyTop[k] == 5);
     const CellFrame& south = cx.cells[0];
     for (int k = 0; k < south.params.partyWalls; ++k) CHECK(south.params.partyTop[k] == 0);
+    // One crown for the block, on its tallest cell; every other roof bare (top 9).
+    int crowned = 0;
+    for (const CellFrame& c : cx.cells) crowned += c.params.top != 9;
+    CHECK(crowned == 1 && cx.cells[4].params.top != 9);
     // Every cell walks; a wing's court face has windows (an outer face, no neighbour on it).
     for (const CellFrame& c : cx.cells) CHECK(unreachableCells(spaceGraphOf(c.plan, c.params, 0.0)).empty());
     // ...and every cell GROWN has its entrance (the lot pass collects it from the facade's attach: no door, not
@@ -217,6 +221,7 @@ TEST_CASE(a_ring_of_cells_round_a_court_enters_every_segment_from_outside) {
         CHECK(c.params.partyWalls == 2);
         CHECK(c.outerFace && c.streetFace && c.connected);
         CHECK(c.params.partyDoors == 0);
+        CHECK(c.params.top == 9);   // a ring's roof is one clean deck
         // the entrance faces outward: along the cell's own radial direction, not into the court
         const Vec2 radial = normalize(centroid(c.plan));
         CHECK(dot(Vec2(c.params.faceDir.x, c.params.faceDir.z), radial) > 0.9);

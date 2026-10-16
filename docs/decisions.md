@@ -10156,14 +10156,16 @@ height (a slice) and its skin; a STACK is sections over storey ranges under keye
   identical; `the_stack_preset_slices_to_todays_storeys_bit_for_bit`). A new form is a transform or a relation on an
   entry, never new tier code; a new mass source (a sweep, an implicit form, a mesh) is a `Mass` whose slices feed
   every planner, facade, collider and census untouched.
-- **A turned or scaled storey is a facet, not a ruled face.** The Twist envelope's storeys each take their own flat
-  facade on their own outline, and a SLAB BAND -- the union of the two outlines (Clipper2 through `Section::unite`),
-  0.3 m deep, its top at the storey line -- closes every seam: a ledge where the storey below sticks out, a soffit
-  where this one does. That is how built twisted towers read (Cayan Tower, Turning Torso: flat panels storey by
-  storey, a visible slab line between), and the facade emitters are planar. A ruled curtain wall between differing
-  outlines (`emitShell` as a facade) is owed, not required. The collider between two such storeys is walls meeting
-  walls: no deck, no parapet (`ColliderTier::deck`). A turned storey is NOT a setback: `tier` stays the entry's, so
-  the cap-and-parapet rule fires only where the entry changes.
+- **A turned or scaled storey's glass is RULED to the storey above** (revised the same evening -- Glenn, walking
+  the lab: "the twisting ... should be continuous and look like one curve"; "they look like layered cakes"). Where
+  the storey above continues the tier on an outline with the same corners, each edge's curtain wall is a ruled face
+  (`FaceRect::ruled`, `planEdgeRuled`): its bottom edge on this storey's floor outline, its top on the ceiling's,
+  the panes and mullions ruled between them, so a twist or a bulge is one surface with the spandrel as the only
+  slab line. The collider's walls rule the same way. Where the corners do not correspond (an implicit form's own
+  contours) the first cut stands: flat facets and a SLAB BAND -- the union of the two outlines -- closing the
+  seam. A turned storey is NOT a setback: `tier` stays the entry's, so the cap-and-parapet rule fires only where
+  the entry changes. The inner inset skin is still vertical (the glass leans by well under the inset per storey);
+  ruling it too is owed.
 - **Support is an overhang.** A `Relation::Support` entry (the Stack envelope's slid modules) hangs past the one
   below. Its floor plate is drawn whole, the underside the soffit; the deck below keeps its parapet only on the runs
   outside the plate (`runsOutside`; the collider clips the same way) -- a ring would wall the room above.
@@ -10219,4 +10221,39 @@ tubes, courtyards, wings -- without a mesh boolean.
 - **Owed.** The rowhouse strip and the mall as presets of the complex (byte-identical), a courtyard as a section
   hole (one ring plan, one building), bridges between cells above the ground, a `growComplex` that grows the cells
   as one, openings between cells above the lobby (sky bridges inside a bundle), the heights as a recipe descriptor.
+
+## ADR-0177 — The implicit mass: a building as a field, its storeys the field's contours
+
+Step 6 of the toolkit plan (issue #105, ADR-0174) opens with the mass source the stack cannot be: a form whose
+storey outlines are not affine images of one section.
+
+- **The field is the engine's own SDF kit**, with the words a building needs on top: a plan extruded
+  (`sdfPlan` the 2D distance to a CCW polygon, `sdfExtrude` its slab), and warps of the space the field is read
+  in (`sdfWave`: the query point displaced along a plan direction by a sine of the coordinate across it and of
+  the height). Spheres, boxes, capsules, unions and blends compose as they always did.
+- **A storey is the field's zero contour at its height.** `sliceSdf` samples the field on a half-metre grid at
+  the storey's mid height -- the grid set off the field's own lines by an odd fraction of a cell, so a plan's edge
+  never lies on a grid line -- traces the contour by marching squares, keeps the largest loop, simplifies it by
+  Douglas-Peucker within 0.3 m and folds the corner chamfers the grid cuts back into corners. The storey view
+  reads that polygon like any other: the facade per edge, the planners, the collider, the census. The seams
+  between storeys are the slab bands of ADR-0175.
+- **The Wave envelope is the first implicit form -- and the wave is in the floor plates.** Glenn, on the first
+  cut (wavy storeys, wavy offices): "the interior of those offices should just be a straight edge versus the
+  exterior which can be wavy". So the storeys are the plan as drawn, the glass straight on it, the interiors
+  partitioned on the rectangle; each floor plate's edge is the field's contour at its floor line, a slab running
+  past the glass by up to `wave` metres (`wavePlates`). That is Aqua Tower as built: straight glass, waving
+  balcony slabs. The implicit mass still slices the field; the grammar reads its contours as plates, not plans.
+- **What the wave taught the planners** (found while its storeys were still wavy, and kept: any non-straight
+  outline meets them). Three defects, each in a planner that assumed straight edges meeting at right angles: the
+  ring planner laid a room per short chord, so a gently turning run of edges (under 35 degrees at every vertex,
+  either way) is now one curved band whose pieces are a room's width along the run with radial, mitred sides, and
+  a straight band beside a curved one measures where its strip is clear instead of assuming the neighbour's depth;
+  the office plate laid its rows the full side of the rectangle inside the plate, past where the skin dipped
+  between the rectangle's samples; the desk rows the same. Each trims to the outline as drawn. An arc's piece is
+  now no longer than two rooms along the glass (a drum's quarter was one office with one desk -- Glenn: "really
+  wide and only had a tiny desk"); a rounded corner's quarter stays one corner office. No straight-edged plan
+  changed (the census over every old recipe is identical).
+- **Owed.** The horizontal sweep (`SweepMass`: a vertical sweep is the stack's slide curves), `sdfRevolve`,
+  the twist / bend / taper warps as SDF words where the stack's curves do not reach, `MeshMass` (the artist's
+  hatch), the `Envelope` (a skin that is not the floors), rakes as stepped cells.
 

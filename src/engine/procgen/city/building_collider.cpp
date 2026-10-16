@@ -121,9 +121,20 @@ bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const P
                                 baseY - groundY, holes);
         } else {
             // An upper tier: plain walls from the deck below to its own, and its cap (none where the storey above
-            // continues the tier on a turned outline: the walls meet the next walls, mass_stack.h).
-            for (std::size_t i = 0; i < ct.plan.size(); ++i)
-                quad(ct.plan[i], ct.plan[(i + 1) % ct.plan.size()], baseY + ct.y0, baseY + ct.y1);
+            // continues the tier on a turned outline: the walls meet the next walls, mass_stack.h) -- RULED up to the
+            // next outline where it has the same corners, as the glass is.
+            const bool ruled = !ct.deck && !last && tiers[t + 1].plan.size() == ct.plan.size();
+            for (std::size_t i = 0; i < ct.plan.size(); ++i) {
+                if (!ruled) { quad(ct.plan[i], ct.plan[(i + 1) % ct.plan.size()], baseY + ct.y0, baseY + ct.y1); continue; }
+                const Poly2& up = tiers[t + 1].plan;
+                const Vec2 a = ct.plan[i], b = ct.plan[(i + 1) % ct.plan.size()], c = up[(i + 1) % up.size()], d = up[i];
+                const uint32_t s = static_cast<uint32_t>(V.size());
+                V.push_back(Vec3(a.x, baseY + ct.y0, a.y));
+                V.push_back(Vec3(b.x, baseY + ct.y0, b.y));
+                V.push_back(Vec3(c.x, baseY + ct.y1, c.y));
+                V.push_back(Vec3(d.x, baseY + ct.y1, d.y));
+                I.insert(I.end(), {s, s + 1, s + 2, s, s + 2, s + 3});
+            }
             if (!ct.deck) continue;
             const uint32_t s = static_cast<uint32_t>(V.size());
             for (const Vec2& q : ct.plan) V.push_back(Vec3(q.x, baseY + ct.y1, q.y));

@@ -332,6 +332,14 @@ TEST_CASE(graph_dump_debug) {
             if (p.storey != showK && !(p.storey == showK - 1 && p.kind != Portal::Kind::Door)) continue;
             std::printf("  portal %-9s s%d  %d <-> %d  at (%.1f,%.1f)\n", portalKindName(p.kind), p.storey, p.a, p.b, (p.p0.x + p.p1.x) * 0.5, (p.p0.y + p.p1.y) * 0.5);
         }
+        // the storey's outline and every unreachable cell's own polygon (a wavy skin, a room laid past it)
+        for (std::size_t i = 0; i < g.cells.size(); ++i) {
+            const Cell& c = g.cells[i];
+            if (c.k0 != showK || (c.kind != CellKind::Hall && seen[i])) continue;
+            std::printf("  poly %zu %s:", i, describe(g, static_cast<int>(i)).c_str());
+            for (const Vec2& q : c.plan) std::printf(" (%.1f,%.1f)", q.x, q.y);
+            std::printf("\n");
+        }
         // the walls with doors on storey 1, and what the planner put either side
         const CorePlan core = coreFor(plan, params, entranceEdgeFor(plan, params));
         for (int k = showK; k < std::min(showK + 1, g.storeys); ++k) {

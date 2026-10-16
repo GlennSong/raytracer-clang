@@ -11,13 +11,13 @@ namespace lotcache {
 using bundle::BinReader;
 using bundle::BinWriter;
 
-constexpr std::size_t kBuildingParamsSize = 592;   // v17: lean; v16: four party walls, their tops and doors; v15: bulge; v13: storeFloors, dineFloors; v12: mallArms, mallCourt   // 432 before the party walls (params v8); 352 until the NYC-variety envelope + curtain fields (params v5)
+constexpr std::size_t kBuildingParamsSize = 608;   // v18: wave, waveLen; v17: lean; v16: four party walls, their tops and doors; v15: bulge; v13: storeFloors, dineFloors; v12: mallArms, mallCourt   // 432 before the party walls (params v8); 352 until the NYC-variety envelope + curtain fields (params v5)
 // If this trips, BuildingParams gained or changed a field: extend putBuildingParams/getBuildingParams, the
 // every-field test, and bump kLotsFormatVersion. (304 on clang/Linux x86_64 with Real = double.)
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 17, kLotsVersion = 14, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 18, kLotsVersion = 14, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -45,7 +45,7 @@ void putBuildingParams(BinWriter& w, const BuildingParams& p) {
     w.put<uint8_t>(static_cast<uint8_t>(p.roofStyle)); w.put<double>(p.roofPitch); putBool(w, p.retailStreetOnly); putBool(w, p.balconies); putBool(w, p.porch); putBool(w, p.chimney); putBool(w, p.spire); putBool(w, p.steeple); putBool(w, p.parkingDecks);
     w.put<int32_t>(p.sideBays); putVec3(w, p.trimColor); w.put<uint8_t>(static_cast<uint8_t>(p.shape)); w.put<int32_t>(p.tiers); w.put<int32_t>(p.sides); w.put<uint32_t>(p.seed);
     w.put<uint8_t>(static_cast<uint8_t>(p.envelope)); w.put<int32_t>(p.baseFloors); w.put<double>(p.setback1); w.put<int32_t>(p.stepFloors); w.put<double>(p.stepDepth); w.put<double>(p.towerFrac); w.put<int32_t>(p.towerFloor); w.put<uint8_t>(p.core); w.put<uint8_t>(p.crown); w.put<uint8_t>(p.signage); w.put<uint8_t>(p.uplights); w.put<uint8_t>(p.top); w.put<uint8_t>(p.helipad); w.put<uint8_t>(p.windowGroup); w.put<uint8_t>(p.verticals ? 1 : 0); w.put<uint8_t>(p.residential ? 1 : 0);
-    w.put<double>(p.skyRatio); w.put<double>(p.taperTop); w.put<double>(p.chamferTop); w.put<double>(p.featherFrom); w.put<double>(p.twistDeg); w.put<double>(p.stackShift); w.put<double>(p.bulge); w.put<double>(p.lean);
+    w.put<double>(p.skyRatio); w.put<double>(p.taperTop); w.put<double>(p.chamferTop); w.put<double>(p.featherFrom); w.put<double>(p.twistDeg); w.put<double>(p.stackShift); w.put<double>(p.bulge); w.put<double>(p.lean); w.put<double>(p.wave); w.put<double>(p.waveLen);
     w.put<uint8_t>(p.glassTint); w.put<uint8_t>(p.mullionTone); w.put<uint8_t>(p.fins); w.put<double>(p.curtainBay); w.put<double>(p.spandrelFrac);
     w.put<uint8_t>(p.partyWalls); for (int k = 0; k < 4; ++k) { w.put<double>(p.partyN[k].x); w.put<double>(p.partyN[k].y); w.put<double>(p.partyAt[k]); w.put<int32_t>(p.partyTop[k]); } w.put<uint8_t>(p.partyDoors); putBool(w, p.backDoor); putBool(w, p.fireEscape); w.put<uint8_t>(p.bigBox); w.put<uint8_t>(p.campus); w.put<uint8_t>(p.shopMix); w.put<uint8_t>(p.mallArms); w.put<double>(p.mallCourt.x); w.put<double>(p.mallCourt.y); w.put<uint8_t>(p.storeFloors); w.put<uint8_t>(p.dineFloors);
 }
@@ -67,7 +67,7 @@ bool getBuildingParams(BinReader& r, BuildingParams& p) {
     p.envelope = static_cast<BuildingParams::Envelope>(envelope);
     if (!r.get(p.core) || !r.get(p.crown) || !r.get(p.signage) || !r.get(p.uplights) || !r.get(p.top) || !r.get(p.helipad)) return false;
     { uint8_t wg = 1, vt = 0; uint8_t rs = 0; if (!r.get(wg) || !r.get(vt) || !r.get(rs)) return false; p.windowGroup = wg; p.verticals = vt != 0; p.residential = rs != 0; }
-    if (!r.get(p.skyRatio) || !r.get(p.taperTop) || !r.get(p.chamferTop) || !r.get(p.featherFrom) || !r.get(p.twistDeg) || !r.get(p.stackShift) || !r.get(p.bulge) || !r.get(p.lean)) return false;
+    if (!r.get(p.skyRatio) || !r.get(p.taperTop) || !r.get(p.chamferTop) || !r.get(p.featherFrom) || !r.get(p.twistDeg) || !r.get(p.stackShift) || !r.get(p.bulge) || !r.get(p.lean) || !r.get(p.wave) || !r.get(p.waveLen)) return false;
     if (!r.get(p.glassTint) || !r.get(p.mullionTone) || !r.get(p.fins) || !r.get(p.curtainBay) || !r.get(p.spandrelFrac)) return false;
     if (!r.get(p.partyWalls)) return false;
     for (int k = 0; k < 4; ++k) { double nx = 0, nz = 0; int32_t top = 0; if (!r.get(nx) || !r.get(nz) || !r.get(p.partyAt[k]) || !r.get(top)) return false; p.partyN[k] = Vec2(nx, nz); p.partyTop[k] = static_cast<int16_t>(top); }

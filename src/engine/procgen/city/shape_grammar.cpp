@@ -1,5 +1,6 @@
 #include "shape_grammar.h"
 #include "mass_stack.h"
+#include "implicit.h"
 #include "face.h"
 #include "section.h"
 #include "trades.h"   // a shop unit's trade: one table for the facade, its interior and its place
@@ -47,8 +48,18 @@ struct FaceRect {
     Vec3 n;             // outward normal
     Real width = 0;
     Real height = 0;
+    // A RULED face (issue #105 step 4, Glenn: "the twisting ... should be continuous and look like one curve"):
+    // the top edge is its own segment, tl -> tr, the storey above's outline; at(x, y) rules between the two edges,
+    // so a twisted or bulging storey's glass runs from its floor outline to its ceiling's in one surface.
+    bool ruled = false;
+    Vec3 tl, tr;
 
-    Vec3 at(Real x, Real y) const { return bl + h * x + v * y; }
+    Vec3 at(Real x, Real y) const {
+        if (!ruled || width < 1e-9 || height < 1e-9) return bl + h * x + v * y;
+        const Vec3 b = bl + h * x;
+        const Vec3 t = tl + (tr - tl) * (x / width);
+        return b + (t - b) * (y / height);
+    }
 };
 
 // The four vertical faces of a storey scope, outward-facing.
@@ -2569,6 +2580,25 @@ FaceRect planEdgeRect(const Poly2& pl, std::size_t i, Real y, Real h) {
     return fr;
 }
 
+// The ruled face of edge `i` between a storey's floor outline `lower` (at y) and its ceiling's `upper` (at y + h),
+// the two outlines corner for corner (one section under a keyed transform); the normal from the face's middle.
+static FaceRect planEdgeRuled(const Poly2& lower, const Poly2& upper, std::size_t i, Real y, Real h) {
+    FaceRect fr = planEdgeRect(lower, i, y, h);
+    const std::size_t n = lower.size();
+    if (upper.size() != n) return fr;
+    const Vec2 a = upper[i % n], b = upper[(i + 1) % n];
+    fr.ruled = true;
+    fr.tl = Vec3(a.x, y + h, a.y);
+    fr.tr = Vec3(b.x, y + h, b.y);
+    const Vec3 mid0 = fr.at(0, 0), mid1 = fr.at(fr.width, 0), mid2 = fr.at(fr.width, h), mid3 = fr.at(0, h);
+    const Vec3 nrm = cross(mid1 - mid0, mid3 - mid0) + cross(mid2 - mid1, mid3 - mid2);
+    if (nrm.lengthSquared() > 1e-12) {
+        const Vec3 nn = normalize(nrm);
+        fr.n = dot(nn, fr.n) < 0 ? nn * -1.0 : nn;
+    }
+    return fr;
+}
+
 // A horizontal SLAB filling the plan: triangulated top + underside, plus a
 // side band around the outline — roof decks, cornice tiers, ground pads.
 void emitPlanRing(BuildingMesh& out, const Poly2& outer, const Poly2& hole,
@@ -2911,7 +2941,7 @@ static void emitParkingDeckRect(BuildingMesh& out, const FaceRect& fr,
 // above roofY. `bodyH` is the building's height to the roof (the masts scale with it).
 static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real bodyH, const BuildingParams& p,
                          const Vec3& /*wallColor*/, bool full, bool rectish) {
-    if (topIn.size() < 3 || p.top < 2) return 0;
+    if (topIn.size() < 3 || p.top < 2 || p.top > 8) return 0;   // (9: a bare deck)
     Poly2 top = topIn;
     ensureCCW(top);
     bool convex = true;
@@ -3607,12 +3637,31 @@ bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd) {
 
 // THE STACK IS THE SOURCE (issue #105 step 4a, mass_stack.h): the tiers and the storey stack are the stack's
 // entries and slices; with identity transforms they are what the two functions below produced until today.
+static bool samePlan(const Poly2& a, const Poly2& b);
+
+// THE WAVE (implicit.h) is in the FLOOR PLATES, not the storeys (Glenn, 2026-10-15: "the interior of those offices
+// should just be a straight edge versus the exterior which can be wavy"): the storeys are the plan as drawn, the
+// glass straight on it, and each plate's edge is the field's contour at its floor line, running past the glass --
+// Aqua Tower. wavePlates gives the plate per storey (empty below the base storeys).
 std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params) {
     return stackOf(plan, params).tiers();
 }
 
 std::vector<StoreyPlan> storeyPlans(const Poly2& plan, const BuildingParams& params) {
     return sliceStoreys(stackOf(plan, params), params);
+}
+
+std::vector<Poly2> wavePlates(const Poly2& plan, const BuildingParams& params) {
+    std::vector<Poly2> out;
+    if (params.envelope != BuildingParams::Envelope::Wave) return out;
+    const ImplicitMass im = implicitOf(plan, params);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
+    out.resize(storeys.size());
+    for (std::size_t k = 0; k < storeys.size(); ++k) {
+        if (static_cast<int>(k) <= im.baseStoreys || !im.field) continue;
+        out[k] = sliceSdf(im.field, storeys[k].y0, im.box, im.cell, im.tol);
+    }
+    return out;
 }
 
 std::vector<MassTier> envelopeTiers(const Poly2& planIn, const BuildingParams& params) {
@@ -6385,6 +6434,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     const std::vector<StairRun> stairs = stairRuns(plan, params, entranceEdge, storeys);   // the blank stair walls up the tiers
     Poly2 cur = plan;
     Real tierY0 = y;
+    bool ruledUp = false;   // the storey below drew its glass ruled up to this storey's outline
+    const std::vector<Poly2> plates = wavePlates(plan, params);
     for (int i = 0; i < params.floors; ++i) {
         const StoreyPlan& sp = storeys[static_cast<std::size_t>(i) + 1];
         if (i > 0 && sp.tier != storeys[static_cast<std::size_t>(i)].tier) {
@@ -6417,17 +6468,34 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             tierY0 = y;
         } else if (i > 0 && !samePlan(sp.plan, cur)) {
             // A TURNED OR SCALED STOREY (mass_stack.h: a keyed transform in the entry -- the Twist envelope): no
-            // setback. A SLAB BAND, the union of the two outlines, closes the seam: its top the ledge where the
-            // storey below sticks out, its underside the soffit where this one does. The facade is faceted storey
-            // by storey, as a built twisted tower's is (Cayan Tower, Turning Torso); the corner posts close with it.
+            // setback. Where the outlines match corner for corner the glass below was RULED up to this outline
+            // (ruledUp), one continuous skin, and nothing closes the seam but the spandrel. Where they do not (an
+            // implicit form's own contours) a SLAB BAND, the union of the two outlines, closes it: its top the ledge
+            // where the storey below sticks out, its underside the soffit where this one does.
             if (full) cornerPosts(cur, tierY0, y - tierY0);
-            const Poly2 band = Section::fromLot(cur).unite(Section::fromLot(sp.plan)).tessellate();
-            emitPlanSlab(out, band.size() >= 3 ? band : sp.plan, y, 0.3, PartId::Trim,
-                         materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            if (!(ruledUp && sp.plan.size() == cur.size())) {
+                const Poly2 band = Section::fromLot(cur).unite(Section::fromLot(sp.plan)).tessellate();
+                emitPlanSlab(out, band.size() >= 3 ? band : sp.plan, y, 0.3, PartId::Trim,
+                             materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            }
             cur = sp.plan;
             tierY0 = y;
         }
         const Real fh = params.floorHeight;
+        // THE WAVE'S PLATE at this storey's floor line: the field's contour, a slab running past the glass
+        if (!plates.empty() && plates[static_cast<std::size_t>(i) + 1].size() >= 3)
+            emitPlanSlab(out, plates[static_cast<std::size_t>(i) + 1], y + 0.02, 0.3, PartId::Trim,
+                         materialFor(PartId::Trim, wallColor).albedo * 0.9);
+        // THE CEILING'S OUTLINE: the storey above's, when it continues this tier on an outline with the same
+        // corners (a twist, a bulge, a lean): the glass is ruled up to it. The top storey, or a setback, or a
+        // storey whose outline is the same: flat, as before.
+        const Poly2* ceiling = nullptr;
+        if (params.curtainWall && i + 2 < static_cast<int>(storeys.size())) {
+            const StoreyPlan& above = storeys[static_cast<std::size_t>(i) + 2];
+            if (above.tier == sp.tier && above.plan.size() == cur.size() && !samePlan(above.plan, cur)) ceiling = &above.plan;
+        }
+        ruledUp = ceiling != nullptr;
+        auto edgeFace = [&](std::size_t e) { return ceiling ? planEdgeRuled(cur, *ceiling, e, y, fh) : planEdgeRect(cur, e, y, fh); };
         const bool plant = mechanicalStorey(params, i + 1);
         for (std::size_t e = 0; e < cur.size(); ++e) {
             if (plant) {
@@ -6449,7 +6517,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                 continue;
             }
             if (params.curtainWall)
-                emitCurtainWallRect(out, planEdgeRect(cur, e, y, fh), wallColor,
+                emitCurtainWallRect(out, edgeFace(e), wallColor,
                                     detail, false, curtainStyleOf(params));
             else if (full) {
                 // the stair's blank wall on this storey: the run that owns it (the ground's, or one moved inboard)
@@ -6858,7 +6926,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             roofRise = std::max(roofRise, topRise);
             // Flat (LOD1) keeps spire/dome/steeple — they are the skyline —
             // but skips the penthouse + roof-furniture pack.
-            if (full && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
+            if (full && params.top != 9 && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
                 // the bulkhead's footprint, a little wider, keeps the plant off the roof access
                 const Poly2 bulk = roofExit ? offsetPlan(ecore.rect(), -0.75) : Poly2{};
                 emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,

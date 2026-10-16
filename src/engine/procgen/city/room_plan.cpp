@@ -181,7 +181,7 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
     // way by one angle under 46 degrees, sweeping no more than a half circle (a drum's full ring stays as it was),
     // is ONE band -- its rooms follow the curve, the outside the chords, the inside the offset curve, the door on
     // the inner middle, the side walls radial. A plan without such a run lays exactly as before.
-    struct Band { bool arc = false; std::size_t e = 0; std::size_t first = 0, count = 0; Real depth = 0; bool rooms = false; };
+    struct Band { bool arc = false; bool wavy = false; std::size_t e = 0; std::size_t first = 0, count = 0; Real depth = 0; bool rooms = false; };
     std::vector<Band> bands;
     {
         std::vector<Real> len(n), turn(n);   // turn[i]: from edge i into edge i + 1
@@ -219,6 +219,34 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             for (std::size_t k = 0; k < count; ++k) group[(i + k) % n] = static_cast<int>(arcs.size());
             arcs.push_back(b);
         }
+        // A WAVY RUN (an implicit form's skin, implicit.h): edges turning gently either way, under 35 degrees at
+        // every vertex, are one curved band too -- its rooms follow the undulation with flat backs, a room's width
+        // along the run, where the straight bands' corner claims (made for right angles) ran rooms into each other.
+        auto gentle = [&](std::size_t i, std::size_t j) {   // edge j continues edge i's run
+            return len[i] >= 1.0 && len[j] >= 1.0 && std::fabs(turn[(j + n - 1) % n]) < 0.61 && std::fabs(turn[(j + n - 1) % n]) > 0.0175;
+        };
+        for (std::size_t i = 0; i < n; ++i) {
+            if (group[i] >= 0) continue;
+            std::size_t count = 1;
+            while (count < n) {
+                const std::size_t j = (i + count) % n;
+                if (group[j] >= 0 || !gentle((i + count - 1) % n, j)) break;
+                ++count;
+            }
+            if (count < 3) continue;
+            if (group[(i + n - 1) % n] < 0 && gentle((i + n - 1) % n, i)) continue;   // not its true start
+            Band b;
+            b.arc = true;
+            b.wavy = true;
+            b.first = i;
+            b.count = count;
+            for (std::size_t k = 0; k < count; ++k) group[(i + k) % n] = static_cast<int>(arcs.size());
+            arcs.push_back(b);
+        }
+        std::sort(arcs.begin(), arcs.end(), [](const Band& a, const Band& b) { return a.first < b.first; });
+        for (std::size_t i = 0; i < n; ++i) group[i] = -1;
+        for (std::size_t a = 0; a < arcs.size(); ++a)
+            for (std::size_t k = 0; k < arcs[a].count; ++k) group[(arcs[a].first + k) % n] = static_cast<int>(a);
         if (arcs.empty()) {
             for (std::size_t e = 0; e < n; ++e) { Band b; b.e = e; b.depth = E[e].depth; b.rooms = E[e].rooms; bands.push_back(b); }
         } else {
@@ -247,15 +275,28 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
     // wall is a straight partition parallel to the arc's chord with the door in its middle; the side walls are
     // perpendicular to that chord. An arc sweeping more than a right angle (a stadium's end) is split into pieces of
     // a right angle at most, one such room each. The furniture's rectangle is the chord rectangle itself.
+    // a plan with a wavy band: every curved band's pieces take radial sides, mitred with the edges beyond the band's
+    // ends too, so pieces of neighbouring bands meet along one line (a sine's symmetric chords read as a short arc
+    // beside the wave; square sides on it cut into the wave's first piece)
+    const bool wavyPlan = std::any_of(bands.begin(), bands.end(), [](const Band& w) { return w.wavy; });
     auto layArc = [&](const Band& b) {
         const std::size_t m = b.count;
+        const bool radial = b.wavy || wavyPlan;
         std::vector<Vec2> v(m + 1);
         for (std::size_t k = 0; k <= m; ++k) v[k] = plan[(b.first + k) % n];
-        // the inward offset at every chord vertex: the bisector, mitred (the ends: the chord's own normal)
+        // the inward offset at every chord vertex: the bisector, mitred (the ends: the chord's own normal, or on a
+        // wavy plan the mitre with the edge beyond)
+        // ...where the edge beyond turns gently (the neighbouring curved band's chord); against a sharp straight
+        // edge the mitre would throw the back corner across it, so the chord's own normal stays
+        const Vec2 before = normalize(plan[b.first % n] - plan[(b.first + n - 1) % n]);
+        const Vec2 after = normalize(plan[(b.first + m + 1) % n] - plan[(b.first + m) % n]);
+        const Vec2 d0 = normalize(v[1] - v[0]), dm = normalize(v[m] - v[m - 1]);
+        const bool mitreStart = radial && std::fabs(std::atan2(cross(before, d0), dot(before, d0))) < 0.61;
+        const bool mitreEnd = radial && std::fabs(std::atan2(cross(dm, after), dot(dm, after))) < 0.61;
         std::vector<Vec2> in(m + 1);
         for (std::size_t k = 0; k <= m; ++k) {
-            const Vec2 dPrev = k > 0 ? normalize(v[k] - v[k - 1]) : normalize(v[1] - v[0]);
-            const Vec2 dNext = k < m ? normalize(v[k + 1] - v[k]) : normalize(v[m] - v[m - 1]);
+            const Vec2 dPrev = k > 0 ? normalize(v[k] - v[k - 1]) : (mitreStart ? before : d0);
+            const Vec2 dNext = k < m ? normalize(v[k + 1] - v[k]) : (mitreEnd ? after : dm);
             const Vec2 n0(-dPrev.y, dPrev.x), n1(-dNext.y, dNext.x);   // inward of a CCW chord: its left
             Vec2 bis = n0 + n1;
             const Real bl = bis.length();
@@ -263,15 +304,20 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             bis = bis * (1.0 / bl);
             in[k] = bis * (1.0 / std::max(Real(0.5), dot(bis, n0)));
         }
-        // pieces of at most a right angle
+        // pieces of at most a right angle (an arc), or of a room's width along the run (a wavy band)
         std::vector<std::pair<std::size_t, std::size_t>> pieces;   // [k0, k1] vertex ranges
         {
             std::size_t k0 = 0;
-            Real sweep = 0;
+            Real sweep = 0, run = 0;
             for (std::size_t k = 0; k + 1 < m; ++k) {
                 const Vec2 d0 = normalize(v[k + 1] - v[k]), d1 = normalize(v[k + 2] - v[k + 1]);
                 const Real t = std::atan2(cross(d0, d1), dot(d0, d1));
-                if (sweep + t > 1.5708 + 0.01) { pieces.push_back({k0, k + 1}); k0 = k + 1; sweep = 0; }
+                run += (v[k + 1] - v[k]).length();
+                // ...and an arc's piece no longer than two rooms along the glass (a drum's quarter was one office
+                // with one desk in it -- Glenn, 2026-10-15); a rounded corner's quarter stays one corner office
+                const bool full = b.wavy ? (std::fabs(sweep + t) > 1.5708 + 0.01 || run + (v[k + 2] - v[k + 1]).length() > widthWant * 1.4)
+                                         : (sweep + t > 1.5708 + 0.01 || run + (v[k + 2] - v[k + 1]).length() > std::max(Real(9.6), widthWant * 2.0));
+                if (full) { pieces.push_back({k0, k + 1}); k0 = k + 1; sweep = 0; run = 0; }
                 sweep += t;
             }
             pieces.push_back({k0, m});
@@ -292,31 +338,35 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             for (const Vec2& w : plan) across = std::max(across, dot(w - A, nIn));
             const Real d = std::min({b.depth, L * 0.9, room, (across - 1.4) * 0.5});
             if (d < kMinDepth) continue;
+            // the back corners: square to the chord (an arc's corner office), or along the mitred offsets at the
+            // piece's ends (a wavy band: pieces turning both ways would overlap behind the glass otherwise)
+            const Vec2 backA = radial ? v[k0] + in[k0] * (dIn + d) : A + nIn * d;
+            const Vec2 backB = radial ? v[k1] + in[k1] * (dIn + d) : B + nIn * d;
             Room r;
             r.edge = (b.first + k0) % n;
             r.kind = rp.office ? RoomKind::Office : RoomKind::Flat;
             r.rect.push_back(A);
             for (std::size_t k = k0 + 1; k < k1; ++k) r.rect.push_back(v[k] + in[k] * dIn);
             r.rect.push_back(B);
-            r.rect.push_back(B + nIn * d);
-            r.rect.push_back(A + nIn * d);
+            r.rect.push_back(backB);
+            r.rect.push_back(backA);
             r.frame = {A, B, B + nIn * d, A + nIn * d};
             rp.rooms.push_back(r);
             RoomWall back;   // the straight partition, the door in its middle
-            back.a = B + nIn * d;
-            back.b = A + nIn * d;
+            back.a = backB;
+            back.b = backA;
             back.doorAt = (rp.rooms.size() % 2) ? 0.35 : 0.65;
             back.glass = params.curtainWall;
             rp.walls.push_back(back);
             RoomWall sideA;   // the side at the piece's start (the last piece's end too)
             sideA.a = A;
-            sideA.b = A + nIn * d;
+            sideA.b = backA;
             sideA.accent = true;
             rp.walls.push_back(sideA);
             if (pi + 1 == pieces.size()) {
                 RoomWall sideB;
                 sideB.a = B;
-                sideB.b = B + nIn * d;
+                sideB.b = backB;
                 sideB.accent = true;
                 rp.walls.push_back(sideB);
             }
@@ -346,6 +396,25 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
             if (prevB.rooms && convexStart) { startAt = inset + prevB.depth; claimStart = inset + cornerEnd[(bi + nb - 1) % nb]; }
             if (nextB.rooms && convexEnd) { endAt = E[e].W - inset - nextB.depth; claimEnd = inset + cornerStart[(bi + 1) % nb]; }
         }
+        auto P = [&](Real x, Real depth) { return E[e].a + E[e].d * x - E[e].nOut * depth; };
+        // BESIDE A WAVY BAND (laid already) the claim is measured, not assumed: the band starts and ends where its
+        // strip is clear of the wavy band's rooms and inside the undulating outline (a corner room of a straight
+        // band ran past where the skin dipped, and under a wavy piece's oblique back).
+        auto clearAt = [&](Real x) {
+            const Vec2 pts[3] = {P(x, inset + 0.3), P(x, inset + E[e].depth * 0.5), P(x, inset + E[e].depth)};
+            for (const Vec2& q : pts) {
+                if (!pointInPolygon(plan, q)) return false;
+                for (const Room& r : rp.rooms)
+                    if (r.rect.size() >= 3 && pointInPolygon(r.rect, q)) return false;
+            }
+            return true;
+        };
+        // (an arc beside a wavy outline is measured too: a sine's symmetric chords read as a short arc)
+        if (prevB.arc && (prevB.wavy || wavyPlan)) { Real x = startAt; while (x < endAt && !clearAt(x)) x += 0.25; startAt = x; claimStart = inset; }
+        if (nextB.arc && (nextB.wavy || wavyPlan)) { Real x = endAt; while (x > startAt && !clearAt(x)) x -= 0.25; endAt = x; claimEnd = inset; }
+        if (std::getenv("RT_RING_DEBUG"))
+            std::fprintf(stderr, "[ring]   straight band %zu edge %zu: span %.1f..%.1f of %.1f (prev %s next %s, %zu rooms laid)\n", bi, e, startAt, endAt, E[e].W,
+                         prevB.arc ? "curved" : "straight", nextB.arc ? "curved" : "straight", rp.rooms.size());
         Real fw, lw;
         lay(e, startAt, endAt, fw, lw);
         cornerStart[bi] = fw;
@@ -353,7 +422,6 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         E[e].cornerStart = fw;
         E[e].cornerEnd = lw;
         if (fw <= 0) return;
-        auto P = [&](Real x, Real depth) { return E[e].a + E[e].d * x - E[e].nOut * depth; };
         auto endWall = [&](Real x, Real coveredTo) {
             const Real from = std::max(inset, coveredTo), to = inset + E[e].depth;
             if (to - from < 0.3) return;
@@ -366,17 +434,29 @@ static RoomPlan ringPlan(const Poly2& planIn, const BuildingParams& params, cons
         if (!primary || prevArc) endWall(startAt, claimStart);
         if (!primary || nextArc) endWall(endAt, claimEnd);
     };
+    if (std::getenv("RT_RING_DEBUG")) {
+        std::fprintf(stderr, "[ring] storey %d plan %zu edges, %zu bands:", storey, n, nb);
+        for (std::size_t bi = 0; bi < nb; ++bi) {
+            const Band& b = bands[bi];
+            std::fprintf(stderr, " %zu:%s%s e%zu+%zu d%.1f%s", bi, b.arc ? "arc" : "str", b.wavy ? "(wavy)" : "", b.arc ? b.first : b.e, b.arc ? b.count : std::size_t(1), b.depth, b.rooms ? "" : " norooms");
+        }
+        std::fprintf(stderr, "\n");
+    }
+    // the curved bands first, wherever they sit (a straight band beside one measures its claim against their rooms),
+    // then the straight ones, primary (even) before secondary (odd) as always
+    for (std::size_t bi = 0; bi < nb; ++bi) {
+        const Band& b = bands[bi];
+        if (b.rooms && b.arc) layArc(b);
+    }
     for (std::size_t bi = 0; bi < nb; bi += 2) {
         const Band& b = bands[bi];
-        if (!b.rooms) continue;
-        if (b.arc) layArc(b);
-        else layStraight(bi, true);
+        if (!b.rooms || b.arc) continue;
+        layStraight(bi, true);
     }
     for (std::size_t bi = 1; bi < nb; bi += 2) {
         const Band& b = bands[bi];
-        if (!b.rooms) continue;
-        if (b.arc) layArc(b);
-        else layStraight(bi, false);
+        if (!b.rooms || b.arc) continue;
+        layStraight(bi, false);
     }
     return rp;
 }
@@ -484,13 +564,28 @@ static RoomPlan deskRowPlan(const Poly2& planIn, const BuildingParams& params, c
         Real x0 = inset + (prev.row ? prev.depth : 0), x1 = s.W - inset - (next.row ? next.depth : 0);
         if (x1 - x0 < 2.0) continue;
         auto P = [&](Real x, Real in) { return s.a + s.d * x - s.nOut * in; };
+        // ...and never past the storey's own skin (an implicit form's wavy outline, issue #105): the strip's corners
+        // at both ends inside the outline, or the span steps in until they are
+        auto insideAt = [&](Real x) {
+            for (Real in : {inset + 0.3, inset + s.depth})
+                if (!pointInPolygon(plan, P(x, in))) return false;
+            return true;
+        };
+        auto trim = [&](Real& a, Real& b) {
+            while (a < b && !insideAt(a)) a += 0.25;
+            while (b > a && !insideAt(b)) b -= 0.25;
+        };
+        trim(x0, x1);
+        if (x1 - x0 < 2.0) continue;
         if (kind == RoomKind::DeskRow) {
             // Offices where the strip is deep enough. An even strip's row runs on into a square corner (the odd
             // neighbour's strip already stops short of this one's whole depth), so the corner is an office too.
             const std::size_t pe = (e + n - 1) % n, ne = (e + 1) % n;
             const bool squareStart = e % 2 == 0 && pe % 2 == 1 && std::fabs(dot(prev.d, s.d)) < 0.1;
             const bool squareEnd = e % 2 == 0 && ne % 2 == 1 && std::fabs(dot(next.d, s.d)) < 0.1;
-            if (officeRow(rp, params, e, s.W, P, squareStart ? inset : x0, squareEnd ? s.W - inset : x1, inset, s.depth))
+            Real r0 = squareStart ? inset : x0, r1 = squareEnd ? s.W - inset : x1;
+            trim(r0, r1);
+            if (officeRow(rp, params, e, s.W, P, r0, r1, inset, s.depth))
                 continue;
         }
         Room r;
@@ -1847,11 +1942,13 @@ static bool innerRect(const Poly2& planIn, Poly2& rect) {
     return true;
 }
 // THE RECTANGLE A PLATE IS LAID IN: itself; a chamfered one's (its cut corners); else the largest inside it.
-static bool officeRectFor(const Poly2& planIn, Poly2& plan, Real cutS[4], Real cutE[4]) {
+static bool officeRectFor(const Poly2& planIn, Poly2& plan, Real cutS[4], Real cutE[4], bool* inner = nullptr) {
     for (int i = 0; i < 4; ++i) cutS[i] = cutE[i] = 0;
+    if (inner) *inner = false;
     if (planIn.size() == 4) { plan = planIn; return true; }
     if (chamferedRect(planIn, plan, cutS, cutE)) return true;
     for (int i = 0; i < 4; ++i) cutS[i] = cutE[i] = 0;
+    if (inner) *inner = true;
     return innerRect(planIn, plan);
 }
 static bool officePlanFits(const Poly2& plan) {
@@ -1880,7 +1977,8 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
     Real cutS[4] = {0, 0, 0, 0}, cutE[4] = {0, 0, 0, 0};
     Poly2 plan = planIn;
     if (storey < 1 || !core.valid) return rp;
-    if (!officeRectFor(planIn, plan, cutS, cutE)) return rp;
+    bool innerPlate = false;
+    if (!officeRectFor(planIn, plan, cutS, cutE, &innerPlate)) return rp;
     ensureCCW(plan);
     const std::size_t n = plan.size();
     const Poly2 coreR = core.rect();
@@ -1913,6 +2011,27 @@ static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, co
             b.s1 = std::min(b.W - inset - (q.rooms ? q.D : 0), upto(e, b.W));
         }
     }
+    // ...and never past the storey's own skin: the largest rectangle inside a plate is inside it only where it was
+    // sampled (an implicit form's wavy outline dips between the samples), so each band's span is trimmed until the
+    // strip's corners lie inside the outline as drawn (issue #105's wavy tower: an end office past the skin).
+    if (innerPlate)
+        for (std::size_t e = 0; e < n; ++e) {
+            Band& b = B[e];
+            if (!b.rooms) continue;
+            const Real td = inset + std::min(b.D, Real(5.0));
+            auto insideAt = [&](Real s) {
+                for (Real v : {inset + 0.3, td})
+                    if (!pointInPolygon(planIn, b.a + b.d * s - b.nOut * v)) return false;
+                return true;
+            };
+            const Real was0 = b.s0, was1 = b.s1;
+            while (b.s0 < b.s1 && !insideAt(b.s0)) b.s0 += 0.25;
+            while (b.s1 > b.s0 && !insideAt(b.s1)) b.s1 -= 0.25;
+            if (std::getenv("RT_OFFICE_DEBUG"))
+                std::fprintf(stderr, "[office] storey %d band %zu a (%.1f,%.1f) d (%.2f,%.2f) W %.1f D %.1f: span %.1f..%.1f -> %.1f..%.1f (test depth %.2f)\n", storey, e,
+                             b.a.x, b.a.y, b.d.x, b.d.y, b.W, b.D, was0, was1, b.s0, b.s1, td);
+        }
+    if (std::getenv("RT_OFFICE_DEBUG")) std::fprintf(stderr, "[office] storey %d plate %s (%zu edges of %zu)\n", storey, innerPlate ? "inner rect" : "as drawn", n, planIn.size());
     // A band too shallow for the office's rooms is a ROW OF DESKS at its windows (deskRowPlan's strip), from the glass
     // to the core, stopping short of its neighbours' rooms and rows.
     {

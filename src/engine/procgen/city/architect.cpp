@@ -876,6 +876,26 @@ void recipeRingBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "ring_block";
 }
 
+// The WAVY TOWER (issue #105 step 6, the first implicit form; Aqua Tower): a glass slab whose skin undulates a
+// metre or two across its long axis, the waves climbing the building, every storey its own outline.
+void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(18, 24) + static_cast<int>(cx.coreness * 30);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Wave;
+    p.baseFloors = 1;
+    p.wave = rng.range(1.2, 2.0);
+    p.waveLen = rng.range(16.0, 24.0);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 60}, {2, 40}});
+    out.name = "wavy_tower";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1620,6 +1640,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"leaning_tower", recipeLeaningTower},
     {"twisted_taper", recipeTwistedTaper},
     {"ring_block", recipeRingBlock},
+    {"wavy_tower", recipeWavyTower},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},

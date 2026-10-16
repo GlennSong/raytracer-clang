@@ -267,8 +267,15 @@ Complex courtyardWings(const Poly2& boxIn, const BuildingParams& params, Real de
         c.frame.u = ux;
         c.frame.v = uy;
         c.role = i < 4 ? "wing" : "corner";
+        c.params.top = 9;   // one crown for the block (below), the other roofs bare
         c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
         cx.cells.push_back(c);
+    }
+    {   // the crown on the tallest cell (the first of them)
+        std::size_t tallest = 0;
+        for (std::size_t i = 1; i < cx.cells.size(); ++i)
+            if (cx.cells[i].params.floors > cx.cells[tallest].params.floors) tallest = i;
+        cx.cells[tallest].params.top = params.top;
     }
     cx.resolve();
     cx.connectLobbies(Vec2(params.faceDir.x, params.faceDir.z));
@@ -301,6 +308,7 @@ Complex ringCells(const Poly2& outlineIn, const BuildingParams& params, Real dep
         c.frame.u = d;
         c.frame.v = Vec2(-d.y, d.x);
         c.role = "segment";
+        c.params.top = 9;   // a ring's roof is one clean deck: no plant on its segments
         c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
         cx.cells.push_back(c);
     }

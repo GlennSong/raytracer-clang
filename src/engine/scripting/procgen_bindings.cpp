@@ -1022,10 +1022,10 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
 static void readTopField(lua_State* L, int idx, BuildingParams& p) {
     lua_getfield(L, idx, "top");
     if (lua_isstring(L, -1)) {
-        static const char* names[9] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
-                                       "antennas", "mast"};
+        static const char* names[10] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
+                                        "antennas", "mast", "none"};
         const std::string t = lua_tostring(L, -1);
-        for (int i = 0; i < 9; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
+        for (int i = 0; i < 10; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
     }
     lua_pop(L, 1);
     lua_getfield(L, idx, "helipad");   // true: a pad on the roof; false: never; unset: the tall-tower rule
@@ -1146,6 +1146,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
                    : e == "stack" ? E::Stack
                    : e == "bulge" ? E::Bulge
                    : e == "curves" ? E::Curves
+                   : e == "wave" ? E::Wave
                                   : E::None;
     }
     lua_pop(L, 1);
@@ -1167,6 +1168,8 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.stackShift  = static_cast<Real>(optField(L, idx, "stack_shift", p.stackShift));
     p.bulge       = static_cast<Real>(optField(L, idx, "bulge", p.bulge));
     p.lean        = static_cast<Real>(optField(L, idx, "lean", p.lean));
+    p.wave        = static_cast<Real>(optField(L, idx, "wave", p.wave));
+    p.waveLen     = static_cast<Real>(optField(L, idx, "wave_len", p.waveLen));
     p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
     p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));
     p.spandrelFrac = static_cast<Real>(optField(L, idx, "spandrel", p.spandrelFrac));
