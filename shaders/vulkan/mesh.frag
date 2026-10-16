@@ -23,7 +23,7 @@ layout(set = 0, binding = 0) uniform Globals {
     mat4  invViewProjection;
     mat4  cascadeVP[4];
     vec4  cameraPosition;
-    vec4  ambient;            // rgb = ambient tint * multiplier (IBL strength)
+    vec4  ambient;            // rgb = ambient tint * multiplier (IBL strength), w = facade glass reflectance scale
     vec4  cascadeSplit;       // far view-space depth of cascades 0..3
     ivec4 counts;             // x lightCount, y cascadeCount, z envMode, w debugView
     vec4  shadowParams;       // x normalBias, y pcfRadius, z mapSize, w strength
@@ -1063,6 +1063,13 @@ void main() {
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    // FACADE GLASS REFLECTS LIKE COATED CURTAIN-WALL GLASS (Glenn, 2026-10-16: the towers read dark and "a little
+    // more matte rather than shiny"; he chose the 3x look from an A/B). The glass tints (curtainGlassColour,
+    // glassGrey) are reflectances of 3-12% for the default pane; real office glass is 15-40%. Scaled here, not in
+    // the baked tints, so it rolls back without regrowing a city: RT_GLASS_REFLECT (default 3, 1 = the old glass)
+    // rides g.ambient.w. Only PartId::Glass/GlassLit are metallic 0.9 at roughness 0.08 (shape_grammar
+    // materialFor); car, train, water and interior glass are not metallic.
+    if (metallic > 0.85 && roughness < 0.1) f0 = clamp(f0 * g.ambient.w, 0.0, 0.9);
 
     // Sun shadow (cascaded). viewDepth is the positive view-space depth; camera
     // looks down -z, so -(view * worldPos).z.

@@ -6682,7 +6682,9 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.ambient[0] = static_cast<float>(lighting.ambientTint.x) * amb;
     impl->cpuGlobals.ambient[1] = static_cast<float>(lighting.ambientTint.y) * amb;
     impl->cpuGlobals.ambient[2] = static_cast<float>(lighting.ambientTint.z) * amb;
-    impl->cpuGlobals.ambient[3] = 1.0f;
+    // facade glass reflectance scale (mesh.frag): 3 by default, RT_GLASS_REFLECT=1 for the old glass
+    static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 3.0f; return v > 0.0f ? v : 3.0f; }();
+    impl->cpuGlobals.ambient[3] = glassReflect;
 
     // Procedural sky (ADR-0016) → skybox + analytic IBL. HDR equirect mode is a
     // later refinement, so envMode is always procedural (0) for now.
