@@ -10,6 +10,7 @@
 #include "../src/engine/procgen/terrain.h"   // applyFlatten (park-adherence test)
 
 #include <map>
+#include <set>
 #include <string>
 
 using namespace engine;
@@ -268,6 +269,38 @@ TEST_CASE(architect_tables_are_coherent) {
         CHECK(rim.params.floors <= 16);
     }
     CHECK(core18 >= 8);
+}
+
+TEST_CASE(every_registered_recipe_is_rolled_by_some_table) {
+    // "Will these show up in island 8?" (Glenn, 2026-10-15): a recipe in the registry is a word the lab and Lua can
+    // say; a city only speaks from the district tables, the block landmarks and the civic quotas. Every registered
+    // recipe must be reachable from one of them, or it is a word nobody will ever hear -- except the few a planner
+    // places by hand (the allow list), which are named here so a new one has to be argued for.
+    std::set<std::string> rolled;
+    for (int t = 0; t < 5; ++t) {
+        const DistrictTag tag = static_cast<DistrictTag>(t);
+        for (uint32_t s = 1; s <= 600; ++s) {
+            rolled.insert(architectPick(tag, 24, 520, s, (s % 3) * 0.5).name);
+            rolled.insert(architectPick(tag, 12, 160, s + 9000, 0.0).name);
+            if (s <= 200) rolled.insert(architectBlockLandmark(tag, 48, 2800, s, 0.6).name);
+        }
+    }
+    for (int k = 0; k < static_cast<int>(LandmarkKind::Count); ++k)
+        for (uint32_t s = 1; s <= 8; ++s) rolled.insert(architectLandmark(static_cast<LandmarkKind>(k), 30, 900, s).name);
+    static const std::set<std::string> placedByHand = {
+        // the campus pass's halls and the big-box pass's store: placed by their own passes (city_lots), never rolled
+        "teaching_hall", "campus_library", "residence_hall", "big_box",
+    };
+    std::vector<std::string> silent;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const std::string name = architectRecipeName(i);
+        if (rolled.count(name) || placedByHand.count(name)) continue;
+        silent.push_back(name);
+    }
+    for (const std::string& n : silent) std::printf("    [tables] never rolled: %s\n", n.c_str());
+    std::printf("    [tables] %d recipes registered, %zu rolled, %zu placed by hand, %zu silent\n", architectRecipeCount(), rolled.size(),
+                placedByHand.size(), silent.size());
+    CHECK(silent.empty());
 }
 
 TEST_CASE(landmark_recipes_are_coherent) {
