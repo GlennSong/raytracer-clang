@@ -265,8 +265,30 @@ TEST_CASE(curved_corner_office_is_one_walled_room) {
     CHECK(core.valid);
     const RoomPlan rp = roomPlan(sps[5].plan, p, core, static_cast<std::size_t>(-1), interiorWallInset(p), 5);
     int curved = 0, framed = 0, curvedDoors = 0;
+    // A room ON A ROUNDED CORNER: two of its corners at the arc's chords (an arc vertex: the outline turns gently there, where a
+    // rectangle's corner turns square). (The
+    // zoned office floor, floor_zones.h, cuts lots with more than four corners anywhere -- an interior lot clipped
+    // by the corridor -- so the corner count alone no longer says "curved".)
+    std::vector<Vec2> arcVerts;
+    {
+        const Poly2& sp = sps[5].plan;
+        for (std::size_t i = 0; i < sp.size(); ++i) {
+            const Vec2 a = sp[(i + sp.size() - 1) % sp.size()], b = sp[i], c = sp[(i + 1) % sp.size()];
+            const Vec2 d0 = normalize(b - a), d1 = normalize(c - b);
+            if (std::fabs(std::atan2(d0.x * d1.y - d0.y * d1.x, dot(d0, d1))) < 0.7) arcVerts.push_back(b);
+        }
+    }
+    auto onArc = [&](const Room& r) {
+        int near = 0;
+        for (const Vec2& v : r.rect) {
+            Real d = 1e9;
+            for (const Vec2& q : arcVerts) d = std::min(d, (v - q).length());
+            near += d < 1.2;
+        }
+        return near >= 2;
+    };
     for (const Room& r : rp.rooms) {
-        if (r.rect.size() <= 4) continue;
+        if (r.rect.size() <= 4 || !onArc(r)) continue;
         ++curved;
         if (r.frame.size() == 4) ++framed;
         for (std::size_t fi = 0; fi < r.frame.size(); ++fi) {
@@ -305,7 +327,7 @@ TEST_CASE(curved_corner_office_is_one_walled_room) {
     emitFurniture(placed, nullptr, rp, 20.0, p.seed);
     int inCurved = 0;
     for (const Room& r : rp.rooms) {
-        if (r.rect.size() <= 4) continue;
+        if (r.rect.size() <= 4 || !onArc(r)) continue;
         for (const PlacedPiece& pc : placed) {
             const Vec2 at(pc.xform.m[0][3], pc.xform.m[2][3]);
             if (pointInPolygon(r.rect, at)) { ++inCurved; break; }

@@ -563,8 +563,9 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
     const uint32_t wood = (hb >> 3) & 3u, style = (hb >> 9) & 3u;
 
     for (const Room& room : rp.rooms) {
-        // (a CURVED room -- the ring's corner office on a rounded plan -- is furnished inside its frame rectangle)
-        const Poly2& rr = room.rect.size() == 4 ? room.rect : room.frame;
+        // (a room with a FRAME is furnished inside it: the ring's curved corner office, every lot of a zoned office
+        // floor -- whose outline may be a trapezoid or an L even with four corners)
+        const Poly2& rr = room.frame.size() == 4 ? room.frame : room.rect;
         if (rr.size() != 4 || room.kind == RoomKind::Hall) continue;
         const Vec2 rc = (rr[0] + rr[2]) * 0.5;
         const uint32_t hr = mix32(hb ^ static_cast<uint32_t>(std::lround(rc.x * 7.0)) ^

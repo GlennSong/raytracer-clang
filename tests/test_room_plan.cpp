@@ -2,6 +2,7 @@
 // walls, partitions on the facade's bay lines, a door in every front, the
 // core's corridor ring and the corners respected, colliders on everything.
 #include "test_framework.h"
+#include "../src/engine/procgen/city/roads/lanes/geom2d.h"
 
 #include "../src/engine/procgen/city/room_plan.h"
 #include "../src/engine/procgen/city/core_plan.h"
@@ -53,15 +54,16 @@ TEST_CASE(rooms_ring_the_plate_and_keep_the_core_clear) {
             CHECK(pointInPolygon(plan, c + (centroid(r.rect) - c) * 0.01));
             CHECK(!pointInPolygon(ring, c));
         }
-    // Every wall is glass, and every enclosed room (a corner office, a meeting room, the reception's screen) has a door.
+    // Every wall is glass, and every enclosed room (an office, a meeting room) has one door. (The zoned floor,
+    // floor_zones.h: the reception is an open desk facing the lifts, no screen of its own.)
     int doors = 0;
     for (const RoomWall& w : rp.walls) {
         CHECK(w.glass);
         if (w.doorAt >= 0) ++doors;
         CHECK(segLen(w) > 0.3);
     }
-    CHECK(reception == 1);   // facing the lifts (2026-10-13), its screen with a door for the staff
-    CHECK(doors == corner + meeting + reception);
+    CHECK(reception == 1);   // facing the lifts (2026-10-13)
+    CHECK(doors == corner + meeting);
     // The lobby gets none.
     CHECK(roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 0).rooms.empty());
 }
@@ -386,16 +388,8 @@ TEST_CASE(ring_rooms_line_an_inside_cornered_plate) {
             for (Vec2& v : o) v = v + normalize(m - v) * 0.02;
             return o;
         };
-        auto overlap = [](const Poly2& A, const Poly2& B) {   // separating axis, convex quads
-            for (const Poly2* P : {&A, &B})
-                for (std::size_t i = 0; i < P->size(); ++i) {
-                    const Vec2 e = (*P)[(i + 1) % P->size()] - (*P)[i], n(-e.y, e.x);
-                    Real a0 = 1e30, a1 = -1e30, b0 = 1e30, b1 = -1e30;
-                    for (const Vec2& v : A) { a0 = std::min(a0, dot(v, n)); a1 = std::max(a1, dot(v, n)); }
-                    for (const Vec2& v : B) { b0 = std::min(b0, dot(v, n)); b1 = std::max(b1, dot(v, n)); }
-                    if (a1 <= b0 || b1 <= a0) return false;
-                }
-            return true;
+        auto overlap = [](const Poly2& A, const Poly2& B) {   // (the zoned floor's lots need not be convex: Clipper)
+            return roads::lanes::setArea(roads::lanes::intersectSets(roads::lanes::fromRing(A), roads::lanes::fromRing(B))) > 0.01;
         };
         for (std::size_t i = 0; i < rp.rooms.size(); ++i) {
             const Poly2 ri = shrink(rp.rooms[i].rect);

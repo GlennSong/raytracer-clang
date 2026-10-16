@@ -1339,10 +1339,14 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
                     const RoomPlan rp = roomPlan(sps[static_cast<std::size_t>(k)].plan, p, core, static_cast<std::size_t>(-1),
                                                  std::max(p.wallThickness, Real(0.55)), k);   // (interiorInset)
                     for (const Room& r : rp.rooms) if (r.kind == RoomKind::DeskRow) { ++deskRows; break; }
-                    for (const Room& r : rp.rooms)
-                        if (r.kind == RoomKind::DeskRow && r.rect.size() == 4 && (r.rect[3] - r.rect[0]).length() >= 5.0 &&
-                            (r.rect[1] - r.rect[0]).length() >= 2.4)
+                    for (const Room& r : rp.rooms) {
+                        // (the furniture's frame where the room has one -- a zoned floor's lot starts its outline at any
+                        // corner; the frame's side 0 is the glass)
+                        const Poly2& q = r.frame.size() == 4 ? r.frame : r.rect;
+                        if (r.kind == RoomKind::DeskRow && q.size() == 4 && (q[3] - q[0]).length() >= 5.0 &&
+                            (q[1] - q[0]).length() >= 2.4)
                             ++deepRows;   // deep enough for offices (kCorridorRing + an office's 2.8 m)
+                    }
                     if (real == 0 && std::getenv("RT_BARE_WHY")) {
                         const OBB2 ob = orientedBoundingBox(sps[static_cast<std::size_t>(k)].plan);
                         std::printf("      bare %s %gx%g s%u k%d plate %.1fx%.1f core %d %.1fx%.1f rooms %zu walls %zu topo %d lights %zu\n", rn, sz[0], sz[1], seed, k,

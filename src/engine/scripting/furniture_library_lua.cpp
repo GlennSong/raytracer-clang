@@ -5,6 +5,7 @@
 #include "../script_assets.h"
 #include "../../log.h"
 
+#include <algorithm>
 #include <mutex>
 
 namespace engine {
@@ -339,6 +340,157 @@ bool loadFurnitureLibrarySource(const std::string& source, FurnitureLibrary& out
     return readFurnitureLibrary(vm, out, err) && readRoomPrograms(vm, out, err);
 }
 
+bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "floor_programs");
+    if (lua_isnil(L, -1)) { lua_settop(L, base); return true; }   // none: the built-in office program
+    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "`floor_programs` is not a table"); }
+    const int progs = lua_gettop(L);
+    auto bad = [&](const std::string& m) { lua_settop(L, base); return fail(err, m); };
+    lua_pushnil(L);
+    while (lua_next(L, progs) != 0) {
+        if (!lua_isstring(L, -2) || !lua_istable(L, -1)) return bad("a floor program is not name = {...}");
+        FloorProgram prog;
+        prog.name = lua_tostring(L, -2);
+        const std::string where = "floor_programs." + prog.name;
+        const int pt = lua_gettop(L);
+        lua_getfield(L, pt, "lots");
+        if (lua_istable(L, -1)) {
+            const int t = lua_gettop(L);
+            FloorZoneParams& z = prog.zones;
+            z.windowDepth = numField(L, t, "window_depth", z.windowDepth);
+            z.aisle = numField(L, t, "aisle", z.aisle);
+            z.street = numField(L, t, "street", z.street);
+            z.lotWidth = numField(L, t, "lot_width", z.lotWidth);
+            z.interiorLot = numField(L, t, "interior_lot", z.interiorLot);
+            z.minSide = numField(L, t, "min_side", z.minSide);
+        }
+        lua_pop(L, 1);
+        if (const std::string f = strField(L, pt, "fill"); !f.empty()) prog.fill = f;
+        if (const std::string f = strField(L, pt, "shallow"); !f.empty()) prog.shallow = f;
+        prog.shallowDepth = numField(L, pt, "shallow_depth", prog.shallowDepth);
+        lua_getfield(L, pt, "zones");
+        if (!lua_istable(L, -1)) return bad(where + ": no zones");
+        {
+            const int zt = lua_gettop(L), n = static_cast<int>(luaL_len(L, zt));
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, zt, i);
+                const int t = lua_gettop(L);
+                const std::string w = where + ".zones[" + std::to_string(i) + "]";
+                if (!lua_istable(L, t)) return bad(w + ": not a table");
+                ZoneRule r;
+                r.tag = strField(L, t, "tag");
+                if (r.tag.empty()) return bad(w + ": no tag");
+                const std::string kind = strField(L, t, "kind");
+                if (!roomKindFromName(kind.empty() ? r.tag : kind, r.kind)) return bad(w + ": unknown kind '" + kind + "'");
+                lua_getfield(L, t, "sites");
+                if (lua_istable(L, -1)) {
+                    r.sites = 0;
+                    const int st = lua_gettop(L), sn = static_cast<int>(luaL_len(L, st));
+                    for (int k = 1; k <= sn; ++k) {
+                        lua_rawgeti(L, st, k);
+                        const std::string site = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+                        lua_pop(L, 1);
+                        if (site == "window") r.sites |= zoneSiteBit(ZoneSite::Window);
+                        else if (site == "corner") r.sites |= zoneSiteBit(ZoneSite::Corner);
+                        else if (site == "interior") r.sites |= zoneSiteBit(ZoneSite::Interior);
+                        else return bad(w + ": unknown site '" + site + "'");
+                    }
+                }
+                lua_pop(L, 1);
+                r.count = static_cast<int>(numField(L, t, "count", 0));
+                r.perM2 = numField(L, t, "per_m2", 0);
+                r.share = numField(L, t, "share", 0);
+                r.minDepth = numField(L, t, "min_depth", 0);
+                lua_getfield(L, t, "area");   // {min, max}
+                if (lua_istable(L, -1)) {
+                    lua_rawgeti(L, -1, 1);
+                    if (lua_isnumber(L, -1)) r.minArea = lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    lua_rawgeti(L, -1, 2);
+                    if (lua_isnumber(L, -1)) r.maxArea = lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                }
+                lua_pop(L, 1);
+                r.enclosed = boolField(L, t, "enclosed", false);
+                r.lifts = boolField(L, t, "lifts", false);
+                const std::string walls = strField(L, t, "walls");
+                if (walls.empty() || walls == "facade") r.walls = 2;
+                else if (walls == "glass") r.walls = 1;
+                else if (walls == "drywall") r.walls = 0;
+                else return bad(w + ": walls must be glass, drywall or facade");
+                const std::string near = strField(L, t, "near");
+                if (near.empty()) r.near = 0;
+                else if (near == "lobby") r.near = 1;
+                else if (near == "core") r.near = 2;
+                else if (near == "far") r.near = 3;
+                else return bad(w + ": near must be lobby, core or far");
+                prog.rules.push_back(r);
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        bool haveFill = false;
+        for (const ZoneRule& r : prog.rules) haveFill = haveFill || r.tag == prog.fill;
+        if (!haveFill) return bad(where + ": the fill tag '" + prog.fill + "' has no zone");
+        lua_getfield(L, pt, "styles");
+        if (lua_istable(L, -1)) {
+            const int sl = lua_gettop(L), n = static_cast<int>(luaL_len(L, sl));
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, sl, i);
+                const int t = lua_gettop(L);
+                if (!lua_istable(L, t)) return bad(where + ".styles: not a table");
+                ZoneStyle st;
+                st.name = strField(L, t, "name");
+                st.weight = numField(L, t, "weight", 1.0);
+                lua_getfield(L, t, "set");   // { tag = { field = value, ... }, ... }
+                if (lua_istable(L, -1)) {
+                    const int setT = lua_gettop(L);
+                    lua_pushnil(L);
+                    while (lua_next(L, setT) != 0) {
+                        if (lua_isstring(L, -2) && lua_istable(L, -1)) {
+                            const std::string tag = lua_tostring(L, -2);
+                            const int ft = lua_gettop(L);
+                            lua_pushnil(L);
+                            while (lua_next(L, ft) != 0) {
+                                if (lua_isstring(L, -2)) {
+                                    ZoneStyle::Set s;
+                                    s.tag = tag;
+                                    s.field = lua_tostring(L, -2);
+                                    s.value = lua_isboolean(L, -1) ? (lua_toboolean(L, -1) ? 1.0 : 0.0) : lua_tonumber(L, -1);
+                                    st.sets.push_back(s);
+                                }
+                                lua_pop(L, 1);
+                            }
+                        }
+                        lua_pop(L, 1);
+                    }
+                }
+                lua_pop(L, 1);
+                // (deterministic whatever order the table walked in)
+                std::sort(st.sets.begin(), st.sets.end(), [](const ZoneStyle::Set& a, const ZoneStyle::Set& b) {
+                    return a.tag != b.tag ? a.tag < b.tag : a.field < b.field;
+                });
+                prog.styles.push_back(st);
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        out.set(std::move(prog));
+        lua_pop(L, 1);
+    }
+    lua_settop(L, base);
+    return true;
+}
+
+bool loadFloorProgramsSource(const std::string& source, FloorProgramBook& out, std::string* err) {
+    ScriptVM vm;
+    std::string e;
+    if (!vm.doString(source, &e)) return fail(err, "floor_programs.lua: " + e);
+    return readFloorPrograms(vm, out, err);
+}
+
 bool ensureFurnitureLibraryLoaded() {
     static std::once_flag once;
     static bool ok = false;
@@ -354,6 +506,18 @@ bool ensureFurnitureLibraryLoaded() {
         if (!loadFurnitureLibrarySource(src, lib, &err)) { LOG_WARN << "[furniture] " << err; return; }
         FurnitureLibrary::global() = lib;
         ok = true;
+        // the floor programs (floor_zones.h): absent, the built-in office program stands
+        const std::string floors = loadScriptCode("floor_programs.lua", "");
+        if (!floors.empty()) {
+            FloorProgramBook book;
+            std::string ferr;
+            if (loadFloorProgramsSource(floors, book, &ferr)) {
+                FloorProgramBook::global() = book;
+                LOG_INFO << "[floors] " << book.size() << " floor programs";
+            } else {
+                LOG_WARN << "[floors] " << ferr << " (the built-in office program stands)";
+            }
+        }
         LOG_INFO << "[furniture] library: " << lib.size() << " described pieces, " << lib.programCount() << " room programs";
     });
     return ok;

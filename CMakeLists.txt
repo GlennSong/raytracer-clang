@@ -144,6 +144,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/section.cpp
     src/engine/procgen/city/face.cpp
     src/engine/procgen/city/room_plan.cpp
+    src/engine/procgen/city/floor_zones.cpp
     src/engine/procgen/city/ladders.cpp
     src/engine/procgen/city/furniture.cpp
     src/engine/procgen/furniture_kit.cpp
@@ -830,6 +831,7 @@ add_executable(run_tests
     tests/test_mesh_mass.cpp
     tests/test_envelope.cpp
     tests/test_section.cpp
+    tests/test_floor_zones.cpp
     tests/test_room_plan.cpp
     tests/test_ladders.cpp
     tests/test_furniture.cpp

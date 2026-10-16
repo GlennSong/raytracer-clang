@@ -5,11 +5,14 @@
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/space_graph.h"
+#include "../src/engine/procgen/city/circulation.h"
+#include "../src/engine/procgen/city/room_plan.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <set>
 #include <string>
@@ -361,5 +364,58 @@ TEST_CASE(graph_dump_debug) {
             for (const RoomWall& w : sr.rp.walls) if (w.doorAt < 0) std::printf("    wall (%.1f,%.1f)-(%.1f,%.1f)%s\n", w.a.x, w.a.y, w.b.x, w.b.y, w.glass ? " glass" : "");
             { Vec2 lo, hi; bounds(sps[static_cast<std::size_t>(k)].plan, lo, hi); std::printf("    plan %zu-gon [%.1f %.1f]-[%.1f %.1f]:", sps[static_cast<std::size_t>(k)].plan.size(), lo.x, lo.y, hi.x, hi.y); for (const Vec2& v : sps[static_cast<std::size_t>(k)].plan) std::printf(" (%.1f,%.1f)", v.x, v.y); std::printf("\n"); }
         }
+    });
+}
+
+// ON REQUEST: RT_GATE_PROBE=<recipe> RT_GATE_DIR=<dir> draws each of that recipe's gate failures (blueprintSvg) and its
+// first bad storey's rooms, walls and doors (<file>.storey.svg), and prints them -- how the zoned office floor's
+// unreachable rooms were found (a circulation set that lost its holes; a union Clipper subtracted wrongly).
+TEST_CASE(graph_gate_blueprints_on_request) {
+    const char* want = std::getenv("RT_GATE_PROBE");
+    if (!want) return;
+    int n = 0;
+    everyRecipe([&](const char* name, uint32_t seed, const Poly2& plan, const BuildingParams& params) {
+        if (std::string(name) != want) return;
+        const SpaceGraph g = spaceGraphOf(plan, params, 0.0);
+        const std::vector<int> bad = unreachableCells(g);
+        if (bad.empty()) return;
+        const std::string fn = std::string(std::getenv("RT_GATE_DIR")) + "/" + name + "_" + std::to_string(seed) + "_" + std::to_string(n++) + ".svg";
+        std::ofstream(fn) << blueprintSvg(g, name, bad);
+        for (int i : bad) {
+            std::printf("    [probe] %s seed %u plan %zu-gon: %s", name, seed, plan.size(), describe(g, i).c_str());
+            for (const Vec2& q : g.cells[static_cast<std::size_t>(i)].plan) std::printf(" (%.2f %.2f)", q.x, q.y);
+            int np = 0;
+            for (const Portal& po : g.portals) if (po.a == i || po.b == i) { ++np; std::printf(" | portal %d->%d kind %d", po.a, po.b, static_cast<int>(po.kind)); }
+            std::printf(" [%d portals]\n", np);
+        }
+        Poly2 ccw = plan;
+        ensureCCW(ccw);
+        const std::size_t ee = entranceEdgeFor(ccw, params);
+        const std::vector<StoreyPlan> sps = storeyPlans(ccw, params);
+        const std::vector<StairRun> runs = stairRuns(ccw, params, ee, sps);
+        const CorePlan core = asCorePlan(circulationFor(ccw, params, ee));
+        const int k = g.cells[static_cast<std::size_t>(bad.front())].k0;
+        const StoreyRooms sr = storeyRooms(ccw, params, 0.0, sps, k, core, runs, ee);
+        const Poly2& sp = sps[static_cast<std::size_t>(k)].plan;
+        Vec2 lo, hi;
+        bounds(sp, lo, hi);
+        const Real S = 20;
+        std::ofstream f(fn + ".storey.svg");
+        auto X = [&](const Vec2& q) { return std::to_string((q.x - lo.x + 1) * S) + "," + std::to_string((hi.y - q.y + 1) * S); };
+        f << "<svg xmlns='http://www.w3.org/2000/svg' width='" << (hi.x - lo.x + 2) * S << "' height='" << (hi.y - lo.y + 2) * S << "'>";
+        auto P = [&](const Poly2& r, const char* fill) { f << "<polygon points='"; for (const Vec2& q : r) f << X(q) << " "; f << "' fill='" << fill << "' stroke='#555' stroke-width='1'/>"; };
+        P(sp, "#eee");
+        if (core.valid) P(core.rect(), "#999");
+        for (const StairRun& r : runs) (void)r;
+        for (const Room& r : sr.rp.rooms) { P(r.rect, r.kind == RoomKind::OpenPlan ? "#9cf" : "#fc9"); const std::string c = X(centroid(r.rect)); f << "<text x='" << c.substr(0, c.find(',')) << "' y='" << c.substr(c.find(',') + 1) << "' font-size='10'>" << cellUseName(r.kind) << "</text>"; }
+        for (const RoomWall& w : sr.rp.walls) {
+            const std::string a = X(w.a), b = X(w.b);
+            f << "<line x1='" << a.substr(0, a.find(',')) << "' y1='" << a.substr(a.find(',') + 1) << "' x2='" << b.substr(0, b.find(',')) << "' y2='" << b.substr(b.find(',') + 1) << "' stroke='#000' stroke-width='3'/>";
+            if (w.doorAt >= 0) { const std::string d = X(w.a + (w.b - w.a) * w.doorAt); f << "<circle cx='" << d.substr(0, d.find(',')) << "' cy='" << d.substr(d.find(',') + 1) << "' r='5' fill='red'/>"; }
+        }
+        for (const Room& r : sr.rp.rooms) { std::printf("    [probe] storey %d room %s:", k, cellUseName(r.kind)); for (const Vec2& q : r.rect) std::printf(" (%.2f %.2f)", q.x, q.y); std::printf("\n"); }
+        for (const RoomWall& w : sr.rp.walls) std::printf("    [probe] wall (%.2f %.2f)-(%.2f %.2f) door %.2f\n", w.a.x, w.a.y, w.b.x, w.b.y, w.doorAt);
+        std::printf("    [probe] storey plan:"); for (const Vec2& q : sp) std::printf(" (%.2f %.2f)", q.x, q.y); std::printf(" core %d\n", core.valid ? 1 : 0);
+        f << "</svg>";
     });
 }

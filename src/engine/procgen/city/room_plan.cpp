@@ -1,4 +1,5 @@
 #include "room_plan.h"
+#include "floor_zones.h"
 #include "../../mesh_builder.h"
 #include <algorithm>
 #include <functional>
@@ -2569,6 +2570,35 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         RoomPlan wu = walkupPlan(planIn, params, stairWell, inset, storey, stairFoot);
         wu.finish = interiorFinishFor(params);
         if (!wu.rooms.empty() && floorIsWalkable(wu, planIn, centroid(stairWell), stairWell)) return wu;
+    }
+    // THE CORE, or in a building with only a stair, its well standing in for one (no lifts: no reception)
+    auto hubFor = [&]() {
+        CorePlan hub = core;
+        if (!hub.valid && stairWell.size() >= 3) {
+            const OBB2 ob = orientedBoundingBox(stairWell);
+            hub.valid = true;
+            hub.frame.u = ob.axis[0];
+            hub.frame.v = ob.axis[1];
+            hub.length = 2 * ob.half[0];
+            hub.depth = 2 * ob.half[1];
+            hub.frame.origin = ob.center - hub.frame.u * ob.half[0] - hub.frame.v * ob.half[1];
+        }
+        return hub;
+    };
+    // AN OFFICE FLOOR IS ZONED (floor_zones.h; Glenn, 2026-10-16: partition the floor the way a block is cut into
+    // lots, tag the lots, furnish by tag): any plate, curved or not, round its core or its stair. RT_FLOOR_PLAN=bands
+    // keeps the old rectangle-only office floor below, for A/B.
+    static const bool bandsOnly = [] { const char* e = std::getenv("RT_FLOOR_PLAN"); return e && std::string(e) == "bands"; }();
+    if (!bandsOnly && !params.residential && storey >= 1 &&
+        (params.officeUse || (params.curtainWall && topo == PlateTopology::Ring))) {
+        const CorePlan hub = hubFor();
+        if (hub.valid) {
+            const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
+                             : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
+            RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell,
+                                         floorProgram("office"));
+            if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
+        }
     }
     if (topo == PlateTopology::Ring && params.curtainWall && !params.officeUse && core.valid && planIn.size() == 4) {
         // An OFFICE floor: open plan with corner offices, meeting rooms and a kitchenette (buildings C).

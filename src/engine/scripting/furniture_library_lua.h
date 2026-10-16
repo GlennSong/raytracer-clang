@@ -5,6 +5,7 @@
 // `furniture_library` a chunk like assets/scripts/furniture_library.lua leaves behind, keyed by kit piece name.
 
 #include "../procgen/furniture_library.h"
+#include "../procgen/city/floor_zones.h"
 #include <string>
 
 namespace engine {
@@ -22,7 +23,13 @@ bool readRoomPrograms(ScriptVM& vm, FurnitureLibrary& out, std::string* err = nu
 // read both.
 bool loadFurnitureLibrarySource(const std::string& source, FurnitureLibrary& out, std::string* err = nullptr);
 
-// FurnitureLibrary::global() from assets/scripts/furniture_library.lua, once per process (later calls return the
+// THE FLOOR PROGRAMS (floor_zones.h): the VM's `floor_programs` global (assets/scripts/floor_programs.lua) into
+// `out`. Unknown kinds, sites, walls or `near` values are errors.
+bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err = nullptr);
+bool loadFloorProgramsSource(const std::string& source, FloorProgramBook& out, std::string* err = nullptr);
+
+// FurnitureLibrary::global() from assets/scripts/furniture_library.lua -- and FloorProgramBook::global() from
+// floor_programs.lua -- once per process (later calls return the
 // first result). Logs what it loaded.
 bool ensureFurnitureLibraryLoaded();
 
