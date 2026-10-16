@@ -454,9 +454,12 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
 // must meet a FRONT face first. One whose first face is a BACK came in through a gap -- a crack between two storeys'
 // faces, at a corner, or a hole -- and is looking at the inside of the far wall. Rays at every `dy` from y0 to y1, at
 // `azimuths` bearings round (cx, cz), from `radius` out. A ray that meets nothing is above or beside the building.
+// A back face under OPEN SKY is no crack: a ray over a roof meets the inside of the far parapet, crown screen or
+// rail, which is meant to be seen from the roof. So a back face counts only when something covers the point the ray
+// reached (a look straight up meets a face): the ray was indoors. The open-sky ones are counted apart (`overRoof`).
 struct FacadeCrackAudit {
-    size_t rays = 0, hits = 0, cracks = 0;
-    struct Crack { Vec3 from, dir, at; std::string mesh; double t; };
+    size_t rays = 0, hits = 0, cracks = 0, overRoof = 0;
+    struct Crack { Vec3 from, dir, at; std::string mesh; double t; Vec3 tri[3]; };
     std::vector<Crack> all;
     std::map<long, size_t> byStorey;   // floor(y / storeyH): which storeys leak
 };
@@ -473,6 +476,31 @@ inline FacadeCrackAudit auditFacadeCracks(const std::vector<NamedMeshRef>& parts
             for (long b = b0; b <= b1; ++b) band[b].push_back(tri);
         }
     }
+    // ...and by the 2 m columns of plan they cover, for the look up
+    constexpr double kCol = 2.0;
+    std::map<std::pair<long, long>, std::vector<Tri>> column;
+    for (const auto& [b, tris] : band)
+        for (const Tri& t : tris) {
+            if (static_cast<long>(std::floor(std::min({t.a.y, t.b.y, t.c.y}))) != b) continue;   // once per triangle
+            const long x0 = static_cast<long>(std::floor(std::min({t.a.x, t.b.x, t.c.x}) / kCol)), x1 = static_cast<long>(std::floor(std::max({t.a.x, t.b.x, t.c.x}) / kCol));
+            const long z0 = static_cast<long>(std::floor(std::min({t.a.z, t.b.z, t.c.z}) / kCol)), z1 = static_cast<long>(std::floor(std::max({t.a.z, t.b.z, t.c.z}) / kCol));
+            for (long x = x0; x <= x1; ++x)
+                for (long z = z0; z <= z1; ++z) column[{x, z}].push_back(t);
+        }
+    auto covered = [&](const Vec3& p) {   // a face above p
+        auto it = column.find({static_cast<long>(std::floor(p.x / kCol)), static_cast<long>(std::floor(p.z / kCol))});
+        if (it == column.end()) return false;
+        for (const Tri& t : it->second) {
+            if (std::max({t.a.y, t.b.y, t.c.y}) <= p.y) continue;
+            // the plan point inside the triangle's plan, and the triangle's height there above p
+            const double ax = t.a.x - p.x, az = t.a.z - p.z, bx = t.b.x - p.x, bz = t.b.z - p.z, qx = t.c.x - p.x, qz = t.c.z - p.z;
+            const double w0 = bx * qz - bz * qx, w1 = qx * az - qz * ax, w2 = ax * bz - az * bx, sum = w0 + w1 + w2;
+            if (std::fabs(sum) < 1e-12) continue;   // a wall: seen edge-on from below
+            if (!((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))) continue;
+            if ((w0 * t.a.y + w1 * t.b.y + w2 * t.c.y) / sum > p.y + 1e-3) return true;
+        }
+        return false;
+    };
     FacadeCrackAudit r;
     for (double y = y0; y <= y1; y += dy) {
         auto it = band.find(static_cast<long>(std::floor(y)));
@@ -482,7 +510,9 @@ inline FacadeCrackAudit auditFacadeCracks(const std::vector<NamedMeshRef>& parts
             const Vec3 d(-std::cos(a), 0, -std::sin(a));
             const Vec3 o(cx - d.x * radius, y, cz - d.z * radius);
             ++r.rays;
-            double best = 2 * radius; const Tri* hit = nullptr;
+            // the nearest face, and the nearest FRONT: a sheet drawn as two faces back to back (a glass rail, a
+            // screen) puts a back and a front at the same depth, and the front is what is drawn there
+            double best = 2 * radius, bestFront = 2 * radius; const Tri* hit = nullptr;
             for (const Tri& t : it->second) {   // Moller-Trumbore, two-sided
                 const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
                 const double det = dot(e1, p);
@@ -492,13 +522,17 @@ inline FacadeCrackAudit auditFacadeCracks(const std::vector<NamedMeshRef>& parts
                 const Vec3 q = cross(s, e1);
                 const double v = dot(d, q) * inv; if (v < 0 || u + v > 1) continue;
                 const double tt = dot(e2, q) * inv;
-                if (tt > 1e-4 && tt < best) { best = tt; hit = &t; }
+                if (tt <= 1e-4) continue;
+                if (tt < best) { best = tt; hit = &t; }
+                if (tt < bestFront && dot(cross(t.c - t.a, t.b - t.a), d) <= 0) bestFront = tt;
             }
             if (!hit) continue;
             ++r.hits;
             if (dot(cross(hit->c - hit->a, hit->b - hit->a), d) <= 0) continue;   // a front: closed here
+            if (bestFront < best + 0.02) continue;                                  // a two-faced sheet
+            if (!covered(o + d * (best - 0.05))) { ++r.overRoof; continue; }      // open sky: a roof's inside
             ++r.cracks; ++r.byStorey[static_cast<long>(std::floor(y / storeyH))];
-            if (r.all.size() < 4000) r.all.push_back({o, d, o + d * best, *hit->mesh, best});
+            if (r.all.size() < 4000) r.all.push_back({o, d, o + d * best, *hit->mesh, best, {hit->a, hit->b, hit->c}});
         }
     }
     return r;

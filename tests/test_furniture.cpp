@@ -1434,6 +1434,75 @@ TEST_CASE(slim_residential_crowns_are_flats_round_the_core) {
 // with only a stair lays it round the stair. A hotel and a hospital keep their rooms. Measured on these 177 workplaces'
 // 852 upper floors (officeUse forced off for the before): beds 7690 -> 0, desks 4595 -> 16775, meeting tables 142 ->
 // 1024, reception desks 32 -> 213 (the glass towers had the office floor already, without its reception).
+// Glenn, 2026-10-16: "The lights in some places overlap in the ceiling." An open plan is a zone over the corner
+// offices and meeting rooms set into it; each lit its own grid over the same ceiling.
+TEST_CASE(ceiling_lights_never_overlap) {
+    UseShippedFurniture shipped;
+    const Real sizes[][2] = {{48, 34}, {36, 24}, {30, 20}};
+    long lights = 0, overlaps = 0, buildings = 0;
+    std::string first;
+    std::map<std::string, int> byRecipe;
+    for (int ri = 0; ri < architectRecipeCount(); ++ri) {
+        const std::string rn = architectRecipeName(ri);
+        for (uint32_t seed = 1; seed <= 2; ++seed)
+            for (const auto& sz : sizes) {
+                const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+                BuildingRecipe rc;
+                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                if (rc.massing == BuildingRecipe::Massing::Park || rc.massing == BuildingRecipe::Massing::Plaza) continue;
+                BuildingParams p = rc.params;
+                const int top = std::min(p.floors + 1, 4);
+                ++buildings;
+                const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 0, top);
+                // each fitting's footprint: centred across X, its depth along Z from the origin (furniture.cpp)
+                struct Fit { Vec3 c; Vec2 X, Z; Real hx, hz; };
+                std::vector<Fit> lit;
+                for (const PlacedPiece& pp : in.furniture) {
+                    if (pp.piece != static_cast<uint8_t>(Piece::CeilingLight)) continue;
+                    const FurniturePiece& kit = furniturePiece(Piece::CeilingLight, pp.variant);
+                    Fit f;
+                    f.X = normalize(Vec2(pp.xform.m[0][0], pp.xform.m[2][0]));
+                    f.Z = normalize(Vec2(pp.xform.m[0][2], pp.xform.m[2][2]));
+                    f.hx = kit.size.x * 0.5; f.hz = kit.size.z * 0.5;
+                    const Vec2 o(pp.xform.m[0][3], pp.xform.m[2][3]), c2 = o + f.Z * f.hz;
+                    f.c = Vec3(c2.x, pp.xform.m[1][3], c2.y);
+                    lit.push_back(f);
+                }
+                auto overlap = [](const Fit& A, const Fit& B) {   // separating axes of two rectangles, 2 cm of slack
+                    const Vec2 d(B.c.x - A.c.x, B.c.z - A.c.z);
+                    for (const Vec2& ax : {A.X, A.Z, B.X, B.Z}) {
+                        const Real ra = A.hx * std::fabs(dot(A.X, ax)) + A.hz * std::fabs(dot(A.Z, ax));
+                        const Real rb = B.hx * std::fabs(dot(B.X, ax)) + B.hz * std::fabs(dot(B.Z, ax));
+                        if (std::fabs(dot(d, ax)) >= ra + rb - 0.02) return false;
+                    }
+                    return true;
+                };
+                std::vector<Vec3> at;
+                for (const Fit& f : lit) at.push_back(f.c);
+                lights += static_cast<long>(at.size());
+                for (std::size_t i = 0; i < at.size(); ++i)
+                    for (std::size_t j = i + 1; j < at.size(); ++j)
+                        if (std::fabs(at[i].y - at[j].y) < 0.3 && overlap(lit[i], lit[j])) {
+                            ++overlaps;
+                            ++byRecipe[rn + " " + std::to_string(static_cast<int>(sz[0]))];
+                            if (first.empty()) {
+                                char b[200];
+                                std::snprintf(b, sizeof b, "%s seed %u %gx%g at %.2f %.2f %.2f and %.2f %.2f %.2f", rn.c_str(), seed, sz[0], sz[1], at[i].x,
+                                              at[i].y, at[i].z, at[j].x, at[j].y, at[j].z);
+                                first = b;
+                            }
+                        }
+            }
+    }
+    std::printf("    [lights] %ld buildings, %ld ceiling lights, %ld overlapping pairs%s%s\n", buildings, lights, overlaps,
+                first.empty() ? "" : "; first: ", first.c_str());
+    for (const auto& [k, v] : byRecipe) std::printf("      %s: %d\n", k.c_str(), v);
+    CHECK(lights > 1000);
+    // OWED: the 20 left are a ring's rooms overlapping each other on a sculpted tower's round slice (no inner
+    // rectangle keeps 85% of a drum, so the office floor never lays there); a ratchet until the round plate is planned
+    CHECK(overlaps <= 20);
+}
+
 TEST_CASE(workplaces_are_furnished_as_offices) {
     UseShippedFurniture shipped;
     const Real sizes[][2] = {{48, 34}, {36, 24}, {30, 20}};

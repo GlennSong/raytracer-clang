@@ -272,11 +272,14 @@ TEST_CASE(building_facades_have_no_cracks_every_recipe) {
                 ++leaking;
                 std::map<std::string, size_t> byPart; for (const auto& c : a.all) ++byPart[c.mesh];
                 std::string parts; for (const auto& [n, c] : byPart) parts += " " + n + ":" + std::to_string(c);
-                std::printf("    [cracks] %-22s seed %2u %-6s %zu of %zu rays leak (%zu storeys) via%s\n", name, seed, planNames[pi], a.cracks, a.hits, a.byStorey.size(), parts.c_str());
+                std::printf("    [cracks] %-22s seed %2u %-6s %zu of %zu rays leak (%zu storeys; %zu over the roof) via%s\n", name, seed, planNames[pi], a.cracks, a.hits, a.byStorey.size(), a.overRoof, parts.c_str());
                 for (int k = 0; k < show && k < static_cast<int>(a.all.size()); ++k) {
                     const auto& c = a.all[static_cast<size_t>(k) * (a.all.size() / static_cast<size_t>(std::max(show, 1)))];
                     std::printf("        in at %.2f %.2f %.2f bearing %.0f deg, sees the back of %s %.1f m on\n", c.from.x + c.dir.x * 50, c.from.y, c.from.z + c.dir.z * 50,
                                 std::atan2(-c.dir.z, -c.dir.x) * 57.29578, c.mesh.c_str(), c.t - 50.0);
+                    if (std::getenv("RT_CRACKS_TRI"))
+                        std::printf("          triangle (%.2f %.2f %.2f) (%.2f %.2f %.2f) (%.2f %.2f %.2f)\n", c.tri[0].x, c.tri[0].y, c.tri[0].z,
+                                    c.tri[1].x, c.tri[1].y, c.tri[1].z, c.tri[2].x, c.tri[2].y, c.tri[2].z);
                 }
             }
         }

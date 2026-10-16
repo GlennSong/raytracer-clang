@@ -863,7 +863,8 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         // THE LIGHTS (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes from"):
         // a working room -- office, open plan, meeting room, kitchenette, shop -- a grid of panels every 2.4 m
         // along its long side; a home's room, a round fitting in its middle (a long hall, one every 4 m).
-        if (ceilingY > y0 + 2.0) {
+        // (an Apparatus floor is a keep-clear strip inside its room, furnished by nothing: the room lights it)
+        if (ceilingY > y0 + 2.0 && room.kind != RoomKind::Apparatus) {
             // kind: 0 an office panel, 1 a round flush fitting, 2 a bar's pendant (on a cord, 0.9 m down)
             auto hangAt = [&](Real a, Real b, int kind) {
                 const bool alongV = F.f.D > F.f.W;
@@ -883,6 +884,15 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 M.m[0][2] = Z.x; M.m[1][2] = 0; M.m[2][2] = Z.z;
                 M.m[0][3] = c.x; M.m[1][3] = ceilingY - h; M.m[2][3] = c.y;
                 out.push_back(pp);
+                // RT_LIGHTS_WHY="x,z": which room hangs each light within 2 m of there
+                static const char* why = std::getenv("RT_LIGHTS_WHY");
+                if (why) {
+                    double wx = 0, wz = 0;
+                    if (std::sscanf(why, "%lf,%lf", &wx, &wz) == 2 && (c - Vec2(wx, wz)).length() < 2.0)
+                        std::fprintf(stderr, "[lights] %.2f %.2f %.2f kind %d hung by room %d of %zu, kind %d (%.1f x %.1f)\n", c.x,
+                                     ceilingY - h, c.y, kind, static_cast<int>(&room - rp.rooms.data()), rp.rooms.size(),
+                                     static_cast<int>(room.kind), F.f.W, F.f.D);
+                }
             };
             const bool working = room.kind == RoomKind::Office || room.kind == RoomKind::OpenPlan || room.kind == RoomKind::DeskRow ||
                                  room.kind == RoomKind::Meeting || room.kind == RoomKind::Kitchenette ||
@@ -901,9 +911,27 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
             } else if (working) {
                 const Real pitch = shopLights == 2 ? 3.6 : 2.4;
                 const int nx = std::max(1, static_cast<int>(F.f.W / pitch)), nz = std::max(1, static_cast<int>(F.f.D / pitch));
+                // An open plan is a zone over the rooms set into it (corner offices, meeting rooms): they light
+                // their own ceilings, so its grid leaves them out (Glenn: "the lights in some places overlap"). Two
+                // bands of open plan meet over a corner no office takes: the band laid first lights it.
+                auto ownedByARoomIn = [&](const Vec2& w) {
+                    if (room.kind != RoomKind::OpenPlan) return false;
+                    for (const Room& o : rp.rooms) {
+                        if (&o == &room || o.rect.size() < 3) continue;
+                        if (o.kind == RoomKind::OpenPlan && &o > &room) continue;
+                        if (pointInPolygon(o.rect, w)) return true;
+                    }
+                    return false;
+                };
                 for (int i = 0; i < nx; ++i)
-                    for (int j = 0; j < nz; ++j)
-                        hangAt(F.f.W * (i + 0.5) / nx, F.f.D * (j + 0.5) / nz, shopLights);
+                    for (int j = 0; j < nz; ++j) {
+                        const Real a = F.f.W * (i + 0.5) / nx, b = F.f.D * (j + 0.5) / nz;
+                        bool owned = false;   // the panel's footprint (1.2 m), not just its centre
+                        for (const Vec2& k : {Vec2(0, 0), Vec2(-0.65, -0.65), Vec2(0.65, -0.65), Vec2(0.65, 0.65), Vec2(-0.65, 0.65)})
+                            owned = owned || ownedByARoomIn(F.f.world(a + k.x, b + k.y));
+                        if (owned) continue;
+                        hangAt(a, b, shopLights);
+                    }
             } else {
                 const Real L = std::max(F.f.W, F.f.D);
                 const int n = L > 6.0 ? static_cast<int>(L / 4.0) : 1;

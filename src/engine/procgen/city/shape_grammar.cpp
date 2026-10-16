@@ -3234,9 +3234,18 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
     const uint32_t h = positionHash(Vec3(c2.x, roofY, c2.y) + Vec3(0.17, 0.41, 0.83));
     RenderMesh glassM, litM, metalM, roofM;
     auto Y = [](const Vec2& v, Real y) { return Vec3(v.x, y, v.y); };
-    auto quad = [](RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& cc, const Vec3& d, const Vec3& col) {
-        const Vec3 n = normalize(cross(b - a, d - a));
-        MeshBuilder::emitQuad(m, a, b, cc, d, n, col);
+    // Every face here is wound to the way it FACES, said outright: the corner order said it before, and the walls
+    // round a CCW plan came out facing in (2026-10-16, the facade crack audit: a lantern's lit glass and a
+    // screen's glass seen only from inside, the dark back shown to the street).
+    auto quad = [](RenderMesh& m, const Vec3& a, const Vec3& b, const Vec3& cc, const Vec3& d, const Vec3& facing,
+                   const Vec3& col) { MeshBuilder::emitQuad(m, a, b, cc, d, normalize(facing), col); };
+    auto outOf = [](const Vec2& a, const Vec2& b) {   // a CCW plan edge's outward normal
+        const Vec2 n = normalize(Vec2(b.y - a.y, a.x - b.x));
+        return Vec3(n.x, 0, n.y);
+    };
+    auto awayFrom = [](const Vec3& centre, const Vec3& a, const Vec3& b, const Vec3& d) {   // a convex solid's face
+        Vec3 n = normalize(cross(b - a, d - a));
+        return dot(n, a - centre) < 0 ? n * -1.0 : n;
     };
     // A vertical box post or beam (metal), centred on a segment's foot.
     auto post = [&](const Vec2& at, Real y0, Real hgt, Real w) {
@@ -3279,8 +3288,8 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
             const Vec2 a = pl[e], b = pl[(e + 1) % pl.size()];
             const Real W = (b - a).length();
             if (W < 0.3) continue;
-            quad(glassM, Y(a, y0), Y(b, y0), Y(b, y0 + H), Y(a, y0 + H), glass);
-            quad(metalM, Y(b, y0), Y(a, y0), Y(a, y0 + H), Y(b, y0 + H), Vec3(0.10, 0.10, 0.11));
+            quad(glassM, Y(a, y0), Y(b, y0), Y(b, y0 + H), Y(a, y0 + H), outOf(a, b), glass);
+            quad(metalM, Y(b, y0), Y(a, y0), Y(a, y0 + H), Y(b, y0 + H), outOf(a, b) * -1.0, Vec3(0.10, 0.10, 0.11));
             const int bays = std::max(1, static_cast<int>(std::lround(W / 3.0)));
             if (full)
                 for (int k = 0; k <= bays; ++k) {
@@ -3288,7 +3297,7 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
                     const Vec2 n = normalize(Vec2(b.y - a.y, a.x - b.x));   // outward (CCW)
                     const Vec2 o = at + n * 0.08;
                     quad(metalM, Y(o - normalize(b - a) * 0.06, y0), Y(o + normalize(b - a) * 0.06, y0),
-                         Y(o + normalize(b - a) * 0.06, y0 + H), Y(o - normalize(b - a) * 0.06, y0 + H), metal);
+                         Y(o + normalize(b - a) * 0.06, y0 + H), Y(o - normalize(b - a) * 0.06, y0 + H), outOf(a, b), metal);
                 }
         }
         emitPlanParapet(out, pl, y0 + H - 0.05, 0.05, metal, PartId::Detail, metal);
@@ -3311,17 +3320,19 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
             const Vec3 A = Y(o - L - S, roofY), B = Y(o + L - S, roofY), C = Y(o + L + S, roofY), D = Y(o - L + S, roofY);
             const Vec3 Cu = C + up * H, Du = D + up * H;
             record(RoofItem::Kind::Sloped, Poly2{o - L - S, o + L - S, o + L + S, o - L + S}, roofY, H);
-            quad(glassM, A, B, Cu, Du, glass);                 // the slope
-            quad(glassM, C, D, Du, Cu, glass);                 // the tall back face
-            MeshBuilder::emitTri(glassM, B, C, Cu, normalize(cross(C - B, Cu - B)), glass);
-            MeshBuilder::emitTri(glassM, D, A, Du, normalize(cross(A - D, Du - D)), glass);
+            const Vec3 mid = (A + B + C + D) * 0.25 + up * (H / 3);   // inside the wedge
+            const Vec3 slopeOut = awayFrom(mid, A, B, Du);
+            quad(glassM, A, B, Cu, Du, slopeOut, glass);                     // the slope
+            quad(glassM, C, D, Du, Cu, awayFrom(mid, C, D, Cu), glass);      // the tall back face
+            MeshBuilder::emitTri(glassM, B, C, Cu, awayFrom(mid, B, C, Cu), glass);
+            MeshBuilder::emitTri(glassM, D, A, Du, awayFrom(mid, D, A, Du), glass);
             if (full) {   // mullion lines down the slope
                 const int n = std::max(2, static_cast<int>((obb.half[la] * 2) / 3.0));
                 for (int k = 1; k < n; ++k) {
                     const Real t = static_cast<Real>(k) / n;
                     const Vec3 lo = A + (B - A) * t, hi = Du + (Cu - Du) * t;
-                    const Vec3 side = normalize(B - A) * 0.07, lift = normalize(cross(B - A, Du - A)) * 0.05;
-                    quad(metalM, lo - side + lift, lo + side + lift, hi + side + lift, hi - side + lift, metal);
+                    const Vec3 side = normalize(B - A) * 0.07, lift = slopeOut * 0.05;
+                    quad(metalM, lo - side + lift, lo + side + lift, hi + side + lift, hi - side + lift, slopeOut, metal);
                 }
             }
             rise = H;
@@ -3340,11 +3351,14 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
             const Vec3 faceCol = glow ? Vec3(0.95, 0.90, 0.80) : p.curtainWall ? glass : kRoofMetal[(h >> 12) % 3];
             for (std::size_t e = 0; e < lo.size() && e < hi.size(); ++e) {
                 const std::size_t f = (e + 1) % lo.size();
-                quad(faces, Y(lo[e], roofY), Y(lo[f], roofY), Y(hi[f], roofY + H), Y(hi[e], roofY + H), faceCol);
+                const Vec3 mid = Y(c2, roofY + H * 0.3);   // inside the pyramid
+                const Vec3 faceOut = awayFrom(mid, Y(lo[e], roofY), Y(lo[f], roofY), Y(hi[e], roofY + H));
+                quad(faces, Y(lo[e], roofY), Y(lo[f], roofY), Y(hi[f], roofY + H), Y(hi[e], roofY + H), faceOut, faceCol);
                 if (full) {   // a metal rib up each arris
                     const Vec3 a = Y(lo[e], roofY), b = Y(hi[e], roofY + H);
                     const Vec3 side = normalize(Y(lo[f], roofY) - a) * 0.09;
-                    quad(metalM, a - side, a + side, b + side * 0.4, b - side * 0.4, metal);
+                    const Vec3 lift = faceOut * 0.03;   // off the face it lies on
+                    quad(metalM, a - side + lift, a + side + lift, b + side * 0.4 + lift, b - side * 0.4 + lift, faceOut, metal);
                 }
             }
             emitPlanSlab(out, hi, roofY + H + 0.3, 0.3, PartId::Roof, metal);
@@ -3359,7 +3373,7 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
             record(RoofItem::Kind::Lantern, lan, roofY, H);
             for (std::size_t e = 0; e < lan.size(); ++e) {
                 const Vec2 a = lan[e], b = lan[(e + 1) % lan.size()];
-                quad(litM, Y(a, roofY), Y(b, roofY), Y(b, roofY + H), Y(a, roofY + H), Vec3(0.95, 0.92, 0.85));
+                quad(litM, Y(a, roofY), Y(b, roofY), Y(b, roofY + H), Y(a, roofY + H), outOf(a, b), Vec3(0.95, 0.92, 0.85));
             }
             if (full)
                 for (const Vec2& v : lan) post(v, roofY, H, 0.35);
@@ -3383,9 +3397,12 @@ static Real emitTowerTop(BuildingMesh& out, const Poly2& topIn, Real roofY, Real
                 // The ring beam along the edge.
                 const Vec2 d = normalize(b - a), nn(-d.y, d.x);
                 const Vec2 a0 = a + nn * (w * 0.5), b0 = b + nn * (w * 0.5), a1 = a - nn * (w * 0.5), b1 = b - nn * (w * 0.5);
-                quad(metalM, Y(a1, roofY + H), Y(b1, roofY + H), Y(b0, roofY + H), Y(a0, roofY + H), metal * 1.1);
-                quad(metalM, Y(a1, roofY + H - w), Y(b1, roofY + H - w), Y(b1, roofY + H), Y(a1, roofY + H), metal * 1.1);
-                quad(metalM, Y(b0, roofY + H - w), Y(a0, roofY + H - w), Y(a0, roofY + H), Y(b0, roofY + H), metal * 1.1);
+                // (nn is the plan's inside: a0/b0 the beam's inner edge, a1/b1 its outer)
+                const Vec3 inV(nn.x, 0, nn.y);
+                quad(metalM, Y(a1, roofY + H), Y(b1, roofY + H), Y(b0, roofY + H), Y(a0, roofY + H), up, metal * 1.1);
+                quad(metalM, Y(a1, roofY + H - w), Y(b1, roofY + H - w), Y(b1, roofY + H), Y(a1, roofY + H), inV * -1.0, metal * 1.1);
+                quad(metalM, Y(b0, roofY + H - w), Y(a0, roofY + H - w), Y(a0, roofY + H), Y(b0, roofY + H), inV, metal * 1.1);
+                quad(metalM, Y(a0, roofY + H - w), Y(b0, roofY + H - w), Y(b1, roofY + H - w), Y(a1, roofY + H - w), up * -1.0, metal * 1.1);
             }
             rise = H;
             break;
