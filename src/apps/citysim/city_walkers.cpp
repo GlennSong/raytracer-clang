@@ -594,24 +594,74 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
             ctx.settings.setString("who.result", q + ": " + r);
         }
     }
+    // The population scan: this step's slice of it (the whole pass spans the 2 s window).
+    {
+        const CitySim& sm = city_.sim();
+        const std::size_t n = sm.agents().size();
+        const ActivityCatalog& cat = sm.activityCatalog();
+        const engine::NavGraph& ng = sm.nav();
+        PopScan& S = scan_;
+        if (S.at.size() != cat.defs.size()) {
+            S.at.assign(cat.defs.size(), 0); S.going.assign(cat.defs.size(), 0);
+            S.nearD.assign(cat.defs.size(), 1e30); S.nearAt.assign(cat.defs.size(), Vec2(0, 0));
+        }
+        const std::size_t perStep = std::max<std::size_t>(1, n / std::max(1, static_cast<int>(1.9 / ctx.clock.fixedStep())) + 1);
+        const std::size_t end = std::min(n, S.next + perStep);
+        for (std::size_t i = S.next; i < end; ++i) {
+            const Agent& a = sm.agents()[i];
+            if (const CitySim::ActivitySpot* sp = sm.usingSpot(static_cast<int>(i))) {
+                S.joggers += sp->kind == SpotKind::Jog ? 1 : 0;
+                if (sp->kind == SpotKind::Sit || sp->kind == SpotKind::Lie) {   // seatedOn()
+                    ++S.seated;
+                    const Real d = (sp->pos - sm.tierCenter()).length();
+                    if (d < S.seatD) { S.seatD = d; S.seatAt = sp->pos; }
+                }
+            }
+            if (a.moving) {
+                if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(cat.defs.size()))
+                    ++S.going[static_cast<std::size_t>(a.tripActivity)];
+            } else if (a.atActivity >= 0 && a.atActivity < static_cast<int>(cat.defs.size())) {
+                const std::size_t d = static_cast<std::size_t>(a.atActivity);
+                ++S.at[d];
+                const Real dd = (a.pos - sm.tierCenter()).lengthSquared();
+                if (dd < S.nearD[d]) { S.nearD[d] = dd; S.nearAt[d] = a.pos; }
+            }
+            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+            if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
+            ++S.onWalks;
+            S.studentsOnWalks += a.role == Agent::Role::Student ? 1 : 0;
+            if (S.onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
+                const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
+                const int ai = static_cast<int>(i);
+                std::fprintf(stderr, "[walk debug] agent %d at %.1f %.1f link %d leg %d/%zu dist %.2f of %.2f speed %.2f far %d tier %d\n",
+                             ai, a.pos.x, a.pos.y, li, a.leg, a.route.links.size(), a.distOnLeg,
+                             L0.length, a.speed, a.far() ? 1 : 0, static_cast<int>(a.tier));
+                std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f bodyLag %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.bodyLag, a.tethered ? 1 : 0);
+                std::fprintf(stderr, "[walk debug]   state %d hold %.1f riding %d awaiting %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
+                             static_cast<int>(a.state), a.holdTimer, sm.riding(ai) ? 1 : 0,
+                             sm.awaitingRide(ai) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
+                             li, L0.footA.x, L0.footA.y, L0.footB.x, L0.footB.y, L0.from, L0.to, ng.streetNodeCount());
+                for (std::size_t q = 1; q < std::min<std::size_t>(5, a.route.links.size()); ++q) {
+                    const engine::NavLink& Lq = ng.links[static_cast<std::size_t>(a.route.links[q])];
+                    std::fprintf(stderr, " [%s %.1f %.1f]", Lq.footpath ? "walk" : "street", Lq.footB.x, Lq.footB.y);
+                }
+                std::fprintf(stderr, "\n");
+            }
+        }
+        S.next = end;
+        if (S.next >= n) {   // the pass is done: it becomes what the telemetry reads, and the next one starts
+            lastScan_ = std::move(S);
+            S = PopScan{};
+        }
+    }
     // Publish the jitter telemetry every 2 s of sim, then start a fresh window.
     tel_.window += ctx.clock.fixedStep();
     if (tel_.window >= 2.0) {
-        // ...and who is sitting (M5): how many, and the one nearest the player's bubble centre
         const CitySim& sm = city_.sim();
-        int seated = 0;
-        Vec2 seatAt(0, 0);
-        Real bestD = 1e30;
-        for (int i = 0; i < static_cast<int>(sm.agents().size()); ++i)
-            if (const CitySim::SeatSpot* st = sm.seatedOn(i)) {
-                ++seated;
-                const Real d = (st->pos - sm.tierCenter()).length();
-                if (d < bestD) { bestD = d; seatAt = st->pos; }
-            }
-        // ...and how many are walking a park's or the quad's paths (footpaths), and students among them
-        int onWalks = 0, studentsOnWalks = 0, joggers = 0;
-        for (int i = 0; i < static_cast<int>(sm.agents().size()); ++i)
-            if (const CitySim::ActivitySpot* sp = sm.usingSpot(i)) joggers += sp->kind == SpotKind::Jog ? 1 : 0;
+        const PopScan& P = lastScan_;   // seated / footpaths / jogging: the latest whole pass
+        const int seated = P.seated, onWalks = P.onWalks, studentsOnWalks = P.studentsOnWalks, joggers = P.joggers;
+        const Vec2 seatAt = P.seatAt;
         int playing = 0, games = 0, gathering = 0, signedUp = 0;   // a group's players on its area, and the games on
         for (const CitySim::Session& se : sm.sessions()) {
             if (se.state == CitySim::Session::State::Gathering) { ++gathering; signedUp += static_cast<int>(se.members.size()); }
@@ -621,32 +671,6 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
         }
         int jogBooked = 0;   // runners on their way: jog spots held
         for (const CitySim::ActivitySpot& sp : sm.spots()) jogBooked += sp.kind == SpotKind::Jog && sp.occupant >= 0 ? 1 : 0;
-        const engine::NavGraph& ng = sm.nav();
-        for (const Agent& a : sm.agents()) {
-            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
-            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-            if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
-            ++onWalks;
-            studentsOnWalks += a.role == Agent::Role::Student ? 1 : 0;
-            if (onWalks == 1 && std::getenv("RT_WALK_DEBUG"))
-                std::fprintf(stderr, "[walk debug] agent %d at %.1f %.1f link %d leg %d/%zu dist %.2f of %.2f speed %.2f far %d tier %d\n",
-                             static_cast<int>(&a - sm.agents().data()), a.pos.x, a.pos.y, li, a.leg, a.route.links.size(), a.distOnLeg,
-                             ng.links[static_cast<std::size_t>(li)].length, a.speed, a.far() ? 1 : 0, static_cast<int>(a.tier));
-            if (onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
-                const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
-                const int ai = static_cast<int>(&a - sm.agents().data());
-                std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f bodyLag %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.bodyLag, a.tethered ? 1 : 0);
-                std::fprintf(stderr, "[walk debug]   state %d hold %.1f riding %d awaiting %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
-                             static_cast<int>(a.state), a.holdTimer, sm.riding(static_cast<int>(&a - sm.agents().data())) ? 1 : 0,
-                             sm.awaitingRide(static_cast<int>(&a - sm.agents().data())) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
-                             li, L0.footA.x, L0.footA.y, L0.footB.x, L0.footB.y, L0.from, L0.to, ng.streetNodeCount());
-                for (std::size_t q = 1; q < std::min<std::size_t>(5, a.route.links.size()); ++q) {
-                    const engine::NavLink& Lq = ng.links[static_cast<std::size_t>(a.route.links[q])];
-                    std::fprintf(stderr, " [%s %.1f %.1f]", Lq.footpath ? "walk" : "street", Lq.footB.x, Lq.footB.y);
-                }
-                std::fprintf(stderr, "\n");
-            }
-        }
         char b[480];
         std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d) | jogging %d (booked %d) | games %d (playing %d) gathering %d (%d coming)",
                       walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
@@ -664,32 +688,21 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
         // way; its groups going and the nearest one to the bubble's centre (where to go and look)
         {
             const ActivityCatalog& cat = sm.activityCatalog();
-            std::vector<int> at(cat.defs.size(), 0), going(cat.defs.size(), 0), groups(cat.defs.size(), 0);
-            std::vector<Real> nearD(cat.defs.size(), 1e30);
-            std::vector<Vec2> nearAt(cat.defs.size());
-            for (const Agent& a : sm.agents()) {
-                if (a.moving) {
-                    if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(cat.defs.size()))
-                        ++going[static_cast<std::size_t>(a.tripActivity)];
-                    continue;
-                }
-                if (a.atActivity < 0 || a.atActivity >= static_cast<int>(cat.defs.size())) continue;
-                const std::size_t d = static_cast<std::size_t>(a.atActivity);
-                ++at[d];
-                const Real dd = (a.pos - sm.tierCenter()).lengthSquared();
-                if (dd < nearD[d]) { nearD[d] = dd; nearAt[d] = a.pos; }
-            }
+            std::vector<int> groups(cat.defs.size(), 0);
+            const bool scanned = P.at.size() == cat.defs.size();   // false until the first pass finishes
+            auto atOf = [&](std::size_t d) { return scanned ? P.at[d] : 0; };
+            auto goingOf = [&](std::size_t d) { return scanned ? P.going[d] : 0; };
             for (const CitySim::Session& se : sm.sessions())
                 if (se.state != CitySim::Session::State::Dead && se.def >= 0 && se.def < static_cast<int>(cat.defs.size()))
                     ++groups[static_cast<std::size_t>(se.def)];
             std::string out;
             char line[200];
             for (std::size_t d = 0; d < cat.defs.size(); ++d) {
-                if (!at[d] && !going[d] && !groups[d]) continue;
-                std::snprintf(line, sizeof line, "%s%s %d (+%d coming)", out.empty() ? "" : " | ", cat.defs[d].name.c_str(), at[d], going[d]);
+                if (!atOf(d) && !goingOf(d) && !groups[d]) continue;
+                std::snprintf(line, sizeof line, "%s%s %d (+%d coming)", out.empty() ? "" : " | ", cat.defs[d].name.c_str(), atOf(d), goingOf(d));
                 out += line;
                 if (groups[d]) { std::snprintf(line, sizeof line, " %d groups", groups[d]); out += line; }
-                if (at[d]) { std::snprintf(line, sizeof line, " nearest %.0f %.0f", nearAt[d].x, nearAt[d].y); out += line; }
+                if (atOf(d)) { std::snprintf(line, sizeof line, " nearest %.0f %.0f", P.nearAt[d].x, P.nearAt[d].y); out += line; }
             }
             ctx.settings.setString("activities.telemetry", out.empty() ? "nobody out" : out);
         }

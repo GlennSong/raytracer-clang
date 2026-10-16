@@ -59,6 +59,18 @@ private:
         long reversals = 0, steps = 0;
         engine::Real window = 0;
     } tel_;
+    // THE POPULATION SCAN behind `walkers?` / `activities?`: one pass over every agent, a slice of it each step
+    // so the whole pass spans the 2 s window (it was four whole-population loops on one step: a 10 ms hitch on
+    // the island every 2 s). `last` is the latest finished pass, what the telemetry publishes.
+    struct PopScan {
+        std::size_t next = 0;
+        int seated = 0, joggers = 0, onWalks = 0, studentsOnWalks = 0;
+        engine::Vec2 seatAt{0, 0};
+        engine::Real seatD = 1e30;
+        std::vector<int> at, going;
+        std::vector<engine::Real> nearD;
+        std::vector<engine::Vec2> nearAt;
+    } scan_, lastScan_;
 
     struct Walker {
         engine::Entity entity;             // the character-capsule entity

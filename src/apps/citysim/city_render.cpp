@@ -3315,7 +3315,10 @@ void CityRenderSystem::step(World& world, Real dt) {
     auto t2 = std::chrono::steady_clock::now();
     simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
-    if (std::chrono::duration<double, std::milli>(t2 - t0).count() > 16.0)
+    // RT_SPIKE_MS=<ms>: the threshold (default 16); 0 logs every tick, what a spike is compared against
+    static const double spikeMs = std::getenv("RT_SPIKE_MS") ? std::atof(std::getenv("RT_SPIKE_MS")) : 16.0;
+    if (std::chrono::duration<double, std::milli>(t2 - t0).count() > spikeMs &&
+        (sim_.phaseTimes().steps != ph0.steps || std::chrono::duration<double, std::milli>(t2 - t1).count() > 16.0))
         LOG_INFO << "[stats] SPIKE citysim step " << std::chrono::duration<double, std::milli>(t1 - t0).count()
                  << " ms, group sync " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms"
                  << " | phases ms: rehash " << (sim_.phaseTimes().rehash - ph0.rehash) / 1000.0
