@@ -873,11 +873,14 @@ archetype_book = {
     {"glass_tower", 14}, {"podium_tower", 8}, {"tower_on_base", 7},
     {"tapered_glass_tower", 6}, {"glass_slab", 5}, {"pencil_tower", 4},
     {"sky_exposure_tower", 8}, {"art_deco_tower", 6}, {"stepped_tower", 5},
-    {"drum_tower", 4}, {"office_slab", 12}, {"commercial_block", 10},
+    {"drum_tower", 4}, {"office_slab", 8},
+    {"twisted_tower", 2}, {"lens_tower", 2}, {"leaning_tower", 1.5}, {"twisted_taper", 1.5},
+    {"wavy_tower", 1.5}, {"stacked_modules", 1.5}, {"rounded_tower", 1.5},
+    {"commercial_block", 2.5},
     {"parking_garage", 4.5}, {"plaza", 3.5}, {"civic_hall", 3},
   },
   commercial = {
-    {"pocket_park", 4}, {"plaza", 3}, {"brick_shop", 18}, {"mixed_use", 13},
+    {"pocket_park", 4}, {"plaza", 3}, {"brick_shop", 16}, {"courtyard_block", 2}, {"mixed_use", 13},
     {"office_midrise", 8}, {"podium_tower", 3}, {"condo_tower", 6},
     {"terrace_condo", 6}, {"loft_block", 6}, {"hotel", 6}, {"bank", 5},
     {"cinema", 4}, {"strip_mall", 4}, {"supermarket", 4}, {"office_park", 3},
@@ -891,7 +894,7 @@ archetype_book = {
   residential = {
     {"pocket_park", 7}, {"yard_house", 18}, {"modern_house", 6},
     {"bungalow", 7}, {"craftsman_house", 7}, {"cottage", 6}, {"villa", 6},
-    {"ranch_house", 7}, {"duplex", 8}, {"rowhouses", 12}, {"garden_condo", 5},
+    {"ranch_house", 7}, {"duplex", 8}, {"rowhouses", 9}, {"courtyard_block", 3}, {"garden_condo", 5},
     {"apartments", 7}, {"corner_shop", 4},
   },
 }

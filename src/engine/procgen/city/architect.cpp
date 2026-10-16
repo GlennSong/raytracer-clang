@@ -767,7 +767,8 @@ void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 3.0;
     out.placeType = "office";
-    towerTop(p, {{5, 60}, {1, 40}});   // a lantern crowns it, or the plain penthouse
+    p.top = 10;      // the glass dome: the lens closes in a cap, the deck a lantern room under it
+    p.diagrid = 2;   // the Gherkin's diagrid, a crossing every two bays
     out.name = "lens_tower";
 }
 
@@ -853,6 +854,7 @@ void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     cx.slender = 4.5 + cx.coreness * 4.0;
     out.placeType = "office";
     towerTop(p, {{1, 50}, {5, 30}, {8, 20}});
+    if (rng.unit() < 0.5) p.diagrid = 2;   // half of them a diagrid
     out.name = "twisted_taper";
 }
 

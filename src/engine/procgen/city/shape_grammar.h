@@ -624,6 +624,9 @@ struct BuildingParams {
     uint8_t glassTint = 0;
     uint8_t mullionTone = 0;
     uint8_t fins = 0;
+    // A DIAGRID (issue #105; 30 St Mary Axe, Hearst Tower): diagonal members crossing every `diagrid` bays in place of
+    // the vertical mullions, the transoms kept. 0 = none. Lua: diagrid = 2.
+    uint8_t diagrid = 0;
     Real  curtainBay = 1.6;
     Real  spandrelFrac = 0.30;
     // THE CORE (skyscrapers v2 M5, core_plan.h): 0 = auto (four floors and
@@ -641,8 +644,10 @@ struct BuildingParams {
     uint8_t uplights = 0;
     // THE TOP (buildings M2): what stands on a flat roof against the sky -- 0/1 the mechanical penthouse, 2 screen,
     // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop), 9 NONE -- the deck bare,
-    // no plant, for the cells of a complex that share one crown (cells.h). spire/dome win over it.
-    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse" | "none".
+    // no plant, for the cells of a complex that share one crown (cells.h), 10 a GLASS DOME over the whole deck
+    // (emitGlassDome: the top outline lofted to a point on a quarter-circle profile, the deck a lantern room under
+    // it -- the Gherkin's cap). spire/dome win over it.
+    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse" | "none" | "dome".
     uint8_t top = 0;
     // THE HELIPAD (issue #105, the roof cell's contents): a raised pad with a ramp on a tall tower's open roof --
     // 0 auto (18 floors and up, half of them by the seed, where the roof has the room), 1 never, 2 always.
@@ -788,7 +793,7 @@ enum class FacadeDetail : uint8_t { Full, Flat };
 // glassTint, mullionTone, fins, curtainBay, spandrelFrac). The defaults are the curtain wall as it always was:
 // grey glass from the wall colour, steel mullions every 1.6 m, a 30% spandrel band (at most 0.9 m), no fins.
 struct CurtainStyle {
-    uint8_t glassTint = 0, mullionTone = 0, fins = 0;
+    uint8_t glassTint = 0, mullionTone = 0, fins = 0, diagrid = 0;
     Real bay = 1.6, spandrelFrac = 0.30;
     Real spandrelH(Real storey) const {   // the opaque band: 0 = floor-to-ceiling glass (a slim slab edge stays)
         return spandrelFrac <= 0.02 ? std::min(Real(0.14), storey * 0.05) : std::min(Real(1.4), storey * spandrelFrac);

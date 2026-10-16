@@ -390,3 +390,37 @@ TEST_CASE(tessellate_for_bays_gives_one_even_bay_per_chord) {
     }
     CHECK(chords >= 20);
 }
+
+TEST_CASE(a_glass_dome_caps_the_lens_and_a_diagrid_crosses_its_glass) {
+    // top = 10 (emitGlassDome): the top outline lofted to a point in glass, the building that much taller, with the
+    // deck under it still the roof the stairs reach; diagrid = 2: the facade's verticals replaced by diagonals.
+    const Poly2 plan = Section::ngon(16, 14.0).tessellate();
+    BuildingParams p;
+    p.floors = 12;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 31;
+    p.top = 1;
+    const BuildingMesh plain = growPlanBuilding(plan, p, 0.0);
+    p.top = 10;
+    const BuildingMesh domed = growPlanBuilding(plan, p, 0.0);
+    CHECK(domed.height > plain.height + 3.0);                   // the rise
+    CHECK(domed.height < plain.height + 14.0 * 0.8 + 1.0);      // and no more than the profile gives
+    auto partVerts = [](const BuildingMesh& bm, PartId id) {
+        std::size_t n = 0;
+        for (const RenderMesh& part : bm.parts) if (part.materialIndex == static_cast<int>(id)) n += part.vertices.size();
+        return n;
+    };
+    CHECK(partVerts(domed, PartId::Glass) > partVerts(plain, PartId::Glass));   // the dome is glass
+    // the deck under the dome is still walked: the graph's roof cell stands
+    const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+    CHECK(g.roof >= 0);
+    CHECK(unreachableCells(g).empty());
+    p.diagrid = 2;
+    const BuildingMesh grid = growPlanBuilding(plan, p, 0.0);
+    CHECK(partVerts(grid, PartId::Detail) != partVerts(domed, PartId::Detail));   // a different lattice
+    std::printf("    [dome] plain %.1f m, domed %.1f m; glass %zu -> %zu vertices; detail %zu -> %zu with the diagrid\n", plain.height, domed.height,
+                partVerts(plain, PartId::Glass), partVerts(domed, PartId::Glass), partVerts(domed, PartId::Detail), partVerts(grid, PartId::Detail));
+}
+

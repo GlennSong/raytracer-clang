@@ -1022,10 +1022,10 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
 static void readTopField(lua_State* L, int idx, BuildingParams& p) {
     lua_getfield(L, idx, "top");
     if (lua_isstring(L, -1)) {
-        static const char* names[10] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
-                                        "antennas", "mast", "none"};
+        static const char* names[11] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
+                                        "antennas", "mast", "none", "dome"};
         const std::string t = lua_tostring(L, -1);
-        for (int i = 0; i < 10; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
+        for (int i = 0; i < 11; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
     }
     lua_pop(L, 1);
     lua_getfield(L, idx, "helipad");   // true: a pad on the roof; false: never; unset: the tall-tower rule
@@ -1171,6 +1171,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.wave        = static_cast<Real>(optField(L, idx, "wave", p.wave));
     p.waveLen     = static_cast<Real>(optField(L, idx, "wave_len", p.waveLen));
     p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
+    p.diagrid     = static_cast<uint8_t>(optField(L, idx, "diagrid", p.diagrid));
     p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));
     p.spandrelFrac = static_cast<Real>(optField(L, idx, "spandrel", p.spandrelFrac));
     lua_getfield(L, idx, "glass");

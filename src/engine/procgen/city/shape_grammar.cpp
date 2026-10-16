@@ -830,9 +830,32 @@ void emitCurtainWallRect(BuildingMesh& out, const FaceRect& fr,
                      fr.at(a1, b0) + gin, fr.at(a0, b0) + gin, fr.v * -1, mullCol);
         }
     };
-    for (int b = 0; b <= bays; ++b) {            // vertical mullions (the pane grid)
-        Real x = std::min(std::max(b * W / bays, mw * 0.5), W - mw * 0.5);
-        bar(x - mw * 0.5, 0, x + mw * 0.5, fh, true);
+    if (cs.diagrid > 0) {
+        // THE DIAGRID: diagonal members crossing every `diagrid` bays, the face's full height, in place of the
+        // verticals -- each a bar along its own line standing proud of the glass, with its two returns
+        const int cells = std::max(1, static_cast<int>(std::lround(static_cast<Real>(bays) / cs.diagrid)));
+        const Real dw = mw * 1.8;
+        auto diag = [&](Real x0, Real y0, Real x1, Real y1) {
+            const Vec3 a = fr.at(x0, y0), b = fr.at(x1, y1);
+            const Vec3 along = b - a;
+            if (along.lengthSquared() < 1e-8) return;
+            const Vec3 across = normalize(cross(fr.n, along)) * (dw * 0.5);
+            MeshBuilder::emitQuad(mull, a - across + outv, b - across + outv, b + across + outv, a + across + outv, fr.n, mullCol);
+            MeshBuilder::emitQuad(mull, a - across + gin, a - across + outv, b - across + outv, b - across + gin, normalize(across) * -1.0, mullCol);
+            MeshBuilder::emitQuad(mull, a + across + outv, a + across + gin, b + across + gin, b + across + outv, normalize(across), mullCol);
+        };
+        for (int k = 0; k < cells; ++k) {
+            const Real x0 = W * k / cells, x1 = W * (k + 1) / cells;
+            diag(x0, 0, x1, fh);
+            diag(x1, 0, x0, fh);
+        }
+        bar(0, 0, mw, fh, true);                 // the face's own edges keep a post
+        bar(W - mw, 0, W, fh, true);
+    } else {
+        for (int b = 0; b <= bays; ++b) {            // vertical mullions (the pane grid)
+            Real x = std::min(std::max(b * W / bays, mw * 0.5), W - mw * 0.5);
+            bar(x - mw * 0.5, 0, x + mw * 0.5, fh, true);
+        }
     }
     for (Real ty : {spandrelH, fh - 0.04}) {     // transoms (spandrel line + head)
         Real t0 = std::max(Real(0), ty - mw * 0.5), t1 = std::min(fh, ty + mw * 0.5);
@@ -2026,6 +2049,61 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
     if (!sc.parts.empty()) out.proxy = sc.parts.front();
     out.attaches.push_back({cXZ + Vec3(0, y, 0), Vec3(0, 1, 0), "roof"});
     return out;
+}
+
+// THE GLASS DOME (issue #105, top 10; the Gherkin's cap): the top outline lofted to a point on a quarter-circle
+// profile -- every ring the outline scaled about its centroid by cos, raised by sin -- in the curtain's glass with a
+// rib up every corner, standing on a trim band at the deck's edge. The deck under it is a lantern room: the
+// bulkhead's doors open into it. Returns the rise.
+static Real emitGlassDome(BuildingMesh& out, const Poly2& topIn, Real y, const BuildingParams& p) {
+    Poly2 top = topIn;
+    if (top.size() < 3) return 0;
+    ensureCCW(top);
+    const Vec2 c = centroid(top);
+    const OBB2 ob = orientedBoundingBox(top);
+    const Real rise = std::max(Real(3.0), std::min(ob.half[0], ob.half[1]) * 0.8);
+    const int rings = 7;
+    const Vec3 glassCol = p.curtainWall ? curtainGlassColour(p.glassTint, glassGrey()) : glassGrey();
+    const Vec3 ribCol = curtainMullionColour(p.mullionTone);
+    RenderMesh glass, ribs, band;
+    auto ringAt = [&](int k, Poly2& r, Real& h) {
+        const Real t = static_cast<Real>(k) / rings;
+        const Real sc = std::cos(t * 1.5707963267948966), sn = std::sin(t * 1.5707963267948966);
+        r.clear();
+        for (const Vec2& q : top) r.push_back(c + (q - c) * sc);
+        h = y + rise * sn;
+    };
+    const std::size_t n = top.size();
+    for (int k = 0; k < rings; ++k) {
+        Poly2 lo, hi;
+        Real yl = 0, yh = 0;
+        ringAt(k, lo, yl);
+        ringAt(k + 1, hi, yh);
+        for (std::size_t i = 0; i < n; ++i) {
+            const Vec3 A(lo[i].x, yl, lo[i].y), B(lo[(i + 1) % n].x, yl, lo[(i + 1) % n].y);
+            const Vec3 C(hi[(i + 1) % n].x, yh, hi[(i + 1) % n].y), D(hi[i].x, yh, hi[i].y);
+            Vec3 nrm = cross(B - A, D - A);
+            if (nrm.lengthSquared() < 1e-12) nrm = cross(B - A, C - A);
+            if (nrm.lengthSquared() < 1e-12) continue;
+            nrm = normalize(nrm);
+            const Vec2 outward = normalize(((lo[i] + lo[(i + 1) % n]) * 0.5) - c);
+            if (nrm.x * outward.x + nrm.z * outward.y + nrm.y * 0.2 < 0) nrm = nrm * -1.0;
+            if (k + 1 == rings) MeshBuilder::emitTri(glass, A, B, D, nrm, glassCol);
+            else MeshBuilder::emitQuad(glass, A, B, C, D, nrm, glassCol);
+            // the rib up this corner's meridian
+            const Vec3 d = D - A;
+            if (d.lengthSquared() > 1e-8) {
+                const Vec3 side = normalize(cross(nrm, d)) * 0.07;
+                const Vec3 proud = nrm * 0.08;
+                MeshBuilder::emitQuad(ribs, A - side + proud, A + side + proud, D + side + proud, D - side + proud, nrm, ribCol);
+            }
+        }
+    }
+    MeshBuilder::emitPlanPrism(band, top, {}, y - 0.05, y + 0.35, p.trimColor * 0.85);
+    appendToPart(out, PartId::Glass, glass);
+    appendToPart(out, PartId::Detail, ribs);     // (the ribs read as metal detail, as mullions do)
+    appendToPart(out, PartId::Trim, band);
+    return rise + 0.35;
 }
 
 // Rooftop crown (ADR-0040 Pass B): a mechanical penthouse/bulkhead set back on
@@ -6959,11 +7037,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             // deck open behind its glass -- a bulkhead under a glass slope was no exit.
             BuildingParams topParams = params;
             if (roofExit && (params.top == 3 || params.top == 4 || params.top == 5 || params.top == 8)) topParams.top = 2;
-            const Real topRise = emitTowerTop(out, cur, y + 0.05, y - baseY, topParams, wallColor, full, rectish);
+            const Real topRise = params.top == 10 ? emitGlassDome(out, cur, y + 0.05, params)
+                                                  : emitTowerTop(out, cur, y + 0.05, y - baseY, topParams, wallColor, full, rectish);
             roofRise = std::max(roofRise, topRise);
             // Flat (LOD1) keeps spire/dome/steeple — they are the skyline —
             // but skips the penthouse + roof-furniture pack.
-            if (full && params.top != 9 && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
+            if (full && params.top != 9 && params.top != 10 && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
                 // the bulkhead's footprint, a little wider, keeps the plant off the roof access
                 const Poly2 bulk = roofExit ? offsetPlan(ecore.rect(), -0.75) : Poly2{};
                 emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
@@ -6995,7 +7074,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
 
 CurtainStyle curtainStyleOf(const BuildingParams& p) {
     CurtainStyle cs;
-    cs.glassTint = p.glassTint; cs.mullionTone = p.mullionTone; cs.fins = p.fins;
+    cs.glassTint = p.glassTint; cs.mullionTone = p.mullionTone; cs.fins = p.fins; cs.diagrid = p.diagrid;
     cs.bay = p.curtainBay > 0.5 ? p.curtainBay : 1.6;
     cs.spandrelFrac = p.spandrelFrac;
     return cs;
