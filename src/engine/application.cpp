@@ -949,6 +949,27 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok";
     }
     if (cmd.name == "findplace?") return "ok " + settingsStore.getString("findplace.result", "none");
+    // `recipes?`: the level's buildings counted by architect recipe, each with its tallest one's centre, base and
+    // height -- whether a recipe the tables roll actually stands in this city, and where to go and look at it
+    if (cmd.name == "recipes?") {
+        const CityBuildings* cb = nullptr;
+        worldState.each<CityBuildings>([&](Entity, CityBuildings& b) { if (!cb) cb = &b; });
+        if (!cb) return "ok none (no city buildings on this level)";
+        struct Tally { int n = 0; const BuildingRecord* tallest = nullptr; };
+        std::map<std::string, Tally> by;
+        for (const BuildingRecord& r : cb->records) {
+            Tally& t = by[r.recipe.empty() ? "?" : r.recipe]; ++t.n;
+            if (!t.tallest || r.height > t.tallest->height) t.tallest = &r;
+        }
+        std::string out = "ok " + std::to_string(cb->records.size()) + " buildings, " + std::to_string(by.size()) + " recipes";
+        char buf[160];
+        for (const auto& [name, t] : by) {
+            const engine::Vec2 c = t.tallest->plan.size() >= 3 ? centroid(t.tallest->plan) : engine::Vec2(0, 0);
+            std::snprintf(buf, sizeof buf, " | %s %d tallest (%.0f, %.0f) base %.1f h %.0f", name.c_str(), t.n, c.x, c.y, t.tallest->baseY, t.tallest->height);
+            out += buf;
+        }
+        return out;
+    }
     // `who? <agent>`: stage a question about any agent; `who?` alone: the answer (refreshed every step)
     if (cmd.name == "who?") {
         if (!cmd.args.empty()) {
@@ -1376,7 +1397,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|traffic?|opensigns?|findplace|findplace?|depots?|activities?|who?|pin)";
+           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|traffic?|opensigns?|findplace|findplace?|recipes?|depots?|activities?|who?|pin)";
 }
 
 }  // namespace engine
