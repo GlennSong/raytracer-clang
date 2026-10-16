@@ -898,6 +898,25 @@ void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "wavy_tower";
 }
 
+// The SCULPTED TOWER (issue #105 step 6, the mesh mass): the first form in assets/masses -- modelled, not
+// composed -- fitted to its lot and dressed in glass, every storey its slice.
+void recipeSculptedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Mesh;
+    p.massMesh = 1;
+    p.baseFloors = 1;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 60}, {2, 40}});
+    out.name = "sculpted_tower";
+}
+
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
 void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1643,6 +1662,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"twisted_taper", recipeTwistedTaper},
     {"ring_block", recipeRingBlock},
     {"wavy_tower", recipeWavyTower},
+    {"sculpted_tower", recipeSculptedTower},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},
@@ -1903,7 +1923,8 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.82) recipeTwistedTaper(out, rng, cx);
             else if (roll < 0.835) recipeWavyTower(out, rng, cx);
             else if (roll < 0.85) recipeStackedModules(out, rng, cx);
-            else if (roll < 0.865) recipeRoundedTower(out, rng, cx);
+            else if (roll < 0.86) recipeRoundedTower(out, rng, cx);
+            else if (roll < 0.865) recipeSculptedTower(out, rng, cx);
             else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
             else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
             else if (roll < 0.97) recipePlaza(out, rng, cx);

@@ -1147,6 +1147,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
                    : e == "bulge" ? E::Bulge
                    : e == "curves" ? E::Curves
                    : e == "wave" ? E::Wave
+                   : e == "mesh" ? E::Mesh
                                   : E::None;
     }
     lua_pop(L, 1);
@@ -1170,6 +1171,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.lean        = static_cast<Real>(optField(L, idx, "lean", p.lean));
     p.wave        = static_cast<Real>(optField(L, idx, "wave", p.wave));
     p.waveLen     = static_cast<Real>(optField(L, idx, "wave_len", p.waveLen));
+    p.massMesh    = static_cast<uint8_t>(optField(L, idx, "mass_mesh", p.massMesh));
     p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
     p.diagrid     = static_cast<uint8_t>(optField(L, idx, "diagrid", p.diagrid));
     p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));

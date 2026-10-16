@@ -1,6 +1,7 @@
 #include "shape_grammar.h"
 #include "mass_stack.h"
 #include "implicit.h"
+#include "mesh_mass.h"
 #include "face.h"
 #include "section.h"
 #include "trades.h"   // a shop unit's trade: one table for the facade, its interior and its place
@@ -3748,10 +3749,19 @@ static bool samePlan(const Poly2& a, const Poly2& b);
 // glass straight on it, and each plate's edge is the field's contour at its floor line, running past the glass --
 // Aqua Tower. wavePlates gives the plate per storey (empty below the base storeys).
 std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params) {
+    if (params.envelope == BuildingParams::Envelope::Mesh) {
+        // the artist's form: one tier per storey whose outline differs from the last (the core's fit asks each)
+        std::vector<MassTier> out;
+        const std::vector<StoreyPlan> storeys = storeyPlans(plan, params);
+        for (std::size_t k = 0; k < storeys.size(); ++k)
+            if (k == 0 || !samePlan(storeys[k].plan, out.back().plan)) out.push_back({storeys[k].plan, k == 0 ? 0 : static_cast<int>(k) - 1});
+        return out;
+    }
     return stackOf(plan, params).tiers();
 }
 
 std::vector<StoreyPlan> storeyPlans(const Poly2& plan, const BuildingParams& params) {
+    if (params.envelope == BuildingParams::Envelope::Mesh) return sliceStoreys(meshOf(plan, params), params);
     return sliceStoreys(stackOf(plan, params), params);
 }
 

@@ -599,7 +599,10 @@ struct BuildingParams {
     //   Wave               an IMPLICIT form (implicit.h): the plan extruded and waved `wave` metres across its
     //                      long axis over `waveLen` along the facade, the wave climbing a cycle per `waveLen` of
     //                      height -- an undulating skin (Aqua Tower), each storey the field's own outline.
-    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack, Bulge, Curves, Wave };
+    //   Mesh               THE ARTIST'S HATCH (mesh_mass.h): a glTF form from `assets/masses` (`massMesh`, 1 + its
+    //                      index in the sorted folder) fitted to the lot and the height, every storey its slice,
+    //                      resampled corner for corner so the glass rules between them.
+    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack, Bulge, Curves, Wave, Mesh };
     Envelope envelope = Envelope::None;
     int   baseFloors = 5;
     Real  setback1 = 6.0;
@@ -617,6 +620,7 @@ struct BuildingParams {
     Real  lean = 0.0;            // Curves: the top's offset along the plan's long axis, as a fraction of the height (signed)
     Real  wave = 0.0;            // Wave: the skin's amplitude (m)
     Real  waveLen = 20.0;        // Wave: its wavelength along the facade and up the building (m)
+    uint8_t massMesh = 0;        // Mesh: 1 + the index of the glTF in assets/masses (0 = none)
     // THE CURTAIN STYLE (skyscrapers NYC variety M2): glassTint 0 auto grey, 1 blue, 2 green, 3 bronze, 4 smoke,
     // 5 silver (reflective), 6 clear; mullionTone 0 steel, 1 bronze, 2 black, 3 silver, 4 white; fins: a vertical
     // fin every `fins` bays (0 none); curtainBay the mullion spacing (m); spandrelFrac the opaque band's share of

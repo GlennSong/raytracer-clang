@@ -10253,7 +10253,18 @@ storey outlines are not affine images of one section.
   now no longer than two rooms along the glass (a drum's quarter was one office with one desk -- Glenn: "really
   wide and only had a tiny desk"); a rounded corner's quarter stays one corner office. No straight-edged plan
   changed (the census over every old recipe is identical).
+- **The mesh mass is the artist's hatch.** A closed glTF (Blender's, or `tools/make_mass.py`'s: the first mass
+  is scripted, the script the record), fitted to the box inside the lot and the storeys' height, is sliced per
+  storey the way the field is -- every triangle's crossing segment linked into loops, the largest kept -- and
+  each slice is RESAMPLED to one corner count by arc length from a fixed bearing, so the storeys correspond
+  corner for corner and the glass rules between them. `massMesh` names the file by its place in the sorted
+  folder, a number the lot cache stores; a form nobody drew falls back to the plan. The core's two rules hold
+  it to the gate: no storey narrower than the core needs (the footprint is pushed toward the box -- a point on
+  the box stays, a point inside moves out by a share of the way -- until the narrowest slice is `kCoreTierMin`
+  + 3 m, the bulge's floor), and a lot with no box inside it that wide (the gate's L, centred on its inner
+  corner) stands as the plan, as the taper and the slab do. `massStack` reports one tier per differing storey,
+  so the core is asked of every slice, not the first.
 - **Owed.** The horizontal sweep (`SweepMass`: a vertical sweep is the stack's slide curves), `sdfRevolve`,
-  the twist / bend / taper warps as SDF words where the stack's curves do not reach, `MeshMass` (the artist's
-  hatch), the `Envelope` (a skin that is not the floors), rakes as stepped cells.
+  the twist / bend / taper warps as SDF words where the stack's curves do not reach, the `Envelope` (a skin that
+  is not the floors), rakes as stepped cells.
 
