@@ -1142,7 +1142,11 @@ void main() {
     // envSpecular = prefiltered * (F0 * scale + bias) — matches Metal's IBL.
     vec2 brdf = texture(brdfLut, vec2(NdotV, roughness)).rg;
     vec3 envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
-    vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb * ambientShadow;
+    // The ambient strength scales the sky's LIGHT (the diffuse fill), not its REFLECTION: a mirror shows the sky at
+    // the sky's own brightness, as Metal's lighting_surface and the water composite do. Scaling both made every glass
+    // tower reflect the sky at ~a quarter of it -- dark and matte (Glenn, 2026-10-16: "a little more matte rather
+    // than shiny").
+    vec3 ambient = (envDiffuse * g.ambient.rgb + envSpecular) * ambientShadow;
 
     // Debug views that need lit-pass data write display-ready values into the HDR
     // target; the composite shows them raw (counts.w carries the selector — see

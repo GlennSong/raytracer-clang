@@ -706,7 +706,7 @@ fn fs_main(in : VSOut) -> FsOut {
   let envDiffuse = kd * albedo * irradiance;
   let brdf = textureSampleLevel(brdfLut, envSamp, vec2<f32>(NdotV, roughness), 0.0).xy;
   let envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
-  let ambient = (envDiffuse + envSpecular) * g.ambient.rgb * aoSample;   // baked AO map
+  let ambient = (envDiffuse * g.ambient.rgb + envSpecular) * aoSample;   // baked AO map; the ambient strength scales the sky's light, not its reflection (as Metal)
 
   // Debug views (Renderer::debugView via counts.y) write display-ready values.
   let dbg = g.counts.y;
