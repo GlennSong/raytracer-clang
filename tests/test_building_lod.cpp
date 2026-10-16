@@ -7,6 +7,7 @@
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/architect.h"   // the every-recipe census
+#include "../src/engine/mesh_audit.h"                // facade cracks
 
 #include <algorithm>
 #include <cmath>
@@ -234,6 +235,55 @@ TEST_CASE(interior_layout_fits_the_plan_and_repeats) {
 // per recipe, seed and plan with a positional hash of the exterior parts and one of the interior's. The first act
 // of every refactor step is to run this into a file; the last is to diff. Only the lines a step means to change may
 // change.
+// NO FACADE CRACKS, EVERY RECIPE (Glenn, 2026-10-16: "some of the twisting buildings have cracks along the edges"):
+// engine::auditFacadeCracks over each recipe's exterior on two lots, two seeds -- a level ray from outside that meets
+// the BACK of a face first came in through a gap. Above the ground storey (its doors are open by design).
+// RT_CRACKS_ONLY=<recipe> narrows it; RT_CRACKS_SHOW=<n> prints n samples a building.
+TEST_CASE(building_facades_have_no_cracks_every_recipe) {
+    // an instrument for now (~8 min over every recipe): RT_CRACKS=1 runs it
+    if (!std::getenv("RT_CRACKS") && !std::getenv("RT_CRACKS_ONLY")) { std::printf("    [cracks] skipped (RT_CRACKS=1 runs it)\n"); return; }
+    const Poly2 rect24 = {{-12, -10}, {12, -10}, {12, 10}, {-12, 10}};
+    const Poly2 rect40 = {{-20, -20}, {20, -20}, {20, 20}, {-20, 20}};
+    const char* only = std::getenv("RT_CRACKS_ONLY");
+    const int show = std::getenv("RT_CRACKS_SHOW") ? std::atoi(std::getenv("RT_CRACKS_SHOW")) : 2;
+    size_t leaking = 0, total = 0;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        if (only && std::string(only) != name) continue;
+        for (uint32_t seed : {3u, 17u}) {
+            BuildingRecipe r;
+            if (!architectRecipeByName(name, seed, 0.6, 24, 600, r)) continue;
+            if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
+            const char* planNames[2] = {"rect24", "rect40"};
+            const Poly2* plans[2] = {&rect24, &rect40};
+            for (int pi = 0; pi < 2; ++pi) {
+                const BuildingMesh bm = growPlanBuilding(*plans[pi], r.params, 1.5);
+                std::vector<std::string> names; names.reserve(bm.parts.size());
+                for (const RenderMesh& part : bm.parts) names.push_back("part " + std::to_string(part.materialIndex));
+                std::vector<NamedMeshRef> refs;
+                double top = 1.5;
+                for (size_t k = 0; k < bm.parts.size(); ++k) {
+                    refs.push_back({names[k], &bm.parts[k]});
+                    for (const Vertex& v : bm.parts[k].vertices) top = std::max(top, static_cast<double>(v.position.y));
+                }
+                const FacadeCrackAudit a = auditFacadeCracks(refs, 0.0, 0.0, 60.0, 1.5 + 6.0, top - 0.3);
+                ++total;
+                if (a.cracks == 0) continue;
+                ++leaking;
+                std::map<std::string, size_t> byPart; for (const auto& c : a.all) ++byPart[c.mesh];
+                std::string parts; for (const auto& [n, c] : byPart) parts += " " + n + ":" + std::to_string(c);
+                std::printf("    [cracks] %-22s seed %2u %-6s %zu of %zu rays leak (%zu storeys) via%s\n", name, seed, planNames[pi], a.cracks, a.hits, a.byStorey.size(), parts.c_str());
+                for (int k = 0; k < show && k < static_cast<int>(a.all.size()); ++k) {
+                    const auto& c = a.all[static_cast<size_t>(k) * (a.all.size() / static_cast<size_t>(std::max(show, 1)))];
+                    std::printf("        in at %.2f %.2f %.2f bearing %.0f deg, sees the back of %s %.1f m on\n", c.from.x + c.dir.x * 50, c.from.y, c.from.z + c.dir.z * 50,
+                                std::atan2(-c.dir.z, -c.dir.x) * 57.29578, c.mesh.c_str(), c.t - 50.0);
+                }
+            }
+        }
+    }
+    std::printf("    [cracks] %zu of %zu buildings leak\n", leaking, total);
+}
+
 TEST_CASE(building_mesh_hash_census_every_recipe) {
     auto hashOf = [](const BuildingMesh& bm, std::size_t& nv, std::size_t& nt) {
         uint64_t h = 1469598103934665603ull;

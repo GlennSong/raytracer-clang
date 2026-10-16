@@ -449,6 +449,61 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
     return r;
 }
 
+// FACADE CRACKS (Glenn, 2026-10-16: "some of the twisting buildings have cracks along the edges ... write something
+// that checks buildings for facade cracks"). A building's outside is closed: a level ray from outside toward its axis
+// must meet a FRONT face first. One whose first face is a BACK came in through a gap -- a crack between two storeys'
+// faces, at a corner, or a hole -- and is looking at the inside of the far wall. Rays at every `dy` from y0 to y1, at
+// `azimuths` bearings round (cx, cz), from `radius` out. A ray that meets nothing is above or beside the building.
+struct FacadeCrackAudit {
+    size_t rays = 0, hits = 0, cracks = 0;
+    struct Crack { Vec3 from, dir, at; std::string mesh; double t; };
+    std::vector<Crack> all;
+    std::map<long, size_t> byStorey;   // floor(y / storeyH): which storeys leak
+};
+inline FacadeCrackAudit auditFacadeCracks(const std::vector<NamedMeshRef>& parts, double cx, double cz, double radius,
+                                          double y0, double y1, double dy = 0.25, int azimuths = 1440, double storeyH = 3.6) {
+    struct Tri { Vec3 a, b, c; const std::string* mesh; };
+    std::map<long, std::vector<Tri>> band;   // every triangle by the 1 m bands of height it spans (the rays are level)
+    for (const NamedMeshRef& nm : parts) {
+        const RenderMesh& m = *nm.mesh;
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const Tri tri{m.vertices[m.indices[t]].position, m.vertices[m.indices[t + 1]].position, m.vertices[m.indices[t + 2]].position, &nm.name};
+            if (cross(tri.c - tri.a, tri.b - tri.a).lengthSquared() < 1e-12) continue;
+            const long b0 = static_cast<long>(std::floor(std::min({tri.a.y, tri.b.y, tri.c.y}))), b1 = static_cast<long>(std::floor(std::max({tri.a.y, tri.b.y, tri.c.y})));
+            for (long b = b0; b <= b1; ++b) band[b].push_back(tri);
+        }
+    }
+    FacadeCrackAudit r;
+    for (double y = y0; y <= y1; y += dy) {
+        auto it = band.find(static_cast<long>(std::floor(y)));
+        if (it == band.end()) continue;
+        for (int k = 0; k < azimuths; ++k) {
+            const double a = 6.283185307179586 * (k + 0.5) / azimuths;
+            const Vec3 d(-std::cos(a), 0, -std::sin(a));
+            const Vec3 o(cx - d.x * radius, y, cz - d.z * radius);
+            ++r.rays;
+            double best = 2 * radius; const Tri* hit = nullptr;
+            for (const Tri& t : it->second) {   // Moller-Trumbore, two-sided
+                const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
+                const double det = dot(e1, p);
+                if (std::fabs(det) < 1e-12) continue;
+                const double inv = 1.0 / det; const Vec3 s = o - t.a;
+                const double u = dot(s, p) * inv; if (u < 0 || u > 1) continue;
+                const Vec3 q = cross(s, e1);
+                const double v = dot(d, q) * inv; if (v < 0 || u + v > 1) continue;
+                const double tt = dot(e2, q) * inv;
+                if (tt > 1e-4 && tt < best) { best = tt; hit = &t; }
+            }
+            if (!hit) continue;
+            ++r.hits;
+            if (dot(cross(hit->c - hit->a, hit->b - hit->a), d) <= 0) continue;   // a front: closed here
+            ++r.cracks; ++r.byStorey[static_cast<long>(std::floor(y / storeyH))];
+            if (r.all.size() < 4000) r.all.push_back({o, d, o + d * best, *hit->mesh, best});
+        }
+    }
+    return r;
+}
+
 }  // namespace engine
 
 #endif
