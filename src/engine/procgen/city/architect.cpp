@@ -898,6 +898,19 @@ void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "wavy_tower";
 }
 
+// THE MALL AS CELLS (cells.h mallCells; ADR-0180; the plan's Westfield): the American mall as the spine, an anchor
+// store at each end of it and a parking garage behind its court, every one its own building, the concourse open
+// into the anchors on both levels. A whole-block landmark of the commercial quarter; the lot pass sizes it.
+void recipeMallComplex(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    out = architectMallWings(rng.next());
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Mall;
+    out.complex.depth = 30.0;   // the anchors' depth
+    cx.slender = 1.0;
+    out.placeType = "shop";
+    out.name = "mall_complex";
+}
+
 // THE TWIN TOWERS (cells.h twinTowers; ADR-0179): two glass towers on one block a gap apart, a sky bridge between
 // them two thirds of the way up, both lobbies on the street -- Petronas. A whole-block landmark.
 void recipeTwinTowers(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -1731,6 +1744,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"sculpted_tower", recipeSculptedTower},
     {"veil_tower", recipeVeilTower},
     {"twin_towers", recipeTwinTowers},
+    {"mall_complex", recipeMallComplex},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},
@@ -1888,7 +1902,9 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
         case DistrictTag::Financial:
         case DistrictTag::Commercial: {
             const Real r = rng.unit();
-            if (r < 0.22) {
+            if (tag == DistrictTag::Commercial && r < 0.06) {
+                recipeMallComplex(out, rng, cx);                      // the mall as cells (ADR-0180): a whole commercial block
+            } else if (r < 0.22) {
                 recipeGlassTower(out, rng, cx);
                 out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
             } else if (r < 0.30) {

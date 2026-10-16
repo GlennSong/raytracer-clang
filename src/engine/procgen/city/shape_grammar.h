@@ -708,6 +708,14 @@ struct BuildingParams {
     Real  partyAt[4] = {0, 0, 0, 0};
     int16_t partyTop[4] = {0, 0, 0, 0};
     uint8_t partyDoors = 0;
+    // A WIDE OPENING in party wall k (cells.h Complex::openWall; ADR-0180): the wall ABSENT along the run from
+    // `partyOpen0[k]` to `partyOpen1[k]` -- positions along the wall's tangent (-n.y, n.x), world -- on storeys
+    // partyOpenK0[k]..partyOpenK1[k] inclusive (K1 < K0: none). An anchor store's front onto a mall's concourse,
+    // a garage onto its court. Set by the complex, never by recipes.
+    Real  partyOpen0[4] = {0, 0, 0, 0};
+    Real  partyOpen1[4] = {0, 0, 0, 0};
+    int16_t partyOpenK0[4] = {0, 0, 0, 0};
+    int16_t partyOpenK1[4] = {-1, -1, -1, -1};
     // A LINK (cells.h, ADR-0179: openings between cells above the ground): a doorway `linkW` wide in the face on
     // the world line (outward normal `linkN`, through `linkC`) at storey `linkStorey`, `linkC` its centre -- and,
     // when `linkLen` > 0, a SKY BRIDGE drawn from it `linkLen` out to the neighbour's matching door: a floor, glass
@@ -738,6 +746,10 @@ struct BuildingParams {
     // bits 0..3 = +u, -u, +v, -v of the plan's own frame (u its long axis, v toward the back) -- and the court's centre
     // (world XZ). The plan is the wings' outline; mallLayout2 reads the rest from these.
     uint8_t mallArms = 0;
+    // ...and which of those wings END OPEN (bits as mallArms; cells.h mallCells, ADR-0180): no anchor inside the wing,
+    // the concourse and its shops run to the end wall, which is a party wall with a wide opening onto the anchor
+    // cell beyond. An open wing needs only 20 m past the court, an anchored one 30.
+    uint8_t mallOpenEnds = 0;
     Vec2 mallCourt{0, 0};
     // A TOWER'S SHOPS AND RESTAURANTS (Glenn: "malls like this in the skyscrapers like in Japan. Also in Japan there are
     // restaurants at the top of skyscrapers"): the first `storeFloors` floors over the ground are a DEPARTMENT STORE
@@ -805,6 +817,19 @@ struct LinkDoor {
 std::vector<LinkDoor> linkDoors(const Poly2& plan, const BuildingParams& params, int storey = -1, Real baseY = 0);
 // The link on edge `e` at `storey`, or -1.
 int linkEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey);
+// THE WIDE OPENING on party wall edge `e` at `storey` (params.partyOpen*, ADR-0180): true with the run's ends `o0`,
+// `o1` along the edge (world XZ, in the edge's direction) when the wall is absent there on that storey.
+bool partyOpenAt(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey, Vec2& o0, Vec2& o1);
+// EVERY CUT through the outside walls above the ground floor's doors: the link doorways (a door's height at their
+// storey) and the wide openings (floor to ceiling over their storeys) -- what the collider leaves out of its walls.
+// World XZ; y absolute when `baseY` is the building's base.
+struct WallCut {
+    std::size_t edge = 0;
+    Vec2 a, b;          // along the edge
+    Real y0 = 0, y1 = 0;
+    bool link = false;  // a link doorway (else a wide opening)
+};
+std::vector<WallCut> wallCuts(const Poly2& plan, const BuildingParams& params, Real baseY);
 // The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
 // plan.size() when there is none.
 // A building whose bay doors stand OPEN (rolled up, each bay a way in): a fire station's (its engines), a factory's

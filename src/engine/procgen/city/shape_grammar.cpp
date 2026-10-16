@@ -1128,6 +1128,61 @@ bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t 
     return k >= 0 && ((params.partyDoors >> k) & 1u) != 0;
 }
 
+bool partyOpenAt(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey, Vec2& o0, Vec2& o1) {
+    const int k = partyWallOf(plan, params, e);
+    if (k < 0 || params.partyOpenK1[k] < params.partyOpenK0[k]) return false;
+    if (storey >= 0 && (storey < params.partyOpenK0[k] || storey > params.partyOpenK1[k])) return false;
+    const std::size_t n = plan.size();
+    const Vec2 a = plan[e % n], b = plan[(e + 1) % n];
+    const Real L = (b - a).length();
+    if (L < 1e-6) return false;
+    const Vec2 d = (b - a) * (1.0 / L);
+    const Vec2 tangent(-params.partyN[k].y, params.partyN[k].x);   // along a CCW plan's edge on that wall
+    const Real ta = dot(a, tangent), tb = dot(b, tangent);
+    const Real lo = std::min(ta, tb), hi = std::max(ta, tb);
+    const Real t0 = std::max(lo, std::min(params.partyOpen0[k], params.partyOpen1[k]));
+    const Real t1 = std::min(hi, std::max(params.partyOpen0[k], params.partyOpen1[k]));
+    if (t1 - t0 < 0.5) return false;
+    auto at = [&](Real t) { return a + d * (std::fabs(tb - ta) > 1e-9 ? (t - ta) / (tb - ta) * L : Real(0)); };
+    o0 = at(t0);
+    o1 = at(t1);
+    if (dot(o1 - o0, d) < 0) std::swap(o0, o1);
+    return true;
+}
+
+std::vector<WallCut> wallCuts(const Poly2& planIn, const BuildingParams& params, Real baseY) {
+    std::vector<WallCut> out;
+    if (planIn.size() < 3) return out;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    auto floorOf = [&](int k) { return k <= 0 ? Real(0) : params.groundHeight + (k - 1) * params.floorHeight; };
+    for (const LinkDoor& ld : linkDoors(plan, params, -1, baseY)) {
+        WallCut c;
+        c.edge = ld.edge;
+        c.a = ld.a;
+        c.b = ld.b;
+        c.y0 = ld.y0;
+        c.y1 = ld.y0 + std::min(ld.h - 0.3, human::DOOR_HEIGHT);
+        c.link = true;
+        out.push_back(c);
+    }
+    for (std::size_t e = 0; e < plan.size(); ++e) {
+        const int k = partyWallOf(plan, params, e);
+        if (k < 0 || params.partyOpenK1[k] < params.partyOpenK0[k]) continue;
+        Vec2 o0, o1;
+        if (!partyOpenAt(plan, params, e, -1, o0, o1)) continue;
+        WallCut c;
+        c.edge = e;
+        c.a = o0;
+        c.b = o1;
+        c.y0 = baseY + floorOf(params.partyOpenK0[k]);
+        c.y1 = baseY + std::min(floorOf(params.partyOpenK1[k] + 1), floorOf(params.floors + 1));
+        if (c.y1 - c.y0 < 0.5) continue;
+        out.push_back(c);
+    }
+    return out;
+}
+
 int linkEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey) {
     if (params.links == 0 || plan.size() < 3 || e >= plan.size()) return -1;
     const Vec2 a = plan[e], b = plan[(e + 1) % plan.size()];
@@ -3436,6 +3491,17 @@ static void emitParapetRun(BuildingMesh& out, const Vec2& a, const Vec2& b, Real
             PartId::Trim, copingCol);
 }
 
+// A BLANK WALL IN PIECES (ADR-0180): the face either side of the run o0 -> o1 (world XZ on the face's edge), nothing
+// across it -- a party wall with a wide opening.
+static void emitBlankWallPieces(BuildingMesh& out, const FaceRect& fr, const Vec2& o0, const Vec2& o1, PartId part, const Vec3& col) {
+    const Vec2 bl2(fr.bl.x, fr.bl.z), h2(fr.h.x, fr.h.z);
+    const Real x0 = std::max(Real(0), dot(o0 - bl2, h2)), x1 = std::min(fr.width, dot(o1 - bl2, h2));
+    RenderMesh bw;
+    if (x0 > 0.05) MeshBuilder::emitQuad(bw, fr.at(0, 0), fr.at(x0, 0), fr.at(x0, fr.height), fr.at(0, fr.height), fr.n, col);
+    if (fr.width - x1 > 0.05) MeshBuilder::emitQuad(bw, fr.at(x1, 0), fr.at(fr.width, 0), fr.at(fr.width, fr.height), fr.at(x1, fr.height), fr.n, col);
+    appendToPart(out, part, bw);
+}
+
 // A RAILING along a run (issue #105: the plates' edges past the glass, a bridge's sides): a top rail, a mid rail
 // and a post every 1.5 m or so, in the balconies' dark metal, `h` high (PARAPET). Posts stand at `a` and before `b`.
 static void emitRailingRun(BuildingMesh& out, const Vec2& a, const Vec2& b, Real y, Real h, const Vec3& col) {
@@ -4641,7 +4707,10 @@ static MallWings mallWingsOf(const Poly2& planIn, const BuildingParams& p) {
         while (s < 400 && pointInPolygon(plan, M.c + M.dir(k) * (s + 0.5))) s += 0.5;
         M.arm[k] = s;
     }
-    M.ok = M.arm[0] > MallWings::a + 30 && M.arm[1] > MallWings::a + 30;
+    // an anchored wing needs 30 m past the court for its anchor; an OPEN-ENDED one (mallOpenEnds: the anchor is the
+    // cell beyond the end wall) 20 m of shops
+    auto enough = [&](int k) { return M.arm[k] > MallWings::a + ((p.mallOpenEnds & (1u << k)) ? 20 : 30); };
+    M.ok = enough(0) && enough(1);
     return M;
 }
 
@@ -4680,7 +4749,11 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
         if (A <= 0) continue;
         // the wing's END: an anchor (u wings, both levels), an entrance vestibule below / the food court above (v wings)
         Real end = A - inset;
-        if (M.anchor(wk)) {
+        if ((params.mallOpenEnds & (1u << wk)) != 0) {
+            // the wing ends OPEN (ADR-0180): the concourse and its shops run to the end wall, a party wall with a wide
+            // opening onto the anchor cell beyond
+            end = A - inset;
+        } else if (M.anchor(wk)) {
             const Real s0 = A - 30.0;
             room(10, {M.P(wk, A - inset, -a + inset), M.P(wk, A - inset, a - inset), M.P(wk, s0, a - inset), M.P(wk, s0, -a + inset)});
             wall(M.P(wk, s0, -a + inset), M.P(wk, s0, -cw));
@@ -5181,10 +5254,17 @@ std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams
     upperP.pilasters = false;
     const FacadeMode upMode = params.solidFacade ? FacadeMode::Solid : FacadeMode::Residential;
     for (std::size_t e = 0; e < splan.size(); ++e) {
-        if (storey > 0 && partyEdge(splan, params, e, storey)) continue;
         const FaceRect fr = planEdgeRect(splan, e, y0, h);
         if (fr.width < 1e-6) continue;
         auto at = [&](Real x) { const Vec3 p = fr.at(x, 0) + fr.n * -inset; return Vec2(p.x, p.z); };
+        {   // A WIDE OPENING in a party wall (ADR-0180): the run is a doorway, floor to ceiling, kept clear
+            Vec2 o0, o1;
+            if (partyOpenAt(splan, params, e, storey, o0, o1)) {
+                const Vec2 bl2(fr.bl.x, fr.bl.z), h2(fr.h.x, fr.h.z);
+                out.push_back({at(dot(o0 - bl2, h2)), at(dot(o1 - bl2, h2)), 0, h, true});
+            }
+        }
+        if (storey > 0 && partyEdge(splan, params, e, storey)) continue;
         if (storey > 0 && params.curtainWall) {
             out.push_back({at(0), at(fr.width), curtainStyleOf(params).spandrelH(h), h, false});
             continue;
@@ -5854,8 +5934,10 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 colQuad(b, a, a + up * 1.0, b + up * 1.0, n * -1.0);
             }
         }
-        // THE GLASS LIFT: a glass shaft from the court floor to the upper level, its car inside (a box of light)
-        {
+        // THE GLASS LIFT: a glass shaft from the court floor to the upper level, its car inside (a box of light) --
+        // only where the wings resolved: a mall grown without its arms (the mesh audit's plain rectangle) has no
+        // court, and a lift drawn at a zero direction was 384 bad normals.
+        if (ML.liftDir.lengthSquared() > 0.5) {
             const Vec3 c(ML.liftAt.x, yL, ML.liftAt.y), D(ML.liftDir.x, 0, ML.liftDir.y), X(-ML.liftDir.y, 0, ML.liftDir.x);
             const Real hw = 1.1, H = yU - yL + 3.0;
             const Vec3 cs[4] = {c - D * hw - X * hw, c + D * hw - X * hw, c + D * hw + X * hw, c - D * hw + X * hw};
@@ -6550,6 +6632,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         const bool party = i != entranceEdge && partyEdge(plan, params, i) && !partyDoorEdge(plan, params, i);
         if (stairEdge || party) {
             const FaceRect bfr = planEdgeRect(plan, i, y, gh);
+            Vec2 o0, o1;
+            if (party && partyOpenAt(plan, params, i, 0, o0, o1)) {
+                // A WIDE OPENING (ADR-0180): the wall either side of the run, nothing across it
+                emitBlankWallPieces(out, bfr, o0, o1, params.wallPart, wallColor);
+                continue;
+            }
             RenderMesh bw;
             MeshBuilder::emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0),
                      bfr.at(bfr.width, bfr.height), bfr.at(0, bfr.height),
@@ -6903,6 +6991,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             }
             if (partyEdge(cur, params, e, i + 1)) {   // a party wall: blank to the roof, or to the lower neighbour's
                 const FaceRect bfr = planEdgeRect(cur, e, y, fh);
+                Vec2 o0, o1;
+                if (partyOpenAt(cur, params, e, i + 1, o0, o1)) { emitBlankWallPieces(out, bfr, o0, o1, params.wallPart, wallColor); continue; }
                 RenderMesh bw;
                 MeshBuilder::emitQuad(bw, bfr.at(0, 0), bfr.at(bfr.width, 0), bfr.at(bfr.width, bfr.height),
                          bfr.at(0, bfr.height), bfr.n, wallColor);

@@ -362,6 +362,27 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             const int li = add(lc);
             doorPortal(c, li, Portal::Kind::Passage, ld.a, ld.b, std::min(sp.h - 0.3, human::DOOR_HEIGHT), k);
         }
+        // WIDE OPENINGS in party walls (ADR-0180): the run is a passage into the next cell on every storey it spans --
+        // a Link cell past the wall, as a link doorway's stub.
+        for (std::size_t e = 0; e < sp.plan.size(); ++e) {
+            Vec2 o0, o1;
+            if (!partyOpenAt(sp.plan, params, e, k, o0, o1)) continue;
+            const Vec2 d = normalize(o1 - o0);
+            const Vec2 n(d.y, -d.x);
+            const Vec2 mid = (o0 + o1) * 0.5;
+            const int c = cellAt(k, mid - n * 0.6);
+            if (c < 0) continue;
+            Cell lc;
+            lc.kind = CellKind::Link;
+            lc.plan = {o0, o1, o1 + n * 1.5, o0 + n * 1.5};
+            ensureCCW(lc.plan);
+            lc.height = sp.h;
+            lc.freeArea = area(lc.plan);
+            lc.k0 = lc.k1 = k;
+            lc.tier = sp.tier;
+            const int li = add(lc);
+            doorPortal(c, li, Portal::Kind::Passage, o0, o1, sp.h, k);
+        }
         // The facade's doors onto the street (the entrance, a shop's own door, the back door).
         if (k == 0)
             for (const WallOpening& o : storeyOpenings(sp.plan, params, k, baseY + sp.y0, sp.h, entranceEdge)) {

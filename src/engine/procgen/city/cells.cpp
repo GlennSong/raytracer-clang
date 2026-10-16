@@ -1,4 +1,5 @@
 #include "cells.h"
+#include <string>
 #include <algorithm>
 #include <cmath>
 
@@ -411,6 +412,115 @@ Complex ringCells(const Poly2& outlineIn, const BuildingParams& params, Real dep
     }
     cx.resolve();
     cx.connectLobbies(Vec2(params.faceDir.x, params.faceDir.z));
+    return cx;
+}
+
+void Complex::openWall(std::size_t ai, Real u0, Real u1, int k0, int k1) {
+    if (ai >= adj.size() || k1 < k0) return;
+    Adjacency& ad = adj[ai];
+    if (ad.a < 0 || ad.b < 0) return;
+    const Real run = (ad.p1 - ad.p0).length();
+    if (run < 1e-6) return;
+    u0 = std::max(Real(0), std::min(u0, u1));
+    u1 = std::min(run, std::max(u0, u1));
+    if (u1 - u0 < 0.5) return;
+    const Vec2 d = (ad.p1 - ad.p0) * (1.0 / run);
+    const Vec2 P0 = ad.p0 + d * u0, P1 = ad.p0 + d * u1;
+    auto apply = [&](CellFrame& c, const Vec2& nOut, Real at) {
+        const Vec2 tangent(-nOut.y, nOut.x);
+        for (int k = 0; k < c.params.partyWalls; ++k) {
+            if (dot(c.params.partyN[k], nOut) < 0.999 || std::fabs(c.params.partyAt[k] - at) > 0.3) continue;
+            const Real t0 = dot(P0, tangent), t1 = dot(P1, tangent);
+            c.params.partyOpen0[k] = std::min(t0, t1);
+            c.params.partyOpen1[k] = std::max(t0, t1);
+            c.params.partyOpenK0[k] = static_cast<int16_t>(k0);
+            c.params.partyOpenK1[k] = static_cast<int16_t>(k1);
+            // the party door in the middle bay is inside a ground opening across the middle: drop it
+            if (k0 == 0 && u0 < run * 0.5 - 0.6 && u1 > run * 0.5 + 0.6) c.params.partyDoors = static_cast<uint8_t>(c.params.partyDoors & ~(1u << k));
+        }
+    };
+    apply(cells[static_cast<std::size_t>(ad.a)], ad.n, ad.at);
+    apply(cells[static_cast<std::size_t>(ad.b)], ad.n * -1.0, -ad.at);
+    ad.openings.push_back({u0, u1, k0, k1});
+}
+
+Complex mallCells(const Poly2& boxIn, const Vec2& faceDirIn, const BuildingParams& mall, const BuildingParams& anchor,
+                  const BuildingParams& garage, bool withGarage, Real anchorDepth) {
+    Complex cx;
+    Poly2 box = boxIn;
+    if (box.size() != 4) return cx;
+    ensureCCW(box);
+    const OBB2 ob = orientedBoundingBox(box);
+    const int la = ob.longAxis();
+    const Real L = 2 * ob.half[la], D = 2 * ob.half[1 - la];
+    const Real spineD = 40.0;                      // the mall's wings are 40 m wide (MallWings::a)
+    anchorDepth = std::max(Real(20), anchorDepth);
+    if (L < 2 * anchorDepth + 82.0 || D < spineD) return cx;
+    const Vec2 u = ob.axis[la];
+    Vec2 v = ob.axis[1 - la];                      // v away from the street
+    const Vec2 fd = faceDirIn.lengthSquared() > 1e-9 ? normalize(faceDirIn) : Vec2(0, -1);
+    if (dot(v, fd) > 0) v = v * -1.0;
+    const Vec2 o = ob.center - u * (L * 0.5) - v * (D * 0.5);   // the street-side corner at u = 0
+    auto rect = [&](Real u0, Real u1, Real v0, Real v1) {
+        Poly2 r = {o + u * u0 + v * v0, o + u * u1 + v * v0, o + u * u1 + v * v1, o + u * u0 + v * v1};
+        ensureCCW(r);
+        return r;
+    };
+    auto cell = [&](const Poly2& plan, const BuildingParams& params, const char* role) {
+        CellFrame c;
+        c.plan = plan;
+        c.params = params;
+        c.params.partyWalls = 0;
+        c.params.partyDoors = 0;
+        c.params.links = 0;
+        for (int k = 0; k < 4; ++k) { c.params.partyOpenK0[k] = 0; c.params.partyOpenK1[k] = -1; }
+        c.frame.origin = plan[0];
+        c.frame.u = u;
+        c.frame.v = v;
+        c.role = role;
+        c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
+        cx.cells.push_back(c);
+    };
+    // THE SPINE: the mall between the anchors, its court in its middle, both wings open at their ends
+    BuildingParams mp = mall;
+    mp.bigBox = 6;
+    mp.mallArms = 0x3;
+    mp.mallOpenEnds = 0x3;
+    mp.faceDir = Vec3(-v.x, 0, -v.y);
+    const Poly2 spine = rect(anchorDepth, L - anchorDepth, 0, spineD);
+    mp.mallCourt = o + u * (L * 0.5) + v * (spineD * 0.5);
+    cell(spine, mp, "spine");
+    // THE ANCHORS: the spine's floors and heights, a department store's upper floor, entered from the street too
+    for (int side = 0; side < 2; ++side) {
+        BuildingParams ap = anchor;
+        ap.floors = mall.floors;
+        ap.groundHeight = mall.groundHeight;
+        ap.floorHeight = mall.floorHeight;
+        ap.storeFloors = static_cast<uint8_t>(std::max(0, mall.floors));
+        ap.faceDir = Vec3(-v.x, 0, -v.y);
+        cell(side == 0 ? rect(0, anchorDepth, 0, spineD) : rect(L - anchorDepth, L, 0, spineD), ap, "anchor");
+    }
+    // THE GARAGE behind the court, when the box is deep enough for a deck's worth
+    const Real gd = D - spineD;
+    if (withGarage && gd >= 24.0) {
+        BuildingParams gp = garage;
+        gp.faceDir = Vec3(v.x, 0, v.y);   // its ramps on the back street
+        cell(rect(L * 0.5 - spineD * 0.5, L * 0.5 + spineD * 0.5, spineD, std::min(D, spineD + 44.0)), gp, "garage");
+    }
+    cx.resolve();
+    cx.connectLobbies(fd);
+    // THE OPENINGS: the concourse's width (12 m, centred) through each anchor wall on every level; 8 m into the
+    // garage at the ground
+    for (std::size_t i = 0; i < cx.adj.size(); ++i) {
+        const Adjacency& ad = cx.adj[i];
+        const std::string& ra = cx.cells[static_cast<std::size_t>(ad.a)].role;
+        const std::string& rb = cx.cells[static_cast<std::size_t>(ad.b)].role;
+        const bool anchorWall = (ra == "spine" && rb == "anchor") || (ra == "anchor" && rb == "spine");
+        const bool garageWall = (ra == "spine" && rb == "garage") || (ra == "garage" && rb == "spine");
+        const Real run = (ad.p1 - ad.p0).length();
+        if (anchorWall) cx.openWall(i, run * 0.5 - 6.0, run * 0.5 + 6.0, 0, std::max(0, mall.floors));
+        else if (garageWall) cx.openWall(i, run * 0.5 - 4.0, run * 0.5 + 4.0, 0, 0);
+    }
     return cx;
 }
 

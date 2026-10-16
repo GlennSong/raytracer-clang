@@ -96,7 +96,7 @@ struct BuildingRecipe {
     // Courtyard -- four wings `depth` deep round an open court, the corners their own cells (a perimeter block).
     // Ring -- `sides` cells `depth` deep round a court on a regular polygon that fills the lot (a round block).
     struct ComplexSpec {
-        enum class Kind : uint8_t { None, BundledTubes, Courtyard, Ring, Twins } kind = Kind::None;
+        enum class Kind : uint8_t { None, BundledTubes, Courtyard, Ring, Twins, Mall } kind = Kind::None;
         int nx = 3, ny = 3;
         Real depth = 15.0;
         int sides = 12;

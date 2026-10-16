@@ -18,6 +18,7 @@
 #include "../procgen/city/space_graph.h"
 #include "../procgen/city/circulation.h"
 #include "../procgen/city/mass_stack.h"
+#include "../procgen/city/architect.h"
 #include "../procgen/city/cells.h"
 #include "../procgen/city/envelope.h"
 #include "../procgen/city/section.h"
@@ -1574,8 +1575,19 @@ int l_building_cells(lua_State* L) {
     const double court = optField(L, 1, "court", 0.0);   // court = <wing depth>: a courtyard block instead of tubes
     const double ringN = optField(L, 1, "ring", 0.0);    // ring = <sides> (with depth = d): a ring of cells on the box's inscribed polygon
     const double twins = optField(L, 1, "twins", 0.0);   // twins = <gap>: two towers along the box with a sky bridge (bridge = storey, bridge_w = width)
+    const bool mallK = flagField(L, 1, "mall");           // mall = true: the American mall as the spine, big-box anchors, a garage (ADR-0180)
     Complex cx;
-    if (twins > 0) {
+    if (mallK) {
+        BuildingParams mp = architectMallWings(p.seed).params;
+        const BuildingParams ap = architectBigBox(p.seed ^ 0x51a3u).params;
+        BuildingRecipe gr;
+        BuildingParams gp = ap;
+        if (architectRecipeByName("parking_garage", p.seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
+        lua_getfield(L, 1, "garage");
+        const bool withGarage = lua_isnil(L, -1) ? true : lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        cx = mallCells(box, Vec2(p.faceDir.x, p.faceDir.z), mp, ap, gp, withGarage, static_cast<Real>(optField(L, 1, "depth", 30.0)));
+    } else if (twins > 0) {
         cx = twinTowers(box, p, static_cast<Real>(twins), floors, static_cast<int>(optField(L, 1, "bridge", 0.0)), static_cast<Real>(optField(L, 1, "bridge_w", 4.5)));
     } else if (ringN >= 3) {
         const OBB2 ob = orientedBoundingBox(box);
@@ -1608,6 +1620,10 @@ int l_building_cells(lua_State* L) {
         lua_pushinteger(L, c.params.partyWalls); lua_setfield(L, -2, "party");
         lua_pushinteger(L, c.params.partyDoors); lua_setfield(L, -2, "doors");
         lua_pushinteger(L, c.params.links); lua_setfield(L, -2, "links");
+        lua_pushstring(L, c.role.c_str()); lua_setfield(L, -2, "role");
+        int openWalls = 0;
+        for (int k = 0; k < c.params.partyWalls; ++k) if (c.params.partyOpenK1[k] >= c.params.partyOpenK0[k]) ++openWalls;
+        lua_pushinteger(L, openWalls); lua_setfield(L, -2, "open_walls");
         if (c.params.links > 0) {
             lua_pushinteger(L, c.params.linkStorey[0]); lua_setfield(L, -2, "link_storey");
             lua_pushnumber(L, c.params.linkLen[0]); lua_setfield(L, -2, "link_len");

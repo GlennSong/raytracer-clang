@@ -10342,3 +10342,29 @@ to each other except where an inner tube had to be entered. This is the first se
   bulkheads.
 - **Owed.** Openings between cells above the ground where they touch (an office suite across tubes); bridges
   between cells of different presets; the rowhouse strip and the mall as complex presets; the ring's one crown.
+
+## ADR-0180 — Wide openings between cells, and the mall as cells
+
+Glenn, 2026-10-15: "does this mean you could build something like the Westfield mall now that we have cells?"
+Almost: the one opening the complex lacked was a shared wall simply ABSENT along a run.
+
+- **A wide opening is a party wall with a hole floor to ceiling.** `Complex::openWall(adjacency, u0, u1, k0, k1)`
+  writes it onto both cells' params (`partyOpen0/1[k]`: the run's ends as positions along the wall's tangent,
+  world; `partyOpenK0/K1[k]`: the storeys) and records the Opening. Through the grammar: the facade draws the
+  blank wall in two pieces either side of the run (`emitBlankWallPieces`); the furniture keeps the run clear
+  (`storeyOpenings` lists it as a doorway); the collider leaves it out of its walls -- `wallCuts` gathers the
+  link doorways of ADR-0179 and the wide openings into one list of cuts the ground prism and the tier walls both
+  honour, each a sill below and a header above; and the graph has a Link cell past the wall on every storey the
+  opening spans, joined by a Passage. A ground opening across a wall's middle bay drops the party door it covers.
+- **The mall as cells** (`mallCells`): the American mall of bigBox 6 is the SPINE -- its two long wings now able to
+  END OPEN (`mallOpenEnds`: no anchor inside, the concourse and its shops to the end wall, an open wing content
+  with 20 m past the court where an anchored one needs 30) -- with an ANCHOR cell at each end, a big-box store
+  given the spine's floors and storey heights so the levels meet and a department store's upper floor, the
+  concourse open into it on every level through 12 m; and a GARAGE cell against the back of the court, parking
+  decks open onto the court at the ground across 8 m, its ramps on the back street. Every cell is its own
+  building with its own way in from the street; the spine keeps its court, escalators and glass lift.
+  `recipeMallComplex` ("mall_complex") is a whole-block landmark of the commercial quarter (6% of its block
+  picks), sized by the lot pass to blocks at least 142 m long and 40 m deep; `building.cells{ mall = true }`.
+- **Owed.** The bend in the spine (a second spine cell at an angle, the court as the hinge); pavilion cells with
+  an arc edge; a court cell spanning levels; the parking lot in front where the block allows it (the American
+  mall's lot pass does this, the cells mall does not yet).

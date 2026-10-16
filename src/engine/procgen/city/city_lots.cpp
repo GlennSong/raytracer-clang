@@ -6024,6 +6024,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const bool courtyard = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Courtyard;
                 const bool ring = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Ring;
                 const bool twins = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Twins;
+                const bool mall = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall;
                 int nx = std::max(1, rec.complex.nx), ny = std::max(1, rec.complex.ny);
                 while (nx > 1 && len / nx < kCoreTierMin + 1.0) --nx;   // every tube wide enough for its core
                 while (ny > 1 && dep / ny < kCoreTierMin + 1.0) --ny;
@@ -6037,7 +6038,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 // twins stand along the box's long axis, each wide enough for its core beyond the gap
                 const Real twinGap = std::max(Real(6.0), std::min(rec.complex.gap, std::max(len, dep) * 0.3));
                 const bool twinsOk = twins && (std::max(len, dep) - twinGap) * 0.5 >= kCoreTierMin + 1.0 && std::min(len, dep) >= kCoreTierMin + 1.0;
-                if (boxOk && (courtyard ? courtOk : ring ? ringOk : twins ? twinsOk : nx * ny >= 2)) {
+                // the mall: a spine of two open wings (at least 82 m) between two anchors, 40 m deep
+                const bool mallOk = mall && std::max(len, dep) >= 2 * rec.complex.depth + 82.0 && std::min(len, dep) >= 40.0;
+                if (boxOk && (courtyard ? courtOk : ring ? ringOk : twins ? twinsOk : mall ? mallOk : nx * ny >= 2)) {
                     const Poly2 box{sb.center - u * (len * 0.5) - v * (dep * 0.5), sb.center + u * (len * 0.5) - v * (dep * 0.5),
                                     sb.center + u * (len * 0.5) + v * (dep * 0.5), sb.center - u * (len * 0.5) + v * (dep * 0.5)};
                     // the heights: the Sears pattern -- a rank per tube by the seed, one tube certain to reach the top;
@@ -6052,7 +6055,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                     if (!courtyard) floors[static_cast<std::size_t>((hh >> 20) % floors.size())] = bp.floors;
                     Complex cx;
-                    if (twins) {
+                    if (mall) {
+                        // the anchors a big-box chain each, the garage a parking garage, by the seed
+                        const BuildingParams ap = architectBigBox(bp.seed ^ 0x51a3u).params;
+                        BuildingRecipe gr;
+                        BuildingParams gp = ap;
+                        if (architectRecipeByName("parking_garage", bp.seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
+                        cx = mallCells(box, Vec2(bp.faceDir.x, bp.faceDir.z), bp, ap, gp, true, rec.complex.depth);
+                    } else if (twins) {
                         // the box turned so its first edge is the long axis; the two the block's floors, the second
                         // a storey or three shorter on half the seeds
                         const bool longX = len >= dep;
@@ -6075,7 +6085,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     if (cx.cells.empty()) { dbg->rejPlan++; emitGreen(); continue; }
                     // ONE CROWN PER BUNDLE (ADR-0179): the tallest tube wears the top; the others' decks stay bare, as
                     // a courtyard block crowns its tallest wing and a ring none
-                    if (!courtyard && !ring && !twins) {
+                    if (!courtyard && !ring && !twins && !mall) {
                         int tallest = 0;
                         for (const CellFrame& cell : cx.cells) tallest = std::max(tallest, cell.params.floors);
                         for (CellFrame& cell : cx.cells) if (cell.params.floors < tallest) cell.params.top = 9;

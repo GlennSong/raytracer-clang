@@ -10,7 +10,7 @@ namespace engine {
 void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
                          const Poly2& plan, Real base, Real top, Real floorY,
                          const std::vector<DoorSpec>& doors, Real plinth,
-                         const std::vector<Poly2>& roofHoles, const std::vector<LinkDoor>* links) {
+                         const std::vector<Poly2>& roofHoles, const std::vector<WallCut>* cuts) {
     if (plan.size() < 3) return;
     const std::size_t n = plan.size();
     auto quad = [&](const Vec2& a, const Vec2& b, Real y0, Real y1) {
@@ -42,12 +42,12 @@ void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
                              std::min(len, t + hw), floorY,
                              floorY + std::max(Real(2.0), ds.height)});
         }
-        if (links)
-            for (const LinkDoor& ld : *links) {
-                if (ld.edge != i || ld.y0 < base || ld.y0 >= top - 1.0) continue;
-                const Real t0 = dot(ld.a - a, u), t1 = dot(ld.b - a, u);
-                spans.push_back({std::max(Real(0), std::min(t0, t1)), std::min(len, std::max(t0, t1)), ld.y0,
-                                 std::min(top, ld.y0 + std::min(ld.h - 0.3, human::DOOR_HEIGHT))});
+        if (cuts)
+            for (const WallCut& c : *cuts) {
+                if (c.edge != i || c.y1 <= base || c.y0 >= top - 0.5) continue;
+                const Real t0 = dot(c.a - a, u), t1 = dot(c.b - a, u);
+                spans.push_back({std::max(Real(0), std::min(t0, t1)), std::min(len, std::max(t0, t1)),
+                                 std::max(base, c.y0), std::min(top, c.y1)});
             }
         std::sort(spans.begin(), spans.end(),
                   [](const Span& x, const Span& y) { return x.t0 < y.t0; });
@@ -126,32 +126,41 @@ bool appendBuildingTiers(std::vector<Vec3>& V, std::vector<uint32_t>& I, const P
         if (t == 0) {
             // The ground tier: the prism as before -- door notches, floor cap, threshold steps -- capped at ITS deck;
             // the link doorways on it (a one-tier tower's bridge door) cut like the doors, at their storey.
-            const std::vector<LinkDoor> links0 = linkDoors(ct.plan, params, -1, baseY);
+            const std::vector<WallCut> cuts0 = wallCuts(ct.plan, params, baseY);
             appendBuildingPrism(V, I, ct.plan, baseY - 0.5, baseY + ct.y1, baseY + 0.05, doors,
-                                baseY - groundY, holes, links0.empty() ? nullptr : &links0);
+                                baseY - groundY, holes, cuts0.empty() ? nullptr : &cuts0);
         } else {
             // An upper tier: plain walls from the deck below to its own, and its cap (none where the storey above
             // continues the tier on a turned outline: the walls meet the next walls, mass_stack.h) -- RULED up to the
             // next outline where it has the same corners, as the glass is.
             const bool ruled = !ct.deck && !last && tiers[t + 1].plan.size() == ct.plan.size();
-            // A LINK DOOR (shape_grammar.h linkDoors; cells.h, ADR-0179) on an edge within this tier: the wall in
-            // pieces round the doorway -- either side full height, the sill below it, the header over it.
-            const std::vector<LinkDoor> links = ruled ? std::vector<LinkDoor>{} : linkDoors(ct.plan, params, -1, 0);
+            // THE CUTS (shape_grammar.h wallCuts; ADR-0179 link doorways, ADR-0180 wide openings) on an edge within
+            // this tier: the wall in pieces round each -- either side full height, the sill below it, the header over.
+            const std::vector<WallCut> cuts = ruled ? std::vector<WallCut>{} : wallCuts(ct.plan, params, baseY);
             for (std::size_t i = 0; i < ct.plan.size(); ++i) {
                 if (!ruled) {
                     const Vec2 a = ct.plan[i], b = ct.plan[(i + 1) % ct.plan.size()];
-                    const LinkDoor* ld = nullptr;
-                    for (const LinkDoor& l : links)
-                        if (l.edge == i && l.y0 >= ct.y0 - 1e-6 && l.y0 < ct.y1 - 1e-6) ld = &l;
-                    if (ld) {
-                        const Real doorH = std::min(ld->h - 0.3, human::DOOR_HEIGHT);
-                        quad(a, ld->a, baseY + ct.y0, baseY + ct.y1);
-                        quad(ld->b, b, baseY + ct.y0, baseY + ct.y1);
-                        quad(ld->a, ld->b, baseY + ct.y0, baseY + ld->y0);
-                        quad(ld->a, ld->b, baseY + ld->y0 + doorH, baseY + ct.y1);
-                        continue;
+                    const Real y0 = baseY + ct.y0, y1 = baseY + ct.y1;
+                    const Vec2 d = b - a;
+                    const Real len = d.length();
+                    if (len < 1e-6) continue;
+                    const Vec2 u = d * (1.0 / len);
+                    struct Span { Real t0, t1, sill, head; };
+                    std::vector<Span> spans;
+                    for (const WallCut& c : cuts) {
+                        if (c.edge != i || c.y1 <= y0 || c.y0 >= y1) continue;
+                        const Real t0 = dot(c.a - a, u), t1 = dot(c.b - a, u);
+                        spans.push_back({std::max(Real(0), std::min(t0, t1)), std::min(len, std::max(t0, t1)), std::max(y0, c.y0), std::min(y1, c.y1)});
                     }
-                    quad(a, b, baseY + ct.y0, baseY + ct.y1);
+                    std::sort(spans.begin(), spans.end(), [](const Span& x, const Span& y) { return x.t0 < y.t0; });
+                    Real cur = 0;
+                    for (const Span& sp : spans) {
+                        if (sp.t0 > cur) quad(a + u * cur, a + u * sp.t0, y0, y1);
+                        quad(a + u * sp.t0, a + u * sp.t1, y0, sp.sill);
+                        quad(a + u * sp.t0, a + u * sp.t1, sp.head, y1);
+                        cur = std::max(cur, sp.t1);
+                    }
+                    if (cur < len) quad(a + u * cur, a + u * len, y0, y1);
                     continue;
                 }
                 const Poly2& up = tiers[t + 1].plan;

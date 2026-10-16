@@ -2,8 +2,11 @@
 // preset, every tube with a way in, the shared walls blank to the lower neighbour's roof.
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/building_collider.h"
 #include "../src/engine/procgen/city/cells.h"
+#include "../src/engine/procgen/city/core_plan.h"
+#include "../src/engine/procgen/city/room_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/space_graph.h"
 
@@ -328,4 +331,104 @@ TEST_CASE(twin_towers_are_joined_by_a_sky_bridge_walked_from_a_lounge) {
     CHECK(I1.size() > I0.size());
     std::printf("    [twins] bridge at storey %d spanning %.1f m, %.1f m wide; a's roof items %d + %d, link cells %d / %d, collider %zu -> %zu indices\n",
                 br.storey, br.span, br.width, bridgeItems, wallItems, links, linksB, I0.size(), I1.size());
+}
+
+// WIDE OPENINGS AND THE MALL AS CELLS (ADR-0180): a shared wall absent along a run on chosen storeys, and the
+// American mall as a spine between two anchors with a garage behind, every one its own building, opened into.
+TEST_CASE(a_wide_opening_leaves_the_shared_wall_absent_on_its_storeys) {
+    const Poly2 box = {{-30, -15}, {30, -15}, {30, 15}, {-30, 15}};
+    BuildingParams p = towerParams(6);
+    p.faceDir = Vec3(0, 0, -1);
+    Complex cx = bundledTubes(box, p, 2, 1, {6, 6});
+    CHECK(cx.cells.size() == 2 && cx.adj.size() == 1);
+    const Real run = (cx.adj[0].p1 - cx.adj[0].p0).length();
+    CHECK(std::fabs(run - 30.0) < 1e-6);
+    cx.openWall(0, run * 0.5 - 6.0, run * 0.5 + 6.0, 0, 2);
+    CHECK(cx.adj[0].openings.size() >= 1);
+    for (const CellFrame& c : cx.cells) {
+        // both cells know the run on that wall on storeys 0..2, and the party door it covers is gone
+        int open = 0;
+        for (int k = 0; k < c.params.partyWalls; ++k)
+            if (c.params.partyOpenK1[k] >= c.params.partyOpenK0[k]) { ++open; CHECK(c.params.partyOpenK0[k] == 0 && c.params.partyOpenK1[k] == 2); CHECK(std::fabs(c.params.partyOpen1[k] - c.params.partyOpen0[k] - 12.0) < 1e-6); }
+        CHECK(open == 1);
+        CHECK(c.params.partyDoors == 0);
+        // the facade: on storeys 0..2 the party edge is open across 12 m, on 3 it is not
+        Vec2 o0, o1;
+        int openEdges = 0;
+        for (std::size_t e = 0; e < c.plan.size(); ++e) if (partyOpenAt(c.plan, c.params, e, 1, o0, o1)) { ++openEdges; CHECK(std::fabs((o1 - o0).length() - 12.0) < 1e-6); }
+        CHECK(openEdges == 1);
+        int closedAbove = 0;
+        for (std::size_t e = 0; e < c.plan.size(); ++e) closedAbove += partyOpenAt(c.plan, c.params, e, 3, o0, o1);
+        CHECK(closedAbove == 0);
+        // the cuts: one, floor 0 to the ceiling of storey 2
+        const std::vector<WallCut> cuts = wallCuts(c.plan, c.params, 0.0);
+        CHECK(cuts.size() == 1);
+        if (!cuts.empty()) { CHECK(std::fabs(cuts[0].y0) < 1e-6); CHECK(std::fabs(cuts[0].y1 - (c.params.groundHeight + 2 * c.params.floorHeight)) < 1e-6); CHECK(!cuts[0].link); }
+        // the collider's wall is in pieces; the graph has a Link cell on each open storey; everything is walked
+        BuildingParams shut = c.params;
+        for (int k = 0; k < 4; ++k) shut.partyOpenK1[k] = -1;
+        std::vector<Vec3> V0, V1;
+        std::vector<uint32_t> I0, I1;
+        appendBuildingTiers(V0, I0, c.plan, shut, 0.0, 0.0, {}, {}, {});
+        appendBuildingTiers(V1, I1, c.plan, c.params, 0.0, 0.0, {}, {}, {});
+        CHECK(I1.size() > I0.size());
+        const SpaceGraph g = spaceGraphOf(c.plan, c.params, 0.0);
+        int links = 0;
+        for (const Cell& cl : g.cells) if (cl.kind == CellKind::Link) { ++links; CHECK(cl.k0 >= 0 && cl.k0 <= 2); }
+        CHECK(links == 3);
+        CHECK(unreachableCells(g).empty());
+        // the furniture keeps the run clear: a door-type opening the run's width on the open storey
+        int clear = 0;
+        for (const WallOpening& o : storeyOpenings(c.plan, c.params, 1, c.params.groundHeight, c.params.floorHeight, entranceEdgeFor(c.plan, c.params)))
+            if (o.door && std::fabs((o.b - o.a).length() - 12.0) < 0.1) ++clear;
+        CHECK(clear == 1);
+    }
+    std::printf("    [opening] a 12 m run open on storeys 0..2 of both tubes, closed on 3\n");
+}
+
+TEST_CASE(the_mall_as_cells_is_a_spine_two_anchors_and_a_garage_opened_into) {
+    const Poly2 box = {{-90, -40}, {90, -40}, {90, 40}, {-90, 40}};
+    const BuildingParams mall = architectMallWings(5).params;
+    const BuildingParams anchor = architectBigBox(9).params;
+    BuildingRecipe gr;
+    CHECK(architectRecipeByName("parking_garage", 11, 0.3, 40.0, 1600.0, gr));
+    const Complex cx = mallCells(box, Vec2(0, -1), mall, anchor, gr.params);
+    CHECK(cx.cells.size() == 4);
+    int spine = -1, anchors = 0, garage = -1;
+    for (std::size_t i = 0; i < cx.cells.size(); ++i) {
+        if (cx.cells[i].role == "spine") spine = static_cast<int>(i);
+        if (cx.cells[i].role == "anchor") ++anchors;
+        if (cx.cells[i].role == "garage") garage = static_cast<int>(i);
+    }
+    CHECK(spine >= 0 && anchors == 2 && garage >= 0);
+    CHECK(cx.adj.size() == 3);   // two anchor walls, the garage's
+    int anchorOpen = 0, garageOpen = 0;
+    for (const Adjacency& ad : cx.adj)
+        for (const Opening& o : ad.openings) {
+            if (o.k1 == mall.floors && std::fabs(o.u1 - o.u0 - 12.0) < 1e-6) ++anchorOpen;
+            if (o.k0 == 0 && o.k1 == 0 && std::fabs(o.u1 - o.u0 - 8.0) < 1e-6) ++garageOpen;
+        }
+    CHECK(anchorOpen == 2 && garageOpen == 1);
+    const CellFrame& sp = cx.cells[static_cast<std::size_t>(spine)];
+    CHECK(sp.params.bigBox == 6 && sp.params.mallArms == 0x3 && sp.params.mallOpenEnds == 0x3);
+    CHECK(sp.params.partyWalls == 3);
+    // the spine's levels: open-ended wings, no anchor rooms inside, the concourse to the end walls; its own
+    // escalators in the court; every cell a building walked, the anchors two levels like the mall
+    for (int k = 0; k <= 1; ++k) {
+        const StoreyRooms sr = storeyRooms(sp.plan, sp.params, 0.0, storeyPlans(sp.plan, sp.params), k, coreFor(sp.plan, sp.params, entranceEdgeFor(sp.plan, sp.params)),
+                                           stairRuns(sp.plan, sp.params, entranceEdgeFor(sp.plan, sp.params), storeyPlans(sp.plan, sp.params)), entranceEdgeFor(sp.plan, sp.params));
+        int anchorRooms = 0, concourse = 0;
+        for (const Room& r : sr.rp.rooms) { if (r.style == 10) ++anchorRooms; if (r.style == 21 || r.style == 22) ++concourse; }
+        CHECK(anchorRooms == 0);
+        CHECK(concourse == 2);
+    }
+    for (const CellFrame& c : cx.cells) {
+        CHECK(c.connected);
+        const SpaceGraph g = spaceGraphOf(c.plan, c.params, 0.0);
+        CHECK(unreachableCells(g).empty());
+        if (c.role == "anchor") { CHECK(c.params.floors == mall.floors); CHECK(c.params.groundHeight == mall.groundHeight); }
+    }
+    std::printf("    [mall] spine %.0f x %.0f, %d anchors, a garage; %zu shared walls, %d anchor openings, %d garage opening\n",
+                2 * orientedBoundingBox(sp.plan).half[orientedBoundingBox(sp.plan).longAxis()], 2 * orientedBoundingBox(sp.plan).half[1 - orientedBoundingBox(sp.plan).longAxis()],
+                anchors, cx.adj.size(), anchorOpen, garageOpen);
 }

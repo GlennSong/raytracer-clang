@@ -77,6 +77,10 @@ struct Complex : Mass {
     // their run); both cells take a link at the bridge's storey (clamped under both roofs) at the middle of the
     // overlap, `a`'s with the span to draw. A bridge with no such faces, or on cells too low, stays unplaced.
     void resolveBridges();
+    // A WIDE OPENING (ADR-0180) through the shared wall of adjacency `ai`: the wall absent from `u0` to `u1` along
+    // the shared run (from its start, in a's edge direction) on storeys k0..k1, on BOTH cells (params.partyOpen*);
+    // recorded as an Opening. A ground opening across the wall's middle bay makes its party door redundant.
+    void openWall(std::size_t ai, Real u0, Real u1, int k0, int k1);
 };
 
 // THE BUNDLE: nx by ny rectangular cells filling `box` (a CCW rectangle; its first edge is the x direction), each a
@@ -103,6 +107,17 @@ Complex ringCells(const Poly2& outline, const BuildingParams& params, Real depth
 // tower would be narrower than its core needs. Petronas.
 Complex twinTowers(const Poly2& box, const BuildingParams& params, Real gap, const std::vector<int>& floorsPerCell, int bridgeStorey = 0,
                    Real bridgeW = 4.5);
+
+// THE MALL AS CELLS (ADR-0180; the plan's Westfield): on `box` (CCW), with the street toward `faceDir`, a SPINE cell
+// along the box's long axis at its street side -- the American mall (`mall`: bigBox 6, its wings +u / -u ending
+// OPEN, its court in the middle, its own escalators and lift) 40 m deep -- an ANCHOR cell at each end of the spine
+// (`anchor`: a big-box store, given the spine's floors and storey heights so the levels meet), the concourse open
+// onto it on every level through a wide opening the concourse's width; and, where the box is deep enough behind
+// the spine, a GARAGE cell (`garage`: parking decks) against the back of the court, open onto it at the ground
+// across 8 m. Every cell its own building, entered from the street as well. Empty when the spine's wings would be
+// too short (the box under 142 m long or 40 m deep).
+Complex mallCells(const Poly2& box, const Vec2& faceDir, const BuildingParams& mall, const BuildingParams& anchor,
+                  const BuildingParams& garage, bool withGarage = true, Real anchorDepth = 30.0);
 
 }  // namespace engine
 
