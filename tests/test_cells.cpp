@@ -2,6 +2,7 @@
 // preset, every tube with a way in, the shared walls blank to the lower neighbour's roof.
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/building_collider.h"
 #include "../src/engine/procgen/city/cells.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/space_graph.h"
@@ -62,10 +63,13 @@ TEST_CASE(a_bundle_of_nine_tubes_shares_its_faces_and_enters_every_tube) {
     const CellFrame& front = cx.cells[7];
     const int kDoor = partyIndexFacing(front.params, Vec2(0, -1));
     CHECK(kDoor >= 0 && ((front.params.partyDoors >> kDoor) & 1u) == 1u);
-    CHECK(mid.params.partyDoors == 0);   // its own way in is its entrance
+    // SHARED LOBBIES (ADR-0179): every whole shared wall opens both ways on the ground, so the centre tube's four
+    // walls all carry a doorway (its own way in is still its entrance, on the street-side one), and every one of
+    // the twelve shared faces has its ground opening
+    CHECK(mid.params.partyWalls == 4 && mid.params.partyDoors == 0xF);
     int openings = 0;
     for (const Adjacency& ad : cx.adj) openings += static_cast<int>(ad.openings.size());
-    CHECK(openings == 1);
+    CHECK(openings == 12);
     // Outer tubes enter from an outer face: the street row faces +z, the back row -z, the sides out.
     CHECK(cx.cells[6].params.faceDir.z > 0.99 && cx.cells[8].params.faceDir.z > 0.99);
     CHECK(cx.cells[0].params.faceDir.z < -0.99 || std::fabs(cx.cells[0].params.faceDir.x) > 0.99);
@@ -79,10 +83,11 @@ TEST_CASE(a_bundle_of_nine_tubes_shares_its_faces_and_enters_every_tube) {
         CHECK(street >= 1);
         CHECK(unreachableCells(g).empty());
     }
-    // The front tube's party wall toward the centre cuts the doorway: that edge is a party door edge, the others not.
+    // The front tube's three party walls (the centre and its two side neighbours) all cut a doorway; its street face
+    // is no party wall.
     int doorEdges = 0;
     for (std::size_t e = 0; e < front.plan.size(); ++e) doorEdges += partyDoorEdge(front.plan, front.params, e);
-    CHECK(doorEdges == 1);
+    CHECK(doorEdges == 3);
     std::printf("    [bundle] 9 tubes, %zu shared faces, %d opening(s); every tube connected and walkable\n", cx.adj.size(), openings);
 }
 
@@ -155,7 +160,7 @@ TEST_CASE(a_courtyard_block_is_eight_cells_round_an_open_court) {
         const Vec2 want[8] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}, {0, -1}, {0, -1}, {0, 1}, {0, 1}};
         if (i < 4) CHECK(std::fabs(c.params.faceDir.x - want[i].x) < 1e-6 && std::fabs(c.params.faceDir.z - want[i].y) < 1e-6);
         else CHECK(std::fabs(std::fabs(c.params.faceDir.z) - 1.0) < 1e-6 || std::fabs(std::fabs(c.params.faceDir.x) - 1.0) < 1e-6);
-        CHECK(c.params.partyDoors == 0);   // every cell has its own street door
+        CHECK(c.params.partyDoors == 3);   // every cell has its own street door, and a doorway through both shared walls (ADR-0179)
         built += area(c.plan);
         // a party wall is a WHOLE edge: an edge along a party plane has both its ends on it (an edge meeting the
         // plane end-on touches it at one corner, which is not a wall on it)
@@ -220,7 +225,7 @@ TEST_CASE(a_ring_of_cells_round_a_court_enters_every_segment_from_outside) {
         CHECK(c.plan.size() == 4);
         CHECK(c.params.partyWalls == 2);
         CHECK(c.outerFace && c.streetFace && c.connected);
-        CHECK(c.params.partyDoors == 0);
+        CHECK(c.params.partyDoors == 3);   // a doorway through both radial walls: the ring's ground floor is one lobby (ADR-0179)
         CHECK(c.params.top == 9);   // a ring's roof is one clean deck
         // the entrance faces outward: along the cell's own radial direction, not into the court
         const Vec2 radial = normalize(centroid(c.plan));
@@ -235,3 +240,92 @@ TEST_CASE(a_ring_of_cells_round_a_court_enters_every_segment_from_outside) {
     std::printf("    [ring] 12 segments, %.0f m2 built round a court of %.0f m2\n", built, area(inner));
 }
 
+
+// OPENINGS BETWEEN CELLS (ADR-0179): shared lobbies through every whole party wall, and twin towers joined by a sky
+// bridge -- a link on both faces, the bridge drawn and walked from one, a lounge storey either end.
+TEST_CASE(a_bundle_opens_its_lobbies_through_every_shared_wall) {
+    const Poly2 box = {{-30, -30}, {30, -30}, {30, 30}, {-30, 30}};
+    BuildingParams p = towerParams(20);
+    p.faceDir = Vec3(0, 0, -1);
+    const Complex cx = bundledTubes(box, p, 2, 2, {20, 16, 12, 20});
+    CHECK(cx.cells.size() == 4);
+    CHECK(cx.adj.size() == 4);   // 2 x 2: four shared walls
+    int doorsBothSides = 0;
+    for (const Adjacency& ad : cx.adj) {
+        const CellFrame& ca = cx.cells[static_cast<std::size_t>(ad.a)];
+        const CellFrame& cb = cx.cells[static_cast<std::size_t>(ad.b)];
+        auto hasDoor = [&](const CellFrame& c, const Vec2& nOut, Real at) {
+            for (int k = 0; k < c.params.partyWalls; ++k)
+                if (dot(c.params.partyN[k], nOut) > 0.999 && std::fabs(c.params.partyAt[k] - at) < 0.3 && ((c.params.partyDoors >> k) & 1u)) return true;
+            return false;
+        };
+        if (hasDoor(ca, ad.n, ad.at) && hasDoor(cb, ad.n * -1.0, -ad.at)) ++doorsBothSides;
+        bool ground = false;
+        for (const Opening& o : ad.openings) if (o.k0 == 0) ground = true;
+        CHECK(ground);
+    }
+    CHECK(doorsBothSides == 4);
+    // every tube still a building walked base to top
+    for (const CellFrame& c : cx.cells) CHECK(unreachableCells(spaceGraphOf(c.plan, c.params, 0.0)).empty());
+    std::printf("    [lobbies] %zu shared walls, %d with a doorway both sides\n", cx.adj.size(), doorsBothSides);
+}
+
+TEST_CASE(twin_towers_are_joined_by_a_sky_bridge_walked_from_a_lounge) {
+    const Poly2 box = {{-34, -14}, {34, -14}, {34, 14}, {-34, 14}};
+    BuildingParams p = towerParams(24);
+    p.faceDir = Vec3(0, 0, -1);
+    const Complex cx = twinTowers(box, p, 12.0, {24, 24}, 0, 4.5);
+    CHECK(cx.cells.size() == 2);
+    CHECK(cx.adj.empty());   // they stand apart
+    CHECK(cx.bridges.size() == 1 && cx.bridges[0].placed);
+    const Bridge& br = cx.bridges[0];
+    CHECK(std::fabs(br.span - 12.0) < 0.05);
+    CHECK(br.storey == 16);   // two thirds of the way up
+    const CellFrame& a = cx.cells[0];
+    const CellFrame& b = cx.cells[1];
+    CHECK(a.params.links == 1 && b.params.links == 1);
+    CHECK(a.params.linkStorey[0] == 16 && b.params.linkStorey[0] == 16);
+    CHECK(std::fabs(a.params.linkLen[0] - 12.0) < 0.05 && b.params.linkLen[0] == 0);
+    CHECK(dot(a.params.linkN[0], b.params.linkN[0]) < -0.999);               // the faces face each other
+    CHECK(std::fabs(a.params.linkC[0].y - b.params.linkC[0].y) < 1e-6);        // the doors in line across the gap
+    CHECK(std::fabs((b.params.linkC[0] - a.params.linkC[0]).length() - 12.0) < 0.05);
+    // the doors, from each side: a's with the bridge footprint, b's a door alone
+    const std::vector<LinkDoor> da = linkDoors(a.plan, a.params, 16, 0), db = linkDoors(b.plan, b.params, 16, 0);
+    CHECK(da.size() == 1 && db.size() == 1);
+    CHECK(da[0].bridge.size() == 4 && db[0].bridge.empty());
+    CHECK(std::fabs(da[0].w - 4.5) < 1e-6);
+    CHECK(linkDoors(a.plan, a.params, 15, 0).empty());
+    // the grammar: a's building carries the bridge (its floor and sides for the collider, glass for the eye)
+    const BuildingMesh ma = growPlanBuilding(a.plan, a.params, 0.0);
+    int bridgeItems = 0, wallItems = 0;
+    for (const RoofItem& ri : ma.roof) { if (ri.kind == RoofItem::Kind::Bridge) ++bridgeItems; if (ri.kind == RoofItem::Kind::BridgeWall) ++wallItems; }
+    CHECK(bridgeItems == 1 && wallItems == 2);
+    BuildingParams plain = a.params;
+    plain.links = 0;
+    const BuildingMesh mp = growPlanBuilding(a.plan, plain, 0.0);
+    auto partVerts = [](const BuildingMesh& bm, PartId id) {
+        std::size_t n = 0;
+        for (const RenderMesh& part : bm.parts) if (part.materialIndex == static_cast<int>(id)) n += part.vertices.size();
+        return n;
+    };
+    CHECK(partVerts(ma, PartId::Concrete) > partVerts(mp, PartId::Concrete));   // the bridge's floor
+    // the graph: a Link cell off storey 16, reached; everything else reached as before
+    const SpaceGraph ga = spaceGraphOf(a.plan, a.params, 0.0, &ma.roof);
+    int links = 0;
+    for (const Cell& c : ga.cells) if (c.kind == CellKind::Link) { ++links; CHECK(c.k0 == 16); CHECK(c.freeArea > 4.5 * 12.0 * 0.9); }
+    CHECK(links == 1);
+    CHECK(unreachableCells(ga).empty());
+    const SpaceGraph gb = spaceGraphOf(b.plan, b.params, 0.0);
+    int linksB = 0;
+    for (const Cell& c : gb.cells) if (c.kind == CellKind::Link) ++linksB;
+    CHECK(linksB == 1);
+    CHECK(unreachableCells(gb).empty());
+    // the collider: the tier wall on a's bridge face is cut round the door (more quads than the plain wall)
+    std::vector<Vec3> V0, V1;
+    std::vector<uint32_t> I0, I1;
+    appendBuildingTiers(V0, I0, a.plan, plain, 0.0, 0.0, {}, {}, {});
+    appendBuildingTiers(V1, I1, a.plan, a.params, 0.0, 0.0, {}, {}, {});
+    CHECK(I1.size() > I0.size());
+    std::printf("    [twins] bridge at storey %d spanning %.1f m, %.1f m wide; a's roof items %d + %d, link cells %d / %d, collider %zu -> %zu indices\n",
+                br.storey, br.span, br.width, bridgeItems, wallItems, links, linksB, I0.size(), I1.size());
+}

@@ -202,6 +202,103 @@ void Complex::connectLobbies(const Vec2& faceDir) {
             changed = true;
         }
     }
+    // SHARED LOBBIES (ADR-0179): every shared wall that is a whole edge of both cells takes a doorway in its middle
+    // bay on BOTH sides -- the two cut the same bay (one layout, one bay width, the edges one segment), so the
+    // ground floors of a bundle, a courtyard block or a ring are one lobby. (The inner cell's entrance above
+    // already stands on such a wall: its own edge is its entrance, the neighbour's the doorway.)
+    auto wholeEdge = [&](const CellFrame& c, const Vec2& nOut, Real at, Real run) {
+        for (std::size_t e = 0; e < c.plan.size(); ++e) {
+            const Vec2 a = c.plan[e], b = c.plan[(e + 1) % c.plan.size()];
+            const Real L = (b - a).length();
+            if (L < 1e-6) continue;
+            const Vec2 d = (b - a) * (1.0 / L);
+            const Vec2 nrm(d.y, -d.x);
+            if (dot(nrm, nOut) > 0.999 && std::fabs(dot(nrm, a) - at) < 0.3 && std::fabs(L - run) < 0.3) return true;
+        }
+        return false;
+    };
+    for (Adjacency& ad : adj) {
+        if (ad.a < 0 || ad.b < 0) continue;
+        CellFrame& ca = cells[static_cast<std::size_t>(ad.a)];
+        CellFrame& cb = cells[static_cast<std::size_t>(ad.b)];
+        const Real run = (ad.p1 - ad.p0).length();
+        if (run < 4.0) continue;
+        if (!wholeEdge(ca, ad.n, ad.at, run) || !wholeEdge(cb, ad.n * -1.0, -ad.at, run)) continue;
+        auto openWall = [&](CellFrame& c, const Vec2& nOut, Real at) {
+            for (int k = 0; k < c.params.partyWalls; ++k)
+                if (dot(c.params.partyN[k], nOut) > 0.999 && std::fabs(c.params.partyAt[k] - at) < 0.3)
+                    c.params.partyDoors = static_cast<uint8_t>(c.params.partyDoors | (1u << k));
+        };
+        openWall(ca, ad.n, ad.at);
+        openWall(cb, ad.n * -1.0, -ad.at);
+        bool had = false;
+        for (const Opening& o : ad.openings) if (o.k0 == 0 && std::fabs((o.u0 + o.u1) * 0.5 - run * 0.5) < 1.0) had = true;
+        if (!had) ad.openings.push_back({run * 0.5 - 0.6, run * 0.5 + 0.6, 0, 0});
+    }
+}
+
+void Complex::resolveBridges() {
+    for (Bridge& br : bridges) {
+        br.placed = false;
+        if (br.a < 0 || br.b < 0 || br.a >= static_cast<int>(cells.size()) || br.b >= static_cast<int>(cells.size()) || br.a == br.b) continue;
+        CellFrame& ca = cells[static_cast<std::size_t>(br.a)];
+        CellFrame& cb = cells[static_cast<std::size_t>(br.b)];
+        if (ca.plan.size() < 3 || cb.plan.size() < 3) continue;
+        // the facing pair: a's edge whose outward normal points at b, b's edge facing back along the same line
+        // direction, the two overlapping along their run; the nearest such pair
+        Real bestGap = 1e30;
+        std::size_t ea = 0, eb = 0;
+        Vec2 bestN;
+        Real u0 = 0, u1 = 0;   // the overlap along a's edge direction, from a's edge start
+        for (std::size_t i = 0; i < ca.plan.size(); ++i) {
+            const Vec2 a0 = ca.plan[i], a1 = ca.plan[(i + 1) % ca.plan.size()];
+            const Real La = (a1 - a0).length();
+            if (La < 2.0) continue;
+            const Vec2 da = (a1 - a0) * (1.0 / La);
+            const Vec2 na(da.y, -da.x);
+            for (std::size_t j = 0; j < cb.plan.size(); ++j) {
+                const Vec2 b0 = cb.plan[j], b1 = cb.plan[(j + 1) % cb.plan.size()];
+                const Real Lb = (b1 - b0).length();
+                if (Lb < 2.0) continue;
+                const Vec2 db = (b1 - b0) * (1.0 / Lb);
+                const Vec2 nb(db.y, -db.x);
+                if (dot(na, nb) > -0.999) continue;                  // not facing back
+                const Real gap = dot(b0 - a0, na);
+                if (gap < 1.0) continue;                             // b must stand in front of a's face
+                // the overlap along a's direction
+                const Real tb0 = dot(b0 - a0, da), tb1 = dot(b1 - a0, da);
+                const Real o0 = std::max(Real(0), std::min(tb0, tb1)), o1 = std::min(La, std::max(tb0, tb1));
+                if (o1 - o0 < std::max(Real(2.0), br.width + 1.0)) continue;
+                if (gap < bestGap) { bestGap = gap; ea = i; eb = j; bestN = na; u0 = o0; u1 = o1; }
+            }
+        }
+        if (bestGap > 1e29) continue;
+        const int top = std::min(ca.params.floors, cb.params.floors);
+        if (top < 3) continue;
+        int storey = br.storey > 0 ? br.storey : std::max(2, (top * 2) / 3);
+        storey = std::max(1, std::min(storey, top));
+        const Vec2 a0 = ca.plan[ea], a1 = ca.plan[(ea + 1) % ca.plan.size()];
+        const Vec2 da = normalize(a1 - a0);
+        const Vec2 centre = a0 + da * ((u0 + u1) * 0.5);
+        const Real w = std::max(Real(1.8), std::min(br.width, (u1 - u0) - 1.0));
+        auto link = [&](CellFrame& c, const Vec2& n, const Vec2& at, Real len) {
+            if (c.params.links >= 2) return false;
+            const int k = c.params.links++;
+            c.params.linkN[k] = n;
+            c.params.linkC[k] = at;
+            c.params.linkStorey[k] = static_cast<int16_t>(storey);
+            c.params.linkLen[k] = len;
+            c.params.linkW[k] = w;
+            return true;
+        };
+        if (!link(ca, bestN, centre, bestGap)) continue;
+        link(cb, bestN * -1.0, centre + bestN * bestGap, 0);
+        (void)eb;
+        br.storey = storey;
+        br.width = w;
+        br.span = bestGap;
+        br.placed = true;
+    }
 }
 
 Complex bundledTubes(const Poly2& boxIn, const BuildingParams& params, int nx, int ny, const std::vector<int>& floorsPerCell) {
@@ -314,6 +411,48 @@ Complex ringCells(const Poly2& outlineIn, const BuildingParams& params, Real dep
     }
     cx.resolve();
     cx.connectLobbies(Vec2(params.faceDir.x, params.faceDir.z));
+    return cx;
+}
+
+Complex twinTowers(const Poly2& boxIn, const BuildingParams& params, Real gap, const std::vector<int>& floorsPerCell, int bridgeStorey, Real bridgeW) {
+    Complex cx;
+    Poly2 box = boxIn;
+    if (box.size() != 4) return cx;
+    ensureCCW(box);
+    const Vec2 o = box[0];
+    const Vec2 ex = box[1] - box[0], ey = box[3] - box[0];
+    const Real L = ex.length();
+    gap = std::max(Real(4.0), gap);
+    const Real each = (L - gap) * 0.5;
+    if (each < kCoreTierMin + 1.0 || ey.length() < kCoreTierMin + 1.0) return cx;
+    const Vec2 ux = ex * (1.0 / L);
+    for (int i = 0; i < 2; ++i) {
+        CellFrame c;
+        const Vec2 x0 = o + ux * (i == 0 ? Real(0) : each + gap);
+        c.plan = {x0, x0 + ux * each, x0 + ux * each + ey, x0 + ey};
+        ensureCCW(c.plan);
+        c.params = params;
+        const std::size_t idx = static_cast<std::size_t>(i);
+        if (!floorsPerCell.empty()) c.params.floors = std::max(1, floorsPerCell[std::min(idx, floorsPerCell.size() - 1)]);
+        c.params.partyWalls = 0;
+        c.params.partyDoors = 0;
+        c.params.links = 0;
+        c.frame.origin = c.plan[0];
+        c.frame.u = ux;
+        c.frame.v = normalize(ey);
+        c.role = "twin";
+        c.mass = std::make_shared<Stack>(stackOf(c.plan, c.params));
+        cx.cells.push_back(c);
+    }
+    cx.resolve();
+    cx.connectLobbies(Vec2(params.faceDir.x, params.faceDir.z));
+    Bridge br;
+    br.a = 0;
+    br.b = 1;
+    br.storey = bridgeStorey;
+    br.width = bridgeW;
+    cx.bridges.push_back(br);
+    cx.resolveBridges();
     return cx;
 }
 

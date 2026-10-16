@@ -32,7 +32,7 @@ struct FloorSurface {
 // A flight's riser and tread as a stair climbs (halfFlightRisers): the surface of a stair shaft cell.
 void steppedFloor(FloorSurface& f, Real storeyH, Real tread, const Vec2& up);
 
-enum class CellKind : uint8_t { Hall, Room, Stair, Lift, Roof, Pad };   // Pad: a helipad, a floor over the roof deck
+enum class CellKind : uint8_t { Hall, Room, Stair, Lift, Roof, Pad, Link };   // Pad: a helipad, a floor over the roof deck; Link: a bridge or doorway to the next cell (cells.h)
 
 struct Cell {
     CellKind kind = CellKind::Hall;

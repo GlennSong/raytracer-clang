@@ -875,8 +875,8 @@ archetype_book = {
     {"sky_exposure_tower", 8}, {"art_deco_tower", 6}, {"stepped_tower", 5},
     {"drum_tower", 4}, {"office_slab", 8},
     {"twisted_tower", 2}, {"lens_tower", 2}, {"leaning_tower", 1.5}, {"twisted_taper", 1.5},
-    {"wavy_tower", 1.5}, {"stacked_modules", 1.5}, {"rounded_tower", 1.0}, {"sculpted_tower", 0.5},
-    {"commercial_block", 2.5},
+    {"wavy_tower", 1.5}, {"stacked_modules", 1.5}, {"rounded_tower", 1.0}, {"sculpted_tower", 0.5}, {"veil_tower", 0.5},
+    {"commercial_block", 2.0},
     {"parking_garage", 4.5}, {"plaza", 3.5}, {"civic_hall", 3},
   },
   commercial = {

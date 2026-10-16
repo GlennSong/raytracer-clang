@@ -10268,3 +10268,77 @@ storey outlines are not affine images of one section.
   the twist / bend / taper warps as SDF words where the stack's curves do not reach, the `Envelope` (a skin that
   is not the floors), rakes as stepped cells.
 
+## ADR-0178 — The envelope: a form worn as a skin round straight floors
+
+Glenn's lab note on the wavy tower (2026-10-15: "the interior of those offices should just be a straight edge
+versus the exterior which can be wavy") was answered first for one form, by putting the wave in the floor plates.
+This makes that answer a word every form can use (`envelope.{h,cpp}`, issue #105 step 6).
+
+- **A form is the floors, or it is a skin.** `BuildingParams::skin` says which: 0, the form is the floors (every
+  storey its slice, as ADR-0175 and ADR-0177 give them); 1, a DOUBLE SKIN -- the storeys are straight, the plan's
+  prism nested above the base storeys, and the form is a second glass skin a gap (`skinGap`) outside them; 2,
+  PLATES -- straight storeys, and each floor's plate runs out to the form's contour (Aqua Tower; the Wave's
+  default, so `wavy_tower` is unchanged); 3, both. The rooms inside are rectangular whatever the skin does, and
+  every planner is untroubled.
+- **The floors inside a skin are the plan scaled about its centre** until, pushed out by the gap, they lie inside
+  the form at every storey above the base (a bisection on the scale; the Wave's floors are the plan itself, its
+  wave running past the plan, or the plan inset by the wave and the gap for a wavy veil). Floors narrower than
+  the core needs (`kCoreTierMin`) cannot stand: the form is then the floors, as if `skin` were 0 -- a twist
+  turning inside a 30 x 24 lot leaves no such floors, a 44 x 40 lot does. `massStack` and `storeyPlans` consult
+  the skin first, so the core, the graph, the collider and the census all see the straight floors.
+- **The veil is drawn from the form's own storeys** (`formStoreys`: what the form would be as floors), each
+  storey's edges ruled up to the next outline's, floor-to-ceiling glass in the building's curtain style (a
+  diagrid when the recipe asks), a trim band at its foot on the base storeys' roof and a parapet at its top.
+  Outlines whose corner counts differ (a field's contours) are resampled to one count by arc length, so the veil
+  rules; outlines that already correspond (a twist's rectangles, a mesh's slices) are used as they are. The veil
+  is scenery: no collider, the floors' glass bounds the walkable space.
+- **A plate's edge past the glass carries a railing** (`emitRailingRun`, `emitPlateRailings`: a top rail, a mid
+  rail, a post every 1.5 m, on every plate edge whose middle lies more than a hand's width outside the storey's
+  outline). This is the railing the wave owed since ADR-0177, and the bridges of the complex will use the same run.
+- **Two recipes wear it.** `veil_tower`: a straight tower in a sculpted glass skin, the form by the seed (a
+  twist, a lens, the curves, the sculpted mass), half of them diagrids; and half of the `sculpted_tower`s are
+  veiled. Both in the financial table and the archetype book; `building.envelope{}` in Lua gives the floors,
+  the veil's outlines and the plates per storey.
+- **The caps the stack owed since ADR-0175 land with it** (`emitGlassCap`, `Cap::Kind` on `mass_stack.h`): the
+  dome's loft -- the top outline ring by ring in glass with a rib up every corner, on a trim band -- is one
+  emitter with a profile per kind. `top` 11 SPIRE: a concave taper to a point, twice the half-width tall. 12
+  VAULT: a barrel over the long axis, the short axis alone scaled by cos, the ridge the last ring, the gables
+  the loft's own ends. 13 APERTURE: the dome stopped at two thirds, open to the sky, a rim at the opening. 14
+  FLARED: the outline swelling out by an eighth under a flat glass lid. The deck under every one stays the roof
+  the stairs reach; the twisted taper, the leaning tower, the sculpted tower and the stacked modules wear them
+  by their seeds. Lua names them as the dome is named.
+- **Owed.** The sweep, `sdfRevolve` and the SDF warps, rakes; the veil's top closed over the gap (a ring roof)
+  where a recipe wants it; a door onto a plate (today no plate is walked).
+
+## ADR-0179 — Openings between cells: shared lobbies, a sky bridge, one crown
+
+The complex of ADR-0176 stood its cells against one another and gave every one a way in; the cells never opened
+to each other except where an inner tube had to be entered. This is the first set of openings BETWEEN cells.
+
+- **A shared wall that is a whole edge of both cells opens both ways on the ground.** `connectLobbies` puts a
+  doorway in the middle bay on both sides of every such adjacency (the two cut the same bay: one layout, one bay
+  width, the edges one segment), so a bundle's, a courtyard block's or a ring's ground floors are one lobby. The
+  doorway is the party wall's `backdoor` bay, which the lot layer already turns into a door the collider notches
+  and a leaf; nothing new reaches the graph (a cell's own gate is unchanged) -- the lobbies join physically, as
+  the inner tube's entrance always did.
+- **A sky bridge is a LINK on both faces.** `Bridge{a, b, storey, width}` on the complex is resolved
+  (`resolveBridges`) to the two faces that face each other across a gap, overlapping along their run; both cells'
+  params take a link (`links`, `linkN`, `linkC`, `linkStorey`, `linkLen`, `linkW`: the face's line, the door's
+  centre, the storey, the span to draw -- on one side only -- and the width). Through the grammar a link is: a
+  doorway in the curtain wall at that storey framed in the mullion metal (`emitLinkDoorway`); the bridge from the
+  side that carries the span -- a floor slab, glass sides floor to ceiling, a roof slab -- recorded as roof items
+  of two new kinds, `Bridge` (a prism walked on top) and `BridgeWall` (a ring, as a screen is), which the roof
+  cell ignores; the storey laid as the LOUNGE (the sky lobby: open floor, so the door opens onto nothing walled);
+  in the collider the wall cut round the doorway at its storey -- in a tier's walls, or in the one-tier tower's
+  ground prism, whose door notches now carry a sill; and in the graph a `Link` cell past the face (the bridge's
+  footprint, or a stub when the cells touch) joined by a Passage to whatever stands at the door. The neighbour's
+  graph has the same from its side; the gate on each cell is unchanged.
+- **Twin towers are the preset** (`twinTowers`: two towers along a box's long axis a gap apart, each the box's
+  full depth, a bridge two thirds of the way up the lower one), `recipeTwinTowers` ("twin_towers", a whole-block
+  landmark of the financial and commercial quarters, 4% of them; a third wear glass spires). Lua:
+  `building.cells{ twins = gap, bridge = storey, bridge_w = w }` returns the bridges placed.
+- **One crown per bundle.** The tallest tube wears the top; every lower tube's deck stays bare (`top = 9`), as a
+  courtyard block crowns its tallest wing and a ring none. Thirteen penthouses on one block were a skyline of
+  bulkheads.
+- **Owed.** Openings between cells above the ground where they touch (an office suite across tubes); bridges
+  between cells of different presets; the rowhouse strip and the mall as complex presets; the ring's one crown.

@@ -39,6 +39,7 @@ const char* cellKindName(CellKind k) {
         case CellKind::Lift: return "lift";
         case CellKind::Roof: return "roof";
         case CellKind::Pad: return "pad";
+        case CellKind::Link: return "link";
     }
     return "?";
 }
@@ -342,6 +343,25 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             if (ca < 0 || cb < 0 || ca == cb) continue;
             doorPortal(ca, cb, Portal::Kind::Door, p - d * (kRoomDoorW * 0.5), p + d * (kRoomDoorW * 0.5), kRoomDoorH, k);
         }
+        // LINKS (shape_grammar.h linkDoors; cells.h, ADR-0179): a doorway through to the next cell above the ground,
+        // and the bridge it opens onto -- a Link cell past the face (the bridge's footprint, or a stub of it when the
+        // cells touch), a Passage from whatever stands at the door. The neighbour's graph has the same from its side.
+        for (const LinkDoor& ld : linkDoors(sp.plan, params, k, 0)) {
+            if (k < 1) continue;
+            const Vec2 mid = (ld.a + ld.b) * 0.5;
+            const int c = cellAt(k, mid - ld.n * 0.6);
+            if (c < 0) continue;
+            Cell lc;
+            lc.kind = CellKind::Link;
+            lc.plan = ld.bridge.size() >= 3 ? ld.bridge : Poly2{ld.a, ld.b, ld.b + ld.n * 1.5, ld.a + ld.n * 1.5};
+            ensureCCW(lc.plan);
+            lc.height = sp.h - 0.3;
+            lc.freeArea = area(lc.plan);
+            lc.k0 = lc.k1 = k;
+            lc.tier = sp.tier;
+            const int li = add(lc);
+            doorPortal(c, li, Portal::Kind::Passage, ld.a, ld.b, std::min(sp.h - 0.3, human::DOOR_HEIGHT), k);
+        }
         // The facade's doors onto the street (the entrance, a shop's own door, the back door).
         if (k == 0)
             for (const WallOpening& o : storeyOpenings(sp.plan, params, k, baseY + sp.y0, sp.h, entranceEdge)) {
@@ -404,7 +424,8 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             if (roof)   // the tanks, the HVAC, the masts' bases, a lantern: not floor (a Screen is the edge, not a hole)
                 for (const RoofItem& ri : *roof) {
                     if (ri.kind == RoofItem::Kind::Screen || ri.kind == RoofItem::Kind::Frame || ri.kind == RoofItem::Kind::Sloped ||
-                        ri.kind == RoofItem::Kind::Ramp || ri.footprint.size() < 3)
+                        ri.kind == RoofItem::Kind::Ramp || ri.kind == RoofItem::Kind::Bridge || ri.kind == RoofItem::Kind::BridgeWall ||
+                        ri.footprint.size() < 3)
                         continue;   // (a sloped glass top stands over the deck, not on it; a ramp is the way onto a pad)
                     r.holes.push_back(ri.footprint);
                     r.freeArea -= area(ri.footprint);
@@ -491,6 +512,7 @@ const char* useFill(const Cell& c) {
     if (c.kind == CellKind::Lift) return "#9fb8d9";
     if (c.kind == CellKind::Roof) return "#e8e8e8";
     if (c.kind == CellKind::Pad) return "#c9d6e3";
+    if (c.kind == CellKind::Link) return "#e3d6a0";
     if (c.kind == CellKind::Hall) return "#f7f4ec";
     switch (c.use) {
         case RoomKind::Shop: return "#f2b9a0";

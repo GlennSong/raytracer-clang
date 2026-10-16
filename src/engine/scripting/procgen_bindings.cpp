@@ -19,6 +19,7 @@
 #include "../procgen/city/circulation.h"
 #include "../procgen/city/mass_stack.h"
 #include "../procgen/city/cells.h"
+#include "../procgen/city/envelope.h"
 #include "../procgen/city/section.h"
 #include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
@@ -1022,10 +1023,10 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
 static void readTopField(lua_State* L, int idx, BuildingParams& p) {
     lua_getfield(L, idx, "top");
     if (lua_isstring(L, -1)) {
-        static const char* names[11] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
-                                        "antennas", "mast", "none", "dome"};
+        static const char* names[15] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
+                                        "antennas", "mast", "none", "dome", "spire", "vault", "aperture", "flared"};
         const std::string t = lua_tostring(L, -1);
-        for (int i = 0; i < 11; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
+        for (int i = 0; i < 15; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
     }
     lua_pop(L, 1);
     lua_getfield(L, idx, "helipad");   // true: a pad on the roof; false: never; unset: the tall-tower rule
@@ -1172,6 +1173,16 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.wave        = static_cast<Real>(optField(L, idx, "wave", p.wave));
     p.waveLen     = static_cast<Real>(optField(L, idx, "wave_len", p.waveLen));
     p.massMesh    = static_cast<uint8_t>(optField(L, idx, "mass_mesh", p.massMesh));
+    // THE SKIN (envelope.h, ADR-0178): skin = "floors" | "double" | "plates" | "both", skin_gap = metres
+    lua_getfield(L, idx, "skin");
+    if (lua_isstring(L, -1)) {
+        const std::string sk = lua_tostring(L, -1);
+        p.skin = sk == "double" ? 1 : sk == "plates" ? 2 : sk == "both" ? 3 : 0;
+    } else if (lua_isnumber(L, -1)) {
+        p.skin = static_cast<uint8_t>(lua_tointeger(L, -1));
+    }
+    lua_pop(L, 1);
+    p.skinGap     = optField(L, idx, "skin_gap", p.skinGap);
     p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
     p.diagrid     = static_cast<uint8_t>(optField(L, idx, "diagrid", p.diagrid));
     p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));
@@ -1487,6 +1498,42 @@ int l_building_mass(lua_State* L) {
     return 1;
 }
 
+// building.envelope{ plan = {...}, <params> | recipe = "name", skin = "double" | "plates" | "both", ... }
+//   -> { skin = 0..3, floors = {{x,z}...} | nil, veil = { [storey] = {{x,z}...} }, plates = { [storey] = {{x,z}...} } }
+// THE ENVELOPE (envelope.h, ADR-0178): the form as a skin round straight floors -- the floors inside it, the veil's
+// outline per storey, the plates' per storey; `floors` nil when the form is the floors.
+int l_building_envelope(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.envelope: `plan` needs three or more points");
+    auto pushPoly = [&](const Poly2& poly) {
+        lua_newtable(L);
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            lua_newtable(L);
+            lua_pushnumber(L, poly[i].x); lua_rawseti(L, -2, 1);
+            lua_pushnumber(L, poly[i].y); lua_rawseti(L, -2, 2);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+    };
+    auto pushPerStorey = [&](const std::vector<Poly2>& per) {
+        lua_newtable(L);
+        for (std::size_t k = 0; k < per.size(); ++k) {
+            if (per[k].size() < 3) continue;
+            pushPoly(per[k]);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(k));
+        }
+    };
+    lua_newtable(L);
+    lua_pushinteger(L, skinOf(p)); lua_setfield(L, -2, "skin");
+    const Poly2 floors = skinFloorsPlan(plan, p);
+    if (floors.size() >= 3) { pushPoly(floors); lua_setfield(L, -2, "floors"); }
+    pushPerStorey(skinSlices(plan, p)); lua_setfield(L, -2, "veil");
+    pushPerStorey(skinPlates(plan, p)); lua_setfield(L, -2, "plates");
+    return 1;
+}
+
 // building.cells{ box = {{x,z}, {x,z}, {x,z}, {x,z}}, tubes = {nx, ny} | court = depth | ring = sides, depth = d, floors = {n, ...}, <params> | recipe = "name", ... }
 //   -> { cells = { {x0, z0, x1, z1, floors, outer, connected, face_x, face_z, party, doors} ... },
 //        adjacencies = { {a, b, top, openings} ... } }
@@ -1526,8 +1573,11 @@ int l_building_cells(lua_State* L) {
     lua_pop(L, 1);
     const double court = optField(L, 1, "court", 0.0);   // court = <wing depth>: a courtyard block instead of tubes
     const double ringN = optField(L, 1, "ring", 0.0);    // ring = <sides> (with depth = d): a ring of cells on the box's inscribed polygon
+    const double twins = optField(L, 1, "twins", 0.0);   // twins = <gap>: two towers along the box with a sky bridge (bridge = storey, bridge_w = width)
     Complex cx;
-    if (ringN >= 3) {
+    if (twins > 0) {
+        cx = twinTowers(box, p, static_cast<Real>(twins), floors, static_cast<int>(optField(L, 1, "bridge", 0.0)), static_cast<Real>(optField(L, 1, "bridge_w", 4.5)));
+    } else if (ringN >= 3) {
         const OBB2 ob = orientedBoundingBox(box);
         const Real R = std::min(ob.half[0], ob.half[1]);
         Poly2 ngon;
@@ -1557,9 +1607,27 @@ int l_building_cells(lua_State* L) {
         lua_pushnumber(L, c.params.faceDir.z); lua_setfield(L, -2, "face_z");
         lua_pushinteger(L, c.params.partyWalls); lua_setfield(L, -2, "party");
         lua_pushinteger(L, c.params.partyDoors); lua_setfield(L, -2, "doors");
+        lua_pushinteger(L, c.params.links); lua_setfield(L, -2, "links");
+        if (c.params.links > 0) {
+            lua_pushinteger(L, c.params.linkStorey[0]); lua_setfield(L, -2, "link_storey");
+            lua_pushnumber(L, c.params.linkLen[0]); lua_setfield(L, -2, "link_len");
+        }
         lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
     }
     lua_setfield(L, -2, "cells");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < cx.bridges.size(); ++i) {
+        const Bridge& br = cx.bridges[i];
+        lua_newtable(L);
+        lua_pushinteger(L, br.a + 1); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, br.b + 1); lua_setfield(L, -2, "b");
+        lua_pushinteger(L, br.storey); lua_setfield(L, -2, "storey");
+        lua_pushnumber(L, br.width); lua_setfield(L, -2, "width");
+        lua_pushnumber(L, br.span); lua_setfield(L, -2, "span");
+        lua_pushboolean(L, br.placed); lua_setfield(L, -2, "placed");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "bridges");
     lua_newtable(L);
     for (std::size_t i = 0; i < cx.adj.size(); ++i) {
         const Adjacency& ad = cx.adj[i];
@@ -4102,6 +4170,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"section", l_building_section},
         {"circulation", l_building_circulation},
         {"mass", l_building_mass},
+        {"envelope", l_building_envelope},
         {"cells", l_building_cells},
         {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},

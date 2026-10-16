@@ -30,7 +30,8 @@ void appendBuildingPrism(std::vector<Vec3>& vertices,
                          std::vector<uint32_t>& indices, const Poly2& plan,
                          Real base, Real top, Real floorY,
                          const std::vector<DoorSpec>& doors, Real plinth,
-                         const std::vector<Poly2>& roofHoles = {});
+                         const std::vector<Poly2>& roofHoles = {},
+                         const std::vector<LinkDoor>* links = nullptr);   // link doorways above the ground (shape_grammar.h), absolute y0
 
 // THE TIERED COLLIDER (architectural toolkit, issue #105, step 1): one prism per tier of a flat-roofed
 // building (shape_grammar.h colliderTiers), the ground tier with its door notches and floor cap, every tier

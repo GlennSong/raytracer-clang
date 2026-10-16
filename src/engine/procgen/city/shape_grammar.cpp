@@ -2,6 +2,7 @@
 #include "mass_stack.h"
 #include "implicit.h"
 #include "mesh_mass.h"
+#include "envelope.h"
 #include "face.h"
 #include "section.h"
 #include "trades.h"   // a shop unit's trade: one table for the facade, its interior and its place
@@ -1127,6 +1128,59 @@ bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t 
     return k >= 0 && ((params.partyDoors >> k) & 1u) != 0;
 }
 
+int linkEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey) {
+    if (params.links == 0 || plan.size() < 3 || e >= plan.size()) return -1;
+    const Vec2 a = plan[e], b = plan[(e + 1) % plan.size()];
+    const Real L = (b - a).length();
+    if (L < 1e-6) return -1;
+    const Vec2 d = (b - a) * (1.0 / L);
+    const Vec2 nrm(d.y, -d.x);
+    for (int k = 0; k < std::min<int>(2, params.links); ++k) {
+        if (params.linkStorey[k] != storey) continue;
+        if (dot(params.linkN[k], nrm) < 0.999) continue;
+        if (std::fabs(dot(nrm, a) - dot(params.linkN[k], params.linkC[k])) > 0.3) continue;
+        const Real t = dot(params.linkC[k] - a, d);
+        if (t < 0.5 || t > L - 0.5) continue;
+        return k;
+    }
+    return -1;
+}
+
+std::vector<LinkDoor> linkDoors(const Poly2& planIn, const BuildingParams& params, int storey, Real baseY) {
+    std::vector<LinkDoor> out;
+    if (params.links == 0 || planIn.size() < 3) return out;
+    Poly2 plan = planIn;
+    ensureCCW(plan);
+    for (std::size_t e = 0; e < plan.size(); ++e) {
+        for (int k = 0; k < std::min<int>(2, params.links); ++k) {
+            const int st = params.linkStorey[k];
+            if (storey >= 0 && st != storey) continue;
+            if (linkEdge(plan, params, e, st) != k) continue;
+            const Vec2 a = plan[e], b = plan[(e + 1) % plan.size()];
+            const Vec2 d = normalize(b - a);
+            const Real L = (b - a).length();
+            const Real w = std::min(std::max(Real(1.2), params.linkW[k]), L - 1.0);
+            const Real t = std::clamp(dot(params.linkC[k] - a, d), w * 0.5 + 0.5, L - w * 0.5 - 0.5);
+            LinkDoor ld;
+            ld.edge = e;
+            ld.a = a + d * (t - w * 0.5);
+            ld.b = a + d * (t + w * 0.5);
+            ld.n = Vec2(d.y, -d.x);
+            ld.storey = st;
+            ld.y0 = baseY + (st <= 0 ? Real(0) : params.groundHeight + (st - 1) * params.floorHeight);
+            ld.h = st <= 0 ? params.groundHeight : params.floorHeight;
+            ld.len = std::max(Real(0), params.linkLen[k]);
+            ld.w = w;
+            if (ld.len > 0.5) {
+                ld.bridge = {ld.a, ld.b, ld.b + ld.n * ld.len, ld.a + ld.n * ld.len};
+                ensureCCW(ld.bridge);
+            }
+            out.push_back(ld);
+        }
+    }
+    return out;
+}
+
 // Where along a stair's wall (from its first corner, CCW) the stair-wall door stands: a metre short of the flight's
 // foot. interiorLayout centres the flight on the wall -- its run (from the ground storey's risers) plus a metre's
 // arrival -- so this needs only the wall's length and the params.
@@ -2052,27 +2106,61 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
     return out;
 }
 
-// THE GLASS DOME (issue #105, top 10; the Gherkin's cap): the top outline lofted to a point on a quarter-circle
-// profile -- every ring the outline scaled about its centroid by cos, raised by sin -- in the curtain's glass with a
-// rib up every corner, standing on a trim band at the deck's edge. The deck under it is a lantern room: the
-// bulkhead's doors open into it. Returns the rise.
-static Real emitGlassDome(BuildingMesh& out, const Poly2& topIn, Real y, const BuildingParams& p) {
+// THE GLASS CAPS (issue #105, tops 10-14; mass_stack.h Cap::Kind): the top outline lofted ring by ring in the
+// curtain's glass with a rib up every corner, standing on a trim band at the deck's edge; the deck under it is a
+// lantern room, the bulkhead's doors open into it. Each kind is a profile -- the ring's scale about the outline's
+// centroid and its height, per `t` from the deck (0) to the top (1):
+//   DOME     (10, the Gherkin): scale cos, height sin on a quarter circle, closed to a point
+//   SPIRE    (11): a concave taper (1 - t)^1.6 twice the plan's half-width tall, closed to a point
+//   VAULT    (12): a barrel over the long axis -- the short axis alone scaled by cos, the ridge the last ring
+//   APERTURE (13): the dome stopped at two thirds, open to the sky, a rim at the opening
+//   FLARED   (14): the outline swelling out by an eighth, closed by a flat glass lid
+// Returns the rise.
+static Real emitGlassCap(BuildingMesh& out, const Poly2& topIn, Real y, const BuildingParams& p, Cap::Kind kind) {
     Poly2 top = topIn;
     if (top.size() < 3) return 0;
     ensureCCW(top);
     const Vec2 c = centroid(top);
     const OBB2 ob = orientedBoundingBox(top);
-    const Real rise = std::max(Real(3.0), std::min(ob.half[0], ob.half[1]) * 0.8);
-    const int rings = 7;
+    const Real half = std::min(ob.half[0], ob.half[1]);
+    Real rise = std::max(Real(3.0), half * 0.8);
+    if (kind == Cap::Kind::Spire) rise = std::max(Real(6.0), half * 2.2);
+    if (kind == Cap::Kind::Flared) rise = std::max(Real(2.5), half * 0.35);
+    const int rings = kind == Cap::Kind::Aperture ? 5 : 7;
+    const Real tEnd = kind == Cap::Kind::Aperture ? Real(0.66) : Real(1);   // the aperture's profile stops short
+    const bool pointed = kind == Cap::Kind::Dome || kind == Cap::Kind::Spire;
     const Vec3 glassCol = p.curtainWall ? curtainGlassColour(p.glassTint, glassGrey()) : glassGrey();
     const Vec3 ribCol = curtainMullionColour(p.mullionTone);
     RenderMesh glass, ribs, band;
     auto ringAt = [&](int k, Poly2& r, Real& h) {
-        const Real t = static_cast<Real>(k) / rings;
-        const Real sc = std::cos(t * 1.5707963267948966), sn = std::sin(t * 1.5707963267948966);
+        const Real t = tEnd * static_cast<Real>(k) / rings;
+        Real su = 1, sv = 1, hh = 0;
+        switch (kind) {
+        case Cap::Kind::Spire:
+            su = sv = std::pow(std::max(Real(0), 1 - t), Real(1.6));
+            hh = t;
+            break;
+        case Cap::Kind::Vault:
+            sv = std::cos(t * 1.5707963267948966);
+            hh = std::sin(t * 1.5707963267948966);
+            break;
+        case Cap::Kind::Flared:
+            su = sv = 1 + 0.12 * std::sin(t * 1.5707963267948966);   // (a quarter read as a lid too wide for its tower)
+            hh = t;
+            break;
+        default:   // Dome, Aperture
+            su = sv = std::cos(t * 1.5707963267948966);
+            hh = std::sin(t * 1.5707963267948966);
+            break;
+        }
         r.clear();
-        for (const Vec2& q : top) r.push_back(c + (q - c) * sc);
-        h = y + rise * sn;
+        const int la = ob.longAxis();
+        for (const Vec2& q : top) {
+            const Vec2 d = q - c;
+            const Real u = dot(d, ob.axis[la]), v = dot(d, ob.axis[1 - la]);
+            r.push_back(c + ob.axis[la] * (u * su) + ob.axis[1 - la] * (v * sv));
+        }
+        h = y + rise * hh;
     };
     const std::size_t n = top.size();
     for (int k = 0; k < rings; ++k) {
@@ -2089,7 +2177,9 @@ static Real emitGlassDome(BuildingMesh& out, const Poly2& topIn, Real y, const B
             nrm = normalize(nrm);
             const Vec2 outward = normalize(((lo[i] + lo[(i + 1) % n]) * 0.5) - c);
             if (nrm.x * outward.x + nrm.z * outward.y + nrm.y * 0.2 < 0) nrm = nrm * -1.0;
-            if (k + 1 == rings) MeshBuilder::emitTri(glass, A, B, D, nrm, glassCol);
+            const bool last = k + 1 == rings;
+            if (last && pointed) MeshBuilder::emitTri(glass, A, B, D, nrm, glassCol);
+            else if ((C - D).lengthSquared() < 1e-8) MeshBuilder::emitTri(glass, A, B, D, nrm, glassCol);   // the vault's ridge
             else MeshBuilder::emitQuad(glass, A, B, C, D, nrm, glassCol);
             // the rib up this corner's meridian
             const Vec3 d = D - A;
@@ -2100,11 +2190,36 @@ static Real emitGlassDome(BuildingMesh& out, const Poly2& topIn, Real y, const B
             }
         }
     }
+    Poly2 lid;
+    Real yLid = y;
+    ringAt(rings, lid, yLid);
+    if (kind == Cap::Kind::Flared && lid.size() >= 3) {
+        // the flat glass lid, and a rib round its rim
+        const Vec3 up(0, 1, 0);
+        const Vec3 cc(centroid(lid).x, yLid, centroid(lid).y);
+        for (std::size_t i = 0; i < n; ++i)
+            MeshBuilder::emitTri(glass, Vec3(lid[i].x, yLid, lid[i].y), Vec3(lid[(i + 1) % n].x, yLid, lid[(i + 1) % n].y), cc, up, glassCol);
+        MeshBuilder::emitPlanPrism(band, offsetPlanPublic(lid, -0.1), {}, yLid - 0.12, yLid + 0.12, ribCol);
+    }
+    if (kind == Cap::Kind::Aperture && lid.size() >= 3)
+        MeshBuilder::emitPlanPrism(band, offsetPlanPublic(lid, -0.15), {}, yLid - 0.05, yLid + 0.45, p.trimColor * 0.85);   // the rim
     MeshBuilder::emitPlanPrism(band, top, {}, y - 0.05, y + 0.35, p.trimColor * 0.85);
     appendToPart(out, PartId::Glass, glass);
     appendToPart(out, PartId::Detail, ribs);     // (the ribs read as metal detail, as mullions do)
     appendToPart(out, PartId::Trim, band);
-    return rise + 0.35;
+    return (yLid - y) + (kind == Cap::Kind::Aperture ? Real(0.45) : Real(0.35));
+}
+
+// The cap a `top` code names (10 dome, 11 spire, 12 vault, 13 aperture, 14 flared); Parapet for every other top.
+static Cap::Kind capKindOf(uint8_t top) {
+    switch (top) {
+    case 10: return Cap::Kind::Dome;
+    case 11: return Cap::Kind::Spire;
+    case 12: return Cap::Kind::Vault;
+    case 13: return Cap::Kind::Aperture;
+    case 14: return Cap::Kind::Flared;
+    default: return Cap::Kind::Parapet;
+    }
 }
 
 // Rooftop crown (ADR-0040 Pass B): a mechanical penthouse/bulkhead set back on
@@ -3321,6 +3436,134 @@ static void emitParapetRun(BuildingMesh& out, const Vec2& a, const Vec2& b, Real
             PartId::Trim, copingCol);
 }
 
+// A RAILING along a run (issue #105: the plates' edges past the glass, a bridge's sides): a top rail, a mid rail
+// and a post every 1.5 m or so, in the balconies' dark metal, `h` high (PARAPET). Posts stand at `a` and before `b`.
+static void emitRailingRun(BuildingMesh& out, const Vec2& a, const Vec2& b, Real y, Real h, const Vec3& col) {
+    const Real L = (b - a).length();
+    if (L < 0.3 || h <= 0) return;
+    const Vec2 d = (b - a) * (1.0 / L), in(-d.y, d.x);
+    const Vec3 r3(d.x, 0, d.y), f3(in.x, 0, in.y), up(0, 1, 0);
+    const Vec3 o(a.x, y, a.y);
+    emitBox(out, Scope{o + up * (h - 0.06) - f3 * 0.03, {r3, up, f3}, Vec3(L, 0.06, 0.06)}, PartId::Metal, col);
+    emitBox(out, Scope{o + up * (h * 0.5) - f3 * 0.02, {r3, up, f3}, Vec3(L, 0.04, 0.04)}, PartId::Metal, col);
+    const int posts = std::max(1, static_cast<int>(std::floor(L / 1.5)));
+    for (int i = 0; i < posts; ++i)
+        emitBox(out, Scope{o + r3 * (i * (L / posts)) - f3 * 0.03, {r3, up, f3}, Vec3(0.06, h, 0.06)}, PartId::Metal, col);
+}
+
+// THE PLATE'S RAILING: every edge of a floor plate whose middle lies past the storey's glass (`glass`, the floor's
+// outline) by more than a hand's width is a balcony edge and carries a railing at the plate's top `y`.
+static void emitPlateRailings(BuildingMesh& out, const Poly2& plate, const Poly2& glass, Real y) {
+    if (plate.size() < 3 || glass.size() < 3) return;
+    const Poly2 past = offsetPlan(glass, -0.35);   // (offsetPlan: a negative inset is an outset)
+    if (past.size() < 3) return;
+    const Vec3 railCol(0.22, 0.23, 0.25);
+    const std::size_t n = plate.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        const Vec2 a = plate[i], b = plate[(i + 1) % n];
+        if (pointInPolygon(past, (a + b) * 0.5)) continue;
+        emitRailingRun(out, a, b, y, human::PARAPET, railCol);
+    }
+}
+
+// THE VEIL (envelope.h, ADR-0178): the form's storey outlines (`skin`, indexed as the storeys) as a glass skin,
+// each storey's edges ruled up to the next outline's (the outlines share a corner count), floor-to-ceiling glass
+// in the building's curtain style; a trim band at its foot on the base storeys' roof, a parapet at its top.
+static void emitSkin(BuildingMesh& out, const std::vector<Poly2>& skin, const std::vector<StoreyPlan>& storeys, Real baseY,
+                     const BuildingParams& params, FacadeDetail detail) {
+    if (skin.empty()) return;
+    CurtainStyle cs = curtainStyleOf(params);
+    cs.spandrelFrac = 0;                      // floor-to-ceiling: a veil has no floors of its own
+    cs.bay = std::max(cs.bay, Real(1.8));
+    const Vec3 trim = params.trimColor * 0.85;
+    std::size_t first = 0, last = 0;
+    for (std::size_t k = 0; k < skin.size() && k < storeys.size(); ++k) {
+        if (skin[k].size() < 3) continue;
+        if (first == 0) first = k;
+        last = k;
+        const Real y = baseY + storeys[k].y0, h = storeys[k].h;
+        const Poly2* upper = (k + 1 < skin.size() && skin[k + 1].size() == skin[k].size()) ? &skin[k + 1] : nullptr;
+        for (std::size_t e = 0; e < skin[k].size(); ++e)
+            emitCurtainWallRect(out, upper ? planEdgeRuled(skin[k], *upper, e, y, h) : planEdgeRect(skin[k], e, y, h), params.wallColor,
+                                detail, false, cs);
+    }
+    if (first == 0) return;
+    emitPlanParapet(out, offsetPlan(skin[first], -0.02), baseY + storeys[first].y0, 0.4, trim, PartId::Trim, trim * 0.9);
+    emitPlanParapet(out, offsetPlan(skin[last], -0.02), baseY + storeys[last].y0 + storeys[last].h, 0.55, trim, PartId::Trim, trim * 0.9);
+}
+
+// A LINK DOORWAY (shape_grammar.h linkDoors; cells.h, ADR-0179) on a curtain-wall storey: the glass either side and
+// over the door, the door framed in the mullion metal -- and, when the link spans a gap, THE SKY BRIDGE out from
+// it: a floor slab, glass sides floor to ceiling, a roof slab; the floor and the sides recorded for the collider
+// (RoofItem Bridge / BridgeWall) so it is walked across to the neighbour's matching door.
+static void emitLinkDoorway(BuildingMesh& out, const FaceRect& fr, const LinkDoor& ld, const BuildingParams& params,
+                            const Vec3& wallColor, FacadeDetail detail) {
+    const Real W = fr.width, fh = fr.height;
+    if (W < 1.0 || fh < 1.0) return;
+    const Vec2 bl2(fr.bl.x, fr.bl.z), h2(fr.h.x, fr.h.z);
+    const Real x0 = std::max(Real(0.2), dot(ld.a - bl2, h2)), x1 = std::min(W - 0.2, dot(ld.b - bl2, h2));
+    if (x1 - x0 < 1.0) return;
+    const Real doorH = std::min(fh - 0.3, human::DOOR_HEIGHT);
+    const CurtainStyle cs = curtainStyleOf(params);
+    auto sub = [&](Real xa, Real xb, Real ya, Real hh) {
+        FaceRect r = fr;
+        r.bl = fr.at(xa, ya);
+        r.width = xb - xa;
+        r.height = hh;
+        r.ruled = false;
+        return r;
+    };
+    if (x0 > 0.4) emitCurtainWallRect(out, sub(0, x0, 0, fh), wallColor, detail, false, cs);
+    if (W - x1 > 0.4) emitCurtainWallRect(out, sub(x1, W, 0, fh), wallColor, detail, false, cs);
+    if (fh - doorH > 0.3) emitCurtainWallRect(out, sub(x0, x1, doorH, fh - doorH), wallColor, detail, false, cs);
+    const Vec3 up(0, 1, 0);
+    const Vec3 metal = curtainMullionColour(params.mullionTone);
+    emitBox(out, Scope{fr.at(x0 - 0.1, 0) - fr.n * 0.12, {fr.h, up, fr.n}, Vec3(0.1, doorH + 0.1, 0.3)}, PartId::Detail, metal);
+    emitBox(out, Scope{fr.at(x1, 0) - fr.n * 0.12, {fr.h, up, fr.n}, Vec3(0.1, doorH + 0.1, 0.3)}, PartId::Detail, metal);
+    emitBox(out, Scope{fr.at(x0 - 0.1, doorH) - fr.n * 0.12, {fr.h, up, fr.n}, Vec3(x1 - x0 + 0.2, 0.1, 0.3)}, PartId::Detail, metal);
+    if (ld.len < 0.5 || ld.bridge.size() < 4) return;
+    const Real len = ld.len, w = x1 - x0;
+    emitBox(out, Scope{fr.at(x0 - 0.15, -0.3), {fr.h, up, fr.n}, Vec3(w + 0.3, 0.3, len)}, PartId::Concrete, Vec3(0.80, 0.79, 0.76));
+    emitBox(out, Scope{fr.at(x0 - 0.15, fh - 0.3), {fr.h, up, fr.n}, Vec3(w + 0.3, 0.3, len)}, PartId::Roof, materialFor(PartId::Roof, wallColor).albedo);
+    CurtainStyle side = cs;
+    side.spandrelFrac = 0;
+    side.bay = std::max(Real(1.2), std::min(cs.bay, Real(2.0)));
+    FaceRect right;
+    right.bl = fr.at(x1, 0);
+    right.h = fr.n;
+    right.v = up;
+    right.n = fr.h;
+    right.width = len;
+    right.height = fh - 0.3;
+    FaceRect left;
+    left.bl = fr.at(x0, 0) + fr.n * len;
+    left.h = fr.n * -1.0;
+    left.v = up;
+    left.n = fr.h * -1.0;
+    left.width = len;
+    left.height = fh - 0.3;
+    emitCurtainWallRect(out, right, wallColor, detail, false, side);
+    emitCurtainWallRect(out, left, wallColor, detail, false, side);
+    RoofItem floor;
+    floor.kind = RoofItem::Kind::Bridge;
+    floor.footprint = ld.bridge;
+    floor.y0 = ld.y0 - 0.3;
+    floor.h = 0.3;
+    out.roof.push_back(floor);
+    const Vec2 d2 = normalize(ld.b - ld.a);
+    for (int sd = 0; sd < 2; ++sd) {
+        const Vec2 e0 = sd == 0 ? ld.a : ld.b;
+        const Vec2 off = d2 * (sd == 0 ? -0.12 : 0.12);
+        RoofItem wall;
+        wall.kind = RoofItem::Kind::BridgeWall;
+        wall.footprint = {e0, e0 + off, e0 + off + ld.n * len, e0 + ld.n * len};
+        ensureCCW(wall.footprint);
+        wall.y0 = ld.y0;
+        wall.h = fh - 0.3;
+        out.roof.push_back(wall);
+    }
+}
+
 static Real emitSpireCrown(BuildingMesh& out, const OBB2& topObb, Real roofY,
                            const BuildingParams& p, const Vec3& wallColor) {
     const Vec3 up(0, 1, 0);
@@ -3749,6 +3992,12 @@ static bool samePlan(const Poly2& a, const Poly2& b);
 // glass straight on it, and each plate's edge is the field's contour at its floor line, running past the glass --
 // Aqua Tower. wavePlates gives the plate per storey (empty below the base storeys).
 std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params) {
+    // THE SKIN (envelope.h, ADR-0178): a form worn as a skin leaves the floors straight -- the plan's prism, the
+    // inner plan nested above the base; the form is drawn round them (emitSkin, the plates) and never sliced here.
+    {
+        Stack floors;
+        if (skinFloorsStack(plan, params, floors)) return floors.tiers();
+    }
     if (params.envelope == BuildingParams::Envelope::Mesh) {
         // the artist's form: one tier per storey whose outline differs from the last (the core's fit asks each)
         std::vector<MassTier> out;
@@ -3761,6 +4010,10 @@ std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params)
 }
 
 std::vector<StoreyPlan> storeyPlans(const Poly2& plan, const BuildingParams& params) {
+    {
+        Stack floors;
+        if (skinFloorsStack(plan, params, floors)) return sliceStoreys(floors, params);
+    }
     if (params.envelope == BuildingParams::Envelope::Mesh) return sliceStoreys(meshOf(plan, params), params);
     return sliceStoreys(stackOf(plan, params), params);
 }
@@ -4983,6 +5236,18 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
         return sr;
     }
     const StairRun* on = runOn(runs, ki);
+    // A LINK STOREY (cells.h, ADR-0179): a bridge or a doorway to the next cell opens here, onto open floor -- the
+    // sky lobby, furnished as the lounge, clear of this storey's stair and off its wall.
+    if (ki >= 1 && !linkDoors(spk.plan, params, ki, 0).empty()) {
+        std::vector<Poly2> wells;
+        std::vector<std::size_t> blank;
+        if (on && nS > 1) {
+            wells.push_back(on->il.well);
+            if (on->sides == spk.plan.size()) blank.push_back(on->il.edge);
+        }
+        sr.rp = transferLoungePlan(spk.plan, params, interiorInset(params), ki, wells, blank);
+        return sr;
+    }
     const bool stair = on != nullptr && nS > 1;   // (one storey: no stair)
     const Poly2 well = stair ? on->il.well : Poly2{};
     const Vec2 foot = stair ? on->il.stairFoot : Vec2(1e30, 1e30);
@@ -6560,7 +6825,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     Poly2 cur = plan;
     Real tierY0 = y;
     bool ruledUp = false;   // the storey below drew its glass ruled up to this storey's outline
-    const std::vector<Poly2> plates = wavePlates(plan, params);
+    const std::vector<Poly2> plates = skinPlates(plan, params);   // (the Wave's, or any form's with skin & 2)
     for (int i = 0; i < params.floors; ++i) {
         const StoreyPlan& sp = storeys[static_cast<std::size_t>(i) + 1];
         if (i > 0 && sp.tier != storeys[static_cast<std::size_t>(i)].tier) {
@@ -6608,9 +6873,12 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         }
         const Real fh = params.floorHeight;
         // THE WAVE'S PLATE at this storey's floor line: the field's contour, a slab running past the glass
-        if (!plates.empty() && plates[static_cast<std::size_t>(i) + 1].size() >= 3)
-            emitPlanSlab(out, plates[static_cast<std::size_t>(i) + 1], y + 0.02, 0.3, PartId::Concrete,
+        if (!plates.empty() && plates[static_cast<std::size_t>(i) + 1].size() >= 3) {
+            const Poly2& plate = plates[static_cast<std::size_t>(i) + 1];
+            emitPlanSlab(out, plate, y + 0.02, 0.3, PartId::Concrete,
                          Vec3(0.80, 0.79, 0.76));   // (pale concrete: the plate reads against the glass, as Aqua's do)
+            if (full) emitPlateRailings(out, plate, cur, y + 0.32);   // a railing where the plate runs past the glass
+        }
         // THE CEILING'S OUTLINE: the storey above's, when it continues this tier on an outline with the same
         // corners (a twist, a bulge, a lean): the glass is ruled up to it. The top storey, or a setback, or a
         // storey whose outline is the same: flat, as before.
@@ -6640,6 +6908,13 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                          bfr.at(0, bfr.height), bfr.n, wallColor);
                 appendToPart(out, params.wallPart, bw);
                 continue;
+            }
+            if (params.curtainWall && linkEdge(cur, params, e, i + 1) >= 0) {
+                // a LINK on this face (cells.h, ADR-0179): the doorway through, and the bridge out from it
+                bool drawn = false;
+                for (const LinkDoor& ld : linkDoors(cur, params, i + 1, baseY))
+                    if (ld.edge == e) { emitLinkDoorway(out, planEdgeRect(cur, e, y, fh), ld, params, wallColor, detail); drawn = true; }
+                if (drawn) continue;
             }
             if (params.curtainWall)
                 emitCurtainWallRect(out, edgeFace(e), wallColor,
@@ -6697,6 +6972,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     }
     if (full) cornerPosts(cur, tierY0, y - tierY0);
     if (params.fireEscape) emitFireEscape(&out, nullptr, plan, params, baseY, full);
+    // THE VEIL (envelope.h, skin & 1): the form as a second glass skin round the straight floors, from the base
+    // storeys' roof to the top, ruled storey to storey; scenery, not a collider -- the floors' glass is the wall.
+    emitSkin(out, skinSlices(plan, params), storeys, baseY, params, detail);
 
     // ROOF (P3.c): a Gable/Hip pitched roof over a rect-ish top plan — the
     // residential silhouette — else the flat deck + parapet + crown.
@@ -7047,12 +7325,13 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             // deck open behind its glass -- a bulkhead under a glass slope was no exit.
             BuildingParams topParams = params;
             if (roofExit && (params.top == 3 || params.top == 4 || params.top == 5 || params.top == 8)) topParams.top = 2;
-            const Real topRise = params.top == 10 ? emitGlassDome(out, cur, y + 0.05, params)
-                                                  : emitTowerTop(out, cur, y + 0.05, y - baseY, topParams, wallColor, full, rectish);
+            const Cap::Kind capKind = capKindOf(params.top);
+            const Real topRise = capKind != Cap::Kind::Parapet ? emitGlassCap(out, cur, y + 0.05, params, capKind)
+                                                               : emitTowerTop(out, cur, y + 0.05, y - baseY, topParams, wallColor, full, rectish);
             roofRise = std::max(roofRise, topRise);
             // Flat (LOD1) keeps spire/dome/steeple — they are the skyline —
             // but skips the penthouse + roof-furniture pack.
-            if (full && params.top != 9 && params.top != 10 && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
+            if (full && params.top != 9 && capKind == Cap::Kind::Parapet && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
                 // the bulkhead's footprint, a little wider, keeps the plant off the roof access
                 const Poly2 bulk = roofExit ? offsetPlan(ecore.rect(), -0.75) : Poly2{};
                 emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,

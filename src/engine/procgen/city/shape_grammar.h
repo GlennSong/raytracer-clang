@@ -247,9 +247,11 @@ struct FurnishedUnit {
 // the building's stream, so nothing can re-plan it later), carried by the building unit and its record, cached
 // with the lot. A Screen or a Frame is a ring of wall along its footprint's edges, not a solid.
 struct RoofItem {
-    enum class Kind : uint8_t { Access, Tank, Hvac, Mast, Lantern, Screen, Frame, Pyramid, Sloped, Helipad, Ramp };
+    enum class Kind : uint8_t { Access, Tank, Hvac, Mast, Lantern, Screen, Frame, Pyramid, Sloped, Helipad, Ramp, Bridge, BridgeWall };
     // A Helipad is a raised pad (its top a floor `h` over the deck); a Ramp climbs onto it: its footprint's first
-    // edge is the foot on the deck, its third edge the top, `h` up.
+    // edge is the foot on the deck, its third edge the top, `h` up. A Bridge is a sky bridge's floor slab (a prism,
+    // walked on top; cells.h, ADR-0179) and a BridgeWall one of its sides (a ring, open above, as a Screen is):
+    // not on the roof at all, so the roof cell ignores them.
     Kind kind = Kind::Hvac;
     Poly2 footprint;
     Real y0 = 0, h = 0;
@@ -621,6 +623,12 @@ struct BuildingParams {
     Real  wave = 0.0;            // Wave: the skin's amplitude (m)
     Real  waveLen = 20.0;        // Wave: its wavelength along the facade and up the building (m)
     uint8_t massMesh = 0;        // Mesh: 1 + the index of the glTF in assets/masses (0 = none)
+    // THE SKIN (envelope.h, ADR-0178): whether the form above is the floors or a skin round straight floors.
+    // 0 the form is the floors; 1 a DOUBLE SKIN (straight floors `skinGap` inside the form, the form a glass veil
+    // round them); 2 PLATES (straight floors, every floor plate running out to the form's contour -- the Wave's
+    // default); 3 both. Lua: skin = "floors" | "double" | "plates" | "both", skin_gap = 1.2.
+    uint8_t skin = 0;
+    Real skinGap = 1.2;
     // THE CURTAIN STYLE (skyscrapers NYC variety M2): glassTint 0 auto grey, 1 blue, 2 green, 3 bronze, 4 smoke,
     // 5 silver (reflective), 6 clear; mullionTone 0 steel, 1 bronze, 2 black, 3 silver, 4 white; fins: a vertical
     // fin every `fins` bays (0 none); curtainBay the mullion spacing (m); spandrelFrac the opaque band's share of
@@ -648,10 +656,13 @@ struct BuildingParams {
     uint8_t uplights = 0;
     // THE TOP (buildings M2): what stands on a flat roof against the sky -- 0/1 the mechanical penthouse, 2 screen,
     // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop), 9 NONE -- the deck bare,
-    // no plant, for the cells of a complex that share one crown (cells.h), 10 a GLASS DOME over the whole deck
-    // (emitGlassDome: the top outline lofted to a point on a quarter-circle profile, the deck a lantern room under
-    // it -- the Gherkin's cap). spire/dome win over it.
-    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse" | "none" | "dome".
+    // no plant, for the cells of a complex that share one crown (cells.h), 10-14 a GLASS CAP over the whole deck
+    // (emitGlassCap, mass_stack.h Cap::Kind: the top outline lofted ring by ring in glass with a rib up every
+    // corner, the deck a lantern room under it): 10 DOME (the Gherkin's), 11 SPIRE (a concave taper to a point),
+    // 12 VAULT (a barrel over the long axis), 13 APERTURE (the dome open at two thirds, a rim at the opening),
+    // 14 FLARED (swelling out by an eighth under a flat glass lid). spire/dome win over it.
+    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse" | "none"
+    //            | "dome" | "spire" | "vault" | "aperture" | "flared".
     uint8_t top = 0;
     // THE HELIPAD (issue #105, the roof cell's contents): a raised pad with a ramp on a tall tower's open roof --
     // 0 auto (18 floors and up, half of them by the seed, where the roof has the room), 1 never, 2 always.
@@ -697,6 +708,17 @@ struct BuildingParams {
     Real  partyAt[4] = {0, 0, 0, 0};
     int16_t partyTop[4] = {0, 0, 0, 0};
     uint8_t partyDoors = 0;
+    // A LINK (cells.h, ADR-0179: openings between cells above the ground): a doorway `linkW` wide in the face on
+    // the world line (outward normal `linkN`, through `linkC`) at storey `linkStorey`, `linkC` its centre -- and,
+    // when `linkLen` > 0, a SKY BRIDGE drawn from it `linkLen` out to the neighbour's matching door: a floor, glass
+    // sides and a roof, walked (the collider's) and in the graph (a Link cell off the storey). The storey is laid
+    // as a lounge, so the door opens onto open floor. Set by the complex's resolveBridges, never by recipes.
+    uint8_t links = 0;
+    Vec2  linkN[2] = {Vec2(0, 0), Vec2(0, 0)};
+    Vec2  linkC[2] = {Vec2(0, 0), Vec2(0, 0)};
+    int16_t linkStorey[2] = {0, 0};
+    Real  linkLen[2] = {0, 0};
+    Real  linkW[2] = {0, 0};
     bool  backDoor = false;
     bool  fireEscape = false;
     // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
@@ -767,6 +789,22 @@ bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, V
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey = -1);
 // Edge `e` is a party wall with a doorway through it (partyDoors): the facade cuts the door, blank otherwise.
 bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
+// A LINK DOOR (params.links; cells.h, ADR-0179): the doorway on a storey's face through to a neighbouring cell, and
+// the bridge it opens onto when the cells stand apart. World XZ; `y0` the storey's floor, absolute when the caller
+// gives `baseY`, relative to the building's base otherwise.
+struct LinkDoor {
+    std::size_t edge = 0;     // the plan edge it is on
+    Vec2 a, b;                // the doorway on that edge, a -> b along the edge
+    Vec2 n;                   // the edge's outward normal
+    int storey = 0;
+    Real y0 = 0, h = 0;       // the storey's floor and height
+    Real len = 0, w = 0;      // the bridge's length out from the face (0: a door only) and the doorway's width
+    Poly2 bridge;             // the bridge's footprint, CCW (empty when len is 0)
+};
+// The link doors of `plan` at `storey` (every storey when `storey` < 0), the edge found by the link's line.
+std::vector<LinkDoor> linkDoors(const Poly2& plan, const BuildingParams& params, int storey = -1, Real baseY = 0);
+// The link on edge `e` at `storey`, or -1.
+int linkEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey);
 // The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
 // plan.size() when there is none.
 // A building whose bay doors stand OPEN (rolled up, each bay a way in): a fire station's (its engines), a factory's

@@ -424,3 +424,39 @@ TEST_CASE(a_glass_dome_caps_the_lens_and_a_diagrid_crosses_its_glass) {
                 partVerts(plain, PartId::Glass), partVerts(domed, PartId::Glass), partVerts(domed, PartId::Detail), partVerts(grid, PartId::Detail));
 }
 
+TEST_CASE(every_glass_cap_rises_over_the_deck_the_stairs_reach) {
+    // tops 11-14 (emitGlassCap, mass_stack.h Cap::Kind): the spire, the vault, the aperture and the flared lid --
+    // each lofted in glass over the top outline, the building that much taller, the deck under it still the roof
+    // the stairs reach. The spire is the tallest, the flared lid the lowest.
+    const Poly2 plan = {{-12, -9}, {12, -9}, {12, 9}, {-12, 9}};
+    BuildingParams p;
+    p.floors = 12;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 31;
+    p.top = 9;
+    const BuildingMesh bare = growPlanBuilding(plan, p, 0.0);
+    auto partVerts = [](const BuildingMesh& bm, PartId id) {
+        std::size_t n = 0;
+        for (const RenderMesh& part : bm.parts) if (part.materialIndex == static_cast<int>(id)) n += part.vertices.size();
+        return n;
+    };
+    Real rise[15] = {};
+    for (uint8_t top = 11; top <= 14; ++top) {
+        p.top = top;
+        const BuildingMesh capped = growPlanBuilding(plan, p, 0.0);
+        rise[top] = capped.height - bare.height;
+        CHECK(rise[top] > 2.0);
+        CHECK(partVerts(capped, PartId::Glass) > partVerts(bare, PartId::Glass));
+        CHECK(partVerts(capped, PartId::Detail) > partVerts(bare, PartId::Detail));   // the ribs
+        const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+        CHECK(g.roof >= 0);
+        CHECK(unreachableCells(g).empty());
+    }
+    CHECK(rise[11] > rise[12] && rise[11] > rise[13] && rise[11] > rise[14]);   // the spire stands tallest
+    CHECK(rise[14] < rise[12]);                                                   // the flared lid is low
+    CHECK(rise[13] < rise[12]);                                                   // the aperture stops short of a dome
+    std::printf("    [caps] spire %.1f, vault %.1f, aperture %.1f, flared %.1f m over the bare deck\n", rise[11], rise[12], rise[13], rise[14]);
+}
+

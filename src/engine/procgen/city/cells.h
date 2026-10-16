@@ -32,10 +32,15 @@ struct Adjacency {
     std::vector<Opening> openings;
 };
 
+// A BRIDGE between two cells that stand apart (ADR-0179): at `storey`, `width` wide, between the faces of `a` and
+// `b` that face each other. resolveBridges writes it onto both cells' params as a LINK (shape_grammar.h: a doorway
+// in each face, the bridge drawn from a's), and records the span it found.
 struct Bridge {
     int a = -1, b = -1;
     int storey = 0;
     Real width = 0;
+    Real span = 0;         // the gap it crosses (resolveBridges)
+    bool placed = false;   // both faces found, both cells tall enough
 };
 
 struct CellFrame {
@@ -53,7 +58,7 @@ struct CellFrame {
 struct Complex : Mass {
     std::vector<CellFrame> cells;
     std::vector<Adjacency> adj;
-    std::vector<Bridge> bridges;   // (owed: a bridge between cells above the ground)
+    std::vector<Bridge> bridges;   // the sky bridges between cells standing apart (resolveBridges)
     Slice slice(Real y) const override;
     Real height() const override;
     MassBounds bounds() const override;
@@ -68,6 +73,10 @@ struct Complex : Mass {
     // connected neighbour -- the neighbour's wall takes a doorway in its middle bay (partyDoors), the cell's
     // entrance faces it. Sets every cell's `streetFace` and `connected`.
     void connectLobbies(const Vec2& faceDir);
+    // THE BRIDGES: for every bridge, the two faces that face each other across a gap (parallel, overlapping along
+    // their run); both cells take a link at the bridge's storey (clamped under both roofs) at the middle of the
+    // overlap, `a`'s with the span to draw. A bridge with no such faces, or on cells too low, stays unplaced.
+    void resolveBridges();
 };
 
 // THE BUNDLE: nx by ny rectangular cells filling `box` (a CCW rectangle; its first edge is the x direction), each a
@@ -87,6 +96,13 @@ Complex courtyardWings(const Poly2& box, const BuildingParams& params, Real dept
 // a sixteen-gon; four cells with mitred corners on a rectangle). `floorsPerCell` per edge (short lists repeat the
 // last). Empty when the court inside would be narrower than `minCourt`.
 Complex ringCells(const Poly2& outline, const BuildingParams& params, Real depth, const std::vector<int>& floorsPerCell, Real minCourt = 6.0);
+
+// THE TWINS: two towers on `box` (CCW; its first edge the long axis they stand along), `gap` apart, each the box's
+// full depth, joined by a SKY BRIDGE `bridgeW` wide at `bridgeStorey` (clamped under both roofs; 0 = two thirds
+// of the way up the lower one). `floorsPerCell`: the two heights (short lists repeat the last). Empty when either
+// tower would be narrower than its core needs. Petronas.
+Complex twinTowers(const Poly2& box, const BuildingParams& params, Real gap, const std::vector<int>& floorsPerCell, int bridgeStorey = 0,
+                   Real bridgeW = 4.5);
 
 }  // namespace engine
 

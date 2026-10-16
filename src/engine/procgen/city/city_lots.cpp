@@ -6023,6 +6023,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 }
                 const bool courtyard = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Courtyard;
                 const bool ring = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Ring;
+                const bool twins = rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Twins;
                 int nx = std::max(1, rec.complex.nx), ny = std::max(1, rec.complex.ny);
                 while (nx > 1 && len / nx < kCoreTierMin + 1.0) --nx;   // every tube wide enough for its core
                 while (ny > 1 && dep / ny < kCoreTierMin + 1.0) --ny;
@@ -6033,7 +6034,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 const Real ringR = std::min(len, dep) * 0.5;
                 const Real ringDepth = std::min(rec.complex.depth, ringR - 3.0);
                 const bool ringOk = ring && ringDepth >= 10.0;
-                if (boxOk && (courtyard ? courtOk : ring ? ringOk : nx * ny >= 2)) {
+                // twins stand along the box's long axis, each wide enough for its core beyond the gap
+                const Real twinGap = std::max(Real(6.0), std::min(rec.complex.gap, std::max(len, dep) * 0.3));
+                const bool twinsOk = twins && (std::max(len, dep) - twinGap) * 0.5 >= kCoreTierMin + 1.0 && std::min(len, dep) >= kCoreTierMin + 1.0;
+                if (boxOk && (courtyard ? courtOk : ring ? ringOk : twins ? twinsOk : nx * ny >= 2)) {
                     const Poly2 box{sb.center - u * (len * 0.5) - v * (dep * 0.5), sb.center + u * (len * 0.5) - v * (dep * 0.5),
                                     sb.center + u * (len * 0.5) + v * (dep * 0.5), sb.center - u * (len * 0.5) + v * (dep * 0.5)};
                     // the heights: the Sears pattern -- a rank per tube by the seed, one tube certain to reach the top;
@@ -6048,7 +6052,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     }
                     if (!courtyard) floors[static_cast<std::size_t>((hh >> 20) % floors.size())] = bp.floors;
                     Complex cx;
-                    if (ring) {
+                    if (twins) {
+                        // the box turned so its first edge is the long axis; the two the block's floors, the second
+                        // a storey or three shorter on half the seeds
+                        const bool longX = len >= dep;
+                        const Poly2 tbox = longX ? box : Poly2{box[1], box[2], box[3], box[0]};
+                        floors.assign(2, bp.floors);
+                        if (((hh >> 7) & 1u) != 0) floors[1] = std::max(4, bp.floors - 1 - static_cast<int>((hh >> 3) & 3u));
+                        cx = twinTowers(tbox, bp, twinGap, floors, rec.complex.bridgeStorey, rec.complex.bridgeW);
+                    } else if (ring) {
                         Poly2 ngon;
                         const int sides = std::max(6, std::min(24, rec.complex.sides));
                         for (int k = 0; k < sides; ++k) {
@@ -6061,6 +6073,13 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         cx = courtyard ? courtyardWings(box, bp, wingDepth, floors) : bundledTubes(box, bp, nx, ny, floors);
                     }
                     if (cx.cells.empty()) { dbg->rejPlan++; emitGreen(); continue; }
+                    // ONE CROWN PER BUNDLE (ADR-0179): the tallest tube wears the top; the others' decks stay bare, as
+                    // a courtyard block crowns its tallest wing and a ring none
+                    if (!courtyard && !ring && !twins) {
+                        int tallest = 0;
+                        for (const CellFrame& cell : cx.cells) tallest = std::max(tallest, cell.params.floors);
+                        for (CellFrame& cell : cx.cells) if (cell.params.floors < tallest) cell.params.top = 9;
+                    }
                     b.groundY = padPlaneFor(plan, Vec2(bp.faceDir.x, bp.faceDir.z));
                     const Real bundleBase = p.ground ? b.groundY + plinth : baseYFor(plan);
                     for (CellFrame& cell : cx.cells) {

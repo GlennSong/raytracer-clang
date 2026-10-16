@@ -746,7 +746,7 @@ void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 3.5 + cx.coreness * 3.0;
     out.placeType = "office";
-    towerTop(p, {{1, 70}, {2, 30}});
+    towerTop(p, {{1, 50}, {2, 25}, {14, 25}});   // a quarter of them flared: a lid swelling over the top module
     out.name = "stacked_modules";
 }
 
@@ -829,7 +829,7 @@ void recipeLeaningTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 3.0;
     out.placeType = "office";
-    towerTop(p, {{1, 50}, {2, 30}, {6, 20}});
+    towerTop(p, {{1, 40}, {2, 20}, {6, 15}, {12, 25}});   // a quarter vaulted: a barrel over the long axis
     out.name = "leaning_tower";
 }
 
@@ -853,7 +853,7 @@ void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.setbackEvery = 0;
     cx.slender = 4.5 + cx.coreness * 4.0;
     out.placeType = "office";
-    towerTop(p, {{1, 50}, {5, 30}, {8, 20}});
+    towerTop(p, {{1, 35}, {5, 20}, {8, 15}, {11, 30}});   // three in ten a glass spire
     if (rng.unit() < 0.5) p.diagrid = 2;   // half of them a diagrid
     out.name = "twisted_taper";
 }
@@ -898,6 +898,29 @@ void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "wavy_tower";
 }
 
+// THE TWIN TOWERS (cells.h twinTowers; ADR-0179): two glass towers on one block a gap apart, a sky bridge between
+// them two thirds of the way up, both lobbies on the street -- Petronas. A whole-block landmark.
+void recipeTwinTowers(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 44);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::None;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    p.baseFloors = 0;
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Twins;
+    out.complex.gap = rng.range(10.0, 16.0);
+    out.complex.bridgeStorey = 0;
+    out.complex.bridgeW = rng.range(4.0, 6.0);
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 40}, {11, 35}, {2, 25}});   // a glass spire on a third of them: the pair reads as a pair
+    out.name = "twin_towers";
+}
+
 // The SCULPTED TOWER (issue #105 step 6, the mesh mass): the first form in assets/masses -- modelled, not
 // composed -- fitted to its lot and dressed in glass, every storey its slice.
 void recipeSculptedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
@@ -911,10 +934,53 @@ void recipeSculptedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.baseFloors = 1;
     p.setbackFloors = 0;
     p.setbackEvery = 0;
+    if (rng.unit() < 0.5) { p.skin = 1; p.skinGap = rng.range(1.0, 1.6); }   // half of them a veil round straight floors
     cx.slender = 4.0 + cx.coreness * 4.0;
     out.placeType = "office";
-    towerTop(p, {{1, 60}, {2, 40}});
+    towerTop(p, {{1, 45}, {2, 25}, {13, 30}});   // three in ten an aperture: the form open to the sky
     out.name = "sculpted_tower";
+}
+
+// THE VEIL (issue #105 step 6, the Envelope word; ADR-0178): a straight tower inside a sculpted glass skin -- the
+// form the seed picks (a twist, a lens, the curves, the sculpted mass), straight floors and rectangular rooms a gap
+// inside it, the skin ruled storey to storey, a diagrid on half of them.
+void recipeVeilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    switch (rng.irange(0, 3)) {
+    case 0:
+        p.envelope = BuildingParams::Envelope::Twist;
+        p.twistDeg = rng.range(40.0, 90.0);
+        break;
+    case 1:
+        p.envelope = BuildingParams::Envelope::Bulge;
+        p.bulge = rng.range(0.35, 0.6);
+        p.taperTop = rng.range(0.6, 0.8);
+        break;
+    case 2:
+        p.envelope = BuildingParams::Envelope::Curves;
+        p.twistDeg = rng.range(30.0, 60.0);
+        p.taperTop = rng.range(0.7, 0.85);
+        p.lean = rng.range(0.06, 0.14);
+        break;
+    default:
+        p.envelope = BuildingParams::Envelope::Mesh;
+        p.massMesh = 1;
+        break;
+    }
+    p.skin = 1;
+    p.skinGap = rng.range(1.0, 1.8);
+    if (rng.unit() < 0.5) p.diagrid = 2;
+    p.baseFloors = rng.unit() < 0.5 ? 1 : 2;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 50}, {2, 30}, {9, 20}});
+    out.name = "veil_tower";
 }
 
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
@@ -1663,6 +1729,8 @@ const NamedRecipe kRecipeRegistry[] = {
     {"ring_block", recipeRingBlock},
     {"wavy_tower", recipeWavyTower},
     {"sculpted_tower", recipeSculptedTower},
+    {"veil_tower", recipeVeilTower},
+    {"twin_towers", recipeTwinTowers},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},
@@ -1825,6 +1893,8 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
                 out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
             } else if (r < 0.30) {
                 recipeBundledTubes(out, rng, cx);                      // the toolkit's complex: a whole block of tubes (issue #105)
+            } else if (r < 0.34) {
+                recipeTwinTowers(out, rng, cx);                        // two towers and a sky bridge (ADR-0179)
             } else if (r < 0.50) {
                 recipePodiumTower(out, rng, cx);
             } else if (r < 0.60) {
@@ -1925,6 +1995,7 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.85) recipeStackedModules(out, rng, cx);
             else if (roll < 0.86) recipeRoundedTower(out, rng, cx);
             else if (roll < 0.865) recipeSculptedTower(out, rng, cx);
+            else if (roll < 0.87) recipeVeilTower(out, rng, cx);
             else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
             else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
             else if (roll < 0.97) recipePlaza(out, rng, cx);
