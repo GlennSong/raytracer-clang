@@ -711,7 +711,7 @@ void recipeTaperedGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // with a slab band between -- the plan itself turns, scaled down only as far as the lot makes it.
 void recipeTwistedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(14, 20) + static_cast<int>(cx.coreness * 40);
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 44);   // (the district rim keeps to 16; coreness lifts the core)
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -734,7 +734,7 @@ void recipeTwistedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // soffits under the overhangs.
 void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(12, 18) + static_cast<int>(cx.coreness * 24);
+    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 28);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -754,7 +754,7 @@ void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // to its waist and narrows to its top, glass, every storey its own facet with a slab band between.
 void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(18, 26) + static_cast<int>(cx.coreness * 22);
+    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 34);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -776,7 +776,7 @@ void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // entered through a neighbour's lobby.
 void recipeBundledTubes(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(22, 30) + static_cast<int>(cx.coreness * 40);
+    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 50);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -814,7 +814,7 @@ void recipeCourtyardBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // a sixth of its height along the lot, now and then with a turn in it as well.
 void recipeLeaningTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(16, 22) + static_cast<int>(cx.coreness * 24);
+    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 30);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -835,7 +835,7 @@ void recipeLeaningTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // The TWISTED TAPER (the curves composed): a rounded tower turning a quarter and narrowing to two thirds at the top.
 void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(18, 26) + static_cast<int>(cx.coreness * 36);
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -880,7 +880,7 @@ void recipeRingBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // metre or two across its long axis, the waves climbing the building, every storey its own outline.
 void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(18, 24) + static_cast<int>(cx.coreness * 30);
+    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 38);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -1798,18 +1798,26 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
         case DistrictTag::Financial:
         case DistrictTag::Commercial: {
             const Real r = rng.unit();
-            if (r < 0.30) {
+            if (r < 0.22) {
                 recipeGlassTower(out, rng, cx);
                 out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
+            } else if (r < 0.30) {
+                recipeBundledTubes(out, rng, cx);                      // the toolkit's complex: a whole block of tubes (issue #105)
             } else if (r < 0.50) {
                 recipePodiumTower(out, rng, cx);
-            } else if (r < 0.65) {
+            } else if (r < 0.60) {
                 recipeSkyExposureTower(out, rng, cx);                  // the whole block cut by the plane
                 out.massing = BuildingRecipe::Massing::LotPlan;
-            } else if (r < 0.78) {
+            } else if (r < 0.65) {
+                recipeRingBlock(out, rng, cx);                         // a round block round a court
+            } else if (r < 0.74) {
                 recipeTaperedGlassTower(out, rng, cx);
-            } else if (r < 0.88) {
+            } else if (r < 0.78) {
+                recipeTwistedTower(out, rng, cx);
+            } else if (r < 0.85) {
                 recipeGlassSlab(out, rng, cx);
+            } else if (r < 0.88) {
+                recipeLensTower(out, rng, cx);
             } else {
                 recipeSteppedTower(out, rng, cx);
                 out.massing = BuildingRecipe::Massing::LotPlan;       // the block's own polygon, stepped
@@ -1817,10 +1825,14 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
             break;
         }
         case DistrictTag::Residential:
-            recipeApartments(out, rng, cx);
-            out.params.floors = rng.irange(5, 9);
-            out.massing = BuildingRecipe::Massing::LotPlan;
-            cx.slender = std::max(cx.slender, Real(2.5));
+            if (rng.unit() < 0.45) {
+                recipeCourtyardBlock(out, rng, cx);                    // the perimeter block round its court (issue #105)
+            } else {
+                recipeApartments(out, rng, cx);
+                out.params.floors = rng.irange(5, 9);
+                out.massing = BuildingRecipe::Massing::LotPlan;
+                cx.slender = std::max(cx.slender, Real(2.5));
+            }
             break;
         case DistrictTag::OldTown:
             recipeOldTownGrand(out, rng, cx);
@@ -1880,7 +1892,16 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.58) recipeArtDecoTower(out, rng, cx);
             else if (roll < 0.63) recipeSteppedTower(out, rng, cx);
             else if (roll < 0.67) recipeDrumTower(out, rng, cx);
-            else if (roll < 0.79) recipeOfficeSlab(out, rng, cx);
+            else if (roll < 0.75) recipeOfficeSlab(out, rng, cx);
+            // THE TOOLKIT'S FORMS (issue #105; Glenn, 2026-10-15: "will these show up in island 8?"): accents,
+            // a few per district, carved from the office slab's and the commercial block's shares
+            else if (roll < 0.77) recipeTwistedTower(out, rng, cx);
+            else if (roll < 0.79) recipeLensTower(out, rng, cx);
+            else if (roll < 0.805) recipeLeaningTower(out, rng, cx);
+            else if (roll < 0.82) recipeTwistedTaper(out, rng, cx);
+            else if (roll < 0.835) recipeWavyTower(out, rng, cx);
+            else if (roll < 0.85) recipeStackedModules(out, rng, cx);
+            else if (roll < 0.865) recipeRoundedTower(out, rng, cx);
             else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
             else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
             else if (roll < 0.97) recipePlaza(out, rng, cx);
@@ -1889,7 +1910,8 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
         case DistrictTag::Commercial:
             if (roll < 0.04)      recipePocketPark(out, rng, cx);
             else if (roll < 0.07) recipePlaza(out, rng, cx);
-            else if (roll < 0.25) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.23) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.25) recipeCourtyardBlock(out, rng, cx);   // (the toolkit's complex: on a lot too small for its court, a plan building)
             else if (roll < 0.38) recipeMixedUse(out, rng, cx);
             else if (roll < 0.46) recipeOfficeMidrise(out, rng, cx);
             else if (roll < 0.49) recipePodiumTower(out, rng, cx);
@@ -1927,7 +1949,8 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.57) recipeVilla(out, rng, cx);
             else if (roll < 0.64) recipeRanchHouse(out, rng, cx);
             else if (roll < 0.72) recipeDuplex(out, rng, cx);
-            else if (roll < 0.84) recipeRowhouses(out, rng, cx);
+            else if (roll < 0.81) recipeRowhouses(out, rng, cx);
+            else if (roll < 0.84) recipeCourtyardBlock(out, rng, cx);
             else if (roll < 0.89) recipeGardenCondo(out, rng, cx);
             else if (roll < 0.96) recipeApartments(out, rng, cx);
             else                  recipeCornerShop(out, rng, cx);
