@@ -6061,7 +6061,9 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         BuildingRecipe gr;
                         BuildingParams gp = ap;
                         if (architectRecipeByName("parking_garage", bp.seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
-                        cx = mallCells(box, Vec2(bp.faceDir.x, bp.faceDir.z), bp, ap, gp, true, rec.complex.depth);
+                        BuildingRecipe pr;
+                        const bool hasPav = architectRecipeByName("oldtown_cafe", bp.seed ^ 0x9e1u, 0.3, 13.0, 130.0, pr);
+                        cx = mallCells(box, Vec2(bp.faceDir.x, bp.faceDir.z), bp, ap, gp, true, rec.complex.depth, hasPav ? &pr.params : nullptr);
                     } else if (twins) {
                         // the box turned so its first edge is the long axis; the two the block's floors, the second
                         // a storey or three shorter on half the seeds

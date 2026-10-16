@@ -109,15 +109,17 @@ Complex twinTowers(const Poly2& box, const BuildingParams& params, Real gap, con
                    Real bridgeW = 4.5);
 
 // THE MALL AS CELLS (ADR-0180; the plan's Westfield): on `box` (CCW), with the street toward `faceDir`, a SPINE cell
-// along the box's long axis at its street side -- the American mall (`mall`: bigBox 6, its wings +u / -u ending
-// OPEN, its court in the middle, its own escalators and lift) 40 m deep -- an ANCHOR cell at each end of the spine
-// (`anchor`: a big-box store, given the spine's floors and storey heights so the levels meet), the concourse open
-// onto it on every level through a wide opening the concourse's width; and, where the box is deep enough behind
-// the spine, a GARAGE cell (`garage`: parking decks) against the back of the court, open onto it at the ground
-// across 8 m. Every cell its own building, entered from the street as well. Empty when the spine's wings would be
-// too short (the box under 142 m long or 40 m deep).
+// along the box's long axis -- the American mall (`mall`: bigBox 6, its court in the middle, its own escalators
+// and lift), its long wings +u / -u ending OPEN into an ANCHOR cell at each end (`anchor`: a big-box store given
+// the spine's floors and storey heights so the levels meet; wider than the wing, the two unequal), the concourse
+// open into each on every level through 12 m; and, where the box is deep, the spine a CROSS: an entrance wing
+// toward the street with the food court over its vestibule, a back wing ending open into the GARAGE cell
+// (`garage`: parking decks) across 8 m at the ground (a shallower box sets the garage against the court's back
+// instead), and a round cafe PAVILION (`pavilion`, when given) by the entrance. Every cell its own building,
+// entered from the street as well. Empty when the long wings would be too short (the box under 142 m long or 40 m
+// deep).
 Complex mallCells(const Poly2& box, const Vec2& faceDir, const BuildingParams& mall, const BuildingParams& anchor,
-                  const BuildingParams& garage, bool withGarage = true, Real anchorDepth = 30.0);
+                  const BuildingParams& garage, bool withGarage = true, Real anchorDepth = 30.0, const BuildingParams* pavilion = nullptr);
 
 }  // namespace engine
 

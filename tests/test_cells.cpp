@@ -387,21 +387,25 @@ TEST_CASE(a_wide_opening_leaves_the_shared_wall_absent_on_its_storeys) {
 }
 
 TEST_CASE(the_mall_as_cells_is_a_spine_two_anchors_and_a_garage_opened_into) {
-    const Poly2 box = {{-90, -40}, {90, -40}, {90, 40}, {-90, 40}};
+    // a block 180 x 110: the spine a CROSS (an entrance wing to the street, a back wing into the garage), two
+    // anchors wider than the wings, the garage, a cafe pavilion by the entrance
+    const Poly2 box = {{-90, -55}, {90, -55}, {90, 55}, {-90, 55}};
     const BuildingParams mall = architectMallWings(5).params;
     const BuildingParams anchor = architectBigBox(9).params;
-    BuildingRecipe gr;
+    BuildingRecipe gr, pr;
     CHECK(architectRecipeByName("parking_garage", 11, 0.3, 40.0, 1600.0, gr));
-    const Complex cx = mallCells(box, Vec2(0, -1), mall, anchor, gr.params);
-    CHECK(cx.cells.size() == 4);
-    int spine = -1, anchors = 0, garage = -1;
+    CHECK(architectRecipeByName("oldtown_cafe", 13, 0.3, 13.0, 130.0, pr));
+    const Complex cx = mallCells(box, Vec2(0, -1), mall, anchor, gr.params, true, 30.0, &pr.params);
+    CHECK(cx.cells.size() == 5);
+    int spine = -1, anchors = 0, garage = -1, pavilions = 0;
     for (std::size_t i = 0; i < cx.cells.size(); ++i) {
         if (cx.cells[i].role == "spine") spine = static_cast<int>(i);
         if (cx.cells[i].role == "anchor") ++anchors;
         if (cx.cells[i].role == "garage") garage = static_cast<int>(i);
+        if (cx.cells[i].role == "pavilion") ++pavilions;
     }
-    CHECK(spine >= 0 && anchors == 2 && garage >= 0);
-    CHECK(cx.adj.size() == 3);   // two anchor walls, the garage's
+    CHECK(spine >= 0 && anchors == 2 && garage >= 0 && pavilions == 1);
+    CHECK(cx.adj.size() == 3);   // two anchor walls, the garage's; the pavilion stands free
     int anchorOpen = 0, garageOpen = 0;
     for (const Adjacency& ad : cx.adj)
         for (const Opening& o : ad.openings) {
@@ -410,8 +414,13 @@ TEST_CASE(the_mall_as_cells_is_a_spine_two_anchors_and_a_garage_opened_into) {
         }
     CHECK(anchorOpen == 2 && garageOpen == 1);
     const CellFrame& sp = cx.cells[static_cast<std::size_t>(spine)];
-    CHECK(sp.params.bigBox == 6 && sp.params.mallArms == 0x3 && sp.params.mallOpenEnds == 0x3);
+    CHECK(sp.plan.size() == 12);   // the cross
+    CHECK(sp.params.bigBox == 6 && sp.params.mallArms == 0xF && sp.params.mallOpenEnds == 0x7);
     CHECK(sp.params.partyWalls == 3);
+    // the anchors are wider than the wing they close: 64 and 52 m across, unequal
+    std::vector<Real> widths;
+    for (const CellFrame& c : cx.cells) if (c.role == "anchor") widths.push_back(2 * orientedBoundingBox(c.plan).half[orientedBoundingBox(c.plan).longAxis()]);
+    CHECK(widths.size() == 2 && std::fabs(widths[0] - 64.0) < 1e-6 && std::fabs(widths[1] - 52.0) < 1e-6);
     // the spine's levels: open-ended wings, no anchor rooms inside, the concourse to the end walls; its own
     // escalators in the court; every cell a building walked, the anchors two levels like the mall
     for (int k = 0; k <= 1; ++k) {
@@ -420,15 +429,17 @@ TEST_CASE(the_mall_as_cells_is_a_spine_two_anchors_and_a_garage_opened_into) {
         int anchorRooms = 0, concourse = 0;
         for (const Room& r : sr.rp.rooms) { if (r.style == 10) ++anchorRooms; if (r.style == 21 || r.style == 22) ++concourse; }
         CHECK(anchorRooms == 0);
-        CHECK(concourse == 2);
+        CHECK(concourse == 4);   // four wings, four concourses
     }
     for (const CellFrame& c : cx.cells) {
-        CHECK(c.connected);
         const SpaceGraph g = spaceGraphOf(c.plan, c.params, 0.0);
+        std::printf("    [mall]   %-8s outer %d street %d connected %d cells %zu unreachable %zu\n", c.role.c_str(), c.outerFace ? 1 : 0, c.streetFace ? 1 : 0,
+                    c.connected ? 1 : 0, g.cells.size(), unreachableCells(g).size());
+        CHECK(c.connected);
         CHECK(unreachableCells(g).empty());
         if (c.role == "anchor") { CHECK(c.params.floors == mall.floors); CHECK(c.params.groundHeight == mall.groundHeight); }
     }
-    std::printf("    [mall] spine %.0f x %.0f, %d anchors, a garage; %zu shared walls, %d anchor openings, %d garage opening\n",
+    std::printf("    [mall] a cross spine %.0f x %.0f, %d anchors (%.0f and %.0f m), a garage, %d pavilion; %zu shared walls, %d anchor openings, %d garage opening\n",
                 2 * orientedBoundingBox(sp.plan).half[orientedBoundingBox(sp.plan).longAxis()], 2 * orientedBoundingBox(sp.plan).half[1 - orientedBoundingBox(sp.plan).longAxis()],
-                anchors, cx.adj.size(), anchorOpen, garageOpen);
+                anchors, widths[0], widths[1], pavilions, cx.adj.size(), anchorOpen, garageOpen);
 }

@@ -1586,7 +1586,9 @@ int l_building_cells(lua_State* L) {
         lua_getfield(L, 1, "garage");
         const bool withGarage = lua_isnil(L, -1) ? true : lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
-        cx = mallCells(box, Vec2(p.faceDir.x, p.faceDir.z), mp, ap, gp, withGarage, static_cast<Real>(optField(L, 1, "depth", 30.0)));
+        BuildingRecipe pr;
+        const bool hasPav = architectRecipeByName("oldtown_cafe", p.seed ^ 0x9e1u, 0.3, 13.0, 130.0, pr);
+        cx = mallCells(box, Vec2(p.faceDir.x, p.faceDir.z), mp, ap, gp, withGarage, static_cast<Real>(optField(L, 1, "depth", 30.0)), hasPav ? &pr.params : nullptr);
     } else if (twins > 0) {
         cx = twinTowers(box, p, static_cast<Real>(twins), floors, static_cast<int>(optField(L, 1, "bridge", 0.0)), static_cast<Real>(optField(L, 1, "bridge_w", 4.5)));
     } else if (ringN >= 3) {
