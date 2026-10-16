@@ -9,6 +9,7 @@
 #include "../../engine/interact_broker.h"
 #include "../../engine/camera/fly_camera_controller.h"
 #include "../../engine/input/input_map.h"
+#include "../../engine/systems/audio_system.h"   // the cabin's barrier
 #include "../../engine/systems/physics_system.h"
 #include "../../engine/world.h"
 #include "../../log.h"
@@ -261,6 +262,15 @@ void TrainSystem::sounds(engine::FrameContext& ctx) {
     constexpr double kJointSpacing = 18.0;   // metres of rail between joints (jointed track: the clatter people expect)
     constexpr double kClackRange = 70.0, kRumbleRange = 140.0, kHornRange = 600.0, kChimeRange = 35.0;
     const Vec3 ear = ctx.view.camera.position;
+    // ABOARD, the line is heard through the car's body (the horn up on the cab roof too); the rumble under
+    // the floor is in here with us.
+    if (train_ >= 0 && car_ >= 0) {
+        const CarPose P = sim_.carPose(train_, car_, 1.0);
+        const engine::Vec3 half(1.5, 2.0, P.length * 0.5);
+        ctx.audio.setListenerCabin(engine::AudioSystem::cabinEnclosureId((uint64_t(2) << 32) | uint64_t(train_)),
+                                   P.m.transformPoint(engine::Vec3(0, half.y, 0)), engine::Quat::fromRotationMatrix(P.m),
+                                   half, engine::AudioSystem::kCabin);
+    }
     const auto& trains = sim_.trains();
     if (ears_.size() != trains.size()) ears_.assign(trains.size(), TrainEar{});
     engine::AudioPlayParams pp;

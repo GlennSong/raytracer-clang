@@ -988,3 +988,94 @@ TEST_CASE(train_sounds_clack_roll_sound_the_horn_and_chime) {
     for (size_t i = 1; i < rumble.size(); ++i) maxStep = std::max(maxStep, std::fabs(rumble[i] - rumble[i - 1]));
     CHECK(std::fabs(rumble.front() - rumble.back()) <= maxStep * 1.5f + 1e-4f);
 }
+
+// Glenn: "The train horn sounds the same inside a building and pretty much anywhere you are in the world."
+// A 600 m horn heard from 300 m off was at half volume on the old straight-line falloff; the free-field law
+// puts it a tenth of the way (-20 dB) and the air dulls it.
+TEST_CASE(a_far_horn_is_quiet_and_dull_not_half_volume) {
+    CHECK(std::fabs(audioDistanceGain(30, 0, 600) - 1.0f) < 1e-4f);     // full out to the reference (range/20)
+    CHECK(std::fabs(audioDistanceGain(300, 0, 600) - 0.1f) < 1e-3f);    // -6 dB per doubling past it
+    CHECK(audioDistanceGain(550, 0, 600) < 0.03f);                       // fading out near the range
+    CHECK(audioDistanceGain(600, 0, 600) == 0.0f);
+    CHECK(audioDistanceGain(1.5, 0, 20) == 1.0f);                        // your own feet: full
+    CHECK(audioAirCutoffHz(300) < 6000.0f && audioAirCutoffHz(5) > 19000.0f);
+
+    AudioEngine audio;
+    audio.initialize(AudioBackendMode::Manual);
+    audio.setListener(Vec3(0, 0, 0), Vec3(0, 0, -1));
+    auto lo = sineClip(48000, 0.5, 300.0), hi = sineClip(48000, 0.5, 6000.0);
+    AudioClipHandle low = audio.createClip(lo.data(), lo.size(), 1, 48000);
+    AudioClipHandle high = audio.createClip(hi.data(), hi.size(), 1, 48000);
+    auto heard = [&](AudioClipHandle c, Real d) {
+        audio.playAt(c, Vec3(0, 0, -d), 600.0);
+        pump(audio, 4096);   // past the filter's settle
+        const double e = pump(audio, 4096).total();
+        audio.stopAll();
+        return e;
+    };
+    const double near = heard(low, 20), far = heard(low, 300);
+    std::printf("    [falloff] 300 Hz at 300 m / at 20 m = %.3f\n", far / near);
+    CHECK(far / near > 0.06 && far / near < 0.14);
+    // the bright note loses more than the low one with distance: the air took its top
+    const double hiRatio = heard(high, 300) / heard(high, 20);
+    std::printf("    [air] 6 kHz at 300 m / at 20 m = %.3f\n", hiRatio);
+    CHECK(hiRatio < (far / near) * 0.85);
+}
+
+// "You shouldn't hear them that loud inside a building": a sound outside the listener's enclosure crosses
+// its walls -- quieter and dull -- and one inside the same enclosure doesn't.
+TEST_CASE(walls_muffle_the_street_and_a_cabin_keeps_its_own_engine) {
+    AudioEngine audio;
+    audio.initialize(AudioBackendMode::Manual);
+    auto pcm = sineClip(48000, 0.5, 2000.0);
+    AudioClipHandle clip = audio.createClip(pcm.data(), pcm.size(), 1, 48000);
+    const AudioBarrier walls{0.12f, 600.0f};
+    // a building covers x > 50
+    audio.setEnclosureQuery([&](const Vec3& p) {
+        return p.x > 50 ? AudioEnclosure{7, walls} : AudioEnclosure{};
+    });
+    auto heard = [&](const Vec3& ear, const Vec3& src) {
+        audio.setListener(ear, Vec3(0, 0, -1));
+        audio.update();
+        audio.playAt(clip, src, 200.0);
+        pump(audio, 4096);
+        const double e = pump(audio, 4096).total();
+        audio.stopAll();
+        return e;
+    };
+    const double open = heard(Vec3(40, 0, 0), Vec3(30, 0, 0));      // both outdoors, 10 m apart
+    const double throughWall = heard(Vec3(60, 0, 0), Vec3(50, 0, 0));   // ear in, street out, 10 m apart
+    CHECK(audio.listenerEnclosure() == 7);
+    const double sameRoom = heard(Vec3(60, 0, 0), Vec3(70, 0, 0));       // both in, 10 m apart
+    std::printf("    [walls] street heard indoors %.3f of outdoors; same room %.3f\n", throughWall / open,
+                sameRoom / open);
+    CHECK(throughWall < open * 0.08);    // -18 dB of walls, and 2 kHz is past their 600 Hz cutoff
+    CHECK(sameRoom > open * 0.9);
+
+    // a cabin: the listener rides in a car parked in the open, the ear hanging behind it (a chase camera)
+    audio.setEnclosureQuery({});
+    auto cab = [&] {
+        audio.setListenerCabin(99, Vec3(0, 0, 0), Quat(), Vec3(1, 0.7, 2.2), AudioBarrier{0.3f, 1500.0f});
+    };
+    auto heardFromCar = [&](const Vec3& src) {
+        audio.setListener(Vec3(0, 1.5, 6), Vec3(0, 0, -1));
+        cab();
+        audio.update();
+        audio.playAt(clip, src, 200.0);
+        cab();
+        audio.update();
+        pump(audio, 4096);
+        const double e = pump(audio, 4096).total();
+        audio.stopAll();
+        return e;
+    };
+    const double engine = heardFromCar(Vec3(0, 0, 1.5));     // under the bonnet: in the cabin
+    CHECK(audio.listenerEnclosure() == 99);
+    const double passing = heardFromCar(Vec3(0, 1.5, 12));   // a car outside, the same 6 m from the ear
+    std::printf("    [cabin] own engine %.4f, a car outside %.4f\n", engine, passing);
+    CHECK(passing < engine * 0.25);
+    // the cabin lapses when nobody renews it
+    audio.update();
+    audio.update();
+    CHECK(audio.listenerEnclosure() == 0);
+}

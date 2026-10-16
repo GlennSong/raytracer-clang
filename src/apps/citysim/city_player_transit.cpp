@@ -7,6 +7,7 @@
 
 #include "../../engine/camera/fly_camera_controller.h"
 #include "../../engine/components.h"
+#include "../../engine/systems/audio_system.h"   // the cabin's barrier
 #include "../../engine/input/input_map.h"
 #include "../../engine/systems/physics_system.h"
 #include "../../engine/procgen/city/building_records.h"
@@ -453,6 +454,19 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
 }
 
 void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
+    // ABOARD, the street is heard through the bus's (the cab's) body; its own engine is in here with us.
+    if (riding_ >= 0 && ctx.audio.ready()) {
+        engine::Vec3 at;
+        engine::Vec2 heading;
+        if (city_.agentWorldPose(riding_, at, heading)) {
+            const bool bus = city_.sim().isBus(riding_);
+            const engine::Vec3 half = bus ? engine::Vec3(1.3, 1.7, 6.0) : engine::Vec3(1.0, 0.9, 2.4);
+            ctx.audio.setListenerCabin(engine::AudioSystem::cabinEnclosureId((uint64_t(1) << 32) | uint64_t(riding_)),
+                                       at + engine::Vec3(0, half.y, 0),
+                                       engine::Quat::fromAxisAngle(engine::Vec3(0, 1, 0), std::atan2(heading.x, heading.y)),
+                                       half, engine::AudioSystem::kCabin);
+        }
+    }
     {
         Entity player;
         ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) {

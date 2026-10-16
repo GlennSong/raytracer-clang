@@ -1,6 +1,7 @@
 #include "audio_system.h"
 
 #include "../components.h"
+#include "../procgen/city/building_records.h"
 
 #include <algorithm>
 
@@ -16,13 +17,18 @@ void AudioSystem::onStart(FrameContext& ctx) {
 void AudioSystem::update(FrameContext& ctx) {
     if (!ctx.audio.ready()) return;
     syncListener(ctx.world, ctx.audio, ctx.view.camera);
+    syncEnclosures(ctx.world, ctx.audio);
     step(ctx.world, ctx.audio);
 }
 
 void AudioSystem::onStop(FrameContext& ctx) {
     ctx.events.unsubscribe(playSoundSub);
     playSoundSub = EventBus::INVALID_SUBSCRIPTION;
-    if (ctx.audio.ready()) ctx.audio.stopAll();
+    if (ctx.audio.ready()) {
+        ctx.audio.stopAll();
+        ctx.audio.setEnclosureQuery({});   // it holds the World
+    }
+    queryWorld_ = nullptr;
     liveVoices.clear();
     clipCache.clear();
 }
@@ -44,6 +50,31 @@ void AudioSystem::syncListener(World& world, AudioEngine& audio,
             forward = Vec3(0, 0, -1);
         audio.setListener(camera.position, forward, camera.up);
     }
+}
+
+void AudioSystem::syncEnclosures(World& world, AudioEngine& audio) {
+    if (queryWorld_ != &world) {
+        queryWorld_ = &world;
+        World* w = &world;
+        audio.setEnclosureQuery([w](const Vec3& p) {
+            const CityBuildings* cb = nullptr;
+            w->each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+            if (!cb) return AudioEnclosure{};
+            const BuildingRecord* r = cb->recordAt(Vec2(p.x, p.z), p.y);
+            if (!r) return AudioEnclosure{};
+            return AudioEnclosure{
+                buildingEnclosureId(static_cast<std::size_t>(r - cb->records.data())),
+                kBuildingWalls};
+        });
+    }
+    // In a car: its chassis box is the cabin.
+    world.each<InVehicle>([&](Entity, InVehicle& in) {
+        const Transform* t = world.get<Transform>(in.vehicle);
+        const Vehicle* v = world.get<Vehicle>(in.vehicle);
+        if (!t || !v) return;
+        audio.setListenerCabin(cabinEnclosureId(in.vehicle.index), t->position, t->orientation,
+                               v->config.chassisHalfExtent, kCabin);
+    });
 }
 
 void AudioSystem::step(World& world, AudioEngine& audio) {
