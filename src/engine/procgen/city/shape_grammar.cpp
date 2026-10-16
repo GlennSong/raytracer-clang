@@ -1229,7 +1229,33 @@ Real interiorInset(const BuildingParams& p) {
 // the sky through (Glenn: "the skyscraper interiors don't have corners").
 static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge, Real y0, Real h,
                           Real thick, const Vec3& paint, bool bothSides,
-                          PartId part = PartId::Interior) {
+                          PartId part = PartId::Interior);
+// The inset skin of a RULED storey (ADR-0175 revised): the strip from `from` to `to` of a storey `hFull` tall
+// whose outline runs from `lower` at `yBase` to `upper` at `yBase + hFull`, corner for corner, so the inside of
+// a twisted or bulging storey's glass leans with the outside. Falls back to the vertical skin where the outlines
+// do not correspond.
+static void emitInsetSkinRuled(BuildingMesh& out, const Poly2& lower, const Poly2& upper, std::size_t edge, Real yBase, Real hFull,
+                               Real from, Real to, Real thick, const Vec3& paint, PartId part = PartId::Interior) {
+    if (lower.size() < 3 || upper.size() != lower.size() || hFull < 1e-6) { emitInsetSkin(out, lower, edge, yBase + from, to - from, thick, paint, false, part); return; }
+    const Poly2 innerL = offsetPolygonEdges(lower, std::vector<Real>(lower.size(), -thick));
+    const Poly2 innerU = offsetPolygonEdges(upper, std::vector<Real>(upper.size(), -thick));
+    if (innerL.size() != lower.size() || innerU.size() != lower.size()) { emitInsetSkin(out, lower, edge, yBase + from, to - from, thick, paint, false, part); return; }
+    const std::size_t e = edge % lower.size(), f = (e + 1) % lower.size();
+    const Real t0 = from / hFull, t1 = to / hFull;
+    auto at = [&](std::size_t i, Real t) { return innerL[i] + (innerU[i] - innerL[i]) * t; };
+    const Vec2 a = at(e, t0), b = at(f, t0), c = at(f, t1), d = at(e, t1);
+    const Vec2 dv = innerL[f] - innerL[e];
+    const Real len = dv.length();
+    if (len < 1e-6) return;
+    const Vec2 nOut(dv.y / len, -dv.x / len);
+    RenderMesh skin;
+    MeshBuilder::emitQuad(skin, Vec3(a.x, yBase + from, a.y), Vec3(b.x, yBase + from, b.y), Vec3(c.x, yBase + to, c.y),
+                          Vec3(d.x, yBase + to, d.y), Vec3(-nOut.x, 0, -nOut.y), paint);
+    appendToPart(out, part, skin);
+}
+static void emitInsetSkin(BuildingMesh& out, const Poly2& plan, std::size_t edge, Real y0, Real h,
+                          Real thick, const Vec3& paint, bool bothSides,
+                          PartId part) {
     if (plan.size() < 3) return;
     const Poly2 inner = offsetPolygonEdges(plan, std::vector<Real>(plan.size(), -thick));
     if (inner.size() != plan.size()) return;
@@ -5093,9 +5119,15 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     for (int ki = std::max(1, kA); ki < kB; ++ki) {
         const std::size_t k = static_cast<std::size_t>(ki);
         const StoreyPlan& spk = storeys[k];
+        // the ceiling's outline where the storey above continues the tier turned or scaled (the glass is ruled
+        // to it outside, so the inside leans with it)
+        const Poly2* ceilingIn = nullptr;
+        if (params.curtainWall && k + 1 < storeys.size() && storeys[k + 1].tier == spk.tier && storeys[k + 1].plan.size() == spk.plan.size() &&
+            !samePlan(storeys[k + 1].plan, spk.plan))
+            ceilingIn = &storeys[k + 1].plan;
         for (std::size_t e = 0; e < spk.plan.size(); ++e) {
-            const FaceRect fr =
-                planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
+            const FaceRect fr = ceilingIn ? planEdgeRuled(spk.plan, *ceilingIn, e, baseY + spk.y0, spk.h)
+                                          : planEdgeRect(spk.plan, e, baseY + spk.y0, spk.h);
             if (partyEdge(spk.plan, params, e, static_cast<int>(k))) {   // the party wall: painted plaster, no windows
                 emitInsetSkin(out, spk.plan, e, baseY + spk.y0, spk.h,
                               interiorInset(params), interiorPaintFor(params), false);
@@ -5121,10 +5153,15 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                 const Real skin = kCurtainGlassIn + 0.02;
                 const CurtainStyle ics = curtainStyleOf(params);
                 const Real band = ics.spandrelH(spk.h);
-                emitInsetSkin(out, spk.plan, e, baseY + spk.y0, band,
-                              skin, interiorPaintFor(params), false);
-                emitInsetSkin(out, spk.plan, e, baseY + spk.y0 + band, spk.h - band,
-                              skin, Vec3(1, 1, 1), false, PartId::Glass);
+                if (ceilingIn) {
+                    emitInsetSkinRuled(out, spk.plan, *ceilingIn, e, baseY + spk.y0, spk.h, 0, band, skin, interiorPaintFor(params));
+                    emitInsetSkinRuled(out, spk.plan, *ceilingIn, e, baseY + spk.y0, spk.h, band, spk.h, skin, Vec3(1, 1, 1), PartId::Glass);
+                } else {
+                    emitInsetSkin(out, spk.plan, e, baseY + spk.y0, band,
+                                  skin, interiorPaintFor(params), false);
+                    emitInsetSkin(out, spk.plan, e, baseY + spk.y0 + band, spk.h - band,
+                                  skin, Vec3(1, 1, 1), false, PartId::Glass);
+                }
                 emitInnerCurtainGrid(out, fr, skin, band, ics);
             } else {
                 emitInnerWallRect(out, fr, facadeLayout(fr, upMode, upperP),
@@ -6484,8 +6521,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         const Real fh = params.floorHeight;
         // THE WAVE'S PLATE at this storey's floor line: the field's contour, a slab running past the glass
         if (!plates.empty() && plates[static_cast<std::size_t>(i) + 1].size() >= 3)
-            emitPlanSlab(out, plates[static_cast<std::size_t>(i) + 1], y + 0.02, 0.3, PartId::Trim,
-                         materialFor(PartId::Trim, wallColor).albedo * 0.9);
+            emitPlanSlab(out, plates[static_cast<std::size_t>(i) + 1], y + 0.02, 0.3, PartId::Concrete,
+                         Vec3(0.80, 0.79, 0.76));   // (pale concrete: the plate reads against the glass, as Aqua's do)
         // THE CEILING'S OUTLINE: the storey above's, when it continues this tier on an outline with the same
         // corners (a twist, a bulge, a lean): the glass is ruled up to it. The top storey, or a setback, or a
         // storey whose outline is the same: flat, as before.
