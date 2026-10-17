@@ -5850,7 +5850,7 @@ bool LevelLoader::load(const std::string& path,
                     engine::Interactables set;
                     for (const engine::PlacedPiece& pp : list)
                         if (flib.interactive(static_cast<engine::Piece>(pp.piece)))
-                            set.pieces.push_back({pp.piece, engine::interactXform(flib.find(static_cast<engine::Piece>(pp.piece)), pp.xform, pp.variant), 0});
+                            set.pieces.push_back({pp.piece, engine::interactXform(flib.find(static_cast<engine::Piece>(pp.piece)), pp.xform, pp.variant), 0, -1, pp.variant});
                     if (!set.pieces.empty()) {
                         set.refreshBounds();
                         seats += set.pieces.size();

@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -59,6 +60,9 @@ struct FurniturePiece {
     Vec3 size{1, 1, 1};                           // the footprint box: x width, y height, z depth
     bool solid = true;                            // the placer adds its box to the collider
     Real colliderH = 0;                           // the collider's height when not size.y (a tap is not a wall)
+    // THE PARTS THAT BLOCK, when not the whole footprint: boxes {centre, size} in piece space -- a cubicle's panels
+    // and worktops, a meeting table's top -- so the floor round the chairs in it stays walkable
+    std::vector<std::array<Vec3, 2>> colliders;
 };
 
 // The piece, modelled once per (piece, variant) and cached (thread-safe). Variant: bits 0-2 the fabric, 3-4 the

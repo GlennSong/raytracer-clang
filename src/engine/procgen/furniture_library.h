@@ -171,6 +171,9 @@ private:
 
 // May `v` start, with `taken` the spots in use?
 inline bool verbFree(const FurnVerb& v, uint32_t taken) { return (v.spots & taken) == 0; }
+// Is the verb's seat on this placement at all? A piece built shorter by its style (a bench of desks for four, not
+// six) has no seat past its far end; a stand spot beside the piece is always there.
+bool verbOnPiece(const FurnitureAsset& a, const FurnVerb& v, uint32_t variant);
 
 }  // namespace engine
 

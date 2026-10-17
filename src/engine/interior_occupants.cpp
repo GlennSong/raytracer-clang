@@ -123,6 +123,7 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
         pieceDraw = plan.lecturer && hasTag(*a, "lecture") ? pieceDraw >> 1 : (pieceDraw >> 1) | 0x80000000u;
         for (int vi = 0; vi < static_cast<int>(a->verbs.size()); ++vi) {
             const FurnVerb& v = a->verbs[static_cast<std::size_t>(vi)];
+            if (!verbOnPiece(*a, v, set.pieces[pi].variant)) continue;
             const Use u{pi, vi, (pieceDraw & 0xFFFFFF00u) | static_cast<uint32_t>(vi & 0xFF)};
             if (v.verb == Verb::Lie && a->family == "sleeping") beds.push_back(u);
             else if (v.verb == Verb::Sit) seats.push_back(u);

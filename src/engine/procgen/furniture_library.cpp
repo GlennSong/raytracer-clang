@@ -108,6 +108,14 @@ FurnitureLibrary& FurnitureLibrary::global() {
 
 namespace engine {
 
+bool verbOnPiece(const FurnitureAsset& a, const FurnVerb& v, uint32_t variant) {
+    if (v.verb == Verb::Stand) return true;
+    const Vec3 size = furniturePiece(a.piece, variant).size;
+    for (std::size_t i = 0; i < a.spots.size(); ++i)
+        if ((v.spots & (1u << i)) && a.spots[i].at.z > size.z + 0.05) return false;
+    return true;
+}
+
 Mat4 interactXform(const FurnitureAsset* a, const Mat4& xform, uint32_t variant) {
     if (!a || a->rise == 0) return xform;
     return xform * Mat4::translate(0, a->rise * static_cast<Real>((variant >> 5) & 7u), 0);

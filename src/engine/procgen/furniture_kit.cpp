@@ -426,7 +426,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             const bool four = (style & 4u) != 0;
             const Real L = four ? 3.2 : 4.8;
             k.out.size = {3.1, 1.38, L};
-            k.out.colliderH = 0.75;   // the desks collide; the low screen above them need not
+            // the desks and the screen down their middle collide; the chairs either side are seats (library spots)
+            k.out.colliders = {{Vec3(0, 0.375, L * 0.5), Vec3(1.6, 0.75, L)}, {Vec3(0, 1.05, L * 0.5), Vec3(0.04, 0.62, L)}};
             k.box(F::Wood, {0, 0.735, L * 0.5}, {1.6, 0.03, L}, 0.004, wood, 1);
             for (double x : {-0.76, 0.76})
                 for (double z : {0.05, L * 0.5, L - 0.05}) k.leg(F::Metal, {x, 0, z}, 0.72, 0.04, kWhite * 0.9);
@@ -451,6 +452,10 @@ FurniturePiece build(Piece p, uint32_t variant) {
             // A CUBICLE: fabric partitions on three sides (1.4 m), an L-shaped worktop, a pedestal, the chair
             // and the monitor; open at +z.
             k.out.size = {2.4, 1.45, 2.4};
+            // (the panels and the worktops collide, not the floor inside: you walk in and sit at it)
+            k.out.colliders = {{Vec3(0, 0.70, 0.03), Vec3(2.4, 1.4, 0.06)}, {Vec3(-1.17, 0.70, 1.2), Vec3(0.06, 1.4, 2.4)},
+                               {Vec3(1.17, 0.70, 1.2), Vec3(0.06, 1.4, 2.4)}, {Vec3(0, 0.37, 0.40), Vec3(2.2, 0.74, 0.70)},
+                               {Vec3(-0.80, 0.37, 1.15), Vec3(0.60, 0.74, 0.85)}};
             const Vec3 panel = fabric * 0.6 + Vec3(0.18, 0.18, 0.18);
             k.box(F::Fabric, {0, 0.70, 0.03}, {2.4, 1.4, 0.06}, 0.015, panel);
             for (double x : {-1.17, 1.17}) k.box(F::Fabric, {x, 0.70, 1.2}, {0.06, 1.4, 2.4}, 0.015, panel);
@@ -470,6 +475,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
         case Piece::MeetingTable: {
             // A meeting table for six: a long top on two pedestal legs, three chairs a side.
             k.out.size = {3.0, 0.95, 2.4};
+            k.out.colliders = {{Vec3(0, 0.375, 1.2), Vec3(2.6, 0.75, 1.1)}};   // the table; its chairs are seats
             k.box(F::Wood, {0, 0.735, 1.2}, {2.6, 0.04, 1.1}, 0.015, wood, 1);
             for (double x : {-0.8, 0.8}) k.box(F::Metal, {x, 0.36, 1.2}, {0.12, 0.72, 0.7}, 0.01, kSteel * 0.7, 1);
             for (double x : {-0.85, 0.0, 0.85})

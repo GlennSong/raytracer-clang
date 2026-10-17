@@ -173,9 +173,35 @@ furniture_library = {
   bathtub = { family = "fixture", tags = { "bathroom" } },
   vanity = { family = "fixture", tags = { "bathroom" } },
   shelving = { family = "storage", tags = { "closet" } },
-  meeting_table = { family = "surface", tags = { "meeting" } },
+  -- A MEETING TABLE's six chairs, three a side, each facing the table (Glenn, 2026-10-16: "I can't sit in the
+  -- meeting room chairs")
+  meeting_table = {
+    family = "surface", tags = { "meeting" },
+    spots = {
+      { id = "n0", at = seat(-0.85, 0.52, 0.35) },
+      { id = "n1", at = seat(0.0, 0.52, 0.35) },
+      { id = "n2", at = seat(0.85, 0.52, 0.35) },
+      { id = "s0", at = seat(-0.85, 0.52, 2.05) },
+      { id = "s1", at = seat(0.0, 0.52, 2.05) },
+      { id = "s2", at = seat(0.85, 0.52, 2.05) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "n0" }, eye = { -0.85, 1.22, 0.42 }, look = { 0, -0.10, 1 }, exit = { -0.85, 0, -0.60 } },
+      { verb = "sit", spots = { "n1" }, eye = { 0.0, 1.22, 0.42 }, look = { 0, -0.10, 1 }, exit = { 0.0, 0, -0.60 } },
+      { verb = "sit", spots = { "n2" }, eye = { 0.85, 1.22, 0.42 }, look = { 0, -0.10, 1 }, exit = { 0.85, 0, -0.60 } },
+      { verb = "sit", spots = { "s0" }, eye = { -0.85, 1.22, 1.98 }, look = { 0, -0.10, -1 }, exit = { -0.85, 0, 3.00 } },
+      { verb = "sit", spots = { "s1" }, eye = { 0.0, 1.22, 1.98 }, look = { 0, -0.10, -1 }, exit = { 0.0, 0, 3.00 } },
+      { verb = "sit", spots = { "s2" }, eye = { 0.85, 1.22, 1.98 }, look = { 0, -0.10, -1 }, exit = { 0.85, 0, 3.00 } },
+    },
+  },
   whiteboard = { family = "fixture", tags = { "meeting", "classroom" } },
-  cubicle = { family = "surface", tags = { "office", "open_plan" } },
+  -- A CUBICLE's chair, facing its desk at the back (-z); you walk in at its open front ("I still can't enter the
+  -- cubes and sit in the chairs")
+  cubicle = {
+    family = "surface", tags = { "office", "open_plan" },
+    spots = { { id = "seat", at = seat(0, 0.52, 1.2) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.22, 1.12 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 2.7 } } },
+  },
   water_cooler = { family = "appliance", tags = { "office", "drink" }, clearance = { front = 0.7 } },
   copier = { family = "appliance", tags = { "office", "print" }, clearance = { front = 0.9 } },
   -- a phone booth's stool, facing its shelf at the back (-z)
@@ -184,7 +210,26 @@ furniture_library = {
     spots = { { id = "seat", at = seat(0, 0.69, 0.62) } },
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.38, 0.58 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 1.4 } } },
   },
-  desk_pod = { family = "surface", tags = { "office", "open_plan" } },
+  -- BENCHING's chairs either side of the desks, facing in (a bench for four has no seats at z 4.0: verbOnPiece)
+  desk_pod = {
+    family = "surface", tags = { "office", "open_plan" },
+    spots = {
+      { id = "l8", at = seat(-1.15, 0.52, 0.8) },
+      { id = "r8", at = seat(1.15, 0.52, 0.8) },
+      { id = "l24", at = seat(-1.15, 0.52, 2.4) },
+      { id = "r24", at = seat(1.15, 0.52, 2.4) },
+      { id = "l40", at = seat(-1.15, 0.52, 4.0) },
+      { id = "r40", at = seat(1.15, 0.52, 4.0) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "l8" }, eye = { -1.08, 1.22, 0.8 }, look = { 1, -0.10, 0 }, exit = { -1.85, 0, 0.8 } },
+      { verb = "sit", spots = { "r8" }, eye = { 1.08, 1.22, 0.8 }, look = { -1, -0.10, 0 }, exit = { 1.85, 0, 0.8 } },
+      { verb = "sit", spots = { "l24" }, eye = { -1.08, 1.22, 2.4 }, look = { 1, -0.10, 0 }, exit = { -1.85, 0, 2.4 } },
+      { verb = "sit", spots = { "r24" }, eye = { 1.08, 1.22, 2.4 }, look = { -1, -0.10, 0 }, exit = { 1.85, 0, 2.4 } },
+      { verb = "sit", spots = { "l40" }, eye = { -1.08, 1.22, 4.0 }, look = { 1, -0.10, 0 }, exit = { -1.85, 0, 4.0 } },
+      { verb = "sit", spots = { "r40" }, eye = { 1.08, 1.22, 4.0 }, look = { -1, -0.10, 0 }, exit = { 1.85, 0, 4.0 } },
+    },
+  },
   -- THE UNIVERSITY
   single_bed = {
     family = "sleeping", tags = { "dorm", "bedroom_single" },

@@ -193,7 +193,7 @@ TEST_CASE(you_can_sit_on_the_toilet) {
     const BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, 6, 7);
     Interactables set;
     for (const PlacedPiece& pp : bm.furniture)
-        if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+        if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0, -1, pp.variant});
     set.refreshBounds();
     int toilets = 0, offered = 0;
     for (std::size_t i = 0; i < set.pieces.size(); ++i) {
@@ -291,4 +291,40 @@ TEST_CASE(every_seat_in_the_kit_can_be_used) {
     std::printf("    [seats] %d seat-like pieces, %d with no sit or lie\n", seats, unusable);
     CHECK(seats >= 20);
     CHECK(unusable == 0);
+}
+
+// SEATS IN THE OFFICE'S FURNITURE (Glenn, 2026-10-16: "I still can't enter the cubes and sit in the chairs ... I can't
+// sit in the meeting room chairs"). The cubicle, the benching and the meeting table carry their chairs in their own
+// meshes: each chair is a seat now, and only the parts that block collide (the panels, the desks, the table's top),
+// so no seat and no place to stand up sits inside a collider -- and a bench built for four offers four seats, not six.
+TEST_CASE(office_furniture_chairs_are_seats_you_can_reach) {
+    const FurnitureLibrary lib = shippedLibrary();
+    struct Case { Piece piece; uint32_t variant; int seats; };
+    const Case cases[] = {{Piece::Cubicle, 0, 1}, {Piece::DeskPod, 0, 6}, {Piece::DeskPod, 4u << 5, 4}, {Piece::MeetingTable, 0, 6}};
+    for (const Case& c : cases) {
+        const FurnitureAsset* a = lib.find(c.piece);
+        CHECK(a != nullptr);
+        if (!a) continue;
+        const FurniturePiece& fp = furniturePiece(c.piece, c.variant);
+        CHECK(!fp.colliders.empty());
+        auto blocked = [&](Real x, Real z) {
+            for (const auto& b : fp.colliders)
+                if (std::fabs(x - b[0].x) < b[1].x * 0.5 && std::fabs(z - b[0].z) < b[1].z * 0.5) return true;
+            return false;
+        };
+        int seats = 0;
+        for (const FurnVerb& v : a->verbs) {
+            if (v.verb != Verb::Sit || !verbOnPiece(*a, v, c.variant)) continue;
+            ++seats;
+            for (std::size_t k = 0; k < a->spots.size(); ++k)
+                if (v.spots & (1u << k)) CHECK(!blocked(a->spots[k].at.x, a->spots[k].at.z));
+            CHECK(!blocked(v.exit.x, v.exit.z));
+        }
+        std::printf("    [office seats] %s v%u: %d seats\n", furniturePieceName(c.piece), c.variant, seats);
+        CHECK(seats == c.seats);
+    }
+    // the cubicle is open at its front: nothing blocks the walk in from there to its chair
+    const FurniturePiece& cube = furniturePiece(Piece::Cubicle, 0);
+    for (Real z = 1.2; z <= 2.4; z += 0.1)
+        for (const auto& b : cube.colliders) CHECK(!(std::fabs(0.0 - b[0].x) < b[1].x * 0.5 + 0.3 && std::fabs(z - b[0].z) < b[1].z * 0.5));
 }

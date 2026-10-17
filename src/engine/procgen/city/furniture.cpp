@@ -185,21 +185,30 @@ struct Furnisher {
         dress(pc, M);
         const FurniturePiece& kit = furniturePiece(pc, pp.variant);
         if (!kit.solid || !collider) return;
-        // The footprint box, the piece's height.
-        const Real hw = kit.size.x * 0.5;
         auto W = [&](Real px, Real pz) {
             return Vec3(a.x + X.x * px + Z.x * pz, 0, a.y + X.z * px + Z.z * pz);
         };
-        const Vec3 c[4] = {W(-hw, 0), W(hw, 0), W(hw, kit.size.z), W(-hw, kit.size.z)};
-        const Real ya = y0 + yOff, yb = y0 + yOff + (kit.colliderH > 0 ? kit.colliderH : kit.size.y);
-        auto V = [&](int i, Real y) { return Vec3(c[i].x, y, c[i].z); };
         auto q = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3) {
             MeshBuilder::emitTri(*collider, p0, p1, p2, normalize(cross(p1 - p0, p2 - p0)), Vec3(1, 1, 1));
             MeshBuilder::emitTri(*collider, p0, p2, p3, normalize(cross(p2 - p0, p3 - p0)), Vec3(1, 1, 1));
         };
-        q(V(0, ya), V(1, ya), V(1, yb), V(0, yb)); q(V(1, ya), V(2, ya), V(2, yb), V(1, yb));
-        q(V(2, ya), V(3, ya), V(3, yb), V(2, yb)); q(V(3, ya), V(0, ya), V(0, yb), V(3, yb));
-        q(V(0, yb), V(1, yb), V(2, yb), V(3, yb));
+        // a box x0..x1 by z0..z1 (piece space), from the floor + ya to + yb: its four sides and its top
+        auto block = [&](Real x0, Real x1, Real z0, Real z1, Real ya, Real yb) {
+            const Vec3 c[4] = {W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1)};
+            auto V = [&](int i, Real y) { return Vec3(c[i].x, y0 + yOff + y, c[i].z); };
+            q(V(0, ya), V(1, ya), V(1, yb), V(0, yb)); q(V(1, ya), V(2, ya), V(2, yb), V(1, yb));
+            q(V(2, ya), V(3, ya), V(3, yb), V(2, yb)); q(V(3, ya), V(0, ya), V(0, yb), V(3, yb));
+            q(V(0, yb), V(1, yb), V(2, yb), V(3, yb));
+        };
+        if (!kit.colliders.empty()) {   // the parts that block (a cubicle's panels, a table's top)
+            for (const auto& b : kit.colliders)
+                block(b[0].x - b[1].x * 0.5, b[0].x + b[1].x * 0.5, b[0].z - b[1].z * 0.5, b[0].z + b[1].z * 0.5,
+                      std::max(Real(0), b[0].y - b[1].y * 0.5), b[0].y + b[1].y * 0.5);
+            return;
+        }
+        // The footprint box, the piece's height.
+        const Real hw = kit.size.x * 0.5;
+        block(-hw, hw, 0, kit.size.z, 0, kit.colliderH > 0 ? kit.colliderH : kit.size.y);
     }
 
     // THE DRESSING (the furniture library, M3): every anchor the placed piece's description carries -- a desk's

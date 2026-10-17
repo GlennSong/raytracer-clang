@@ -52,7 +52,7 @@ bool pieceVerbs(const Interactables& set, uint32_t pi, const FurnitureLibrary& l
     Vec3 primAt, secAt;
     for (std::size_t vi = 0; vi < a->verbs.size(); ++vi) {
         const FurnVerb& v = a->verbs[vi];
-        if (!verbFree(v, ip.taken)) continue;
+        if (!verbFree(v, ip.taken) || !verbOnPiece(*a, v, ip.variant)) continue;
         const Vec3 c = piecePoint(ip.xform, verbCentre(*a, v));
         const Real d = Vec3(c.x - feet.x, 0, c.z - feet.z).length();
         if (d > reach) continue;
@@ -108,7 +108,7 @@ bool takeInteraction(Interactables& set, Entity setEntity, uint32_t pi, int vi, 
     const FurnitureAsset* a = lib.find(static_cast<Piece>(ip.piece));
     if (!a || static_cast<std::size_t>(vi) >= a->verbs.size()) return false;
     const FurnVerb& v = a->verbs[static_cast<std::size_t>(vi)];
-    if (!verbFree(v, ip.taken)) return false;
+    if (!verbFree(v, ip.taken) || !verbOnPiece(*a, v, ip.variant)) return false;
     ip.taken |= v.spots;
     out = Seated{};
     out.set = setEntity;

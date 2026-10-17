@@ -30,6 +30,7 @@ struct InteractPiece {
     Mat4 xform;          // piece space -> world
     uint32_t taken = 0;  // spots in use (bit i = the library entry's spot i)
     int16_t unit = -1;   // the shop unit it furnishes (Interactables::units), -1: the building's own
+    uint32_t variant = 0;   // its build (furniturePiece): a shorter style has fewer seats (verbOnPiece)
 };
 
 struct InteractUnit {
