@@ -86,6 +86,10 @@ struct TreeRecipe {
     // Empty: leafColor..leafColorHi, one colour a tree.
     std::vector<std::vector<Vec3>> leafPalettes;
     LeafCardSpec card;
+    // NEAR FOLIAGE (foliage_kit.h): the strand -- one shoot drawn flat, its own card grammar -- and the spray the
+    // shoots are built into. A tree grown with foliage = 1 wears these instead of the card.
+    LeafCardSpec strand;
+    SpraySpec spray;
 };
 
 class TreeRecipeBook {

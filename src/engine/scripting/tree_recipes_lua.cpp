@@ -177,6 +177,62 @@ bool checkVars(const std::string& axiom, const std::vector<RecipeRule>& rules, c
     return true;
 }
 
+// A LEAF CARD (leaf_card.h) table at the top of the stack: a 2D twig grammar, its leaf and flower. (The recipe's
+// `card`, and its `strand` -- the near foliage's shoot.)
+bool readCard(lua_State* L, LeafCardSpec& cs, const std::string& cw, std::string* err) {
+    const int ct = lua_gettop(L);
+    cs.set = true;
+    if (const std::string a = strField(L, ct, "axiom"); !a.empty()) cs.axiom = a;
+    cs.iterations = static_cast<int>(numField(L, ct, "iterations", cs.iterations));
+    cs.variants = std::clamp(static_cast<int>(numField(L, ct, "variants", cs.variants)), 1, 4);
+    cs.stemWidth = numField(L, ct, "stem_width", cs.stemWidth);
+    cs.cup = numField(L, ct, "cup", cs.cup);
+    cs.shadeJitter = numField(L, ct, "shade_jitter", cs.shadeJitter);
+    cs.tipBright = numField(L, ct, "tip_bright", cs.tipBright);
+    if (!readRules(L, ct, cs.rules, cw, err) || !readRanges(L, ct, "vars", cs.vars, cw, err) ||
+        !checkVars(cs.axiom, cs.rules, cs.vars, cw, err))
+        return false;
+    lua_getfield(L, ct, "leaf");
+    if (lua_istable(L, -1)) {
+        const int lt = lua_gettop(L);
+        if (const std::string s = strField(L, lt, "shape"); !s.empty()) cs.shape = s;
+        cs.leafLength = numField(L, lt, "length", cs.leafLength);
+        cs.leafWidth = numField(L, lt, "width", cs.leafWidth);
+        cs.lobes = static_cast<int>(numField(L, lt, "lobes", cs.lobes));
+        cs.teeth = static_cast<int>(numField(L, lt, "teeth", cs.teeth));
+        Vec3 hi;
+        readColour(L, lt, "color", cs.leafTint, hi);
+    }
+    lua_pop(L, 1);
+    { Vec3 hi; readColour(L, ct, "stem_color", cs.stemTint, hi); }
+    static const char* kShapes[] = {"oval", "lobed", "serrate", "needle", "leaflet", "palmate"};
+    if (std::find(std::begin(kShapes), std::end(kShapes), cs.shape) == std::end(kShapes)) {
+        return fail(err, cw + ".leaf: unknown shape '" + cs.shape + "'");
+    }
+    // THE FLOWER (drawn at every W)
+    lua_getfield(L, ct, "flower");
+    if (lua_istable(L, -1)) {
+        const int ft = lua_gettop(L);
+        auto& fl = cs.flower;
+        fl.set = true;
+        if (const std::string sh = strField(L, ft, "shape"); !sh.empty()) fl.shape = sh;
+        fl.size = numField(L, ft, "size", fl.size);
+        fl.petals = static_cast<int>(numField(L, ft, "petals", fl.petals));
+        fl.notch = numField(L, ft, "notch", fl.notch);
+        fl.eye = numField(L, ft, "eye", fl.eye);
+        Vec3 hi;
+        readColour(L, ft, "color", fl.tint, hi);
+        fl.eyeTint = fl.tint;
+        readColour(L, ft, "eye_color", fl.eyeTint, hi);
+        static const char* kFlowers[] = {"blossom", "daisy", "floret"};
+        if (std::find(std::begin(kFlowers), std::end(kFlowers), fl.shape) == std::end(kFlowers)) {
+            return fail(err, cw + ".flower: unknown shape '" + fl.shape + "'");
+        }
+    }
+    lua_pop(L, 1);
+    return true;
+}
+
 }  // namespace
 
 bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
@@ -218,65 +274,30 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             lua_settop(L, base);
             return false;
         }
-        // THE LEAF CARD (leaf_card.h): a 2D twig grammar and its leaf
+        // THE LEAF CARD (leaf_card.h) and the near foliage's STRAND and SPRAY (foliage_kit.h)
         lua_getfield(L, t, "card");
+        if (lua_istable(L, -1) && !readCard(L, r.card, where + ".card", err)) { lua_settop(L, base); return false; }
+        lua_pop(L, 1);
+        lua_getfield(L, t, "strand");
+        if (lua_istable(L, -1) && !readCard(L, r.strand, where + ".strand", err)) { lua_settop(L, base); return false; }
+        lua_pop(L, 1);
+        lua_getfield(L, t, "spray");
         if (lua_istable(L, -1)) {
-            const int ct = lua_gettop(L);
-            LeafCardSpec& cs = r.card;
-            cs.set = true;
-            const std::string cw = where + ".card";
-            if (const std::string a = strField(L, ct, "axiom"); !a.empty()) cs.axiom = a;
-            cs.iterations = static_cast<int>(numField(L, ct, "iterations", cs.iterations));
-            cs.variants = std::clamp(static_cast<int>(numField(L, ct, "variants", cs.variants)), 1, 4);
-            cs.stemWidth = numField(L, ct, "stem_width", cs.stemWidth);
-            cs.cup = numField(L, ct, "cup", cs.cup);
-            cs.shadeJitter = numField(L, ct, "shade_jitter", cs.shadeJitter);
-            cs.tipBright = numField(L, ct, "tip_bright", cs.tipBright);
-            if (!readRules(L, ct, cs.rules, cw, err) || !readRanges(L, ct, "vars", cs.vars, cw, err) ||
-                !checkVars(cs.axiom, cs.rules, cs.vars, cw, err)) {
-                lua_settop(L, base);
-                return false;
-            }
-            lua_getfield(L, ct, "leaf");
-            if (lua_istable(L, -1)) {
-                const int lt = lua_gettop(L);
-                if (const std::string s = strField(L, lt, "shape"); !s.empty()) cs.shape = s;
-                cs.leafLength = numField(L, lt, "length", cs.leafLength);
-                cs.leafWidth = numField(L, lt, "width", cs.leafWidth);
-                cs.lobes = static_cast<int>(numField(L, lt, "lobes", cs.lobes));
-                cs.teeth = static_cast<int>(numField(L, lt, "teeth", cs.teeth));
-                Vec3 hi;
-                readColour(L, lt, "color", cs.leafTint, hi);
-            }
-            lua_pop(L, 1);
-            { Vec3 hi; readColour(L, ct, "stem_color", cs.stemTint, hi); }
-            static const char* kShapes[] = {"oval", "lobed", "serrate", "needle", "leaflet", "palmate"};
-            if (std::find(std::begin(kShapes), std::end(kShapes), cs.shape) == std::end(kShapes)) {
-                lua_settop(L, base);
-                return fail(err, cw + ".leaf: unknown shape '" + cs.shape + "'");
-            }
-            // THE FLOWER (drawn at every W)
-            lua_getfield(L, ct, "flower");
-            if (lua_istable(L, -1)) {
-                const int ft = lua_gettop(L);
-                auto& fl = cs.flower;
-                fl.set = true;
-                if (const std::string sh = strField(L, ft, "shape"); !sh.empty()) fl.shape = sh;
-                fl.size = numField(L, ft, "size", fl.size);
-                fl.petals = static_cast<int>(numField(L, ft, "petals", fl.petals));
-                fl.notch = numField(L, ft, "notch", fl.notch);
-                fl.eye = numField(L, ft, "eye", fl.eye);
-                Vec3 hi;
-                readColour(L, ft, "color", fl.tint, hi);
-                fl.eyeTint = fl.tint;
-                readColour(L, ft, "eye_color", fl.eyeTint, hi);
-                static const char* kFlowers[] = {"blossom", "daisy", "floret"};
-                if (std::find(std::begin(kFlowers), std::end(kFlowers), fl.shape) == std::end(kFlowers)) {
-                    lua_settop(L, base);
-                    return fail(err, cw + ".flower: unknown shape '" + fl.shape + "'");
-                }
-            }
-            lua_pop(L, 1);
+            const int st = lua_gettop(L);
+            SpraySpec& sp = r.spray;
+            sp.set = true;
+            sp.sideShoots = static_cast<int>(numField(L, st, "side_shoots", sp.sideShoots));
+            sp.sideAngle = numField(L, st, "side_angle", sp.sideAngle);
+            sp.sideLength = numField(L, st, "side_length", sp.sideLength);
+            sp.sideFalloff = numField(L, st, "side_falloff", sp.sideFalloff);
+            sp.lift = numField(L, st, "lift", sp.lift);
+            sp.fins = std::clamp(static_cast<int>(numField(L, st, "fins", sp.fins)), 1, 6);
+            sp.aspect = numField(L, st, "aspect", sp.aspect);
+            sp.droop = numField(L, st, "droop", sp.droop);
+            sp.variants = std::clamp(static_cast<int>(numField(L, st, "variants", sp.variants)), 1, 16);
+            sp.perNode = std::max(1, static_cast<int>(numField(L, st, "per_node", sp.perNode)));
+            sp.budget = std::max(1, static_cast<int>(numField(L, st, "budget", sp.budget)));
+            readColour(L, st, "color", sp.color, sp.colorHi);
         }
         lua_pop(L, 1);
         got.push_back(std::move(r));

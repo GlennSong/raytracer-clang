@@ -4,6 +4,7 @@
 #include "../../renderer/renderer.h"   // RenderMesh, Vertex
 #include "../../rt_math.h"             // Vec3
 #include "lsystem.h"                   // ModuleString (for skinTree)
+#include "foliage_kit.h"               // SpraySpec
 #include <cstdint>
 #include <vector>
 
@@ -94,6 +95,10 @@ struct TreeParams {
     float clipX = 0.0f, clipY = 0.0f, clipZ = 0.0f;
     int   maxLeafCards  = 6000;     // hard budget: stop emitting cluster cards past
                                     //   this, so one tree can't blow up the triangle count
+    // THE FOLIAGE: 0 crossed cards (the mid distance), 1 SPRAYS (foliage_kit.h: shoots of strands, near trees) --
+    // leavesPerTip sprays a leafy node, maxLeafCards the sprays' budget, leafSize a spray's length
+    int   foliage       = 0;
+    SpraySpec spray;
 
     // --- Colors (baked into vertex color; multiply the material albedo) ---
     Vec3  barkColor     = Vec3(0.33, 0.24, 0.16);
@@ -114,6 +119,8 @@ struct TreeMesh {
     // every leaf and every piece of bark hangs on the tree; later the LODs)
     struct Limb { Vec3 a, b; float ra = 0, rb = 0; };
     std::vector<Limb> limbs;
+    int foliage = 0;                      // what `leaves` is: 0 crossed cards (both windings), 1 sprays (one winding:
+                                          //   draw it two-sided) -- TreeParams::foliage
     std::vector<Vec3>     collisionVertices;
     std::vector<uint32_t> collisionIndices;
 };

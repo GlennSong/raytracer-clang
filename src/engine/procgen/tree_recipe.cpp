@@ -38,6 +38,7 @@ const std::vector<Field>& fields() {
         {"leafThickness", &TreeParams::leafThickness}, {"leafClump", &TreeParams::leafClump}, {"leafPitch", &TreeParams::leafPitch},
         {"maxLeafCards", nullptr, &TreeParams::maxLeafCards}, {"cardTiles", nullptr, &TreeParams::cardTiles},
         {"paletteScale", &TreeParams::paletteScale}, {"tipCards", nullptr, nullptr, &TreeParams::tipCards},
+        {"foliage", nullptr, &TreeParams::foliage},
         {"clipX", &TreeParams::clipX}, {"clipY", &TreeParams::clipY}, {"clipZ", &TreeParams::clipZ},
     };
     return v;
@@ -139,6 +140,9 @@ TreeMesh growRecipeTree(const TreeRecipe& r, uint32_t seed, const std::map<std::
     for (const auto& [name, v] : overrides)
         if (!setTreeParam(p, name, v)) vars[name] = v;   // (a var's name: the lab may pin a grammar number too)
     if (r.card.set) p.cardTiles = std::max(1, r.card.variants);   // (the card atlas the recipe draws)
+    p.spray = r.spray;
+    if (p.foliage == 1 && (!r.spray.set || !r.strand.set)) p.foliage = 0;   // (no spray kit: cards)
+    if (p.foliage == 1) p.cardTiles = std::max(1, r.strand.variants);      // (the strand atlas)
     if (r.rules.empty()) return growTree(p, seed);
     ParametricLSystem grammar;
     for (const TreeRecipe::Rule& rule : r.rules)

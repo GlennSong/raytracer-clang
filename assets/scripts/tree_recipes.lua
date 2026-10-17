@@ -153,6 +153,30 @@ tree_recipes = {
       leaf = { shape = "needle", length = 0.07, width = 0.008 },
       stem_width = 0.008, cup = 0.3, shade_jitter = 0.25, tip_bright = 0.35,
     },
+    -- NEAR FOLIAGE (foliage = 1; foliage_kit.h): a STRAND is one shoot drawn flat -- the orange-brown twig, needles
+    -- angled forward off both sides (short ones where they point at you), a bud at the tip, lighter new growth --
+    -- and a SPRAY is shoots built from it: three strand fins through each shoot's axis, side shoots fanned off a
+    -- main one
+    strand = {
+      axiom = "K(13)", iterations = 15, variants = 2,
+      rules = {
+        -- three ways a stretch of twig carries its needles, drawn at random: never a regular comb
+        { "K(n):n>0",  "F(0.018)[+($a)L(1)][-($a+6)L(0.95)][+($a*0.6)L(0.8)][-($a*0.55)L(0.8)][+(16)L(0.5)][-(12)L(0.45)]K(n-1)", 2 },
+        { "K(n):n>0",  "F(0.018)[+($a+8)L(0.9)][-($a)L(1)][+($a*0.7)L(0.85)][-($a*0.7)L(0.7)][+($a*1.25)L(0.7)][-(20)L(0.5)]K(n-1)", 2 },
+        { "K(n):n>0",  "F(0.018)[+($a*0.8)L(1)][-($a*1.2)L(0.85)][+($a*0.45)L(0.75)][-($a*0.5)L(0.9)][+(10)L(0.4)]K(n-1)", 1 },
+        { "K(n):n<=0", "F(0.006)[+(24)L(0.65)][-(22)L(0.6)][+(10)L(0.5)]W(1)" },
+      },
+      vars = { a = {44, 56} },
+      leaf = { shape = "needle", length = 0.075, width = 0.007, color = {0.26, 0.44, 0.32} },
+      flower = { shape = "blossom", size = 0.022, petals = 7, notch = 0, eye = 0.4,
+                 color = {0.50, 0.30, 0.16}, eye_color = {0.40, 0.22, 0.12} },
+      stem_color = {0.80, 0.50, 0.28}, stem_width = 0.011, cup = 0.3, shade_jitter = 0.35, tip_bright = 0.3,
+    },
+    spray = {
+      side_shoots = 9, side_angle = 50, side_length = 0.5, side_falloff = 0.9, lift = 20, fins = 2,
+      aspect = 0.38, droop = 0.25, variants = 8, per_node = 2, budget = 3200,
+      color = { {0.82, 0.82, 0.82}, {1.0, 1.0, 1.0} },
+    },
   },
 
   -- SAKURA (Somei-yoshino): a short trunk splits into three scaffold limbs that climb and then spread, an umbrella

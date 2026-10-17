@@ -876,6 +876,114 @@
         "recipe": "hedge",
         "seed": 8
       }
+    },
+    {
+      "id": 60,
+      "name": "spruce_near_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 1,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 61,
+      "name": "spruce_near_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 2,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 62,
+      "name": "spruce_near_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 63,
+      "name": "spruce_near_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 4,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 64,
+      "name": "spruce_near_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 5,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 65,
+      "name": "spruce_near_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 6,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
     }
   ],
   "terrain": {

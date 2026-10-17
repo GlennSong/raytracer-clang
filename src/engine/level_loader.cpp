@@ -884,11 +884,12 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
                     if (it.value().is_number()) overrides[it.key()] = it.value().get<double>();
             tm = growRecipeTree(*r, seed, overrides);
             if (barkStyle.empty()) barkStyle = r->bark;
-            if (r->card.set) {   // the species' own leaf cards, drawn by its card grammar (leaf_card.h)
-                uint32_t h = 2166136261u;
-                for (unsigned char ch : r->name) h = (h ^ ch) * 16777619u;
+            uint32_t h = 2166136261u;
+            for (unsigned char ch : r->name) h = (h ^ ch) * 16777619u;
+            if (tm.foliage == 1)   // NEAR FOLIAGE: sprays wearing the species' strands (foliage_kit.h), tiles its shape
+                cardAtlas = leafCardAtlas(r->strand, h, std::max(32, static_cast<int>(std::lround(436.0 * r->spray.aspect))), 436);
+            else if (r->card.set)   // the species' own leaf cards, drawn by its card grammar (leaf_card.h)
                 cardAtlas = leafCardAtlas(r->card, h);
-            }
             fromRecipe = true;
         } else {
             LOG_WARN << "tree e" << index << ": no recipe '" << name << "' in tree_recipes.lua";
@@ -964,6 +965,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
             r.material.albedoMap = upload(leafTexture(128));
         }
         r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
+        if (tm.foliage == 1) r.material.flags |= RenderMaterial::FLAG_TWO_SIDED;   // (sprays: one winding)
         world.add<Renderable>(e, r);
     }
 }

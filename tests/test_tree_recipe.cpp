@@ -223,6 +223,35 @@ TEST_CASE(leaf_cards_are_drawn_whole_inside_the_card) {
         }
     }
     CHECK(cards >= 3);
+    // the STRANDS (near foliage, foliage_kit.h): whole inside their narrow tiles too
+    for (const std::string& name : book.names()) {
+        const TreeRecipe* r = book.find(name);
+        if (!r->strand.set) continue;
+        const int tw = std::max(32, static_cast<int>(std::lround(436.0 * r->spray.aspect)));
+        const LeafCardAtlas at = leafCardAtlas(r->strand, 11u, tw, 436);
+        const int W = at.albedo.width, H = at.albedo.height;
+        int edge = 0, solid = 0;
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                const uint8_t a = at.albedo.pixels[(static_cast<std::size_t>(y) * W + x) * 4 + 3];
+                solid += a > 128;
+                const bool border = x % tw == 0 || x % tw == tw - 1 || y % 436 == 0 || y % 436 == 435;
+                edge += border && a > 128;
+            }
+        std::printf("    [strand] %-8s %dx%d, %d solid texels, %d on a tile edge\n", name.c_str(), W, H, solid, edge);
+        CHECK(solid > W * H / 20);
+        CHECK(edge == 0);
+        if (const char* dir = std::getenv("RT_CARD_DUMP")) {
+            Image img(W, H);
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    const uint8_t* p = &at.albedo.pixels[(static_cast<std::size_t>(y) * W + x) * 4];
+                    const double a = p[3] / 255.0;
+                    img.setPixel(x, H - 1 - y, Vec3(0.55, 0.55, 0.58) * (1.0 - a) + Vec3(p[0], p[1], p[2]) * (a / 255.0));
+                }
+            img.writePng(std::string(dir) + "/strand_" + name + ".png");
+        }
+    }
 }
 
 // EVERY PART HANGS ON THE TREE (Glenn: "some of the spruce leaves seem to be floating and not attached to anything. We
@@ -352,4 +381,38 @@ TEST_CASE(cards_carry_colour_and_palettes_vary_the_crown) {
     }
     std::printf("    [colour] maple red share across the crown %.2f .. %.2f\n", lo, hi);
     CHECK(hi - lo > 0.08);
+}
+
+// NEAR FOLIAGE (foliage_kit.h; Glenn: "a 2d texture image of a strand of spruce blades ... put them around a cylinder
+// ... cluster those using geometry"): a spruce grown with foliage = 1 wears sprays -- shoots of strand fins -- within
+// their budget, every spray on the tree (no piece further from a limb than a spray is long), and the same seed grows
+// the same sprays.
+TEST_CASE(spruce_sprays_are_built_from_strands_and_hang_on_the_tree) {
+    const TreeRecipeBook book = shipped();
+    const TreeRecipe* r = book.find("spruce");
+    CHECK(r && r->strand.set && r->spray.set);
+    if (!r) return;
+    const TreeMesh t = growRecipeTree(*r, 3u, {{"foliage", 1.0}, {"leafSize", 0.7}});
+    const TreeMesh cards = growRecipeTree(*r, 3u);
+    CHECK(t.foliage == 1 && cards.foliage == 0);
+    const std::vector<RenderMesh> one = buildSprays(r->spray, 2, 7u);
+    CHECK(static_cast<int>(one.size()) == r->spray.variants);
+    const std::size_t sprayTris = one.empty() ? 0 : one[0].indices.size() / 3;
+    std::printf("    [sprays] spruce: %zu tris a spray, %zu leaf tris (cards: %zu), %zu bark tris\n", sprayTris,
+                t.leaves.indices.size() / 3, cards.leaves.indices.size() / 3, t.branches.indices.size() / 3);
+    CHECK(t.leaves.indices.size() / 3 <= static_cast<std::size_t>(r->spray.budget) * (sprayTris + 40));
+    int off = 0;
+    for (std::size_t v = 0; v < t.leaves.vertices.size(); v += 53) {
+        const Vec3 p = t.leaves.vertices[v].position;
+        Real best = 1e9;
+        for (const TreeMesh::Limb& l : t.limbs) {
+            const Vec3 ab = l.b - l.a;
+            const Real s = std::clamp(dot(p - l.a, ab) / std::max(Real(1e-12), dot(ab, ab)), Real(0), Real(1));
+            best = std::min(best, (p - (l.a + ab * s)).length());
+        }
+        off += best > 0.7 * 1.15 * 1.2;
+    }
+    CHECK(off == 0);
+    const TreeMesh again = growRecipeTree(*r, 3u, {{"foliage", 1.0}, {"leafSize", 0.7}});
+    CHECK(again.leaves.vertices.size() == t.leaves.vertices.size());
 }

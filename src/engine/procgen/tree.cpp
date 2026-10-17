@@ -625,11 +625,19 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         auto leafyNode = [&](const SkeletonNode& n) {
             return n.isTip || (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
         };
+        // SPRAYS (foliage_kit.h): the species' variants, laid along their twigs, the fan level -- their own count a
+        // node and their own budget
+        std::vector<RenderMesh> sprays;
+        if (params.foliage == 1) sprays = buildSprays(params.spray, params.cardTiles, seed ^ 0x5b7au);
+        out.foliage = sprays.empty() ? 0 : 1;
+        const int perNode = sprays.empty() ? params.leavesPerTip : params.spray.perNode;
+        const int budget = sprays.empty() ? params.maxLeafCards : params.spray.budget;
+        std::uniform_real_distribution<double> sprayRoll(-0.35, 0.35), sprayColour(0.0, 1.0);
         std::size_t wanted = 0;
         for (const SkeletonNode& n : nodes)
-            if (leafyNode(n)) wanted += static_cast<std::size_t>(std::max(0, params.leavesPerTip));
-        const double keep = wanted > static_cast<std::size_t>(params.maxLeafCards)
-                                ? static_cast<double>(params.maxLeafCards) / static_cast<double>(wanted) : 1.0;
+            if (leafyNode(n)) wanted += static_cast<std::size_t>(std::max(0, perNode));
+        const double keep = wanted > static_cast<std::size_t>(budget)
+                                ? static_cast<double>(budget) / static_cast<double>(wanted) : 1.0;
         std::uniform_real_distribution<double> odds(0.0, 1.0);
         for (const SkeletonNode& n : nodes) {
             if (!leafyNode(n)) continue;
@@ -641,8 +649,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             const Vec3 ref = std::abs(h.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
             const Vec3 s1 = normalize(cross(h, ref)), s2 = normalize(cross(h, s1));
             std::uniform_real_distribution<float> along(1.0f - std::clamp(params.leafClump, 0.0f, 1.0f), 1.0f);
-            for (int j = 0; j < params.leavesPerTip; j++) {
-                if (cards >= params.maxLeafCards) break;
+            for (int j = 0; j < perNode; j++) {
+                if (cards >= budget) break;
                 if (keep < 1.0 && odds(rng) >= keep) continue;
                 // spiralled round the twig, each card's FOOT on the twig's bark somewhere along its last stretch, the
                 // card tilted out from the twig by leafPitch (about the twig's own axis: a sideways limb's cards lie
@@ -665,11 +673,35 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                         tile = pick(rng);
                     }
                 }
-                addLeaf(out.leaves, jpos, dir, params.leafSize,
-                        leafColourAt(jpos) * vary(rng), params.cardTiles, tile);
+                if (!sprays.empty()) {
+                    const RenderMesh& sp = sprays[static_cast<std::size_t>(tile + cards) % sprays.size()];
+                    const Vec3 Y = dir;
+                    Vec3 Z = Vec3(0, 1, 0) - Y * dot(Y, Vec3(0, 1, 0));
+                    Z = Z.length() > 1e-3 ? normalize(Z) : normalize(cross(Y, Vec3(1, 0, 0)));
+                    const Vec3 X0 = normalize(cross(Y, Z));
+                    const double rr = sprayRoll(rng);   // the fan turned a little about its shoot
+                    const Vec3 X = X0 * std::cos(rr) + Z * std::sin(rr), Zr = normalize(cross(X, Y));
+                    const double sc = params.leafSize * vary(rng);
+                    const Vec3 tint = params.leafPalette.empty()
+                                          ? params.spray.color + (params.spray.colorHi - params.spray.color) * sprayColour(rng)
+                                          : leafColourAt(jpos);
+                    const uint32_t base = static_cast<uint32_t>(out.leaves.vertices.size());
+                    for (const Vertex& v : sp.vertices) {
+                        Vertex w = v;
+                        w.position = jpos + (X * v.position.x + Y * v.position.y + Zr * v.position.z) * sc;
+                        w.normal = normalize(X * v.normal.x + Y * v.normal.y + Zr * v.normal.z);
+                        w.tangent = normalize(X * v.tangent.x + Y * v.tangent.y + Zr * v.tangent.z);
+                        w.color = tint;
+                        out.leaves.vertices.push_back(w);
+                    }
+                    for (uint32_t i : sp.indices) out.leaves.indices.push_back(base + i);
+                } else {
+                    addLeaf(out.leaves, jpos, dir, params.leafSize,
+                            leafColourAt(jpos) * vary(rng), params.cardTiles, tile);
+                }
                 cards++;
             }
-            if (cards >= params.maxLeafCards) break;
+            if (cards >= budget) break;
         }
     }
 
