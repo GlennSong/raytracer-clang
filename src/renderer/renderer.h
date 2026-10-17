@@ -574,6 +574,14 @@ struct SceneLighting {
     // Aviation-beacon lights (BeaconLightSystem, every frame): the nearest
     // few lamps as red points, flashing. Merged like interiorPoints.
     std::vector<PointLight> beaconPoints;
+    // THE VIEWER'S ENCLOSURE (AudioSystem, every frame; the same box the walls and cabins muffle sound by): the
+    // cabin they ride in, else the building they stand in, as a box -- centre, its horizontal axis u, half
+    // extents (along u, across it, up). Glass inside it is the viewer's own window and reflects the room, not
+    // the sky (mesh.frag). viewerBoxValid false: out in the open.
+    bool viewerBoxValid = false;
+    Vec3 viewerBoxCentre;
+    Vec3 viewerBoxAxisU{1, 0, 0};
+    Vec3 viewerBoxHalf;
     // The beacon flash clock and the night exposure adaptation (exposure /
     // authored exposure), published by DayNightSystem each frame so the
     // sprites and point lights flash and dim in step with the grown lamps.

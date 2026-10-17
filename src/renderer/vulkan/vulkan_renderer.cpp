@@ -187,6 +187,12 @@ struct GlobalsUBO {
     // w enabled; then x encodeLo, y (encodeHi - encodeLo). mesh.frag only.
     float    terrainHorizon[4];
     float    terrainHorizon2[4];
+    // The viewer's enclosure (SceneLighting::viewerBox*): A xyz centre, w half along u (0 = none); B xy the axis u
+    // (x, z), z half across it, w half up. glassMode: x 1 = glass as a filter, 0 = the old glass (RT_GLASS=old),
+    // 2 = no glass (RT_GLASS=none, the reference for an A/B).
+    float    viewerBoxA[4];
+    float    viewerBoxB[4];
+    float    glassMode[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -4110,7 +4116,9 @@ bool VulkanRenderer::Impl::createPipeline() {
     raster.polygonMode = VK_POLYGON_MODE_FILL;
     depthStencil.depthWriteEnable = VK_FALSE;
     blendAttachments[0].blendEnable = VK_TRUE;
-    blendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    // PREMULTIPLIED (mesh.frag writes colour * alpha): glass ADDS its reflection over what it lets through, which
+    // a straight alpha blend cannot say without a pane colour of its own greying the view
+    blendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAttachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAttachments[0].colorBlendOp = VK_BLEND_OP_ADD;
     blendAttachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -6685,6 +6693,28 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     // facade glass reflectance scale (mesh.frag): 3 by default, RT_GLASS_REFLECT=1 for the old glass
     static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 3.0f; return v > 0.0f ? v : 3.0f; }();
     impl->cpuGlobals.ambient[3] = glassReflect;
+    {
+        // RT_GLASS=old: the old glass; RT_GLASS=none: panes drawn as nothing (the reference a pane is measured against)
+        static const float glassMode = [] {
+            const char* e = std::getenv("RT_GLASS");
+            return !e ? 1.0f : std::string(e) == "old" ? 0.0f : std::string(e) == "none" ? 2.0f : 1.0f;
+        }();
+        float* A = impl->cpuGlobals.viewerBoxA;
+        float* B = impl->cpuGlobals.viewerBoxB;
+        const Vec3 u = lighting.viewerBoxAxisU;
+        const Real ul = std::sqrt(u.x * u.x + u.z * u.z);
+        const bool box = lighting.viewerBoxValid && ul > 1e-6;
+        A[0] = static_cast<float>(lighting.viewerBoxCentre.x);
+        A[1] = static_cast<float>(lighting.viewerBoxCentre.y);
+        A[2] = static_cast<float>(lighting.viewerBoxCentre.z);
+        A[3] = box ? static_cast<float>(lighting.viewerBoxHalf.x) : 0.0f;
+        B[0] = box ? static_cast<float>(u.x / ul) : 1.0f;
+        B[1] = box ? static_cast<float>(u.z / ul) : 0.0f;
+        B[2] = static_cast<float>(lighting.viewerBoxHalf.z);
+        B[3] = static_cast<float>(lighting.viewerBoxHalf.y);
+        impl->cpuGlobals.glassMode[0] = glassMode;
+        impl->cpuGlobals.glassMode[1] = impl->cpuGlobals.glassMode[2] = impl->cpuGlobals.glassMode[3] = 0.0f;
+    }
 
     // Procedural sky (ADR-0016) → skybox + analytic IBL. HDR equirect mode is a
     // later refinement, so envMode is always procedural (0) for now.

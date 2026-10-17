@@ -481,6 +481,13 @@ void AudioEngine::setListenerCabin(uint64_t id, const Vec3& centre,
 }
 
 uint64_t AudioEngine::listenerEnclosure() const { return impl->listenerEnc.id; }
+bool AudioEngine::listenerCabin(Vec3& centre, Quat& orientation, Vec3& halfExtent) const {
+    if (impl->cabin.ttl <= 0) return false;
+    centre = impl->cabin.centre;
+    orientation = impl->cabin.orientation;
+    halfExtent = impl->cabin.halfExtent;
+    return true;
+}
 
 void AudioEngine::setMasterVolume(float volume) {
     impl->master = std::max(volume, 0.0f);
@@ -588,6 +595,7 @@ void AudioEngine::setEnclosureQuery(AudioEnclosureQuery) {}
 void AudioEngine::setListenerCabin(uint64_t, const Vec3&, const Quat&, const Vec3&,
                                    AudioBarrier) {}
 uint64_t AudioEngine::listenerEnclosure() const { return 0; }
+bool AudioEngine::listenerCabin(Vec3&, Quat&, Vec3&) const { return false; }
 void AudioEngine::setMasterVolume(float) {}
 float AudioEngine::masterVolume() const { return 1.0f; }
 void AudioEngine::setBusVolume(AudioBus, float) {}

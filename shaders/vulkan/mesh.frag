@@ -47,6 +47,9 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyCity;
     vec4  terrainHorizon;     // xy world origin, z 1/extent, w enabled
     vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo
+    vec4  viewerBoxA;         // the viewer's enclosure (SceneLighting::viewerBox*): xyz centre, w half along u (0: none)
+    vec4  viewerBoxB;         // xy its axis u (x, z), z half across it, w half up
+    vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none)
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
@@ -1234,10 +1237,35 @@ void main() {
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).
         float opacity = uintBitsToFloat(pc.surfaceFlags.w) * mapAlpha;
+        // (the transparent pass blends PREMULTIPLIED: colour * alpha out, the destination times 1 - alpha)
         if (isWater) {
-            outColor = vec4(color, waterA);   // composited above
+            outColor = vec4(color * waterA, waterA);   // composited above
+        } else if (opacity < 0.999 && g.glassMode.x > 1.5 && !isWater) {
+            outColor = vec4(0.0);   // RT_GLASS=none: the pane is not there (the A/B's reference)
+        } else if (opacity < 0.999 && g.glassMode.x > 0.5) {
+            // GLASS AS A FILTER (Glenn, 2026-10-16: "glass on trains and buildings makes the outside color appear
+            // duller and less saturated"). Clear glass has no colour of its own to lay over the view: it lets
+            // through all but a little (the pane's opacity read as absorption, 0.4 of it: a 0.24 pane passes 90%)
+            // less what it reflects, and ADDS that reflection. Before, a quarter of the view was the pane's own lit
+            // blue-grey and the sky's reflection laid over the rest -- a grey veil. And a window of the viewer's
+            // own (the building they stand in, the train they ride: SceneLighting::viewerBox) reflects the dim
+            // room behind them at clear glass's 4 %, not the bright sky outside.
+            bool own = false;
+            if (g.viewerBoxA.w > 0.0) {
+                vec3 d = inWorldPos - g.viewerBoxA.xyz;
+                vec2 u = g.viewerBoxB.xy;
+                own = abs(dot(d.xz, u)) <= g.viewerBoxA.w && abs(dot(d.xz, vec2(-u.y, u.x))) <= g.viewerBoxB.z &&
+                      abs(d.y) <= g.viewerBoxB.w;
+            }
+            vec3 fs = own ? vec3(0.04) * brdf.x + brdf.y : f0 * brdf.x + brdf.y;   // the split-sum reflectance
+            vec3 reflected = own ? fs * g.ambient.rgb * 0.08                      // the room: dim, by day
+                                 : prefiltered * fs * g.ambient.rgb * ambientShadow;
+            float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0);
+            float T = 1.0 - 0.4 * opacity;
+            float a = 1.0 - T * (1.0 - F);
+            outColor = vec4(reflected, a);
         } else if (opacity < 0.999) {
-            // GLASS (Glenn's walk, 2026-09-14: "the glass has no reflectivity"):
+            // THE OLD GLASS (RT_GLASS=old; Glenn's walk, 2026-09-14: "the glass has no reflectivity"):
             // a plain alpha blend scales the reflection by the opacity, so an
             // 18 % pane showed 18 % of its sky. Real glass ADDS its Fresnel
             // reflection over what comes through: the blend's alpha becomes
@@ -1248,9 +1276,9 @@ void main() {
             vec3 reflected = prefiltered * fs * g.ambient.rgb * ambientShadow;
             float a = opacity + (1.0 - opacity) * F;
             vec3 c = (color * opacity + reflected * (1.0 - opacity)) / max(a, 1e-4);
-            outColor = vec4(c, a);
+            outColor = vec4(c * a, a);
         } else {
-            outColor = vec4(color, opacity);
+            outColor = vec4(color * opacity, opacity);
         }
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)

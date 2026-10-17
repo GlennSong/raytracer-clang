@@ -161,6 +161,8 @@ public:
                           const Vec3& halfExtent, AudioBarrier barrier);
     // The listener's enclosure as of the last update() (0 = open air): for tests and the debug readout.
     uint64_t listenerEnclosure() const;
+    // The cabin the listener rides in, while it lasts (the renderer's "your own glass" box: AudioSystem).
+    bool listenerCabin(Vec3& centre, Quat& orientation, Vec3& halfExtent) const;
     void setMasterVolume(float volume);
     float masterVolume() const;
     void setBusVolume(AudioBus bus, float volume);

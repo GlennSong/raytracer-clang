@@ -39,6 +39,7 @@ public:
     // building) and, while the player sits in a car (InVehicle), that car's chassis box as the listener's
     // cabin. Call once a frame after syncListener.
     void syncEnclosures(World& world, AudioEngine& audio);
+    void publishViewerBox(FrameContext& ctx);
     // What the walls take: a building's (glass, masonry, closed windows) and a vehicle's cabin. citysim's
     // bus and train riders use kCabin too.
     static constexpr AudioBarrier kBuildingWalls{0.12f, 600.0f};
