@@ -379,6 +379,9 @@ const char* programFor(RoomKind kind) {
         case RoomKind::ShopFloor: return "shop_floor";
         case RoomKind::Warehouse: return "warehouse";
         case RoomKind::HotelLobby: return "hotel_lobby";
+        case RoomKind::CopyRoom: return "copy_room";
+        case RoomKind::PhoneBooths: return "phone_booths";
+        case RoomKind::WaterCooler: return "water_cooler";
         default: return "";
     }
 }
@@ -904,7 +907,8 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                                  room.kind == RoomKind::Market || room.kind == RoomKind::Courtroom ||
                                  room.kind == RoomKind::Chamber || room.kind == RoomKind::EngineBay ||
                                  room.kind == RoomKind::ShopFloor || room.kind == RoomKind::Warehouse ||
-                                 room.kind == RoomKind::HotelLobby ||
+                                 room.kind == RoomKind::HotelLobby || room.kind == RoomKind::CopyRoom ||
+                                 room.kind == RoomKind::PhoneBooths || room.kind == RoomKind::WaterCooler ||
                                  room.kind == RoomKind::Shop;
             // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
             const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;

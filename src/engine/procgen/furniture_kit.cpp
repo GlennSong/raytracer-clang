@@ -1536,6 +1536,52 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Fabric, {0, 0.030, 0.7}, {1.5, 0.012, 0.9}, 0.004, fabric, 1);
             break;
         }
+        case Piece::WaterCooler: {
+            // A WATER COOLER (Glenn, 2026-10-16: "a water cooler and so on"): a white cabinet, the drip tray and its
+            // two taps (cold blue, hot red) at cup height, the big blue bottle upside down on top. Faces +z.
+            k.out.size = {0.34, 1.34, 0.36};
+            k.box(F::Hard, {0, 0.50, 0.18}, {0.32, 1.0, 0.32}, 0.012, kWhite, 1);
+            k.box(F::Hard, {0, 0.80, 0.335}, {0.22, 0.16, 0.012}, 0.0, kBlack * 2.5, 1);          // the recess
+            k.box(F::Hard, {0, 0.73, 0.33}, {0.22, 0.02, 0.06}, 0.0, kSteel * 0.7, 1);            // its drip tray
+            k.box(F::Hard, {-0.05, 0.86, 0.33}, {0.04, 0.04, 0.05}, 0.004, Vec3(0.15, 0.35, 0.80), 1);   // cold
+            k.box(F::Hard, {0.05, 0.86, 0.33}, {0.04, 0.04, 0.05}, 0.004, Vec3(0.80, 0.15, 0.12), 1);    // hot
+            k.box(F::Hard, {0, 1.005, 0.18}, {0.26, 0.01, 0.26}, 0.0, kSteel * 0.8, 1);           // the collar
+            k.turned(F::Hard, {0, 1.0, 0.18}, {{0.0, 0.0}, {0.03, 0.0}, {0.03, 0.04}, {0.13, 0.09}, {0.135, 0.29},
+                                                {0.12, 0.33}, {0.0, 0.335}}, Vec3(0.45, 0.68, 0.88), 1.0, 16);
+            break;
+        }
+        case Piece::Copier: {
+            // A COPIER (the copy room's): a printer-copier on its paper-drawer base -- two drawers, the body with its
+            // output tray and a sheet in it, the scanner's lid on top, the control panel tilted toward the user (+z).
+            k.out.size = {0.62, 1.16, 0.68};
+            const Vec3 shell(0.82, 0.82, 0.80);
+            k.box(F::Hard, {0, 0.31, 0.33}, {0.60, 0.58, 0.62}, 0.008, shell * 0.92, 1);
+            k.front(F::Hard, -0.28, 0.28, 0.06, 0.30, 0.64, shell, kBlack * 3.0);
+            k.front(F::Hard, -0.28, 0.28, 0.32, 0.56, 0.64, shell, kBlack * 3.0);
+            k.box(F::Hard, {0, 0.81, 0.32}, {0.60, 0.42, 0.62}, 0.01, shell, 1);                  // the body
+            k.box(F::Hard, {-0.04, 0.86, 0.50}, {0.46, 0.08, 0.30}, 0.0, kBlack * 2.0, 1);        // the output slot
+            k.box(F::Ceramic, {-0.04, 0.905, 0.47}, {0.21, 0.004, 0.28}, 0.0, kPorcelain, 1);     // a sheet in it
+            k.box(F::Hard, {0, 1.06, 0.31}, {0.58, 0.06, 0.56}, 0.008, shell * 1.05, 1);          // the scanner lid
+            k.boxTilted(F::Hard, {0.17, 1.06, 0.61}, {0.24, 0.03, 0.12}, 0.004, 0.45, kBlack * 2.0);   // the panel
+            break;
+        }
+        case Piece::PhoneBooth: {
+            // A PHONE BOOTH (an office's acoustic pod): felt-lined walls and a roof with its light, a glass door on
+            // the front (+z), a shelf to lean a laptop on and a stool inside. Stood in a row against a wall.
+            k.out.size = {1.0, 2.25, 1.0};
+            const Vec3 felt = fabric * 0.8 + Vec3(0.08, 0.08, 0.08);
+            k.box(F::Hard, {0, 0.03, 0.5}, {1.0, 0.06, 1.0}, 0.0, kSteel * 0.6, 1);               // the plinth
+            k.box(F::Fabric, {0, 1.12, 0.03}, {1.0, 2.12, 0.06}, 0.01, felt);                      // the back
+            for (double x : {-0.47, 0.47}) k.box(F::Fabric, {x, 1.12, 0.5}, {0.06, 2.12, 1.0}, 0.01, felt);   // sides
+            k.box(F::Hard, {0, 2.21, 0.5}, {1.0, 0.08, 1.0}, 0.01, kWhite, 1);                     // the roof
+            k.box(F::Light, {0, 2.165, 0.5}, {0.5, 0.01, 0.5}, 0.0, Vec3(1.0, 0.95, 0.85), 1);   // its light
+            k.box(F::Wood, {0, 1.02, 0.22}, {0.84, 0.03, 0.36}, 0.004, wood, 1);                   // the shelf
+            k.turned(F::Hard, {0, 0, 0.62}, {{0.0, 0.0}, {0.18, 0.0}, {0.18, 0.02}, {0.03, 0.04}, {0.03, 0.62},
+                                              {0.17, 0.64}, {0.17, 0.68}, {0.0, 0.69}}, kBlack * 3.0, 1.0, 12);   // the stool
+            k.box(F::Metal, {0, 1.12, 0.975}, {0.88, 2.06, 0.012}, 0.0, Vec3(0.55, 0.62, 0.66), 1);   // the glass door
+            k.rod(F::Metal, {0.36, 0.9, 0.995}, {0.36, 1.4, 0.995}, 0.012, kChrome, 8);
+            break;
+        }
         default: break;
     }
     return k.out;
@@ -1553,7 +1599,8 @@ const char* const kPieceNames[kPieceCount] = {
     "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
     "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats",
     "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box",
-    "gear_locker", "machine", "workbench", "pallet_stack", "forklift"};
+    "gear_locker", "machine", "workbench", "pallet_stack", "forklift",
+    "water_cooler", "copier", "phone_booth"};
 
 }  // namespace
 

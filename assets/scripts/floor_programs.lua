@@ -16,6 +16,7 @@
 --   walls      "glass", "drywall", or "facade" (glass behind a curtain wall, drywall in masonry; the default)
 --   near       "lobby" (closest to the lifts first), "core", "far" (farthest from the lifts first); else spread out
 --   lifts      only on a floor with lifts (a stair-only office has no reception)
+--   min_floor  only on a floor of at least this many m2 (a small floor keeps its lots for desks)
 -- styles     a building's habit, picked per building by weight: `set` overrides zones' numbers by tag.
 --
 -- Keep the office program alike with builtinOfficeProgram() (floor_zones.cpp): it stands where this file is not
@@ -32,11 +33,18 @@ floor_programs = {
       -- the corner office is the whole corner (a rounded corner's arc too)
       { tag = "corner_office", kind = "office", sites = {"corner"}, share = 1.0, enclosed = true, area = {8, 1e9} },
       { tag = "pantry", kind = "kitchenette", sites = {"interior"}, count = 1, near = "core", area = {10, 50} },
+      { tag = "copy", kind = "copy_room", sites = {"interior"}, count = 1, near = "core", enclosed = true,
+        walls = "drywall", area = {6, 28}, min_depth = 2.0, min_floor = 700 },
       { tag = "meeting", kind = "meeting", sites = {"interior", "window"}, per_m2 = 320, enclosed = true, walls = "glass",
         area = {10, 45}, min_depth = 3.0 },
       { tag = "office", kind = "office", sites = {"window"}, share = 0.0, enclosed = true, near = "far",
         area = {8, 30}, min_depth = 3.0 },
-      { tag = "lounge", kind = "lounge", sites = {"window", "interior"}, count = 1, area = {12, 1e9} },
+      -- the floor's points: a water cooler with a high table to stand at, phone booths (one row a 900 m2)
+      { tag = "water_cooler", kind = "water_cooler", sites = {"interior", "window"}, count = 1, area = {6, 30},
+        min_depth = 2.0, min_floor = 500 },
+      { tag = "phone_booths", kind = "phone_booths", sites = {"interior"}, per_m2 = 900, area = {6, 30},
+        min_depth = 2.2, min_floor = 900 },
+      { tag = "lounge", kind = "lounge", sites = {"window", "interior"}, count = 1, area = {12, 1e9}, min_floor = 800 },
       { tag = "open_plan", kind = "open_plan" },
       { tag = "desk_row", kind = "desk_row" },
     },

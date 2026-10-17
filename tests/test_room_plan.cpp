@@ -36,8 +36,9 @@ TEST_CASE(rooms_ring_the_plate_and_keep_the_core_clear) {
     CHECK(rp.office);
     // THE OFFICE FLOOR (buildings C): open-plan zones window to corridor, glass corner offices, a meeting room and
     // a kitchenette against the corridor. Every room inside the plan and outside the core.
-    int open = 0, corner = 0, meeting = 0, kitchenette = 0, reception = 0;
+    int open = 0, corner = 0, meeting = 0, kitchenette = 0, reception = 0, copy = 0;
     for (const Room& r : rp.rooms) {
+        if (r.kind == RoomKind::CopyRoom) ++copy;
         if (r.kind == RoomKind::Reception) ++reception;
         if (r.kind == RoomKind::OpenPlan) ++open;
         if (r.kind == RoomKind::Office) ++corner;
@@ -54,16 +55,30 @@ TEST_CASE(rooms_ring_the_plate_and_keep_the_core_clear) {
             CHECK(pointInPolygon(plan, c + (centroid(r.rect) - c) * 0.01));
             CHECK(!pointInPolygon(ring, c));
         }
-    // Every wall is glass, and every enclosed room (an office, a meeting room) has one door. (The zoned floor,
-    // floor_zones.h: the reception is an open desk facing the lifts, no screen of its own.)
+    // Every wall is glass but the copy room's (drywall), and every enclosed room (an office, a meeting room, the copy
+    // room) has one door. (The zoned floor, floor_zones.h: the reception is an open desk facing the lifts, no screen
+    // of its own.)
+    auto onCopyRoom = [&](const RoomWall& w) {
+        const Vec2 m = (w.a + w.b) * 0.5;
+        for (const Room& r : rp.rooms) {
+            if (r.kind != RoomKind::CopyRoom) continue;
+            for (std::size_t i = 0; i < r.rect.size(); ++i) {
+                const Vec2 a = r.rect[i], b = r.rect[(i + 1) % r.rect.size()], ab = b - a;
+                const Real t = std::clamp(dot(m - a, ab) / std::max(dot(ab, ab), Real(1e-9)), Real(0), Real(1));
+                if ((a + ab * t - m).length() < 0.1) return true;
+            }
+        }
+        return false;
+    };
     int doors = 0;
     for (const RoomWall& w : rp.walls) {
-        CHECK(w.glass);
+        CHECK(w.glass || onCopyRoom(w));
         if (w.doorAt >= 0) ++doors;
         CHECK(segLen(w) > 0.3);
     }
     CHECK(reception == 1);   // facing the lifts (2026-10-13)
-    CHECK(doors == corner + meeting);
+    CHECK(copy <= 1);
+    CHECK(doors == corner + meeting + copy);
     // The lobby gets none.
     CHECK(roomPlan(plan, p, core, static_cast<std::size_t>(-1), inset, 0).rooms.empty());
 }

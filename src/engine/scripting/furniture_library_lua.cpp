@@ -403,6 +403,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
                 r.perM2 = numField(L, t, "per_m2", 0);
                 r.share = numField(L, t, "share", 0);
                 r.minDepth = numField(L, t, "min_depth", 0);
+                r.minFloor = numField(L, t, "min_floor", 0);
                 lua_getfield(L, t, "area");   // {min, max}
                 if (lua_istable(L, -1)) {
                     lua_rawgeti(L, -1, 1);

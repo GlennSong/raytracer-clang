@@ -93,6 +93,7 @@ struct ZoneRule {
     Real perM2 = 0;               // ... or one per this many m2 of floor ...
     Real share = 0;               // ... or this share of the lots it may take
     Real minArea = 0, maxArea = 1e9, minDepth = 0;
+    Real minFloor = 0;            // only on a floor of at least this many m2 (a small floor has no copy room)
     bool enclosed = false;        // partitions round it, a door onto circulation
     uint8_t walls = 2;            // 0 drywall, 1 glass, 2 glass behind a curtain wall else drywall
     uint8_t near = 0;             // 0 spread out, 1 the lift lobby, 2 the core

@@ -570,7 +570,7 @@ FloorProgramBook& FloorProgramBook::global() {
 }
 
 bool roomKindFromName(const std::string& name, RoomKind& out) {
-    for (int k = 0; k <= static_cast<int>(RoomKind::HotelLobby); ++k) {
+    for (int k = 0; k <= static_cast<int>(kLastRoomKind); ++k) {
         std::string n = cellUseName(static_cast<RoomKind>(k));
         std::replace(n.begin(), n.end(), ' ', '_');
         if (n == name) { out = static_cast<RoomKind>(k); return true; }
@@ -597,12 +597,19 @@ FloorProgram builtinOfficeProgram() {
     r->share = 1.0; r->enclosed = true; r->minArea = 8;
     r = rule("pantry", RoomKind::Kitchenette, I);
     r->count = 1; r->near = 2; r->minArea = 10; r->maxArea = 50;
+    r = rule("copy", RoomKind::CopyRoom, I);
+    r->count = 1; r->near = 2; r->enclosed = true; r->walls = 0; r->minArea = 6; r->maxArea = 28; r->minDepth = 2.0;
+    r->minFloor = 700;
     r = rule("meeting", RoomKind::Meeting, I | W);
     r->perM2 = 320; r->enclosed = true; r->walls = 1; r->minArea = 10; r->maxArea = 45; r->minDepth = 3.0;
     r = rule("office", RoomKind::Office, W);
     r->share = 0.0; r->enclosed = true; r->near = 3; r->minArea = 8; r->maxArea = 30; r->minDepth = 3.0;
+    r = rule("water_cooler", RoomKind::WaterCooler, I | W);
+    r->count = 1; r->minArea = 6; r->maxArea = 30; r->minDepth = 2.0; r->minFloor = 500;
+    r = rule("phone_booths", RoomKind::PhoneBooths, I);
+    r->perM2 = 900; r->minArea = 6; r->maxArea = 30; r->minDepth = 2.2; r->minFloor = 900;
     r = rule("lounge", RoomKind::Lounge, W | I);
-    r->count = 1; r->minArea = 12;
+    r->count = 1; r->minArea = 12; r->minFloor = 800;
     rule("open_plan", RoomKind::OpenPlan, W | C | I);
     rule("desk_row", RoomKind::DeskRow, W | C | I);
     ZoneStyle s;
@@ -626,6 +633,7 @@ void setRuleField(ZoneRule& r, const std::string& f, Real v) {
     else if (f == "min_area") r.minArea = v;
     else if (f == "max_area") r.maxArea = v;
     else if (f == "min_depth") r.minDepth = v;
+    else if (f == "min_floor") r.minFloor = v;
     else if (f == "enclosed") r.enclosed = v != 0;
 }
 int ruleIndex(const std::vector<ZoneRule>& rules, const std::string& tag) {
@@ -661,6 +669,7 @@ ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& progIn, uint32_t
         const ZoneRule& r = rules[ri];
         if (static_cast<int>(ri) == fill || static_cast<int>(ri) == shallow) continue;
         if (r.lifts && !lifts) continue;
+        if (fp.fieldArea < r.minFloor) continue;
         std::vector<std::size_t> el;
         for (std::size_t z = 0; z < nz; ++z) {
             const FloorZone& Z = fp.zones[z];
@@ -826,19 +835,23 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
             rm.rect = Z.poly;
             rm.edge = static_cast<std::size_t>(std::max(0, Z.group));
             const bool enclosed = R.enclosed && attempt < 2;
-            // the door: the longest clear run onto circulation (an open zone too, unless this is the second try)
+            // the door: the longest clear run onto the corridors; failing that (first try only), onto an open zone
+            // (a copy room beside the reception opens onto the corridor, not through the reception)
             std::size_t doorEdge = Z.poly.size();
             Real doorMid = 0.5, best = 0;
-            if (enclosed)
+            for (int via = 0; enclosed && via < (attempt == 0 ? 2 : 1) && best < kDoorRun; ++via) {
+                best = 0;
+                doorEdge = Z.poly.size();
                 for (std::size_t i = 0; i < Z.poly.size(); ++i) {
                     Real mid;
-                    const Real run = accessRun(Z.poly, i, attempt == 0 ? walk : circ, mid);
+                    const Real run = accessRun(Z.poly, i, via == 0 ? circ : walk, mid);
                     // ...where the room is deep behind it (not a sliver's edge: the doorway must open INTO the room)
                     const Vec2 a = Z.poly[i], b = Z.poly[(i + 1) % Z.poly.size()];
                     const Vec2 d = normalize(b - a), out(d.y, -d.x);
                     if (!pointInPolygon(Z.poly, a + (b - a) * mid - out * 0.6)) continue;
                     if (run > best) { best = run; doorMid = mid; doorEdge = i; }
                 }
+            }
             // the frame: side 0 the glass for a window lot; else the side away from the door
             Poly2 fr = Z.frame;
             if (Z.site == ZoneSite::Interior && fr.size() == 4 && doorEdge < Z.poly.size()) {

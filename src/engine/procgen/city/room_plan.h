@@ -67,11 +67,15 @@ enum class PlateTopology : uint8_t {
 // market hall's floor of stalls, a police cell, a courtroom, a council chamber, a fire station's engine bay and the
 // floor one engine stands on (Apparatus: kept clear, furnished by nothing -- a loading bay's strip and a stair's flight
 // too), a factory's shop floor, a warehouse's racked floor; a hotel's lobby (its reception, its lounge).
+// CopyRoom .. WaterCooler: the zoned office floor's points (floor_zones.h): a copy room by the core, a row of phone
+// booths, a water cooler's corner with a high table to stand at.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
                                 Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception, Gallery,
                                 Ward, Exam, NurseStation, Waiting,
                                 Nave, Foyer, Auditorium, Market, Cell, Courtroom, Chamber, EngineBay, Apparatus,
-                                ShopFloor, Warehouse, HotelLobby };
+                                ShopFloor, Warehouse, HotelLobby,
+                                CopyRoom, PhoneBooths, WaterCooler };
+constexpr RoomKind kLastRoomKind = RoomKind::WaterCooler;
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

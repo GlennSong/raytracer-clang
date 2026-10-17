@@ -2,7 +2,8 @@
 -- tags"). What a room of each kind holds, as steps run in order. Loaded with furniture_library.lua; the floor plans
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
 -- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting, nave,
--- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay, shop_floor, warehouse, hotel_lobby. Shops are still furnished in code, by their trade.
+-- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay, shop_floor, warehouse, hotel_lobby,
+-- copy_room, phone_booths, water_cooler. Shops are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -346,6 +347,37 @@ furniture_rooms = {
         { pick = { family = "seating", tags = { "dining" } }, x = 0.7, z = 0.0, fit = { 0.6, 0.6 } },
         { pick = { family = "seating", tags = { "dining" } }, x = 0.7, z = 1.85, faces = "wall", fit = { 0.6, 0.6 } },
       } },
+    { wall = { 0.34, 0.36 }, sides = { 1, 3, 0 }, clear = 0.7, pick = "water_cooler" },
+  },
+
+  -- THE ZONED OFFICE FLOOR's points (floor_programs.lua): side 0 is the wall away from the door (an open zone's
+  -- side 2 is the aisle it opens onto)
+  copy_room = {
+    -- the copier on the back wall, a second in a wide room; filing cabinets and a shelf of paper on the side walls
+    { wall = { 0.62, 0.68 }, sides = { 0, 1, 3 }, clear = 0.9, pick = "copier" },
+    { wall = { 0.62, 0.68 }, sides = { 0, 1, 3 }, clear = 0.9, min_w = 4.2, pick = "copier" },
+    { wall = { 0.46, 0.6 }, sides = { 1, 3, 0 }, tall = true, clear = 0.6, count = { per = 1.4, min = 1, max = 3 },
+      pick = { family = "storage", tags = { "office" } } },
+    { wall = { 1.2, 0.5 }, sides = { 3, 1, 0 }, tall = true, clear = 0.6, pick = "shelving" },
+  },
+
+  phone_booths = {
+    -- a row of booths along the long wall, doors to the aisle; a second row across where the zone is deep enough
+    { wall = { 1.0, 1.0 }, sides = "long", clear = 0.9, count = { per = 1.1, min = 1, max = 6 }, pick = "phone_booth" },
+    { wall = { 1.0, 1.0 }, sides = "opposite", clear = 0.9, count = { per = 1.1, min = 1, max = 6 }, pick = "phone_booth" },
+    { wall = { 0.9, 0.9 }, sides = { 1, 3 }, pick = { family = "decor", tags = { "plant" } } },
+  },
+
+  water_cooler = {
+    -- the cooler against a wall, a high table to stand at with a stool each side, a plant
+    { wall = { 0.34, 0.36 }, sides = { 0, 1, 3 }, clear = 0.7, pick = "water_cooler" },
+    { wall = { 1.9, 0.7 }, sides = { 1, 3, 0 },
+      set = {
+        { pick = "bar_stool", x = 0.21, fit = { 0.42, 0.42 } },
+        { pick = "high_table", x = 0.95 },
+        { pick = "bar_stool", x = 1.69, fit = { 0.42, 0.42 } },
+      } },
+    { wall = { 0.9, 0.9 }, sides = { 3, 1, 0 }, pick = { family = "decor", tags = { "plant" } } },
   },
 
   closet = {

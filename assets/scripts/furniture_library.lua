@@ -176,6 +176,14 @@ furniture_library = {
   meeting_table = { family = "surface", tags = { "meeting" } },
   whiteboard = { family = "fixture", tags = { "meeting", "classroom" } },
   cubicle = { family = "surface", tags = { "office", "open_plan" } },
+  water_cooler = { family = "appliance", tags = { "office", "drink" }, clearance = { front = 0.7 } },
+  copier = { family = "appliance", tags = { "office", "print" }, clearance = { front = 0.9 } },
+  -- a phone booth's stool, facing its shelf at the back (-z)
+  phone_booth = {
+    family = "fixture", tags = { "office", "booth" }, clearance = { front = 0.9 },
+    spots = { { id = "seat", at = seat(0, 0.69, 0.62) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.38, 0.58 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 1.4 } } },
+  },
   desk_pod = { family = "surface", tags = { "office", "open_plan" } },
   -- THE UNIVERSITY
   single_bed = {

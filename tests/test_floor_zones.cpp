@@ -91,7 +91,8 @@ void dumpSvg(const std::string& name, const Poly2& plan, const FloorPartition& f
         for (const Room& r : rp->rooms) {
             const char* fill = r.kind == RoomKind::Office ? "#c9f" : r.kind == RoomKind::Meeting ? "#fc6" : r.kind == RoomKind::OpenPlan ? "#9cf"
                              : r.kind == RoomKind::Reception ? "#f66" : r.kind == RoomKind::Kitchenette ? "#6c6" : r.kind == RoomKind::Lounge ? "#fa8"
-                             : "#bbb";
+                             : r.kind == RoomKind::CopyRoom ? "#a98" : r.kind == RoomKind::PhoneBooths ? "#7bb"
+                             : r.kind == RoomKind::WaterCooler ? "#6ae" : "#bbb";
             poly(r.rect, fill, "#888", 0.5);
             f << "<text x='" << pt(centroid(r.rect)).substr(0, pt(centroid(r.rect)).find(',')) << "' y='"
               << pt(centroid(r.rect)).substr(pt(centroid(r.rect)).find(',') + 1) << "' font-size='9' text-anchor='middle'>"
@@ -202,6 +203,8 @@ TEST_CASE(every_zone_of_a_zoned_floor_is_furnished) {
     CHECK(loadFurnitureLibrarySource(read("furniture_library.lua") + "\n" + read("furniture_rooms.lua"), lib, &err));
     FurnitureLibrary::global() = lib;
     int rooms = 0, empty = 0;
+    // the floor's points hold what they are for: a copier, phone booths, a water cooler
+    int points = 0, pointsWithTheirPiece = 0;
     for (const Plate& pl : plates())
         for (uint32_t seed = 1; seed <= 3; ++seed) {
             const BuildingParams p = officeParams(seed);
@@ -215,6 +218,17 @@ TEST_CASE(every_zone_of_a_zoned_floor_is_furnished) {
                 int in = 0;
                 for (const PlacedPiece& pc : placed)
                     if (pointInPolygon(r.rect, Vec2(pc.xform.m[0][3], pc.xform.m[2][3]))) ++in;
+                const Piece want = r.kind == RoomKind::CopyRoom ? Piece::Copier : r.kind == RoomKind::PhoneBooths ? Piece::PhoneBooth
+                                 : r.kind == RoomKind::WaterCooler ? Piece::WaterCooler : Piece::Count;
+                if (want != Piece::Count) {
+                    ++points;
+                    bool has = false;
+                    for (const PlacedPiece& pc : placed)
+                        has = has || (pc.piece == static_cast<int>(want) && pointInPolygon(r.rect, Vec2(pc.xform.m[0][3], pc.xform.m[2][3])));
+                    if (has) ++pointsWithTheirPiece;
+                    else std::printf("    [furnished] %s seed %u: a %s without its piece, %.1f m2\n", pl.name.c_str(), seed,
+                                     cellUseName(r.kind), area(r.rect));
+                }
                 if (in > 0) continue;
                 ++empty;
                 const Poly2& f = r.frame;
@@ -224,9 +238,12 @@ TEST_CASE(every_zone_of_a_zoned_floor_is_furnished) {
             }
         }
     FurnitureLibrary::global() = saved;
-    std::printf("    [furnished] %d rooms, %d empty\n", rooms, empty);
+    std::printf("    [furnished] %d rooms, %d empty; %d copy rooms, phone booths and water coolers, %d with their piece\n",
+                rooms, empty, points, pointsWithTheirPiece);
     CHECK(rooms > 500);
     CHECK(empty == 0);
+    CHECK(points > 20);
+    CHECK(pointsWithTheirPiece == points);
 }
 
 // THE SHIPPED PROGRAM (assets/scripts/floor_programs.lua) loads, names an office program whose zones all build a known
@@ -247,6 +264,15 @@ TEST_CASE(the_shipped_floor_program_loads_and_lays_walkable_floors) {
     std::printf("    [program] office: %zu zones, %zu styles (built-in %zu, %zu)\n", office->rules.size(), office->styles.size(),
                 builtin.rules.size(), builtin.styles.size());
     CHECK(office->rules.size() >= 4);
+    // the built-in program is what the file ships with: the same zones in the same order
+    CHECK(office->rules.size() == builtin.rules.size());
+    for (std::size_t i = 0; i < std::min(office->rules.size(), builtin.rules.size()); ++i) {
+        const ZoneRule &a = office->rules[i], &b = builtin.rules[i];
+        CHECK(a.tag == b.tag && a.kind == b.kind && a.sites == b.sites && a.count == b.count && a.enclosed == b.enclosed &&
+              a.walls == b.walls && a.near == b.near && std::fabs(a.minFloor - b.minFloor) < 1e-9 &&
+              std::fabs(a.perM2 - b.perM2) < 1e-9 && std::fabs(a.minArea - b.minArea) < 1e-9);
+        if (a.tag != b.tag) std::printf("    [program] zone %zu: %s in the file, %s built in\n", i, a.tag.c_str(), b.tag.c_str());
+    }
     int floors = 0, walked = 0;
     for (const Plate& pl : plates()) {
         const BuildingParams p = officeParams(2);
