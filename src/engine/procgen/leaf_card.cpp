@@ -95,8 +95,9 @@ bool insidePolar(const std::string& shape, int lobes, int teeth, int petals, dou
 }
 
 // Draw one card: expand the grammar with this variant's vars, walk it with the 2D turtle.
-void drawTwig(const LeafCardSpec& s, uint32_t seed, std::vector<Stem>& stems, std::vector<Leaf>& leaves) {
+void drawTwig(const LeafCardSpec& s, uint32_t seed, int row, std::vector<Stem>& stems, std::vector<Leaf>& leaves) {
     std::map<std::string, double> vars;
+    vars["row"] = row;   // the atlas row this card is drawn in: row 0 the tip cards (TreeParams::tipCards)
     for (const RecipeRange& g : s.vars) {
         uint32_t h = seed * 0x9E3779B9u;
         for (unsigned char c : g.name) h = (h ^ c) * 16777619u;
@@ -170,7 +171,7 @@ LeafCardAtlas leafCardAtlas(const LeafCardSpec& spec, uint32_t seed, int tileW, 
     for (int tile = 0; tile < n * n; ++tile) {
         std::vector<Stem> stems;
         std::vector<Leaf> leaves;
-        drawTwig(spec, seed * 7919u + static_cast<uint32_t>(tile) * 104729u + 1u, stems, leaves);
+        drawTwig(spec, seed * 7919u + static_cast<uint32_t>(tile) * 104729u + 1u, tile / n, stems, leaves);
         if (stems.empty() && leaves.empty()) continue;
         // the drawing's extent: |x| about the base, y from its lowest to its highest
         double maxX = 1e-6, minY = 0.0, maxY = 1e-6;
@@ -262,7 +263,13 @@ LeafCardAtlas leafCardAtlas(const LeafCardSpec& spec, uint32_t seed, int tileW, 
                     if (!in) continue;
                     float b;
                     if (l.flower) {
-                        const bool eyeHere = fl.shape != "floret" && rho <= fl.eye;
+                        // (a floret's lower lip wears the eye colour: a 'Hot Lips' salvia's red under white)
+                        bool eyeHere = fl.shape != "floret" && rho <= fl.eye;
+                        if (fl.shape == "floret") {
+                            const double fx = rho * std::cos(phi), fy = rho * std::sin(phi);
+                            const double a = (fx - 0.25) / 0.75, bb = fy / 0.42;
+                            eyeHere = a * a + bb * bb > 1.0;   // outside the hood: the lip
+                        }
                         tint = eyeHere ? fl.eyeTint : fl.tint;
                         b = static_cast<float>(l.shade * (eyeHere ? 0.9 : 0.82 + 0.18 * rho));
                     } else {

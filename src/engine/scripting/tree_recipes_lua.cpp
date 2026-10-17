@@ -165,6 +165,7 @@ bool readRules(lua_State* L, int t, std::vector<RecipeRule>& out, const std::str
 bool checkVars(const std::string& axiom, const std::vector<RecipeRule>& rules, const std::vector<RecipeRange>& vars,
                const std::string& where, std::string* err) {
     std::map<std::string, double> mid;
+    mid["row"] = 0.0;   // (the card grammar's own: the atlas row a card is drawn in)
     for (const RecipeRange& g : vars) mid[g.name] = 0.5 * (g.lo + g.hi);
     std::string missing;
     substituteVars(axiom, mid, &missing);
@@ -195,6 +196,10 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
         if (const std::string a = strField(L, t, "axiom"); !a.empty()) r.axiom = a;
         r.iterations = static_cast<int>(numField(L, t, "iterations", r.iterations));
         if (const std::string b = strField(L, t, "bark"); !b.empty()) r.bark = b;
+        if (const std::string k = strField(L, t, "kind"); !k.empty()) {
+            if (k != "tree" && k != "shrub") { lua_settop(L, base); return fail(err, where + ".kind: not \"tree\" or \"shrub\""); }
+            r.shrub = k == "shrub";
+        }
         readColour(L, t, "bark_color", r.barkColor, r.barkColorHi);
         readColour(L, t, "leaf_color", r.leafColor, r.leafColorHi);
         if (!readPalettes(L, t, "leaf_palette", r.leafPalettes, where, err)) { lua_settop(L, base); return false; }

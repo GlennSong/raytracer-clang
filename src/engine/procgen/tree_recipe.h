@@ -70,6 +70,7 @@ struct LeafCardSpec {
 
 struct TreeRecipe {
     std::string name;
+    bool shrub = false;              // kind = "shrub": a shrub or a perennial (knee to head height), not a tree
     std::string axiom = "A(1.6)";   // module literals once its $vars are substituted
     int iterations = 5;
     using Rule = RecipeRule;

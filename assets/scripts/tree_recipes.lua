@@ -23,6 +23,10 @@
 --   bark_color, leaf_color   {r, g, b} linear, or {{lo}, {hi}} drawn per tree
 --   leaf_palette        colour by patches across the crown (params.paletteScale m across): a list of colours the
 --                       cards blend along, or a list of such lists, each seed picking one (red maples, orange ones)
+--   SHRUBS AND PERENNIALS are recipes too: the axiom fans many stems out of the ground (R(n) below), collar 0 and no
+--   roots. params.tipCards puts the card atlas's first row at the stems' tips (flower spikes, daisies, berries) and
+--   the other rows along them (leaves); the card grammar reads $row to know which it is drawing. clipX/Y/Z prune
+--   the growth to a box (a clipped hedge: the cut twigs' leaves crowd its faces).
 --   card                THE LEAF CARD the tree's foliage wears (procgen/leaf_card.h): a small 2D twig grammar drawn by a
 --                       2D turtle -- F(len) a stem, +(a) -(a) turns, [ ] a side shoot, L(scale) a leaf -- and the leaf:
 --     axiom, iterations, rules, vars   as the tree's (vars drawn per card variant)
@@ -278,6 +282,231 @@ tree_recipes = {
       vars = { side = {28, 40}, a = {24, 34}, bend = {-3, 3} },
       leaf = { shape = "needle", length = 0.13, width = 0.007 },
       stem_color = {0.45, 0.35, 0.28}, stem_width = 0.009, cup = 0.3, shade_jitter = 0.25, tip_bright = 0.25,
+    },
+  },
+
+  ---------------------------------------------------------------------------------------------------------------
+  -- SHRUBS AND PERENNIALS (Glenn's street-planting photos, 2026-10-17)
+
+  -- INDIAN HAWTHORN (Rhaphiolepis): a dense rounded mound of glossy oval leaves, the new growth red-bronze,
+  -- clusters of blue-black berries at the shoot tips.
+  hawthorn = {
+    kind = "shrub",
+    axiom = "R(9)",
+    iterations = 9,
+    rules = {
+      { "R(n):n>0",     "/(137.5)[&($spread*(0.35+0.65*n/9))S($len)]R(n-1)" },
+      { "R(n):n<=0",    "S($len)" },
+      { "S(l):l>0.1",   "F(l)/(90)[+($fork)S(l*$side)][-($fork)S(l*$side)]S(l*$lead)", 2 },
+      { "S(l):l>0.1",   "F(l)/(137.5)[&($fork)S(l*$side)]S(l*$lead)", 1 },
+      { "S(l):l<=0.1",  "F(l)A(l)" },
+    },
+    vars = { spread = {45, 70}, len = {0.26, 0.32}, fork = {30, 42}, side = {0.72, 0.80}, lead = {0.80, 0.86} },
+    params = {
+      droop = {0.08, 0.14}, light = 0.2, meander = 0.10, angleJitter = 10, collar = 0, rootCount = 0, flare = 0,
+      tipRadius = 0.004, pipeExponent = 2.5, radiusScale = 1.0, ringSegments = 5,
+      leafSize = {0.20, 0.24}, leavesPerTip = 4, leafThickness = 0.012, leafClump = 1.0, leafPitch = 50,
+      maxLeafCards = 7000, paletteScale = 0.45, tipCards = 1,
+    },
+    bark = "smooth",
+    bark_color = {0.30, 0.25, 0.20},
+    leaf_color = { {0.92, 0.92, 0.92}, {1.0, 1.0, 1.0} },
+    leaf_palette = { {0.62, 0.72, 0.55}, {0.75, 0.85, 0.62}, {1.0, 0.95, 0.60}, {1.0, 0.55, 0.45} },
+    card = {
+      axiom = "X($row)", iterations = 2, variants = 2,
+      rules = {
+        -- the tips: a rosette with a cluster of berries
+        { "X(r):r<0.5",  "F(0.05)[+(55)L(0.85)][-(55)L(0.85)]F(0.04)[+(28)L(1)][-(28)L(1)]F(0.03)[+(30)F(0.025)W(1)][-(22)F(0.03)W(1)][F(0.035)W(1)][+(65)F(0.02)W(0.9)][-(60)F(0.02)W(0.9)]" },
+        -- along the stems: alternate glossy leaves
+        { "X(r):r>=0.5", "F(0.05)[+(55)L(0.9)][-(55)L(0.85)]F(0.05)[+(45)L(1)][-(45)L(1)]F(0.04)[+(25)L(1)][-(25)L(1)]L(1.05)" },
+      },
+      leaf = { shape = "oval", length = 0.12, width = 0.05, color = {0.22, 0.40, 0.10} },
+      flower = { shape = "blossom", size = 0.028, petals = 8, notch = 0, eye = 0.3,
+                 color = {0.10, 0.10, 0.22}, eye_color = {0.06, 0.06, 0.14} },
+      stem_color = {0.40, 0.30, 0.25}, stem_width = 0.008, cup = 0.55, shade_jitter = 0.25,
+    },
+  },
+
+  -- MEXICAN SAGE (Salvia leucantha): a fountain of long arching stems, grey-green lance leaves, each stem ending in
+  -- a long velvety purple spike.
+  mexican_sage = {
+    kind = "shrub",
+    axiom = "R(16)",
+    iterations = 10,
+    rules = {
+      { "R(n):n>0",     "/(137.5)[&($spread*(0.25+0.75*n/16))S($len)]R(n-1)" },
+      { "R(n):n<=0",    "S($len)" },
+      { "S(l):l>0.12",  "F(l)S(l*0.92)", 3 },
+      { "S(l):l>0.12",  "F(l)/(137.5)[&(35)S(l*0.65)]S(l*0.9)", 1 },
+      { "S(l):l<=0.12", "F(l)A(l)" },
+    },
+    vars = { spread = {30, 55}, len = {0.20, 0.25} },
+    params = {
+      droop = {0.12, 0.18}, light = 0.25, meander = 0.10, angleJitter = 10, collar = 0, rootCount = 0, flare = 0,
+      tipRadius = 0.005, pipeExponent = 2.6, radiusScale = 1.0, ringSegments = 5,
+      leafSize = {0.26, 0.32}, leavesPerTip = 3, leafThickness = 0.010, leafClump = 1.0, leafPitch = 30,
+      maxLeafCards = 4000, tipCards = 1,
+    },
+    bark = "smooth",
+    bark_color = {0.35, 0.38, 0.30},
+    leaf_color = { {0.90, 0.90, 0.90}, {1.0, 1.0, 1.0} },
+    card = {
+      axiom = "X($row)", iterations = 18, variants = 2,
+      rules = {
+        { "X(r):r<0.5",  "F(0.03)P(14)" },
+        { "P(n):n>0",    "F(0.022)+($bend)[+(38)W(0.55+0.03*n)][-(38)W(0.55+0.03*n)]P(n-1)" },
+        { "P(n):n<=0",   "W(0.5)" },
+        { "X(r):r>=0.5", "F(0.06)[+(28)L(1)][-(28)L(1)]F(0.06)[+(24)L(0.95)][-(24)L(0.95)]F(0.05)[+(20)L(0.85)][-(20)L(0.85)]L(0.8)" },
+      },
+      vars = { bend = {-3, 3} },
+      leaf = { shape = "leaflet", length = 0.22, width = 0.035, color = {0.30, 0.40, 0.24} },
+      flower = { shape = "floret", size = 0.045, color = {0.48, 0.16, 0.68}, eye_color = {0.60, 0.30, 0.80} },
+      stem_color = {0.40, 0.20, 0.52}, stem_width = 0.014, cup = 0.3,
+    },
+  },
+
+  -- BLUE SALVIA (Salvia farinacea): a compact clump of upright stems, each a slim violet-blue spike over pale
+  -- mealy stalks, broad green leaves low down.
+  blue_salvia = {
+    kind = "shrub",
+    axiom = "R(12)",
+    iterations = 8,
+    rules = {
+      { "R(n):n>0",     "/(137.5)[&($spread*(0.2+0.8*n/12))S($len)]R(n-1)" },
+      { "R(n):n<=0",    "S($len)" },
+      { "S(l):l>0.08",  "F(l)S(l*0.9)", 3 },
+      { "S(l):l>0.08",  "F(l)/(137.5)[&(25)S(l*0.8)]S(l*0.9)", 1 },
+      { "S(l):l<=0.08", "F(l)A(l)" },
+    },
+    vars = { spread = {14, 30}, len = {0.11, 0.14} },
+    params = {
+      droop = 0.04, light = 0.15, meander = 0.08, angleJitter = 8, collar = 0, rootCount = 0, flare = 0,
+      tipRadius = 0.004, pipeExponent = 2.6, radiusScale = 1.0, ringSegments = 5,
+      leafSize = {0.18, 0.22}, leavesPerTip = 2, leafThickness = 0.0, leafClump = 0.3, leafPitch = 8,
+      maxLeafCards = 2000, tipCards = 1,
+    },
+    bark = "smooth",
+    bark_color = {0.30, 0.36, 0.24},
+    leaf_color = { {0.90, 0.90, 0.90}, {1.0, 1.0, 1.0} },
+    card = {
+      axiom = "X($row)", iterations = 16, variants = 2,
+      rules = {
+        { "X(r):r<0.5",  "F(0.10)P(12)" },
+        { "P(n):n>0",    "F(0.02)+($bend)[+(30)W(0.6+0.03*n)][-(30)W(0.6+0.03*n)]P(n-1)" },
+        { "P(n):n<=0",   "W(0.5)" },
+        { "X(r):r>=0.5", "F(0.03)[+(50)L(1)][-(50)L(1)][+(25)L(0.9)][-(25)L(0.9)]F(0.04)[+(35)L(0.8)][-(35)L(0.8)]" },
+      },
+      vars = { bend = {-2, 2} },
+      leaf = { shape = "oval", length = 0.16, width = 0.05, color = {0.20, 0.36, 0.12} },
+      flower = { shape = "floret", size = 0.04, color = {0.20, 0.20, 0.78}, eye_color = {0.32, 0.30, 0.85} },
+      stem_color = {0.55, 0.58, 0.72}, stem_width = 0.012, cup = 0.35,
+    },
+  },
+
+  -- EURYOPS (golden daisy bush): a dense low mound of fine bright-green leaves, dotted all over with yellow daisies
+  -- held just above it.
+  euryops = {
+    kind = "shrub",
+    axiom = "R(10)",
+    iterations = 9,
+    rules = {
+      { "R(n):n>0",     "/(137.5)[&($spread*(0.35+0.65*n/10))S($len)]R(n-1)" },
+      { "R(n):n<=0",    "S($len)" },
+      { "S(l):l>0.09",  "F(l)/(90)[+($fork)S(l*0.76)][-($fork)S(l*0.76)]S(l*0.84)", 2 },
+      { "S(l):l>0.09",  "F(l)/(90)[+($fork)S(l*0.76)]S(l*0.86)", 1 },
+      { "S(l):l<=0.09", "F(l)A(l)" },
+    },
+    vars = { spread = {55, 75}, len = {0.22, 0.27}, fork = {28, 38} },
+    params = {
+      droop = 0.10, light = 0.25, meander = 0.08, angleJitter = 10, collar = 0, rootCount = 0, flare = 0,
+      tipRadius = 0.004, pipeExponent = 2.5, radiusScale = 1.0, ringSegments = 5,
+      leafSize = {0.20, 0.24}, leavesPerTip = 3, leafThickness = 0.010, leafClump = 1.0, leafPitch = 40,
+      maxLeafCards = 7000, tipCards = 1, paletteScale = 0.6,
+    },
+    bark = "smooth",
+    bark_color = {0.32, 0.30, 0.22},
+    leaf_color = { {0.92, 0.92, 0.92}, {1.0, 1.0, 1.0} },
+    leaf_palette = { {0.80, 0.90, 0.70}, {1.0, 1.0, 1.0} },
+    card = {
+      axiom = "X($row)", iterations = 2, variants = 2,
+      rules = {
+        { "X(r):r<0.5",  "F(0.05)[+(45)L(1)][-(45)L(1)][+(20)L(1)][-(20)L(1)]F(0.04)[+(30)L(0.9)][-(30)L(0.9)]F(0.10)W(1)" },
+        { "X(r):r>=0.5", "F(0.04)[+(50)L(1)][-(50)L(1)][+(25)L(1)][-(25)L(1)]F(0.04)[+(40)L(0.9)][-(40)L(0.9)][+(15)L(0.9)][-(15)L(0.9)]L(0.9)" },
+      },
+      leaf = { shape = "leaflet", length = 0.12, width = 0.018, color = {0.20, 0.42, 0.08} },
+      flower = { shape = "daisy", size = 0.10, petals = 13, eye = 0.28,
+                 color = {1.0, 0.80, 0.05}, eye_color = {0.88, 0.55, 0.03} },
+      stem_color = {0.25, 0.40, 0.12}, stem_width = 0.008, cup = 0.3,
+    },
+  },
+
+  -- 'HOT LIPS' SALVIA (Salvia microphylla): an open, twiggy shrub of small round leaves; at the shoot tips little
+  -- two-lipped flowers, white hoods over red lips.
+  hot_lips = {
+    kind = "shrub",
+    axiom = "R(8)",
+    iterations = 9,
+    rules = {
+      { "R(n):n>0",     "/(137.5)[&($spread*(0.3+0.7*n/8))S($len)]R(n-1)" },
+      { "R(n):n<=0",    "S($len)" },
+      { "S(l):l>0.1",   "F(l)/(90)[+($fork)S(l*0.74)]S(l*0.86)", 2 },
+      { "S(l):l>0.1",   "F(l)/(90)[+($fork)S(l*0.74)][-($fork)S(l*0.74)]S(l*0.84)", 1 },
+      { "S(l):l<=0.1",  "F(l)A(l)" },
+    },
+    vars = { spread = {35, 60}, len = {0.26, 0.32}, fork = {25, 35} },
+    params = {
+      droop = 0.10, light = 0.2, meander = 0.12, angleJitter = 12, collar = 0, rootCount = 0, flare = 0,
+      tipRadius = 0.003, pipeExponent = 2.5, radiusScale = 1.0, ringSegments = 5,
+      leafSize = {0.20, 0.24}, leavesPerTip = 3, leafThickness = 0.008, leafClump = 1.0, leafPitch = 35,
+      maxLeafCards = 5000, tipCards = 1,
+    },
+    bark = "smooth",
+    bark_color = {0.30, 0.28, 0.20},
+    leaf_color = { {0.90, 0.90, 0.90}, {1.0, 1.0, 1.0} },
+    card = {
+      axiom = "X($row)", iterations = 2, variants = 2,
+      rules = {
+        { "X(r):r<0.5",  "F(0.06)[+(50)L(0.8)][-(50)L(0.8)]F(0.07)[+(40)F(0.02)W(1)][-(35)F(0.02)W(1)]F(0.05)[+(30)F(0.02)W(0.95)][-(30)F(0.02)W(0.9)]F(0.03)W(0.85)" },
+        { "X(r):r>=0.5", "F(0.05)[+(55)L(1)][-(55)L(1)]F(0.05)[+(50)L(0.95)][-(50)L(0.95)]F(0.05)[+(45)L(0.9)][-(45)L(0.9)]L(0.85)" },
+      },
+      leaf = { shape = "oval", length = 0.06, width = 0.035, color = {0.26, 0.44, 0.12} },
+      flower = { shape = "floret", size = 0.06, color = {0.98, 0.97, 0.96}, eye_color = {0.88, 0.04, 0.10} },
+      stem_color = {0.35, 0.30, 0.22}, stem_width = 0.006, cup = 0.4,
+    },
+  },
+
+  -- A CLIPPED HEDGE (pittosporum / xylosma): a dense shrub grown past its box and sheared back to it -- the cut
+  -- twigs' leaves crowd the faces. One plant fills 1.8 m of a row.
+  hedge = {
+    kind = "shrub",
+    axiom = "R(10)",
+    iterations = 10,
+    rules = {
+      { "R(n):n>0",     "/(137.5)[&($spread*(0.3+0.7*n/10))S($len)]R(n-1)" },
+      { "R(n):n<=0",    "S($len)" },
+      { "S(l):l>0.08",  "F(l)/(90)[+($fork)S(l*0.78)][-($fork)S(l*0.78)]S(l*0.86)" },
+      { "S(l):l<=0.08", "F(l)A(l)" },
+    },
+    vars = { spread = {35, 60}, len = {0.34, 0.40}, fork = {30, 40} },
+    params = {
+      droop = 0.05, light = 0.15, meander = 0.08, angleJitter = 12, collar = 0, rootCount = 0, flare = 0,
+      tipRadius = 0.004, pipeExponent = 2.5, radiusScale = 1.0, ringSegments = 5,
+      leafSize = {0.20, 0.24}, leavesPerTip = 3, leafThickness = 0.010, leafClump = 1.0, leafPitch = 55,
+      maxLeafCards = 9000, paletteScale = 0.5, clipX = 0.95, clipY = 1.6, clipZ = 0.6,
+    },
+    bark = "smooth",
+    bark_color = {0.30, 0.26, 0.20},
+    leaf_color = { {0.92, 0.92, 0.92}, {1.0, 1.0, 1.0} },
+    leaf_palette = { {0.55, 0.65, 0.50}, {0.70, 0.80, 0.55}, {1.0, 0.95, 0.55} },
+    card = {
+      axiom = "F(0.04)S(4)", iterations = 5, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.035)+($bend)[+($a)L(1)][-($a)L(0.95)]S(n-1)" },
+        { "S(n):n<=0", "F(0.02)[+(30)L(0.9)][-(30)L(0.9)]L(1)" },
+      },
+      vars = { a = {45, 65}, bend = {-8, 8} },
+      leaf = { shape = "oval", length = 0.08, width = 0.04, color = {0.16, 0.34, 0.07} },
+      stem_color = {0.35, 0.28, 0.20}, stem_width = 0.006, cup = 0.5, shade_jitter = 0.3,
     },
   },
 }

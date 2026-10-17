@@ -624,6 +624,258 @@
         "recipe": "pine",
         "seed": 6
       }
+    },
+    {
+      "id": 42,
+      "name": "hawthorn_1",
+      "shape": "tree",
+      "position": [
+        -27.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hawthorn",
+        "seed": 1
+      }
+    },
+    {
+      "id": 43,
+      "name": "hawthorn_2",
+      "shape": "tree",
+      "position": [
+        -22.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hawthorn",
+        "seed": 2
+      }
+    },
+    {
+      "id": 44,
+      "name": "mexican_sage_1",
+      "shape": "tree",
+      "position": [
+        -17.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "mexican_sage",
+        "seed": 1
+      }
+    },
+    {
+      "id": 45,
+      "name": "mexican_sage_2",
+      "shape": "tree",
+      "position": [
+        -12.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "mexican_sage",
+        "seed": 2
+      }
+    },
+    {
+      "id": 46,
+      "name": "blue_salvia_1",
+      "shape": "tree",
+      "position": [
+        -7.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "blue_salvia",
+        "seed": 1
+      }
+    },
+    {
+      "id": 47,
+      "name": "blue_salvia_2",
+      "shape": "tree",
+      "position": [
+        -2.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "blue_salvia",
+        "seed": 2
+      }
+    },
+    {
+      "id": 48,
+      "name": "euryops_1",
+      "shape": "tree",
+      "position": [
+        3.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "euryops",
+        "seed": 1
+      }
+    },
+    {
+      "id": 49,
+      "name": "euryops_2",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "euryops",
+        "seed": 2
+      }
+    },
+    {
+      "id": 50,
+      "name": "hot_lips_1",
+      "shape": "tree",
+      "position": [
+        13.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hot_lips",
+        "seed": 1
+      }
+    },
+    {
+      "id": 51,
+      "name": "hot_lips_2",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hot_lips",
+        "seed": 2
+      }
+    },
+    {
+      "id": 52,
+      "name": "hedge_1",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 1
+      }
+    },
+    {
+      "id": 53,
+      "name": "hedge_2",
+      "shape": "tree",
+      "position": [
+        -6.2,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 2
+      }
+    },
+    {
+      "id": 54,
+      "name": "hedge_3",
+      "shape": "tree",
+      "position": [
+        -4.4,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 3
+      }
+    },
+    {
+      "id": 55,
+      "name": "hedge_4",
+      "shape": "tree",
+      "position": [
+        -2.5999999999999996,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 4
+      }
+    },
+    {
+      "id": 56,
+      "name": "hedge_5",
+      "shape": "tree",
+      "position": [
+        -0.7999999999999998,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 5
+      }
+    },
+    {
+      "id": 57,
+      "name": "hedge_6",
+      "shape": "tree",
+      "position": [
+        1.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 6
+      }
+    },
+    {
+      "id": 58,
+      "name": "hedge_7",
+      "shape": "tree",
+      "position": [
+        2.8000000000000007,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 7
+      }
+    },
+    {
+      "id": 59,
+      "name": "hedge_8",
+      "shape": "tree",
+      "position": [
+        4.6,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 8
+      }
     }
   ],
   "terrain": {

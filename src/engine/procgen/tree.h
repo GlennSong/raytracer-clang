@@ -87,6 +87,11 @@ struct TreeParams {
     float leafPitch     = 40.0f;    // a card's tilt out from its twig (deg): 0 along it, 90 straight out
     int   cardTiles     = 1;        // the leaf texture is an atlas of cardTiles x cardTiles cards (leaf_card.h): each
                                     //   card picks one
+    bool  tipCards      = false;    // ...the atlas's first row at the tips, the other rows along the stems (a salvia's
+                                    //   flower spikes ending its stems, leaves below)
+    // CLIPPED (a hedge, a topiary): growth outside the box -- |x| <= clipX, 0 <= y <= clipY, |z| <= clipZ about the
+    // foot -- is pruned back to the box, so the cut twigs' leaves crowd its faces. 0 = unclipped.
+    float clipX = 0.0f, clipY = 0.0f, clipZ = 0.0f;
     int   maxLeafCards  = 6000;     // hard budget: stop emitting cluster cards past
                                     //   this, so one tree can't blow up the triangle count
 

@@ -435,6 +435,30 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         }
     }
 
+    // CLIPPED: everything beyond the box goes, and a node that lost its children is a tip (its leaves on the face)
+    if (params.clipX > 0.0f && params.clipY > 0.0f && params.clipZ > 0.0f && !nodes.empty()) {
+        const Vec3 foot = nodes[0].pos;
+        std::vector<int> remap(nodes.size(), -1);
+        std::vector<SkeletonNode> kept;
+        for (size_t i = 0; i < nodes.size(); ++i) {   // (parent before child)
+            const SkeletonNode& n = nodes[i];
+            const Vec3 d = n.pos - foot;
+            const bool inside = std::fabs(d.x) <= params.clipX && d.y >= -0.05 && d.y <= params.clipY &&
+                                std::fabs(d.z) <= params.clipZ;
+            if (!inside || (n.parent >= 0 && remap[n.parent] < 0)) continue;
+            remap[i] = static_cast<int>(kept.size());
+            SkeletonNode c = n;
+            c.parent = n.parent >= 0 ? remap[n.parent] : -1;
+            c.childCount = 0;
+            kept.push_back(c);
+        }
+        for (SkeletonNode& c : kept)
+            if (c.parent >= 0) kept[c.parent].childCount++;
+        for (SkeletonNode& c : kept)
+            if (c.childCount == 0) c.isTip = true;
+        nodes.swap(kept);
+    }
+
     TreeMesh out;
 
     // Decompose the skeleton into branch chains: from each node, the child whose
@@ -632,8 +656,14 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 const Vec3 jpos = a + (n.pos - a) * u + o * (rad * 0.9);
                 int tile = 0;
                 if (params.cardTiles > 1) {
-                    std::uniform_int_distribution<int> pick(0, params.cardTiles * params.cardTiles - 1);
-                    tile = pick(rng);
+                    const int nt = params.cardTiles;
+                    if (params.tipCards) {   // the first row at the tips, the rest along the stems
+                        std::uniform_int_distribution<int> col(0, nt - 1), row(1, nt - 1);
+                        tile = n.isTip ? col(rng) : row(rng) * nt + col(rng);
+                    } else {
+                        std::uniform_int_distribution<int> pick(0, nt * nt - 1);
+                        tile = pick(rng);
+                    }
                 }
                 addLeaf(out.leaves, jpos, dir, params.leafSize,
                         leafColourAt(jpos) * vary(rng), params.cardTiles, tile);

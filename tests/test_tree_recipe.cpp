@@ -84,7 +84,8 @@ TEST_CASE(shipped_tree_recipes_load_and_grow) {
         CHECK(t.branches.indices.size() > 300);
         CHECK(!t.leaves.vertices.empty());
         CHECK(!t.collisionIndices.empty());
-        CHECK(topOf(t) > 4.0);
+        if (r->shrub) CHECK(topOf(t) > 0.3 && topOf(t) < 3.0);   // knee to head height
+        else CHECK(topOf(t) > 4.0);
         const TreeMesh again = growRecipeTree(*r, 1);
         CHECK(again.branches.vertices.size() == t.branches.vertices.size());
         CHECK(again.branches.vertices.empty() || (again.branches.vertices.back().position - t.branches.vertices.back().position).length() < 1e-9);
@@ -103,8 +104,11 @@ TEST_CASE(a_recipes_seeds_are_different_trees_of_it) {
             sizes.insert(static_cast<long>(t.branches.vertices.size()));
         }
         std::printf("    [variety] %-8s 6 seeds: %zu heights, %zu branchings\n", name.c_str(), heights.size(), sizes.size());
-        CHECK(heights.size() >= 4);
-        CHECK(sizes.size() >= 4);
+        const TreeRecipe* r = book.find(name);
+        const bool clipped = r->shrub && std::any_of(r->params.begin(), r->params.end(), [](const TreeRecipe::Range& g) {
+            return g.name == "clipY" && g.hi > 0; });
+        CHECK(clipped || heights.size() >= (r->shrub ? 3u : 4u));   // (a clipped hedge is its box's height)
+        CHECK(sizes.size() >= (r->shrub ? 3u : 4u));
     }
 }
 

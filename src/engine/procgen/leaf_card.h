@@ -13,7 +13,8 @@
 // (where the card meets the branch), supersampled for clean edges, colour dilated under the cut so mips do not
 // darken. RGB is a brightness pattern the leaf's vertex colour tints (as tree.h leafTexture); the NORMAL map cups
 // each leaf about its midrib, so a card lights leaf by leaf, not as one flat sheet. `variants` x `variants` cards,
-// each its own draw of the grammar's ranges, share the atlas.
+// each its own draw of the grammar's ranges, share the atlas. The grammar sees `$row`, the atlas row it is drawn
+// in: with TreeParams::tipCards the tree puts row 0 at its tips (a salvia's spikes) and the rest along its stems.
 
 #include "tree.h"          // TextureData
 #include "tree_recipe.h"   // LeafCardSpec
