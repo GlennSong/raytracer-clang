@@ -19,6 +19,11 @@
 --     leaves   leaves leafSize leavesPerTip leafThickness leafClump maxLeafCards
 --   bark                the bark texture: "oak" (furrows), "birch" (pale, lenticels), "pine" (plates)
 --   bark_color, leaf_color   {r, g, b} linear, or {{lo}, {hi}} drawn per tree
+--   card                THE LEAF CARD the tree's foliage wears (procgen/leaf_card.h): a small 2D twig grammar drawn by a
+--                       2D turtle -- F(len) a stem, +(a) -(a) turns, [ ] a side shoot, L(scale) a leaf -- and the leaf:
+--     axiom, iterations, rules, vars   as the tree's (vars drawn per card variant)
+--     leaf = { shape = "oval" | "lobed" | "serrate" | "needle" | "leaflet", length, width, lobes, teeth }
+--     stem_width, cup (a leaf's curl about its midrib, 0 flat), shade_jitter, variants (cards a side of the atlas)
 --
 -- The tree lab (assets/levels/tree_lab.json) grows each in a row of seeds; this file hot-reloads there.
 
@@ -50,6 +55,17 @@ tree_recipes = {
     bark = "oak",
     bark_color = { {0.26, 0.21, 0.16}, {0.34, 0.27, 0.20} },
     leaf_color = { {0.14, 0.30, 0.08}, {0.20, 0.38, 0.11} },
+    card = {
+      -- oak leaves crowd at the end of each shoot: a couple along it, a rosette at its tip
+      axiom = "S(2)", iterations = 3, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.13)+($bend)[+($a)L($s*0.8)]F(0.11)-($bend)[-($a)L($s*0.85)]S(n-1)" },
+        { "S(n):n<=0", "F(0.06)[+($b)L($s*0.8)][-($b)L($s*0.8)][+($b*0.5)L($s*0.85)]L(0.95)" },
+      },
+      vars = { a = {48, 66}, b = {58, 76}, s = {0.85, 1.05}, bend = {-8, 8} },
+      leaf = { shape = "lobed", length = 0.32, width = 0.13, lobes = 3 },
+      stem_width = 0.014, cup = 0.5,
+    },
   },
 
   -- BIRCH: one slim leader whorling light branches up its length, their twigs drooping; white bark, hardly fluted.
@@ -70,11 +86,22 @@ tree_recipes = {
       meander = {0.05, 0.10}, lean = {0, 8}, angleJitter = {8, 12},
       flare = 0.3, nodeSwell = 0.05, barkNoise = 0.03, twist = 0, rootCount = 3, rootSpread = 2.0, collar = 0.4,
       tipRadius = 0.010, pipeExponent = 2.3, radiusScale = 1.2, ringSegments = 8,
-      leafSize = {0.28, 0.34}, leavesPerTip = 4, leafThickness = 0.035, leafClump = 0.8, maxLeafCards = 5000,
+      leafSize = {0.38, 0.46}, leavesPerTip = 7, leafThickness = 0.035, leafClump = 0.9, maxLeafCards = 9000,
     },
     bark = "birch",
     bark_color = { {0.74, 0.72, 0.68}, {0.82, 0.80, 0.76} },
     leaf_color = { {0.20, 0.40, 0.10}, {0.27, 0.48, 0.12} },
+    card = {
+      -- small toothed leaves, alternate, well apart along a slender drooping twig
+      axiom = "S(5)", iterations = 6, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.10)+($bend)[+($a)L($s)]F(0.10)+($bend)[-($a)L($s)]S(n-1)" },
+        { "S(n):n<=0", "F(0.05)L(0.9)" },
+      },
+      vars = { a = {42, 56}, s = {0.85, 1.0}, bend = {-3, 2} },
+      leaf = { shape = "serrate", length = 0.15, width = 0.10, teeth = 8 },
+      stem_width = 0.008, cup = 0.4,
+    },
   },
 
   -- SPRUCE: a straight whorled leader; each whorl's branches longest at the bottom (n counts down the tree), sagging
@@ -95,10 +122,20 @@ tree_recipes = {
       flare = 0.6, lobes = {5, 8}, lobeDepth = 0.10, lobeHeight = 1.0, nodeSwell = 0.04, barkNoise = 0.05,
       twist = 0, rootCount = 4, rootSpread = 2.0, collar = 0.3,
       tipRadius = 0.010, pipeExponent = 2.4, radiusScale = 1.4, ringSegments = 8,
-      leafSize = {0.28, 0.34}, leavesPerTip = 3, leafThickness = 0.05, leafClump = 0.5, maxLeafCards = 9000,
+      leafSize = {0.44, 0.54}, leavesPerTip = 5, leafThickness = 0.05, leafClump = 0.5, maxLeafCards = 14000,
     },
     bark = "pine",
     bark_color = { {0.22, 0.16, 0.12}, {0.28, 0.20, 0.15} },
     leaf_color = { {0.06, 0.16, 0.06}, {0.09, 0.21, 0.08} },
+    card = {
+      axiom = "S(14)", iterations = 15, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.04)+($bend)[+(58)L(1)][-(58)L(1)][+(34)L(0.9)][-(34)L(0.9)]S(n-1)" },
+        { "S(n):n<=0", "F(0.02)L(0.8)" },
+      },
+      vars = { bend = {-3, 3} },
+      leaf = { shape = "needle", length = 0.11, width = 0.012 },
+      stem_width = 0.010, cup = 0.3, shade_jitter = 0.25,
+    },
   },
 }

@@ -3,6 +3,8 @@
 #include "test_framework.h"
 #include "../src/engine/procgen/tree_recipe.h"
 #include "../src/engine/scripting/tree_recipes_lua.h"
+#include "../src/engine/procgen/leaf_card.h"
+#include "../src/image.h"
 
 #include <algorithm>
 #include <cmath>
@@ -164,4 +166,51 @@ TEST_CASE(welded_branches_start_on_their_parent_not_inside_it) {
     CHECK(whole);
     CHECK(weld.branches.vertices.size() < tube.branches.vertices.size());
     CHECK(weld.branches.indices.size() % 3 == 0);
+}
+
+// THE LEAF CARDS (Glenn: "when I look at the leaf cards I can see where it's cut off ... Can we generate those cards
+// using the l-system to draw those leaves?"): every species with a card draws its own -- lobed oak leaves, toothed
+// birch leaves, spruce needles -- and NOTHING touches a card's edge (the twig fitted inside a margin), every tile of
+// the atlas holds leaves, the normals are unit. RT_CARD_DUMP=<dir> writes each atlas over a grey for a look.
+TEST_CASE(leaf_cards_are_drawn_whole_inside_the_card) {
+    const TreeRecipeBook book = shipped();
+    int cards = 0;
+    for (const std::string& name : book.names()) {
+        const TreeRecipe* r = book.find(name);
+        if (!r->card.set) continue;
+        ++cards;
+        const LeafCardAtlas at = leafCardAtlas(r->card, 11u);
+        const int n = at.tiles, W = at.albedo.width, H = at.albedo.height, tw = W / n, th = H / n;
+        int edge = 0, emptyTiles = 0;
+        double coverage = 0;
+        for (int t = 0; t < n * n; ++t) {
+            long covered = 0;
+            for (int y = 0; y < th; ++y)
+                for (int x = 0; x < tw; ++x) {
+                    const uint8_t a = at.albedo.pixels[(static_cast<std::size_t>((t / n) * th + y) * W + (t % n) * tw + x) * 4 + 3];
+                    if (a == 0) continue;
+                    ++covered;
+                    if (x < 2 || y < 2 || x >= tw - 2 || y >= th - 2) ++edge;
+                }
+            if (covered == 0) ++emptyTiles;
+            coverage += covered / double(tw * th);
+        }
+        std::printf("    [cards] %-8s %s: %dx%d atlas of %d, %.0f%% covered, %d texels on a tile's edge\n", name.c_str(),
+                    r->card.shape.c_str(), W, H, n * n, 100.0 * coverage / (n * n), edge);
+        CHECK(emptyTiles == 0);
+        CHECK(edge == 0);
+        CHECK(coverage / (n * n) > 0.04);
+        if (const char* dir = std::getenv("RT_CARD_DUMP")) {
+            Image img(W, H);
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    const uint8_t* p = &at.albedo.pixels[(static_cast<std::size_t>(y) * W + x) * 4];
+                    const double a = p[3] / 255.0, b = p[0] / 255.0;
+                    const Vec3 leaf = Vec3(0.20, 0.42, 0.12) * b, bg(0.55, 0.55, 0.58);
+                    img.setPixel(x, H - 1 - y, bg * (1.0 - a) + leaf * a);
+                }
+            img.writePng(std::string(dir) + "/card_" + name + ".png");
+        }
+    }
+    CHECK(cards >= 3);
 }

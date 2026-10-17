@@ -36,7 +36,7 @@ const std::vector<Field>& fields() {
         {"barkVScale", &TreeParams::barkVScale}, {"leaves", nullptr, nullptr, &TreeParams::leaves},
         {"leafSize", &TreeParams::leafSize}, {"leavesPerTip", nullptr, &TreeParams::leavesPerTip},
         {"leafThickness", &TreeParams::leafThickness}, {"leafClump", &TreeParams::leafClump},
-        {"maxLeafCards", nullptr, &TreeParams::maxLeafCards},
+        {"maxLeafCards", nullptr, &TreeParams::maxLeafCards}, {"cardTiles", nullptr, &TreeParams::cardTiles},
     };
     return v;
 }
@@ -132,6 +132,7 @@ TreeMesh growRecipeTree(const TreeRecipe& r, uint32_t seed, const std::map<std::
     TreeParams p = drawTreeParams(r, seed, &vars);
     for (const auto& [name, v] : overrides)
         if (!setTreeParam(p, name, v)) vars[name] = v;   // (a var's name: the lab may pin a grammar number too)
+    if (r.card.set) p.cardTiles = std::max(1, r.card.variants);   // (the card atlas the recipe draws)
     if (r.rules.empty()) return growTree(p, seed);
     ParametricLSystem grammar;
     for (const TreeRecipe::Rule& rule : r.rules)

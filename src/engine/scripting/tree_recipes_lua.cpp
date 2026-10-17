@@ -6,6 +6,7 @@
 #include "../../log.h"
 
 #include <algorithm>
+#include <map>
 
 namespace engine {
 
@@ -80,6 +81,51 @@ bool readRanges(lua_State* L, int t, const char* key, std::vector<TreeRecipe::Ra
     return true;
 }
 
+// The `rules` list at field `key` of t: {predecessor, successor [, weight]} each.
+bool readRules(lua_State* L, int t, std::vector<RecipeRule>& out, const std::string& where, std::string* err) {
+    lua_getfield(L, t, "rules");
+    if (lua_istable(L, -1)) {
+        const int rt = lua_gettop(L), n = static_cast<int>(luaL_len(L, rt));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, rt, i);
+            const int e = lua_gettop(L);
+            RecipeRule rule;
+            if (lua_istable(L, e)) {
+                lua_rawgeti(L, e, 1);
+                if (lua_isstring(L, -1)) rule.predecessor = lua_tostring(L, -1);
+                lua_rawgeti(L, e, 2);
+                if (lua_isstring(L, -1)) rule.successor = lua_tostring(L, -1);
+                lua_rawgeti(L, e, 3);
+                rule.weight = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : numField(L, e, "weight", 1.0);
+                lua_pop(L, 3);
+            }
+            lua_pop(L, 1);
+            if (rule.predecessor.empty() || rule.successor.empty()) {
+                lua_pop(L, 1);
+                return fail(err, where + ".rules[" + std::to_string(i) + "]: not {predecessor, successor [, weight]}");
+            }
+            out.push_back(rule);
+        }
+    }
+    lua_pop(L, 1);
+    return true;
+}
+
+// Every $name a grammar uses has a var.
+bool checkVars(const std::string& axiom, const std::vector<RecipeRule>& rules, const std::vector<RecipeRange>& vars,
+               const std::string& where, std::string* err) {
+    std::map<std::string, double> mid;
+    for (const RecipeRange& g : vars) mid[g.name] = 0.5 * (g.lo + g.hi);
+    std::string missing;
+    substituteVars(axiom, mid, &missing);
+    for (const RecipeRule& rule : rules) {
+        substituteVars(rule.predecessor, mid, &missing);
+        substituteVars(rule.successor, mid, &missing);
+    }
+    if (!missing.empty()) return fail(err, where + ": $" + missing + " has no var");
+    return true;
+}
+
 }  // namespace
 
 bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
@@ -112,41 +158,45 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
                 return fail(err, where + ".params: unknown param '" + g.name + "'");
             }
         }
-        lua_getfield(L, t, "rules");
+        if (!readRules(L, t, r.rules, where, err) || !checkVars(r.axiom, r.rules, r.vars, where, err)) {
+            lua_settop(L, base);
+            return false;
+        }
+        // THE LEAF CARD (leaf_card.h): a 2D twig grammar and its leaf
+        lua_getfield(L, t, "card");
         if (lua_istable(L, -1)) {
-            const int rt = lua_gettop(L), n = static_cast<int>(luaL_len(L, rt));
-            for (int i = 1; i <= n; ++i) {
-                lua_rawgeti(L, rt, i);
-                const int e = lua_gettop(L);
-                TreeRecipe::Rule rule;
-                if (lua_istable(L, e)) {
-                    lua_rawgeti(L, e, 1);
-                    if (lua_isstring(L, -1)) rule.predecessor = lua_tostring(L, -1);
-                    lua_rawgeti(L, e, 2);
-                    if (lua_isstring(L, -1)) rule.successor = lua_tostring(L, -1);
-                    lua_rawgeti(L, e, 3);
-                    rule.weight = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : numField(L, e, "weight", 1.0);
-                    lua_pop(L, 3);
-                }
-                lua_pop(L, 1);
-                if (rule.predecessor.empty() || rule.successor.empty()) {
-                    lua_settop(L, base);
-                    return fail(err, where + ".rules[" + std::to_string(i) + "]: not {predecessor, successor [, weight]}");
-                }
-                r.rules.push_back(rule);
+            const int ct = lua_gettop(L);
+            LeafCardSpec& cs = r.card;
+            cs.set = true;
+            const std::string cw = where + ".card";
+            if (const std::string a = strField(L, ct, "axiom"); !a.empty()) cs.axiom = a;
+            cs.iterations = static_cast<int>(numField(L, ct, "iterations", cs.iterations));
+            cs.variants = std::clamp(static_cast<int>(numField(L, ct, "variants", cs.variants)), 1, 4);
+            cs.stemWidth = numField(L, ct, "stem_width", cs.stemWidth);
+            cs.cup = numField(L, ct, "cup", cs.cup);
+            cs.shadeJitter = numField(L, ct, "shade_jitter", cs.shadeJitter);
+            if (!readRules(L, ct, cs.rules, cw, err) || !readRanges(L, ct, "vars", cs.vars, cw, err) ||
+                !checkVars(cs.axiom, cs.rules, cs.vars, cw, err)) {
+                lua_settop(L, base);
+                return false;
+            }
+            lua_getfield(L, ct, "leaf");
+            if (lua_istable(L, -1)) {
+                const int lt = lua_gettop(L);
+                if (const std::string s = strField(L, lt, "shape"); !s.empty()) cs.shape = s;
+                cs.leafLength = numField(L, lt, "length", cs.leafLength);
+                cs.leafWidth = numField(L, lt, "width", cs.leafWidth);
+                cs.lobes = static_cast<int>(numField(L, lt, "lobes", cs.lobes));
+                cs.teeth = static_cast<int>(numField(L, lt, "teeth", cs.teeth));
+            }
+            lua_pop(L, 1);
+            static const char* kShapes[] = {"oval", "lobed", "serrate", "needle", "leaflet"};
+            if (std::find(std::begin(kShapes), std::end(kShapes), cs.shape) == std::end(kShapes)) {
+                lua_settop(L, base);
+                return fail(err, cw + ".leaf: unknown shape '" + cs.shape + "'");
             }
         }
         lua_pop(L, 1);
-        // every $name the grammar uses has a var
-        std::map<std::string, double> mid;
-        for (const TreeRecipe::Range& g : r.vars) mid[g.name] = 0.5 * (g.lo + g.hi);
-        std::string missing;
-        substituteVars(r.axiom, mid, &missing);
-        for (const TreeRecipe::Rule& rule : r.rules) {
-            substituteVars(rule.predecessor, mid, &missing);
-            substituteVars(rule.successor, mid, &missing);
-        }
-        if (!missing.empty()) { lua_settop(L, base); return fail(err, where + ": $" + missing + " has no var"); }
         got.push_back(std::move(r));
         lua_pop(L, 1);
     }

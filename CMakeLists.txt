@@ -88,6 +88,7 @@ add_library(engine_core STATIC
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
     src/engine/procgen/tree_recipe.cpp
+    src/engine/procgen/leaf_card.cpp
     src/engine/procgen/surface_maps.cpp
     src/engine/procgen/vehicle_mesh.cpp
     src/engine/procgen/vehicle/car_mesh.cpp

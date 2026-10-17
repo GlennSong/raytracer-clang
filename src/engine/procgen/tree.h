@@ -80,6 +80,8 @@ struct TreeParams {
                                     //   just twig tips), to fill out the ends; 0 = tips only
     float leafClump     = 0.9f;     // jitter cards into the gaps around a node, in
                                     //   leafSize units (canopy-volume fill); 0 = on-node
+    int   cardTiles     = 1;        // the leaf texture is an atlas of cardTiles x cardTiles cards (leaf_card.h): each
+                                    //   card picks one
     int   maxLeafCards  = 6000;     // hard budget: stop emitting cluster cards past
                                     //   this, so one tree can't blow up the triangle count
 

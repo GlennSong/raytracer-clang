@@ -22,25 +22,47 @@
 
 namespace engine {
 
+// A grammar rule and a drawn number: the tree's and its leaf card's.
+struct RecipeRule {
+    std::string predecessor;     // "A(l)" or guarded "A(l):l>0.5"
+    std::string successor;
+    double weight = 1.0;
+};
+struct RecipeRange {
+    std::string name;
+    double lo = 0, hi = 0;       // lo == hi: a fixed number
+};
+
+// THE LEAF CARD (leaf_card.h): a 2D twig grammar and the leaf shape it draws at every L.
+struct LeafCardSpec {
+    bool set = false;                     // the recipe has a card (else the generic leaf cluster)
+    std::string axiom = "S(5)";
+    int iterations = 6;
+    std::vector<RecipeRule> rules;
+    std::vector<RecipeRange> vars;        // drawn per card variant
+    std::string shape = "oval";           // oval | lobed | serrate | needle | leaflet
+    double leafLength = 0.30, leafWidth = 0.14;   // a leaf at L(1), in the grammar's units
+    int lobes = 3;                        // lobed: lobes down each side
+    int teeth = 9;                        // serrate: teeth down each side
+    double stemWidth = 0.012;             // the twig's stroke
+    double cup = 0.5;                     // how far a leaf's normal tips across it (0: flat)
+    double shadeJitter = 0.18;            // leaf-to-leaf brightness variation
+    int variants = 2;                     // cards a side of the atlas
+};
+
 struct TreeRecipe {
     std::string name;
     std::string axiom = "A(1.6)";   // module literals once its $vars are substituted
     int iterations = 5;
-    struct Rule {
-        std::string predecessor;     // "A(l)" or guarded "A(l):l>0.5"
-        std::string successor;
-        double weight = 1.0;
-    };
+    using Rule = RecipeRule;
     std::vector<Rule> rules;         // empty: the built-in grammar (growTree) from the params
-    struct Range {
-        std::string name;
-        double lo = 0, hi = 0;       // lo == hi: a fixed number
-    };
+    using Range = RecipeRange;
     std::vector<Range> params;       // TreeParams fields
     std::vector<Range> vars;         // $names in the rules and the axiom
     std::string bark = "oak";        // the bark maps' style (tree.h barkStyleFromName)
     Vec3 barkColor{0.33, 0.24, 0.16}, barkColorHi{0.33, 0.24, 0.16};   // drawn between
     Vec3 leafColor{0.19, 0.44, 0.13}, leafColorHi{0.19, 0.44, 0.13};
+    LeafCardSpec card;
 };
 
 class TreeRecipeBook {

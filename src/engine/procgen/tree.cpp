@@ -380,11 +380,14 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
 // `side`, shaded with `normal`.
 void addLeafQuad(RenderMesh& mesh, const Vec3& at, const Vec3& forward,
                  const Vec3& side, const Vec3& normal, float w, float len,
-                 const Vec3& color) {
+                 const Vec3& color, int tiles = 1, int tile = 0) {
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
     Vec3 corners[4] = {at - side * w, at + side * w,
                        at + side * w + forward * len, at - side * w + forward * len};
-    float uv[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    // (an atlas of tiles x tiles cards: this card's cell)
+    const float ts = 1.0f / static_cast<float>(std::max(1, tiles));
+    const float u0 = (tile % std::max(1, tiles)) * ts, v0 = (tile / std::max(1, tiles)) * ts;
+    float uv[4][2] = {{u0, v0}, {u0 + ts, v0}, {u0 + ts, v0 + ts}, {u0, v0 + ts}};
     for (int i = 0; i < 4; i++) {
         Vertex v(corners[i], normal, side, uv[i][0], uv[i][1]);
         v.color = color;
@@ -398,14 +401,14 @@ void addLeafQuad(RenderMesh& mesh, const Vec3& at, const Vec3& forward,
 // from any viewing angle instead of vanishing edge-on. The texture is a clump of
 // many leaves, so one cross reads as a dense tuft.
 void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
-             const Vec3& color) {
+             const Vec3& color, int tiles = 1, int tile = 0) {
     Vec3 forward = normalize(dir);
     Vec3 ref = std::abs(forward.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
     Vec3 side = normalize(cross(forward, ref));
     Vec3 normal = normalize(cross(forward, side));
     float w = size * 0.5f, len = size * 1.7f;
-    addLeafQuad(mesh, at, forward, side, normal, w, len, color);
-    addLeafQuad(mesh, at, forward, normal, side, w, len, color);   // crossed 90°
+    addLeafQuad(mesh, at, forward, side, normal, w, len, color, tiles, tile);
+    addLeafQuad(mesh, at, forward, normal, side, w, len, color, tiles, tile);   // crossed 90°
 }
 
 }  // namespace
@@ -554,8 +557,13 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 Vec3 dir = r.transformDirection(n.heading);
                 Vec3 jpos = n.pos + Vec3(off(rng), off(rng), off(rng)) *
                                         (params.leafSize * params.leafClump);
+                int tile = 0;
+                if (params.cardTiles > 1) {
+                    std::uniform_int_distribution<int> pick(0, params.cardTiles * params.cardTiles - 1);
+                    tile = pick(rng);
+                }
                 addLeaf(out.leaves, jpos, dir, params.leafSize,
-                        params.leafColor * vary(rng));
+                        params.leafColor * vary(rng), params.cardTiles, tile);
                 cards++;
             }
             if (cards >= params.maxLeafCards) break;

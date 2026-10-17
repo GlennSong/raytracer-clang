@@ -85,6 +85,7 @@
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
 #include "procgen/tree_recipe.h"
+#include "procgen/leaf_card.h"
 #include "procgen/surface_maps.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
@@ -868,6 +869,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
     std::string barkStyle = ent.contains("tree") ? ent["tree"].value("barkStyle", std::string()) : std::string();
     TreeMesh tm;
     bool fromRecipe = false;
+    LeafCardAtlas cardAtlas;
 #ifdef RT_ENABLE_SCRIPTING
     if (ent.contains("tree") && ent["tree"].contains("recipe")) {
         std::string path;
@@ -882,6 +884,11 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
                     if (it.value().is_number()) overrides[it.key()] = it.value().get<double>();
             tm = growRecipeTree(*r, seed, overrides);
             if (barkStyle.empty()) barkStyle = r->bark;
+            if (r->card.set) {   // the species' own leaf cards, drawn by its card grammar (leaf_card.h)
+                uint32_t h = 2166136261u;
+                for (unsigned char ch : r->name) h = (h ^ ch) * 16777619u;
+                cardAtlas = leafCardAtlas(r->card, h);
+            }
             fromRecipe = true;
         } else {
             LOG_WARN << "tree e" << index << ": no recipe '" << name << "' in tree_recipes.lua";
@@ -941,7 +948,12 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         r.mesh = assets.acquireMesh(tm.leaves, key + ":leaves");
         r.material.albedo = Vec3(1, 1, 1);   // leaf color is baked into vertex color
         r.material.roughness = 0.7f;
-        r.material.albedoMap = upload(leafTexture(128));
+        if (!cardAtlas.albedo.pixels.empty()) {
+            r.material.albedoMap = upload(cardAtlas.albedo);
+            r.material.normalMap = upload(cardAtlas.normal);
+        } else {
+            r.material.albedoMap = upload(leafTexture(128));
+        }
         r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
         world.add<Renderable>(e, r);
     }
