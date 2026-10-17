@@ -866,10 +866,18 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
 
     // A RECIPE TREE (tree_recipe.h; the tree lab): "tree": {"recipe": "oak", "seed": 3, "set": {"lobeDepth": 0}} --
     // the species from assets/scripts/tree_recipes.lua, the seed drawing within its ranges, `set` pinning knobs
+    //
+    // ITS LEVELS OF DETAIL (Glenn, 2026-10-17: "hero trees have everything wielded. And then mid level doesn't have
+    // to wield them all and then furthest would be cards"): a recipe with near foliage (a leaf kit or sprays) and no
+    // `foliage` pinned grows TWICE -- the HERO (joints at every fork of wood, leaves one by one or sprays) drawn to
+    // kLodHeroOut, and the MID (joints on the trunk and main limbs only, crossed cards) from there out, the two
+    // crossfading per pixel over the band (FLAG_LOD_BAND) and each culled outside its own range. "lod": false keeps
+    // the one tree (the lab's comparison rows pin foliage and get the one they pin).
+    constexpr float kLodBand0 = 24.0f, kLodBand1 = 30.0f;
     std::string barkStyle = ent.contains("tree") ? ent["tree"].value("barkStyle", std::string()) : std::string();
-    TreeMesh tm;
+    struct Level { TreeMesh tm; LeafCardAtlas atlas; float in0 = 0, in1 = 0, out0 = 0, out1 = 0; Real minD = 0, maxD = 0; };
+    std::vector<Level> levels;
     bool fromRecipe = false;
-    LeafCardAtlas cardAtlas;
 #ifdef RT_ENABLE_SCRIPTING
     if (ent.contains("tree") && ent["tree"].contains("recipe")) {
         std::string path;
@@ -882,16 +890,40 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
             if (ent["tree"].contains("set") && ent["tree"]["set"].is_object())
                 for (auto it = ent["tree"]["set"].begin(); it != ent["tree"]["set"].end(); ++it)
                     if (it.value().is_number()) overrides[it.key()] = it.value().get<double>();
-            tm = growRecipeTree(*r, seed, overrides);
             if (barkStyle.empty()) barkStyle = r->bark;
             uint32_t h = 2166136261u;
             for (unsigned char ch : r->name) h = (h ^ ch) * 16777619u;
-            if (tm.foliage == 2)   // NEAR LEAVES: each leaf / blossom one whole picture of the species' (foliage_kit.h)
-                cardAtlas = foliageElementAtlas(r->card, r->leafKit.blossomSize > 0.0, h);
-            else if (tm.foliage == 1)   // NEAR FOLIAGE: sprays wearing the species' strands (foliage_kit.h), tiles its shape
-                cardAtlas = leafCardAtlas(r->strand, h, std::max(32, static_cast<int>(std::lround(436.0 * r->spray.aspect))), 436);
-            else if (r->card.set)   // the species' own leaf cards, drawn by its card grammar (leaf_card.h)
-                cardAtlas = leafCardAtlas(r->card, h);
+            auto atlasFor = [&](const TreeMesh& tm) {
+                if (tm.foliage == 2)   // NEAR LEAVES: each leaf / blossom one whole picture of the species' (foliage_kit.h)
+                    return foliageElementAtlas(r->card, r->leafKit.blossomSize > 0.0, h);
+                if (tm.foliage == 1)   // NEAR FOLIAGE: sprays wearing the species' strands (foliage_kit.h), tiles its shape
+                    return leafCardAtlas(r->strand, h, std::max(32, static_cast<int>(std::lround(436.0 * r->spray.aspect))), 436);
+                if (r->card.set)       // the species' own leaf cards, drawn by its card grammar (leaf_card.h)
+                    return leafCardAtlas(r->card, h);
+                return LeafCardAtlas{};
+            };
+            const bool nearKit = r->leafKit.set || (r->spray.set && r->strand.set);
+            const bool lod = nearKit && !overrides.count("foliage") && ent["tree"].value("lod", true);
+            if (lod) {
+                std::map<std::string, double> hero = overrides, mid = overrides;
+                hero["foliage"] = r->leafKit.set ? 2.0 : 1.0;
+                mid["foliage"] = 0.0;
+                if (!mid.count("jointMinRadius")) mid["jointMinRadius"] = 0.10;   // (the trunk and main limbs)
+                Level H, M;
+                H.tm = growRecipeTree(*r, seed, hero);
+                H.out0 = kLodBand0; H.out1 = kLodBand1; H.maxD = kLodBand1 + 8.0;
+                M.tm = growRecipeTree(*r, seed, mid);
+                M.in0 = kLodBand0; M.in1 = kLodBand1; M.minD = kLodBand0 - 8.0;
+                H.atlas = atlasFor(H.tm);
+                M.atlas = atlasFor(M.tm);
+                levels.push_back(std::move(H));
+                levels.push_back(std::move(M));
+            } else {
+                Level L;
+                L.tm = growRecipeTree(*r, seed, overrides);
+                L.atlas = atlasFor(L.tm);
+                levels.push_back(std::move(L));
+            }
             fromRecipe = true;
         } else {
             LOG_WARN << "tree e" << index << ": no recipe '" << name << "' in tree_recipes.lua";
@@ -899,76 +931,97 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         }
     }
 #endif
-    if (!fromRecipe) tm = growTree(tp, seed);
+    if (!fromRecipe) {
+        Level L;
+        L.tm = growTree(tp, seed);
+        levels.push_back(std::move(L));
+    }
     if (barkStyle.empty()) barkStyle = "oak";
-    if (tm.branches.vertices.empty()) return;
+    if (levels.empty() || levels.front().tm.branches.vertices.empty()) return;
 
     auto upload = [&](const TextureData& td) -> TextureHandle {
         if (td.pixels.empty()) return TextureHandle{};
         return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
     };
-
-    const std::string key = "tree:" + std::to_string(index) + ":" + std::to_string(seed);
-
-    // Bark entity: textured, collidable. It is the tree's *document* entity —
-    // it carries the SourceSpec (with the recipe) so the whole tree round-trips
-    // through the LevelWriter; the leaf entity is a runtime companion (no
-    // SourceSpec) regenerated from the recipe on load.
+    // the bark's maps, once for all its levels
+    TextureHandle barkAlbedo, barkNormal;
     {
-        Entity e = world.create();
-        createEntityCommon(e, ent, world);
-
-        SourceSpec spec = buildSourceSpec(ent, "tree");
-        if (ent.contains("tree")) spec.recipe = ent["tree"].dump();
-        world.add<SourceSpec>(e, spec);
-
-        Renderable r;
-        r.mesh = assets.acquireMesh(tm.branches, key + ":bark");
-        r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
-        r.material.roughness = 1.0f;
-        // Per-species bark relief: value pattern (modulates vertex color) + normal map.
         // THE BARK by kind (material_recipes.h: furrowed, plated, smooth, papery, ringed; the old style names map on),
         // one tile a kind (cached), else the old per-style maps
         BarkKind barkKind;
         if (barkKindFromName(barkStyle, barkKind)) {
             const BarkTextures bt = barkTextures(barkKind, 1u);
-            r.material.albedoMap = upload(bt.albedo);
-            r.material.normalMap = upload(bt.normal);
+            barkAlbedo = upload(bt.albedo);
+            barkNormal = upload(bt.normal);
         } else {
             BarkMaps bm = barkMaps(barkStyleFromName(barkStyle), 256, seed);
-            r.material.albedoMap = upload(bm.albedo);
-            r.material.normalMap = upload(bm.normal);
+            barkAlbedo = upload(bm.albedo);
+            barkNormal = upload(bm.normal);
         }
-        if (ent.contains("material")) applyMaterial(ent["material"], r.material);
-        world.add<Renderable>(e, r);
-
-        MeshCollider mc;
-        mc.vertices = tm.collisionVertices;
-        mc.indices = tm.collisionIndices;
-        mc.surface = ColliderSurface::Wood;
-        if (ent.contains("physics"))
-            mc.friction = ent["physics"].value("friction", mc.friction);
-        world.add<MeshCollider>(e, mc);
     }
-
-    // Leaf entity: alpha-cut cards at the same transform, no collision.
-    if (!tm.leaves.vertices.empty()) {
-        Entity e = world.create();
-        createEntityCommon(e, ent, world);
-
-        Renderable r;
-        r.mesh = assets.acquireMesh(tm.leaves, key + ":leaves");
-        r.material.albedo = Vec3(1, 1, 1);   // leaf color is baked into vertex color
-        r.material.roughness = 0.7f;
-        if (!cardAtlas.albedo.pixels.empty()) {
-            r.material.albedoMap = upload(cardAtlas.albedo);
-            r.material.normalMap = upload(cardAtlas.normal);
-        } else {
-            r.material.albedoMap = upload(leafTexture(128));
+    auto banded = [](RenderMaterial& m, Renderable& r, const Level& L) {
+        if (L.in1 > L.in0 || L.out1 > L.out0) {
+            m.flags |= RenderMaterial::FLAG_LOD_BAND;
+            m.lodIn0 = L.in0; m.lodIn1 = L.in1; m.lodOut0 = L.out0; m.lodOut1 = L.out1;
         }
-        r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
-        if (tm.foliage >= 1) r.material.flags |= RenderMaterial::FLAG_TWO_SIDED;   // (sprays, leaves: one winding)
-        world.add<Renderable>(e, r);
+        r.minDistance = L.minD;
+        r.drawDistance = L.maxD;
+    };
+
+    for (std::size_t li = 0; li < levels.size(); ++li) {
+        const Level& L = levels[li];
+        const TreeMesh& tm = L.tm;
+        const std::string key = "tree:" + std::to_string(index) + ":" + std::to_string(seed) + ":" + std::to_string(li);
+        // Bark entity: textured. The FIRST level's is the tree's *document* entity -- it carries the SourceSpec (with
+        // the recipe) so the whole tree round-trips through the LevelWriter -- and its collider (the LAST level's mesh:
+        // the cheapest wood, the same limbs). The others are runtime companions regenerated from the recipe on load.
+        {
+            Entity e = world.create();
+            createEntityCommon(e, ent, world);
+            if (li == 0) {
+                SourceSpec spec = buildSourceSpec(ent, "tree");
+                if (ent.contains("tree")) spec.recipe = ent["tree"].dump();
+                world.add<SourceSpec>(e, spec);
+            }
+            Renderable r;
+            r.mesh = assets.acquireMesh(tm.branches, key + ":bark");
+            r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
+            r.material.roughness = 1.0f;
+            r.material.albedoMap = barkAlbedo;
+            r.material.normalMap = barkNormal;
+            if (ent.contains("material")) applyMaterial(ent["material"], r.material);
+            banded(r.material, r, L);
+            world.add<Renderable>(e, r);
+            if (li == 0) {
+                const TreeMesh& phys = levels.back().tm;
+                MeshCollider mc;
+                mc.vertices = phys.collisionVertices;
+                mc.indices = phys.collisionIndices;
+                mc.surface = ColliderSurface::Wood;
+                if (ent.contains("physics"))
+                    mc.friction = ent["physics"].value("friction", mc.friction);
+                world.add<MeshCollider>(e, mc);
+            }
+        }
+        // Leaf entity: alpha-cut cards (or sprays, or leaves one by one) at the same transform, no collision.
+        if (!tm.leaves.vertices.empty()) {
+            Entity e = world.create();
+            createEntityCommon(e, ent, world);
+            Renderable r;
+            r.mesh = assets.acquireMesh(tm.leaves, key + ":leaves");
+            r.material.albedo = Vec3(1, 1, 1);   // leaf color is baked into vertex color
+            r.material.roughness = 0.7f;
+            if (!L.atlas.albedo.pixels.empty()) {
+                r.material.albedoMap = upload(L.atlas.albedo);
+                r.material.normalMap = upload(L.atlas.normal);
+            } else {
+                r.material.albedoMap = upload(leafTexture(128));
+            }
+            r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
+            if (tm.foliage >= 1) r.material.flags |= RenderMaterial::FLAG_TWO_SIDED;   // (sprays, leaves: one winding)
+            banded(r.material, r, L);
+            world.add<Renderable>(e, r);
+        }
     }
 }
 
