@@ -47,6 +47,7 @@ struct LeafCardSpec {
     double stemWidth = 0.012;             // the twig's stroke
     double cup = 0.5;                     // how far a leaf's normal tips across it (0: flat)
     double shadeJitter = 0.18;            // leaf-to-leaf brightness variation
+    double tipBright = 0.0;               // the new growth: leaves lighter toward the card's far end (0 none)
     int variants = 2;                     // cards a side of the atlas
 };
 

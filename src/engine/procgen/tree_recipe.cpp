@@ -35,7 +35,7 @@ const std::vector<Field>& fields() {
         {"radiusScale", &TreeParams::radiusScale}, {"ringSegments", nullptr, &TreeParams::ringSegments},
         {"barkVScale", &TreeParams::barkVScale}, {"leaves", nullptr, nullptr, &TreeParams::leaves},
         {"leafSize", &TreeParams::leafSize}, {"leavesPerTip", nullptr, &TreeParams::leavesPerTip},
-        {"leafThickness", &TreeParams::leafThickness}, {"leafClump", &TreeParams::leafClump},
+        {"leafThickness", &TreeParams::leafThickness}, {"leafClump", &TreeParams::leafClump}, {"leafPitch", &TreeParams::leafPitch},
         {"maxLeafCards", nullptr, &TreeParams::maxLeafCards}, {"cardTiles", nullptr, &TreeParams::cardTiles},
     };
     return v;

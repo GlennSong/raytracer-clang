@@ -175,6 +175,7 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             cs.stemWidth = numField(L, ct, "stem_width", cs.stemWidth);
             cs.cup = numField(L, ct, "cup", cs.cup);
             cs.shadeJitter = numField(L, ct, "shade_jitter", cs.shadeJitter);
+            cs.tipBright = numField(L, ct, "tip_bright", cs.tipBright);
             if (!readRules(L, ct, cs.rules, cw, err) || !readRanges(L, ct, "vars", cs.vars, cw, err) ||
                 !checkVars(cs.axiom, cs.rules, cs.vars, cw, err)) {
                 lua_settop(L, base);

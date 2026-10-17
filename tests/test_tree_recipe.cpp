@@ -216,3 +216,64 @@ TEST_CASE(leaf_cards_are_drawn_whole_inside_the_card) {
     }
     CHECK(cards >= 3);
 }
+
+// EVERY PART HANGS ON THE TREE (Glenn: "some of the spruce leaves seem to be floating and not attached to anything. We
+// should validate that all of the geometry makes sense for a tree"): every limb of the skeleton starts where another
+// ends (or at the foot); every leaf card's foot is on a twig's bark; every bark vertex lies on a limb -- within its
+// radius swollen by the flare, the lobes, the collar and a crotch's stub, never metres out in the air.
+TEST_CASE(every_part_of_a_tree_hangs_on_it) {
+    const TreeRecipeBook book = shipped();
+    auto segDist = [](const Vec3& p, const TreeMesh::Limb& l, float& radAt) {
+        const Vec3 ab = l.b - l.a;
+        const Real L2 = std::max(Real(1e-12), dot(ab, ab));
+        const Real t = std::clamp(dot(p - l.a, ab) / L2, Real(0), Real(1));
+        radAt = l.ra + (l.rb - l.ra) * static_cast<float>(t);
+        return (p - (l.a + ab * t)).length();
+    };
+    for (const std::string& name : book.names())
+        for (uint32_t seed : {1u, 4u}) {
+            const TreeMesh t = growRecipeTree(*book.find(name), seed);
+            CHECK(!t.limbs.empty());
+            // connected: every limb's start is the foot or another limb's end
+            int loose = 0;
+            for (const TreeMesh::Limb& l : t.limbs) {
+                bool joined = (l.a - t.limbs.front().a).length() < 1e-6;
+                for (const TreeMesh::Limb& m : t.limbs) joined = joined || (m.b - l.a).length() < 1e-6;
+                loose += !joined;
+            }
+            // the cards: each quad's foot (its first two corners' midpoint) on a twig
+            int floating = 0;
+            Real worstCard = 0;
+            for (std::size_t q = 0; q + 3 < t.leaves.vertices.size(); q += 4) {
+                const Vec3 foot = (t.leaves.vertices[q].position + t.leaves.vertices[q + 1].position) * 0.5;
+                Real best = 1e9;
+                for (const TreeMesh::Limb& l : t.limbs) {
+                    float r = 0;
+                    const Real d = segDist(foot, l, r) - r;
+                    best = std::min(best, d);
+                }
+                worstCard = std::max(worstCard, best);
+                floating += best > 0.03;
+            }
+            // the bark: every 7th vertex near a limb
+            int adrift = 0;
+            Real worstBark = 0;
+            for (std::size_t v = 0; v < t.branches.vertices.size(); v += 7) {
+                const Vec3 p = t.branches.vertices[v].position;
+                Real best = 1e9;
+                for (const TreeMesh::Limb& l : t.limbs) {
+                    float r = 0;
+                    const Real d = segDist(p, l, r);
+                    best = std::min(best, d - (4.6 * r + 0.08));
+                }
+                worstBark = std::max(worstBark, best);
+                adrift += best > 0;
+            }
+            if (seed == 1)
+                std::printf("    [attached] %-8s %zu limbs (%d loose), %zu cards (%d off a twig, worst %.3f m), bark %d adrift\n",
+                            name.c_str(), t.limbs.size(), loose, t.leaves.vertices.size() / 8, floating, worstCard, adrift);
+            CHECK(loose == 0);
+            CHECK(floating == 0);
+            CHECK(adrift == 0);
+        }
+}

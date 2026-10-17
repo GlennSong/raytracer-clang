@@ -565,6 +565,9 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             add(baseP + dir * L + Vec3(0, -0.02f, 0), tipR);
             Vec3 color = params.barkColor * vary(rng);
             addCurvedBranch(out.branches, rp, color, params.ringSegments, vScale, 3);
+            out.limbs.push_back({baseP, rp.points.front(), baseR, rp.radius.front()});   // (the root's own skeleton)
+            for (std::size_t q = 0; q + 1 < rp.points.size(); ++q)
+                out.limbs.push_back({rp.points[q], rp.points[q + 1], rp.radius[q], rp.radius[q + 1]});
         }
     }
 
@@ -581,14 +584,26 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             bool leafy = n.isTip ||
                          (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
             if (!leafy) continue;
+            // the twig the cards hang on: this node's internode (parent to node), or for the root its heading
+            const Vec3 a = n.parent >= 0 ? nodes[n.parent].pos : n.pos - n.heading * 0.1;
+            Vec3 h = n.pos - a;
+            const double segLen = h.length();
+            h = segLen > 1e-9 ? h * (1.0 / segLen) : n.heading;
+            const Vec3 ref = std::abs(h.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+            const Vec3 s1 = normalize(cross(h, ref)), s2 = normalize(cross(h, s1));
+            std::uniform_real_distribution<float> along(1.0f - std::clamp(params.leafClump, 0.0f, 1.0f), 1.0f);
             for (int j = 0; j < params.leavesPerTip; j++) {
                 if (cards >= params.maxLeafCards) break;
-                // Spiral the leaves around the heading and pitch them outward.
-                double roll = (params.phyllotaxis * j) * PI / 180.0;
-                Mat4 r = Mat4::rotateY(roll) * Mat4::rotateX((0.7 + tilt(rng)));
-                Vec3 dir = r.transformDirection(n.heading);
-                Vec3 jpos = n.pos + Vec3(off(rng), off(rng), off(rng)) *
-                                        (params.leafSize * params.leafClump);
+                // spiralled round the twig, each card's FOOT on the twig's bark somewhere along its last stretch, the
+                // card tilted out from the twig by leafPitch (about the twig's own axis: a sideways limb's cards lie
+                // along it, not across it)
+                const double roll = (params.phyllotaxis * j) * PI / 180.0 + off(rng) * 0.4;
+                const Vec3 o = s1 * std::cos(roll) + s2 * std::sin(roll);
+                const double pitch = (params.leafPitch * PI / 180.0) + tilt(rng) * 0.6;
+                const Vec3 dir = normalize(h * std::cos(pitch) + o * std::sin(pitch));
+                const float u = along(rng);
+                const float rad = (n.parent >= 0 ? nodes[n.parent].radius * (1.0f - u) : 0.0f) + n.radius * u;
+                const Vec3 jpos = a + (n.pos - a) * u + o * (rad * 0.9);
                 int tile = 0;
                 if (params.cardTiles > 1) {
                     std::uniform_int_distribution<int> pick(0, params.cardTiles * params.cardTiles - 1);
@@ -601,6 +616,9 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             if (cards >= params.maxLeafCards) break;
         }
     }
+
+    for (const SkeletonNode& n : nodes)
+        if (n.parent >= 0) out.limbs.push_back({nodes[n.parent].pos, n.pos, nodes[n.parent].radius, n.radius});
 
     // Collision = the bark geometry (positions + indices), branches only.
     out.collisionVertices.reserve(out.branches.vertices.size());

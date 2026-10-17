@@ -16,14 +16,16 @@
 --     trunk    flare lobes lobeDepth lobeHeight nodeSwell barkNoise twist rootCount rootSpread
 --     joints   collar (a side branch welds into its parent, flaring by this; 0 = overlapping tubes)
 --     girth    tipRadius pipeExponent radiusScale ringSegments
---     leaves   leaves leafSize leavesPerTip leafThickness leafClump maxLeafCards
+--     leaves   leaves leafSize leavesPerTip leafThickness leafClump (how far back along a twig its cards spread)
+--              leafPitch (deg a card tilts out from its twig) maxLeafCards
 --   bark                the bark texture: "oak" (furrows), "birch" (pale, lenticels), "pine" (plates)
 --   bark_color, leaf_color   {r, g, b} linear, or {{lo}, {hi}} drawn per tree
 --   card                THE LEAF CARD the tree's foliage wears (procgen/leaf_card.h): a small 2D twig grammar drawn by a
 --                       2D turtle -- F(len) a stem, +(a) -(a) turns, [ ] a side shoot, L(scale) a leaf -- and the leaf:
 --     axiom, iterations, rules, vars   as the tree's (vars drawn per card variant)
 --     leaf = { shape = "oval" | "lobed" | "serrate" | "needle" | "leaflet", length, width, lobes, teeth }
---     stem_width, cup (a leaf's curl about its midrib, 0 flat), shade_jitter, variants (cards a side of the atlas)
+--     stem_width, cup (a leaf's curl about its midrib, 0 flat), shade_jitter, tip_bright (lighter new growth toward
+--     the card's far end), variants (cards a side of the atlas)
 --
 -- The tree lab (assets/levels/tree_lab.json) grows each in a row of seeds; this file hot-reloads there.
 
@@ -122,20 +124,25 @@ tree_recipes = {
       flare = 0.6, lobes = {5, 8}, lobeDepth = 0.10, lobeHeight = 1.0, nodeSwell = 0.04, barkNoise = 0.05,
       twist = 0, rootCount = 4, rootSpread = 2.0, collar = 0.3,
       tipRadius = 0.010, pipeExponent = 2.4, radiusScale = 1.4, ringSegments = 8,
-      leafSize = {0.44, 0.54}, leavesPerTip = 5, leafThickness = 0.05, leafClump = 0.5, maxLeafCards = 14000,
+      leafSize = {0.40, 0.50}, leavesPerTip = 4, leafThickness = 0.07, leafClump = 1.0, leafPitch = {18, 30},
+      maxLeafCards = 16000,
     },
     bark = "pine",
     bark_color = { {0.22, 0.16, 0.12}, {0.28, 0.20, 0.15} },
     leaf_color = { {0.06, 0.16, 0.06}, {0.09, 0.21, 0.08} },
+    -- a SPRAY: a shoot with side shoots off it, each a bottlebrush -- needles all round the twig, so seen flat they
+    -- point every way off it, forward and back -- lighter at the tips where this year's growth is
     card = {
-      axiom = "S(14)", iterations = 15, variants = 2,
+      axiom = "M(4)", iterations = 14, variants = 2,
       rules = {
-        { "S(n):n>0",  "F(0.04)+($bend)[+(58)L(1)][-(58)L(1)][+(34)L(0.9)][-(34)L(0.9)]S(n-1)" },
-        { "S(n):n<=0", "F(0.02)L(0.8)" },
+        { "M(n):n>0",  "K(3)/(0)[+($side)K(6)][-($side)K(6)]M(n-1)" },
+        { "M(n):n<=0", "K(5)" },
+        { "K(n):n>0",  "F(0.026)+($bend)[+(78)L(1)][-(78)L(1)][+(52)L(0.95)][-(52)L(0.95)][+(108)L(0.75)][-(108)L(0.75)][+(26)L(0.85)][-(26)L(0.85)]K(n-1)" },
+        { "K(n):n<=0", "F(0.012)[+(20)L(0.7)][-(20)L(0.7)]L(0.75)" },
       },
-      vars = { bend = {-3, 3} },
-      leaf = { shape = "needle", length = 0.11, width = 0.012 },
-      stem_width = 0.010, cup = 0.3, shade_jitter = 0.25,
+      vars = { side = {32, 46}, bend = {-3, 3} },
+      leaf = { shape = "needle", length = 0.07, width = 0.008 },
+      stem_width = 0.008, cup = 0.3, shade_jitter = 0.25, tip_bright = 0.35,
     },
   },
 }

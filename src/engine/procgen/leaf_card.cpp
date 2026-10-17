@@ -177,6 +177,10 @@ LeafCardAtlas leafCardAtlas(const LeafCardSpec& spec, uint32_t seed, int tileW, 
                     if (std::fabs(across) > hw || hw <= 0.0) continue;
                     const double f = across / hw;   // -1 .. 1 across the leaf
                     float b = static_cast<float>(l.shade * (0.86 + 0.14 * t));
+                    if (spec.tipBright > 0.0) {   // the new growth at the shoots' ends: lighter up the card
+                        const double fy = std::clamp((l.base.y - minY) / std::max(1e-6, maxY - minY), 0.0, 1.0);
+                        b *= static_cast<float>(1.0 - spec.tipBright * (1.0 - fy * fy));
+                    }
                     if (std::fabs(f) < 0.07 && spec.shape != "needle") b *= 0.8f;   // the midrib
                     // cupped about the midrib: the normal tips across the leaf, in the card's (x, y) frame
                     const double tip = spec.cup * f;

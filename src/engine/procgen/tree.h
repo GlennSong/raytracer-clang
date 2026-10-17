@@ -82,8 +82,9 @@ struct TreeParams {
     int   leavesPerTip  = 4;
     float leafThickness = 0.045f;   // also leaf branches at/under this radius (not
                                     //   just twig tips), to fill out the ends; 0 = tips only
-    float leafClump     = 0.9f;     // jitter cards into the gaps around a node, in
-                                    //   leafSize units (canopy-volume fill); 0 = on-node
+    float leafClump     = 0.9f;     // how far back along the twig's last internode its cards spread (a fraction of
+                                    //   it; 0 = all at the node). Every card's foot is ON the twig's bark.
+    float leafPitch     = 40.0f;    // a card's tilt out from its twig (deg): 0 along it, 90 straight out
     int   cardTiles     = 1;        // the leaf texture is an atlas of cardTiles x cardTiles cards (leaf_card.h): each
                                     //   card picks one
     int   maxLeafCards  = 6000;     // hard budget: stop emitting cluster cards past
@@ -101,6 +102,10 @@ struct TreeParams {
 struct TreeMesh {
     RenderMesh branches;                  // generalized-cylinder bark (UVs + tangents)
     RenderMesh leaves;                    // textured leaf cards
+    // THE SKELETON it was skinned on: every internode, parent end to child end, with its radii (the validation that
+    // every leaf and every piece of bark hangs on the tree; later the LODs)
+    struct Limb { Vec3 a, b; float ra = 0, rb = 0; };
+    std::vector<Limb> limbs;
     std::vector<Vec3>     collisionVertices;
     std::vector<uint32_t> collisionIndices;
 };
