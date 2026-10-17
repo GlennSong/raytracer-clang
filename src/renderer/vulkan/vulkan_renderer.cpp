@@ -189,7 +189,7 @@ struct GlobalsUBO {
     float    terrainHorizon2[4];
     // The viewer's enclosure (SceneLighting::viewerBox*): A xyz centre, w half along u (0 = none); B xy the axis u
     // (x, z), z half across it, w half up. glassMode: x 1 = glass as a filter, 0 = the old glass (RT_GLASS=old),
-    // 2 = no glass (RT_GLASS=none, the reference for an A/B).
+    // 2 = no glass (RT_GLASS=none, the reference for an A/B); y the ceiling over the viewer (0: none).
     float    viewerBoxA[4];
     float    viewerBoxB[4];
     float    glassMode[4];
@@ -6713,7 +6713,8 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         B[2] = static_cast<float>(lighting.viewerBoxHalf.z);
         B[3] = static_cast<float>(lighting.viewerBoxHalf.y);
         impl->cpuGlobals.glassMode[0] = glassMode;
-        impl->cpuGlobals.glassMode[1] = impl->cpuGlobals.glassMode[2] = impl->cpuGlobals.glassMode[3] = 0.0f;
+        impl->cpuGlobals.glassMode[1] = lighting.viewerCeilingY;   // (0: none)
+        impl->cpuGlobals.glassMode[2] = impl->cpuGlobals.glassMode[3] = 0.0f;
     }
 
     // Procedural sky (ADR-0016) → skybox + analytic IBL. HDR equirect mode is a

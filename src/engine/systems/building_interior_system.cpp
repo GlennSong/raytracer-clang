@@ -56,6 +56,7 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
     // RenderSystem to merge (the street-lamp pattern). The shader already
     // loops point lights; interiors were the one place with none.
     ctx.view.lighting.interiorPoints.clear();
+    ctx.view.lighting.viewerCeilingY = 0;
     if (!resident_.empty()) {
         const CityBuildings* cb = nullptr;
         ctx.world.each<CityBuildings>(
@@ -87,6 +88,11 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
                 // follow them up).
                 const int nSt = static_cast<int>(storeys.size());
                 const int f = storeyOf(r, player.y);
+                // the ceiling over the player, while they are in this building (its windows mirror its panels)
+                if (cb->recordAt(xz, player.y) == &r && f >= 0 && f < nSt) {
+                    const StoreyPlan& sp = storeys[static_cast<std::size_t>(f)];
+                    ctx.view.lighting.viewerCeilingY = static_cast<float>(r.baseY + sp.y0 + sp.h);
+                }
                 const int kFrom = std::max(0, std::min(f - WINDOW_BELOW, nSt - 4));
                 const int lightCount = std::min(nSt, kFrom + 4);
                 for (int k = kFrom; k < lightCount; ++k) {

@@ -582,6 +582,9 @@ struct SceneLighting {
     Vec3 viewerBoxCentre;
     Vec3 viewerBoxAxisU{1, 0, 0};
     Vec3 viewerBoxHalf;
+    // ...and the ceiling over them (BuildingInteriorSystem, in a building; 0: none): its lit panels are what a night
+    // window mirrors
+    float viewerCeilingY = 0.0f;
     // The beacon flash clock and the night exposure adaptation (exposure /
     // authored exposure), published by DayNightSystem each frame so the
     // sprites and point lights flash and dim in step with the grown lamps.

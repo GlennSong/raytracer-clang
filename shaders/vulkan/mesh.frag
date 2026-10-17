@@ -49,7 +49,8 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo
     vec4  viewerBoxA;         // the viewer's enclosure (SceneLighting::viewerBox*): xyz centre, w half along u (0: none)
     vec4  viewerBoxB;         // xy its axis u (x, z), z half across it, w half up
-    vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none)
+    vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none),
+                              // y the ceiling over the viewer (0: none)
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
@@ -729,6 +730,41 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
     return directLight;
 }
 
+// THE ROOM A WINDOW REFLECTS (the viewer's own glass, at night a dark mirror of the lit room): the light the
+// point lights near it throw (a floor's ceiling panels, staged as interiorPoints), as the radiance of the room's
+// surfaces they light -- irradiance times a room's average reflectance (0.6) over pi, half of it facing the glass.
+vec3 roomRadiance(vec3 worldPos) {
+    vec3 e = vec3(0.0);
+    int count = min(g.counts.x, 32);
+    for (int i = 0; i < count; ++i) {
+        Light light = g.lights[i];
+        if (int(light.typeRange.x) != 0) continue;   // point lights only (the sun and spots are not the room)
+        float dist = length(light.positionIntensity.xyz - worldPos);
+        e += light.colorOuter.rgb * light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
+    }
+    return e * (0.6 / PI) * 0.5;
+}
+
+// THE CEILING'S PANELS IN A WINDOW (the viewer's own glass): the reflected ray out to the ceiling over them, and a
+// lit 600 x 1200 panel wherever it lands on the office grid -- every 2.4 m, square to the building (the viewer box's
+// axis), as furniture.cpp hangs them. A cheap interior map of the room behind the viewer: at night the panels shine
+// in the black glass, by day they are lost in the light coming through.
+vec3 ceilingPanels(vec3 P, vec3 R) {
+    float ceilY = g.glassMode.y;
+    if (ceilY <= 0.0 || R.y < 0.02) return vec3(0.0);
+    float t = (ceilY - 0.02 - P.y) / R.y;
+    if (t <= 0.0 || t > 40.0) return vec3(0.0);
+    vec3 H = P + R * t;
+    vec2 u = g.viewerBoxB.xy, w = vec2(-u.y, u.x);
+    vec2 d = H.xz - g.viewerBoxA.xz;
+    vec2 q = vec2(dot(d, u), dot(d, w));
+    if (abs(q.x) > g.viewerBoxA.w || abs(q.y) > g.viewerBoxB.z) return vec3(0.0);   // past the building's walls
+    vec2 c = abs(fract(q / 2.4) - 0.5) * 2.4;                                         // from the cell's centre
+    vec2 fw = max(fwidth(q), vec2(1e-3));
+    float on = (1.0 - smoothstep(0.6 - fw.x, 0.6 + fw.x, c.x)) * (1.0 - smoothstep(0.3 - fw.y, 0.3 + fw.y, c.y));
+    return vec3(2.2, 2.1, 1.9) * on;   // the panel's own emission (furniture_draw.cpp)
+}
+
 void main() {
     // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a
     // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)
@@ -1258,7 +1294,9 @@ void main() {
                       abs(d.y) <= g.viewerBoxB.w;
             }
             vec3 fs = own ? vec3(0.04) * brdf.x + brdf.y : f0 * brdf.x + brdf.y;   // the split-sum reflectance
-            vec3 reflected = own ? fs * g.ambient.rgb * 0.08                      // the room: dim, by day
+            vec3 Rv = reflect(-V, dot(N, V) < 0.0 ? -N : N);
+            vec3 reflected = own ? fs * (g.ambient.rgb * 0.08 + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv))
+                                 // (the room: dim by day; at night its lit self, the ceiling's panels in the glass)
                                  : prefiltered * fs * g.ambient.rgb * ambientShadow;
             float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0);
             float T = 1.0 - 0.4 * opacity;
