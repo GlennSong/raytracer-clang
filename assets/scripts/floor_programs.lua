@@ -2,7 +2,8 @@
 -- (window lots along the glass, corner lots where it turns, interior lots in the court round the core); a program
 -- then tags each lot, the way the archetype book picks a lot's building.
 --
--- lots       how the plate is cut (metres; m2 for interior_lot)
+-- lots       how the plate is cut (metres; m2 for interior_lot; min_access: a window lot with less than this onto
+--            circulation joins its neighbour)
 -- fill       the tag every lot no zone takes gets ...
 -- shallow    ... or this one, where the lot's frame is shallower than shallow_depth
 -- zones      tried IN ORDER; a lot one takes is not offered to the next. Each:
@@ -18,9 +19,12 @@
 --   lifts      only on a floor with lifts (a stair-only office has no reception)
 --   min_floor  only on a floor of at least this many m2 (a small floor keeps its lots for desks)
 -- styles     a building's habit, picked per building by weight: `set` overrides zones' numbers by tag.
+-- residential  homes: each `flat` lot is laid out inside as a flat (living room and bedrooms on the glass, hall,
+--              bath and kitchen behind; a studio where that will not walk), and a floor that will not walk is left to
+--              the older apartment floors rather than opened up
 --
--- Keep the office program alike with builtinOfficeProgram() (floor_zones.cpp): it stands where this file is not
--- loaded (procgen without the scripting layer, most tests).
+-- Keep the programs alike with builtinOfficeProgram() and builtinApartmentProgram() (floor_zones.cpp): they stand
+-- where this file is not loaded (procgen without the scripting layer, most tests).
 
 floor_programs = {
   office = {
@@ -52,6 +56,27 @@ floor_programs = {
       { name = "corner_offices", weight = 2 },
       { name = "perimeter_offices", weight = 1, set = { office = { share = 0.5 } } },
       { name = "open_floor", weight = 1, set = { meeting = { per_m2 = 500 } } },
+    },
+  },
+
+  -- AN APARTMENT FLOOR: flats along the glass, each a lot deep enough to reach the corridor round the core; what a
+  -- deep plate leaves in the middle is the residents' storage rooms
+  apartments = {
+    residential = true,
+    -- min_access: a flat needs its hall and its bath on the corridor, so a lot narrower there joins its neighbour;
+    -- min_lot_area: so does a lot too small for a flat
+    lots = { window_depth = 12.0, aisle = 1.6, street = 1.8, lot_width = 8.5, interior_lot = 20, min_side = 2.6,
+             min_access = 4.0, min_lot_area = 30.0 },
+    fill = "landing",
+    shallow = "landing", shallow_depth = 0,
+    zones = {
+      { tag = "flat", kind = "flat", sites = {"window", "corner"}, share = 1.0, enclosed = true, walls = "drywall",
+        area = {30, 1e9}, min_depth = 4.5 },
+      -- a deep plate's middle: the residents' storage rooms
+      { tag = "storage", kind = "closet", sites = {"interior"}, share = 1.0, enclosed = true, walls = "drywall",
+        area = {4, 40} },
+      -- what is left (a storage room with no door, a lot shut off): landing, part of the corridor
+      { tag = "landing", kind = "hall", walls = "drywall" },
     },
   },
 }

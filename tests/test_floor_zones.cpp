@@ -92,7 +92,10 @@ void dumpSvg(const std::string& name, const Poly2& plan, const FloorPartition& f
             const char* fill = r.kind == RoomKind::Office ? "#c9f" : r.kind == RoomKind::Meeting ? "#fc6" : r.kind == RoomKind::OpenPlan ? "#9cf"
                              : r.kind == RoomKind::Reception ? "#f66" : r.kind == RoomKind::Kitchenette ? "#6c6" : r.kind == RoomKind::Lounge ? "#fa8"
                              : r.kind == RoomKind::CopyRoom ? "#a98" : r.kind == RoomKind::PhoneBooths ? "#7bb"
-                             : r.kind == RoomKind::WaterCooler ? "#6ae" : "#bbb";
+                             : r.kind == RoomKind::WaterCooler ? "#6ae" : r.kind == RoomKind::Living ? "#bde3a8"
+                             : r.kind == RoomKind::Bed ? "#f3d9a4" : r.kind == RoomKind::Bath ? "#a8d8e8"
+                             : r.kind == RoomKind::Kitchen ? "#e8b8a8" : r.kind == RoomKind::Hall ? "#eee"
+                             : r.kind == RoomKind::Closet ? "#ccb" : r.kind == RoomKind::Flat ? "#f9a" : "#bbb";
             poly(r.rect, fill, "#888", 0.5);
             f << "<text x='" << pt(centroid(r.rect)).substr(0, pt(centroid(r.rect)).find(',')) << "' y='"
               << pt(centroid(r.rect)).substr(pt(centroid(r.rect)).find(',') + 1) << "' font-size='9' text-anchor='middle'>"
@@ -264,14 +267,25 @@ TEST_CASE(the_shipped_floor_program_loads_and_lays_walkable_floors) {
     std::printf("    [program] office: %zu zones, %zu styles (built-in %zu, %zu)\n", office->rules.size(), office->styles.size(),
                 builtin.rules.size(), builtin.styles.size());
     CHECK(office->rules.size() >= 4);
-    // the built-in program is what the file ships with: the same zones in the same order
-    CHECK(office->rules.size() == builtin.rules.size());
-    for (std::size_t i = 0; i < std::min(office->rules.size(), builtin.rules.size()); ++i) {
-        const ZoneRule &a = office->rules[i], &b = builtin.rules[i];
-        CHECK(a.tag == b.tag && a.kind == b.kind && a.sites == b.sites && a.count == b.count && a.enclosed == b.enclosed &&
-              a.walls == b.walls && a.near == b.near && std::fabs(a.minFloor - b.minFloor) < 1e-9 &&
-              std::fabs(a.perM2 - b.perM2) < 1e-9 && std::fabs(a.minArea - b.minArea) < 1e-9);
-        if (a.tag != b.tag) std::printf("    [program] zone %zu: %s in the file, %s built in\n", i, a.tag.c_str(), b.tag.c_str());
+    // the built-in programs are what the file ships with: the same lots, the same zones in the same order
+    for (const FloorProgram& bi : {builtin, builtinApartmentProgram()}) {
+        const FloorProgram* fp = book.find(bi.name);
+        CHECK(fp != nullptr);
+        if (!fp) continue;
+        CHECK(fp->residential == bi.residential && fp->fill == bi.fill && fp->shallow == bi.shallow);
+        CHECK(std::fabs(fp->zones.windowDepth - bi.zones.windowDepth) < 1e-9 && std::fabs(fp->zones.lotWidth - bi.zones.lotWidth) < 1e-9 &&
+              std::fabs(fp->zones.interiorLot - bi.zones.interiorLot) < 1e-9 && std::fabs(fp->zones.minAccess - bi.zones.minAccess) < 1e-9 &&
+              std::fabs(fp->zones.minLotArea - bi.zones.minLotArea) < 1e-9);
+        CHECK(fp->rules.size() == bi.rules.size());
+        for (std::size_t i = 0; i < std::min(fp->rules.size(), bi.rules.size()); ++i) {
+            const ZoneRule &a = fp->rules[i], &b = bi.rules[i];
+            CHECK(a.tag == b.tag && a.kind == b.kind && a.sites == b.sites && a.count == b.count && a.enclosed == b.enclosed &&
+                  a.walls == b.walls && a.near == b.near && std::fabs(a.minFloor - b.minFloor) < 1e-9 &&
+                  std::fabs(a.perM2 - b.perM2) < 1e-9 && std::fabs(a.share - b.share) < 1e-9 &&
+                  std::fabs(a.minArea - b.minArea) < 1e-9 && std::fabs(a.maxArea - b.maxArea) < 1e-9 &&
+                  std::fabs(a.minDepth - b.minDepth) < 1e-9);
+            if (a.tag != b.tag) std::printf("    [program] %s zone %zu: %s in the file, %s built in\n", bi.name.c_str(), i, a.tag.c_str(), b.tag.c_str());
+        }
     }
     int floors = 0, walked = 0;
     for (const Plate& pl : plates()) {
@@ -285,4 +299,89 @@ TEST_CASE(the_shipped_floor_program_loads_and_lays_walkable_floors) {
     }
     CHECK(floors >= 9);
     CHECK(walked == floors);
+}
+
+// APARTMENT FLOORS ARE ZONED TOO (Glenn, 2026-10-16: "partition the open space of an office floor or even a
+// residential building's floor"): every plate, glass or masonry, is cut into flats along its glass, each reaching the
+// corridor through its own front door and laid out inside -- a living room, bedrooms, a bath, a kitchen -- where the
+// old apartment floor took rectangles only and a drum's floor was studios round an empty middle. Every floor walks
+// from the lifts, few flats fall back to studios, and the rooms are furnished.
+TEST_CASE(every_plate_gets_an_apartment_floor_of_flats) {
+    auto read = [](const char* name) {
+        std::ifstream in(std::string(RT_SOURCE_DIR) + "/assets/scripts/" + name);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+    FurnitureLibrary saved = FurnitureLibrary::global(), lib;
+    std::string err;
+    CHECK(loadFurnitureLibrarySource(read("furniture_library.lua") + "\n" + read("furniture_rooms.lua"), lib, &err));
+    FurnitureLibrary::global() = lib;
+    int floors = 0, walked = 0, flats = 0, studios = 0, fronts = 0, unfurnished = 0, laid = 0;
+    for (const Plate& pl : plates())
+        for (uint32_t seed = 1; seed <= 4; ++seed) {
+            BuildingParams p = officeParams(seed);
+            p.officeUse = false;
+            p.residential = true;
+            p.curtainWall = seed % 2 == 0;
+            const CorePlan core = coreFor(pl.plan, p, entranceEdgeFor(pl.plan, p));
+            if (!core.valid) continue;
+            const RoomPlan rp = roomPlan(pl.plan, p, core, static_cast<std::size_t>(-1), interiorWallInset(p), 5);
+            ++floors;
+            if (seed == 1 && std::getenv("RT_ZONE_SVG")) {
+                const FloorProgram& ap = floorProgram("apartments");
+                dumpSvg("apartments " + pl.name, pl.plan, partitionFloor(pl.plan, core, interiorWallInset(p), p, ap.zones), &rp);
+            }
+            int n[64] = {};
+            for (const Room& r : rp.rooms) ++n[static_cast<int>(r.kind)];
+            const bool walks = floorIsWalkable(rp, pl.plan, core.frame.toWorld({core.length * 0.5, -1.1}));
+            walked += walks;
+            // a laid flat has one bath and one room to live in (a living room, or a studio's Flat room); a lot that
+            // would not lay is a Flat room on its own, with no bath
+            const int liv = n[static_cast<int>(RoomKind::Bath)];
+            const int st = std::max(0, n[static_cast<int>(RoomKind::Flat)] + n[static_cast<int>(RoomKind::Living)] - liv);
+            flats += liv;
+            studios += st;
+            laid += liv + st > 0;
+            for (const RoomWall& w : rp.walls) fronts += w.doorAt >= 0;
+            std::vector<PlacedPiece> placed;
+            emitFurniture(placed, nullptr, rp, 20.0, p.seed, 23.0);
+            if (std::getenv("RT_APT_PROBE") && seed == 1 && pl.name == std::getenv("RT_APT_PROBE")) {
+                const FloorPartition fpp = partitionFloor(pl.plan, core, interiorWallInset(p), p, floorProgram("apartments").zones);
+                for (const FloorZone& z : fpp.zones)
+                    std::printf("    [probe] zone site %d area %.1f depth %.1f access %.1f at %.1f %.1f\n", static_cast<int>(z.site), z.area,
+                                z.depth, z.accessLen, centroid(z.poly).x, centroid(z.poly).y);
+                std::printf("    [probe] %s: %zu pieces\n", pl.name.c_str(), placed.size());
+                for (const Room& r : rp.rooms)
+                    std::printf("    [probe]   %s frame %zu (%.2f,%.2f)-(%.2f,%.2f)-(%.2f,%.2f) rect0 (%.2f,%.2f)\n", cellUseName(r.kind), r.frame.size(),
+                                r.frame.size() == 4 ? r.frame[0].x : 0., r.frame.size() == 4 ? r.frame[0].y : 0.,
+                                r.frame.size() == 4 ? r.frame[1].x : 0., r.frame.size() == 4 ? r.frame[1].y : 0.,
+                                r.frame.size() == 4 ? r.frame[3].x : 0., r.frame.size() == 4 ? r.frame[3].y : 0., r.rect[0].x, r.rect[0].y);
+                for (std::size_t k = 0; k < std::min<std::size_t>(placed.size(), 10); ++k)
+                    std::printf("    [probe]   piece %s at %.2f %.2f\n", furniturePieceName(static_cast<Piece>(placed[k].piece)), placed[k].xform.m[0][3], placed[k].xform.m[2][3]);
+            }
+            for (const Room& r : rp.rooms) {
+                if (r.kind != RoomKind::Living && r.kind != RoomKind::Bed && r.kind != RoomKind::Kitchen && r.kind != RoomKind::Bath) continue;
+                int in = 0;
+                for (const PlacedPiece& pc : placed)
+                    if (pointInPolygon(r.rect, Vec2(pc.xform.m[0][3], pc.xform.m[2][3]))) ++in;
+                if (in == 0) {
+                    ++unfurnished;
+                    std::printf("    [apts] %s seed %u: an empty %s, %.1f m2\n", pl.name.c_str(), seed, cellUseName(r.kind), area(r.rect));
+                }
+            }
+            if (seed == 1)
+                std::printf("    [apts] %-16s %2d flats %d studios, %d beds %d baths %d kitchens, %zu walls; walks %d\n",
+                            pl.name.c_str(), liv, st, n[static_cast<int>(RoomKind::Bed)], n[static_cast<int>(RoomKind::Bath)],
+                            n[static_cast<int>(RoomKind::Kitchen)], rp.walls.size(), walks ? 1 : 0);
+        }
+    FurnitureLibrary::global() = saved;
+    std::printf("    [apts] %d floors, %d with flats, %d walk; %d flats, %d studios, %d doors, %d living rooms unfurnished\n",
+                floors, laid, walked, flats, studios, fronts, unfurnished);
+    CHECK(floors >= 30);
+    CHECK(laid == floors);
+    CHECK(walked == floors);
+    CHECK(flats >= 8 * floors);
+    CHECK(studios * 5 <= flats);
+    CHECK(unfurnished == 0);
 }

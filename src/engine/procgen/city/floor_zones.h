@@ -49,6 +49,9 @@ struct FloorZoneParams {
     Real lotWidth = 4.8;      // a window lot's width along the glass (grouped to the facade's bays)
     Real interiorLot = 24.0;  // the court is bisected down to lots of about this many m2
     Real minSide = 2.6;       // ...no side shorter than this
+    Real minAccess = 0;       // a window lot with less than this onto circulation joins its neighbour along the glass
+                              // (a flat needs its hall and bath on the corridor: a tight curve's wedges pair up)
+    Real minLotArea = 0;      // ...and so does one smaller than this (m2: no flat in a leftover bay)
 };
 
 struct FloorZone {
@@ -114,13 +117,18 @@ struct FloorProgram {
     FloorZoneParams zones;
     std::string fill = "open_plan", shallow = "desk_row";
     Real shallowDepth = 3.2;
+    // HOMES (an apartment floor): its `flat` lots are laid out inside as flats -- living room and bedrooms on the
+    // glass, the hall, bath and kitchen behind (room_plan.h layoutApartment), a studio where that will not walk; the
+    // floor is no workplace (no office lighting), and one that will not walk is not opened up but left to the planner's
+    // older floors.
+    bool residential = false;
     std::vector<ZoneRule> rules;   // `fill` and `shallow` are rules too (looked up by tag; their quotas unused)
     std::vector<ZoneStyle> styles;
 };
 
 // The programs by name, loaded once from assets/scripts/floor_programs.lua by the scripting layer
 // (furniture_library_lua.h, the same VM as the furniture). Empty until then; floorProgram() falls back to the
-// built-in office program (what the Lua file ships with), so procgen and tests need no Lua.
+// built-in program of that name (office, apartments: what the Lua file ships with), so procgen and tests need no Lua.
 class FloorProgramBook {
 public:
     void clear() { programs_.clear(); }
@@ -132,6 +140,7 @@ private:
     std::vector<FloorProgram> programs_;
 };
 FloorProgram builtinOfficeProgram();
+FloorProgram builtinApartmentProgram();
 const FloorProgram& floorProgram(const std::string& name);
 
 // The RoomKind a program names ("open_plan", "meeting", ... -- space_graph's cellUseName with underscores).

@@ -894,8 +894,8 @@ constexpr Real kCorridor = 2.2;   // core_plan.cpp's kCorridor: the ring kept cl
 // ONE APARTMENT (buildings B): the unit x0..x1 along a band, from the window wall (depth vIn) to its front on the
 // corridor (vFront, the band's depth D), its front door at xd -- laid out into rooms and walls. P maps (along the
 // band, depth in from the window wall) to the plan. Shared by the tower floor and the walk-up.
-static void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
-                            Real vIn, Real vFront, Real D, Real xd, bool partyWallRight) {
+void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
+                     Real vIn, Real vFront, Real D, Real xd, bool partyWallRight, bool frontWall) {
     const Real kHall = 1.6, kBath = 2.3, kCloset = std::max(Real(1.4), kRoomDoorW + 0.7), kBedW = 3.4, kLivingMin = 4.2;
     const Real UW = x1 - x0;
         // The zones: the back strip along the corridor and the window side.
@@ -972,7 +972,7 @@ static void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec
             rp.rooms.push_back(rm);
         }
         // THE WALLS. The front, with the entry door.
-        {
+        if (frontWall) {
             RoomWall w; w.a = P(x0, vFront); w.b = P(x1, vFront);
             w.doorAt = (xd - x0) / UW;
             rp.walls.push_back(w);
@@ -2488,6 +2488,16 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
                   std::size_t blankEdge, Real inset, int storey,
                   const Poly2& stairWell, std::size_t entranceEdge, const Vec2& stairFoot) {
     const PlateTopology topo = plateTopologyFor(planIn, params, core);
+    // RT_FLOOR_PLAN=bands keeps the older office and apartment floors below, for A/B
+    static const bool bandsOnly = [] { const char* e = std::getenv("RT_FLOOR_PLAN"); return e && std::string(e) == "bands"; }();
+    if (!bandsOnly && params.residential && core.valid && storey >= 1 && !params.campus && params.civicRooms == 0) {
+        // AN APARTMENT FLOOR IS ZONED TOO (floor_zones.h, the `apartments` program): the plate cut into flats along
+        // the glass, each reaching the corridor round the core, laid out inside; any plate, curved or not. A floor
+        // that will not walk falls to the older floors below.
+        const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
+        RoomPlan zf = zonedFloorPlan(planIn, params, core, inset, storey, true, entry, stairWell, floorProgram("apartments"));
+        if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
+    }
     if (topo == PlateTopology::Apartments) {
         // Walk it from the corridor in front of the core's doors; a floor that fails falls back to the ring.
         RoomPlan ap = apartmentPlan(planIn, params, core, inset, storey);
@@ -2588,7 +2598,6 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     // AN OFFICE FLOOR IS ZONED (floor_zones.h; Glenn, 2026-10-16: partition the floor the way a block is cut into
     // lots, tag the lots, furnish by tag): any plate, curved or not, round its core or its stair. RT_FLOOR_PLAN=bands
     // keeps the old rectangle-only office floor below, for A/B.
-    static const bool bandsOnly = [] { const char* e = std::getenv("RT_FLOOR_PLAN"); return e && std::string(e) == "bands"; }();
     if (!bandsOnly && !params.residential && storey >= 1 &&
         (params.officeUse || (params.curtainWall && topo == PlateTopology::Ring))) {
         const CorePlan hub = hubFor();

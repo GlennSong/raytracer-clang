@@ -550,6 +550,54 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
             z.accessLen = std::max(z.accessLen, accessRun(z.poly, i, walk, mid));
         }
     }
+    // a window lot too narrow on the corridor joins a window lot beside it -- the one it shares the most wall with of
+    // those that leave it wider on the corridor -- until it is wide enough (the end of a stadium: three wedges a metre
+    // wide at the back are one flat; a rounded corner's two halves, which meet the corridor only at its corner, join
+    // the flat beside them)
+    for (bool merged = zp.minAccess > 0 || zp.minLotArea > 0; merged;) {
+        merged = false;
+        for (std::size_t a = 0; a < fp.zones.size() && !merged; ++a) {
+            const FloorZone& A = fp.zones[a];
+            const bool small = A.area < zp.minLotArea;
+            if (A.site == ZoneSite::Interior || (A.accessLen >= zp.minAccess && !small)) continue;
+            struct Cand { std::size_t b; Real gain; Poly2 poly; };
+            std::vector<Cand> cands;
+            for (std::size_t b = 0; b < fp.zones.size(); ++b) {
+                if (b == a || fp.zones[b].site == ZoneSite::Interior) continue;
+                const G::PolySet un = G::unionSets(G::fromRing(A.poly), G::fromRing(fp.zones[b].poly));
+                if (un.size() != 1 || !un.front().holes.empty()) continue;
+                const Real gain = perimeter(A.poly) + perimeter(fp.zones[b].poly) - perimeter(un.front().outer);
+                if (gain > 0.5) cands.push_back({b, gain, un.front().outer});
+            }
+            std::sort(cands.begin(), cands.end(), [](const Cand& x, const Cand& y) { return x.gain > y.gain; });
+            for (Cand& cd : cands) {
+                const FloorZone& B = fp.zones[cd.b];
+                if (area(cd.poly) > 1.6 * zp.lotWidth * zp.windowDepth) continue;   // no flat the size of a floor
+                ensureCCW(cd.poly);
+                FloorZone z = A.area > B.area ? A : B;
+                const Vec2 ax = z.frame.size() == 4 ? z.frame[1] - z.frame[0] : Vec2(1, 0);
+                z.poly = cd.poly;
+                z.area = area(cd.poly);
+                z.frontage = A.frontage + B.frontage;
+                z.curved = A.curved || B.curved;
+                z.site = A.site == ZoneSite::Corner || B.site == ZoneSite::Corner ? ZoneSite::Corner : ZoneSite::Window;
+                z.frame = inscribedRect(cd.poly, ax);
+                z.depth = z.frame.size() == 4 ? (z.frame[3] - z.frame[0]).length() : 0;
+                z.toLobby = (centroid(cd.poly) - fp.lobby).length();
+                z.toCore = coreRing.empty() ? 1e9 : distToRing(centroid(cd.poly), coreRing);
+                z.accessLen = 0;
+                for (std::size_t i = 0; i < cd.poly.size(); ++i) {
+                    Real mid;
+                    z.accessLen = std::max(z.accessLen, accessRun(cd.poly, i, walk, mid));
+                }
+                if (!small && z.accessLen < A.accessLen + 0.5) continue;   // no wider on the corridor than it was
+                fp.zones[cd.b] = z;
+                fp.zones.erase(fp.zones.begin() + static_cast<std::ptrdiff_t>(a));
+                merged = true;
+                break;
+            }
+        }
+    }
     return fp;
 }
 
@@ -619,10 +667,40 @@ FloorProgram builtinOfficeProgram() {
     return p;
 }
 
+FloorProgram builtinApartmentProgram() {
+    FloorProgram p;
+    p.name = "apartments";
+    p.residential = true;
+    p.zones.windowDepth = 12.0;
+    p.zones.minAccess = 4.0;
+    p.zones.minLotArea = 30.0;
+    p.zones.lotWidth = 8.5;
+    p.zones.interiorLot = 20.0;
+    p.fill = "landing";
+    p.shallow = "landing";
+    p.shallowDepth = 0;
+    const uint8_t W = zoneSiteBit(ZoneSite::Window), C = zoneSiteBit(ZoneSite::Corner), I = zoneSiteBit(ZoneSite::Interior);
+    auto rule = [&](const char* tag, RoomKind kind, uint8_t sites) {
+        ZoneRule r;
+        r.tag = tag;
+        r.kind = kind;
+        r.sites = sites;
+        r.walls = 0;
+        p.rules.push_back(r);
+        return &p.rules.back();
+    };
+    ZoneRule* r = rule("flat", RoomKind::Flat, W | C);
+    r->share = 1.0; r->enclosed = true; r->minArea = 30; r->minDepth = 4.5;
+    r = rule("storage", RoomKind::Closet, I);
+    r->share = 1.0; r->enclosed = true; r->minArea = 4; r->maxArea = 40;
+    rule("landing", RoomKind::Hall, W | C | I);
+    return p;
+}
+
 const FloorProgram& floorProgram(const std::string& name) {
     if (const FloorProgram* p = FloorProgramBook::global().find(name)) return *p;
-    static const FloorProgram office = builtinOfficeProgram();
-    return office;
+    static const FloorProgram office = builtinOfficeProgram(), apartments = builtinApartmentProgram();
+    return name == "apartments" ? apartments : office;
 }
 
 namespace {
@@ -753,13 +831,274 @@ void addWall(std::vector<RoomWall>& walls, RoomWall w) {
         walls.push_back(piece);
     }
 }
+
+// The pieces of wall w inside `poly` (its doorway kept where it falls in a piece long enough to carry it).
+void clipWall(const RoomWall& w, const Poly2& poly, std::vector<RoomWall>& out) {
+    const Vec2 ab = w.b - w.a;
+    const Real L = ab.length();
+    if (L < 0.1) return;
+    std::vector<Real> ts = {0, 1};
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        const Vec2 c = poly[i], d = poly[(i + 1) % poly.size()], cd = d - c;
+        const Real den = cross(ab, cd);
+        if (std::fabs(den) < 1e-12) continue;
+        const Real t = cross(c - w.a, cd) / den, u = cross(c - w.a, ab) / den;
+        if (t > 0 && t < 1 && u >= -1e-9 && u <= 1 + 1e-9) ts.push_back(t);
+    }
+    std::sort(ts.begin(), ts.end());
+    for (std::size_t k = 0; k + 1 < ts.size(); ++k) {
+        const Real t0 = ts[k], t1 = ts[k + 1];
+        if ((t1 - t0) * L < 0.1 || !pointInPolygon(poly, w.a + ab * ((t0 + t1) * 0.5))) continue;
+        RoomWall piece = w;
+        piece.a = w.a + ab * t0;
+        piece.b = w.a + ab * t1;
+        piece.doorAt = -1;
+        if (w.doorAt >= t0 && w.doorAt <= t1 && (t1 - t0) * L > kRoomDoorW + 0.6) piece.doorAt = (w.doorAt - t0) / (t1 - t0);
+        out.push_back(piece);
+    }
+}
+
+// ONE FLAT laid in `frame`, a rectangle of the lot square to its glass: the apartment layout (living room and bedrooms
+// on the glass, the hall at the front door with the bath and kitchen beside it; room_plan.h layoutApartment).
+bool layFlatIn(const FloorZone& Z, const Poly2& frame, const Vec2& door, std::vector<Room>& rooms, std::vector<RoomWall>& walls) {
+    // laid in a rectangle of the lot square to its glass, so every room is a whole rectangle; then whatever of the
+    // lot lies past it goes to the rooms beside it -- the end rooms stretched out to the lot's sides (a wedge's wide
+    // glass), the glass rooms out to a curve's bulge, the back rooms on to the corridor -- and all of it cut to the lot
+    const Vec2 O = frame[0], u = normalize(frame[1] - frame[0]), nIn = perp(u);
+    const Real x0 = 0, x1 = (frame[1] - frame[0]).length(), v0 = 0, v1 = (frame[3] - frame[0]).length();
+    if (x1 - x0 < 3.9 || v1 - v0 < 5.0) {
+        if (std::getenv("RT_FLAT_DEBUG")) std::fprintf(stderr, "[flat] frame %.2f x %.2f\n", x1 - x0, v1 - v0);
+        return false;
+    }
+    // the hall at the door; in a narrow flat, at the end of the back nearer it (the bath beside it, not squeezed out)
+    Real xd = std::clamp(dot(door - O, u), x0 + 0.9, x1 - 0.9);
+    if (x1 - x0 < 6.5) xd = xd < (x0 + x1) * 0.5 ? x0 + 0.8 : x1 - 0.8;
+    RoomPlan lay;
+    auto P = [&](Real x, Real v) { return O + u * x + nIn * v; };
+    layoutApartment(lay, 0, P, x0, x1, v0, v1, v1 - v0, xd, false, false);
+    bool bath = false, kitchen = false;
+    for (const Room& r : lay.rooms) { bath = bath || r.kind == RoomKind::Bath; kitchen = kitchen || r.kind == RoomKind::Kitchen; }
+    if (!bath) {
+        if (std::getenv("RT_FLAT_DEBUG")) std::fprintf(stderr, "[flat] no bath in %.2f x %.2f\n", x1 - x0, v1 - v0);
+        return false;
+    }
+    // too narrow for a kitchen of its own: a studio flat -- its hall and bath, and one room to live and sleep in with
+    // the kitchenette along a wall (the `flat` furniture program)
+    // ...and one with no bedroom sleeps in its living room: a studio too
+    bool bed = false;
+    for (const Room& r : lay.rooms) bed = bed || r.kind == RoomKind::Bed;
+    if (!kitchen || !bed)
+        for (Room& r : lay.rooms) if (r.kind == RoomKind::Living) r.kind = RoomKind::Flat;
+    const Real far = 1000.0;
+    // the back strip: rooms whose far side is the frame's back (they reach on to the corridor, not sideways); the
+    // front rooms at either end take the lot beside the back strip as well (a wedge's wide end), cut round it
+    const Real vb = [&] {
+        Real m = v1;
+        for (const Room& r : lay.rooms) {
+            Real lo = 1e30, hi = -1e30;
+            for (const Vec2& q : r.rect) { lo = std::min(lo, dot(q - O, nIn)); hi = std::max(hi, dot(q - O, nIn)); }
+            if (std::fabs(hi - v1) < 1e-4 && lo > v0 + 1e-4) m = std::min(m, lo);
+        }
+        return m;
+    }();
+    auto isBack = [&](const Room& r) {
+        Real lo = 1e30;
+        for (const Vec2& q : r.rect) lo = std::min(lo, dot(q - O, nIn));
+        return lo >= vb - 1e-4;
+    };
+    RoomKind backEnd[2] = {RoomKind::Hall, RoomKind::Hall}, frontEnd[2] = {RoomKind::Living, RoomKind::Living};
+    for (const Room& r : lay.rooms) {
+        Real lo = 1e30, hi = -1e30;
+        for (const Vec2& q : r.rect) { lo = std::min(lo, dot(q - O, u)); hi = std::max(hi, dot(q - O, u)); }
+        RoomKind* ends = isBack(r) ? backEnd : frontEnd;
+        if (std::fabs(lo - x0) < 1e-4) ends[0] = r.kind;
+        if (std::fabs(hi - x1) < 1e-4) ends[1] = r.kind;
+    }
+    G::PolySet backSet;
+    std::vector<G::PolySet> sides(lay.rooms.size());   // a front end room's share of the lot beside the back strip
+    for (std::size_t ri = 0; ri < lay.rooms.size(); ++ri) {
+        Room& r = lay.rooms[ri];
+        const bool back = isBack(r);
+        for (Vec2& q : r.rect) {
+            const Real x = dot(q - O, u), v = dot(q - O, nIn);
+            Vec2 d(0, 0);
+            if (!back && std::fabs(x - x0) < 1e-4) d = d - u * far;
+            if (!back && std::fabs(x - x1) < 1e-4) d = d + u * far;
+            if (std::fabs(v - v0) < 1e-4) d = d - nIn * far;
+            if (!back) {
+                if (std::fabs(x - x0) < 1e-4 && std::fabs(v - vb) < 1e-4) {
+                    Poly2 sq = {P(x0 - far, vb), P(x0, vb), P(x0, v1), P(x0 - far, v1)};
+                    ensureCCW(sq);
+                    sides[ri] = G::fromRing(sq);
+                }
+                if (std::fabs(x - x1) < 1e-4 && std::fabs(v - vb) < 1e-4) {
+                    Poly2 sq = {P(x1, vb), P(x1 + far, vb), P(x1 + far, v1), P(x1, v1)};
+                    ensureCCW(sq);
+                    sides[ri] = sides[ri].empty() ? G::fromRing(sq) : G::unionSets(sides[ri], G::fromRing(sq));
+                }
+            }
+            q = q + d;
+        }
+        ensureCCW(r.rect);
+        if (back) backSet = backSet.empty() ? G::fromRing(r.rect) : G::unionSets(backSet, G::fromRing(r.rect));
+    }
+    // THE FOYER: the lot past the frame's back, toward the corridor (a wedge's narrow end, beyond its largest
+    // rectangle), is the hall's -- the way in from the front door; the private rooms beside it walled off from it
+    {
+        Poly2 beyond = {P(-far, v1), P(far, v1), P(far, v1 + far), P(-far, v1 + far)};
+        ensureCCW(beyond);
+        G::PolySet foyer = G::fromRing(beyond);
+        // (a kitchen in the back strip, open to the hall, takes what lies behind it: a deeper kitchen, a smaller hall)
+        for (Room& r : lay.rooms) {
+            if (r.kind != RoomKind::Kitchen || !isBack(r)) continue;
+            Real lo = 1e30, hi = -1e30;
+            for (const Vec2& q : r.rect) { lo = std::min(lo, dot(q - O, u)); hi = std::max(hi, dot(q - O, u)); }
+            Poly2 behind = {P(lo, v1), P(hi, v1), P(hi, v1 + far), P(lo, v1 + far)};
+            ensureCCW(behind);
+            const Poly2 whole = largestOuter(G::unionSets(G::fromRing(r.rect), G::fromRing(behind)));
+            if (whole.size() >= 3) r.rect = whole;
+            foyer = G::differenceSets(foyer, G::fromRing(behind));
+        }
+        for (Room& r : lay.rooms) {
+            if (r.kind != RoomKind::Hall || !isBack(r)) continue;
+            const Poly2 whole = largestOuter(G::unionSets(G::fromRing(r.rect), foyer));
+            if (whole.size() >= 3) r.rect = whole;
+            break;
+        }
+        for (const Room& r : lay.rooms) {
+            if (!isBack(r) || (r.kind != RoomKind::Bath && r.kind != RoomKind::Closet)) continue;
+            Real lo = 1e30, hi = -1e30;
+            for (const Vec2& q : r.rect) { lo = std::min(lo, dot(q - O, u)); hi = std::max(hi, dot(q - O, u)); }
+            RoomWall w;
+            w.a = P(lo, v1);
+            w.b = P(hi, v1);
+            lay.walls.push_back(w);
+        }
+    }
+    for (RoomWall& w : lay.walls) {
+        const Vec2 door0 = w.a + (w.b - w.a) * std::max(Real(0), w.doorAt);
+        const bool alongU = std::fabs(dot(w.b - w.a, nIn)) < 1e-4;
+        for (Vec2* q : {&w.a, &w.b}) {
+            const Real x = dot(*q - O, u), v = dot(*q - O, nIn);
+            const bool divider = alongU && std::fabs(v - vb) < 1e-4;   // (stays the back strip's width)
+            if (!divider && std::fabs(x - x0) < 1e-4) *q = *q - u * far;
+            if (!divider && std::fabs(x - x1) < 1e-4) *q = *q + u * far;
+            if (!alongU && std::fabs(v - v0) < 1e-4) *q = *q - nIn * far;
+        }
+        if (w.doorAt >= 0) w.doorAt = dot(door0 - w.a, normalize(w.b - w.a)) / std::max(Real(1e-6), (w.b - w.a).length());
+    }
+    // the back strip's ends, where the end rooms beside it are private (a bedroom in front, a bath or closet behind)
+    for (int e = 0; e < 2; ++e) {
+        const bool priv = frontEnd[e] == RoomKind::Bed || backEnd[e] == RoomKind::Bath || backEnd[e] == RoomKind::Closet;
+        if (!priv) continue;
+        RoomWall w;
+        w.a = P(e == 0 ? x0 : x1, vb);
+        w.b = P(e == 0 ? x0 : x1, v1);
+        lay.walls.push_back(w);
+    }
+    // the front end rooms with the lot beside the back strip
+    for (std::size_t ri = 0; ri < lay.rooms.size(); ++ri) {
+        if (sides[ri].empty()) continue;
+        Room& r = lay.rooms[ri];
+        const G::PolySet un = G::unionSets(G::fromRing(r.rect), sides[ri]);
+        const Poly2 whole = largestOuter(un);
+        if (whole.size() >= 3) r.rect = whole;
+    }
+    std::vector<Room> rs;
+    for (Room r : lay.rooms) {
+        ensureCCW(r.rect);
+        const Poly2 cut = largestOuter(G::intersectSets(G::fromRing(r.rect), G::fromRing(Z.poly)));
+        if (cut.size() < 3 || area(cut) < 1.5) continue;
+        r.rect = cut;
+        ensureCCW(r.rect);
+        r.frame = inscribedRect(r.rect, u);
+        // a room cut too small to furnish (a bath a wedge squeezed to a metre): no flat, a studio
+        const Real fw = r.frame.size() == 4 ? std::min((r.frame[1] - r.frame[0]).length(), (r.frame[3] - r.frame[0]).length()) : 0;
+        const Real need = r.kind == RoomKind::Living ? 2.6 : r.kind == RoomKind::Bed ? 2.4 : r.kind == RoomKind::Hall ? 1.0 : 1.8;
+        if (fw < need) {
+            if (std::getenv("RT_FLAT_DEBUG")) std::fprintf(stderr, "[flat] a %s cut to %.2f (needs %.2f)\n", cellUseName(r.kind), fw, need);
+            return false;
+        }
+        rs.push_back(r);
+    }
+    // a hall that is most of the flat is no layout (a frame far from the corridor leaves it all to the foyer)
+    Real hallA = 0, allA = 0;
+    for (const Room& r : rs) { allA += area(r.rect); if (r.kind == RoomKind::Hall) hallA += area(r.rect); }
+    if (hallA > std::max(Real(8.0), 0.28 * allA)) {
+        if (std::getenv("RT_FLAT_DEBUG")) std::fprintf(stderr, "[flat] hall %.1f of %.1f m2\n", hallA, allA);
+        return false;
+    }
+    std::vector<RoomWall> ws;
+    for (const RoomWall& w : lay.walls) clipWall(w, Z.poly, ws);
+    // walk it from inside the front door
+    RoomPlan check;
+    check.rooms = rs;
+    check.walls = ws;
+    Vec2 in = Vec2(0, 0);
+    {
+        Real bd = 1e9;
+        for (std::size_t i = 0; i < Z.poly.size(); ++i) {
+            const Vec2 a = Z.poly[i], b = Z.poly[(i + 1) % Z.poly.size()];
+            const Real d = distToSegment(door, a, b);
+            if (d < bd && (b - a).length() > 1e-6) { bd = d; in = perp(normalize(b - a)); }
+        }
+    }
+    if (rs.empty() || !floorIsWalkable(check, Z.poly, door + in * 0.6)) {
+        if (std::getenv("RT_FLAT_DEBUG")) std::fprintf(stderr, "[flat] %zu rooms do not walk\n", rs.size());
+        return false;
+    }
+    rooms.insert(rooms.end(), rs.begin(), rs.end());
+    walls.insert(walls.end(), ws.begin(), ws.end());
+    return true;
+}
+
+// A FLAT in its lot (a window or corner lot reaching the corridor), laid out inside -- a wedge on a drum, a trapezoid
+// at a chamfer included. Tried in the lot's frame (its largest rectangle) and in the widest rectangles 6..13 m deep off
+// its glass (a wedge's largest rectangle is narrow and deep; the flat wants the wide glass for its bedroom); the one
+// that lives best kept. Its rooms and inner walls; false (nothing added) when none walks from the front door: the lot
+// is a studio.
+bool layFlat(const FloorZone& Z, const Vec2& door, std::vector<Room>& rooms, std::vector<RoomWall>& walls) {
+    if (Z.frame.size() != 4) return false;
+    std::vector<Poly2> frames = {Z.frame};
+    const Vec2 O = Z.frame[0], u = normalize(Z.frame[1] - Z.frame[0]), nIn = perp(u);
+    for (Real D : {6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0}) {
+        Poly2 half = {O - u * 1000.0 - nIn * 1000.0, O + u * 1000.0 - nIn * 1000.0, O + u * 1000.0 + nIn * D, O - u * 1000.0 + nIn * D};
+        ensureCCW(half);
+        const Poly2 part = largestOuter(G::intersectSets(G::fromRing(Z.poly), G::fromRing(half)));
+        if (part.size() < 3) continue;
+        const Poly2 f = inscribedRect(part, u);
+        if (f.size() == 4) frames.push_back(f);
+    }
+    // each laid and scored: the floor it gives to living (a bedroom, a kitchen of its own) over the hall it needs
+    Real bestScore = -1e30;
+    std::vector<Room> bestRooms;
+    std::vector<RoomWall> bestWalls;
+    for (const Poly2& f : frames) {
+        std::vector<Room> rs;
+        std::vector<RoomWall> ws;
+        if (!layFlatIn(Z, f, door, rs, ws)) continue;
+        Real score = 0;
+        for (const Room& r : rs) {
+            const Real a = area(r.rect);
+            if (r.kind == RoomKind::Hall) score -= 0.5 * a;
+            else if (r.kind == RoomKind::Bed) score += a + 25.0;
+            else if (r.kind == RoomKind::Kitchen) score += a + 15.0;
+            else if (r.kind == RoomKind::Living || r.kind == RoomKind::Flat) score += a;
+        }
+        if (score > bestScore) { bestScore = score; bestRooms = rs; bestWalls = ws; }
+    }
+    if (bestScore <= -1e29) return false;
+    rooms.insert(rooms.end(), bestRooms.begin(), bestRooms.end());
+    walls.insert(walls.end(), bestWalls.begin(), bestWalls.end());
+    return true;
+}
 }  // namespace
 
 RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const CorePlan& core, Real inset,
                         int storey, bool lifts, const Vec2& entry, const Poly2& stairWell, const FloorProgram& prog) {
     RoomPlan rp;
-    rp.topology = PlateTopology::Ring;
-    rp.office = true;
+    rp.topology = prog.residential ? PlateTopology::Apartments : PlateTopology::Ring;
+    rp.office = !prog.residential;
     if (storey < 1) return rp;
     Poly2 plan = plate;
     ensureCCW(plan);
@@ -819,8 +1158,12 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
     const int fillRule = ruleIndex(prog.rules, prog.fill);
     const RoomKind fillKind = fillRule >= 0 ? prog.rules[static_cast<std::size_t>(fillRule)].kind : RoomKind::OpenPlan;
 
-    // three tries: as tagged; the enclosed rooms whose only way in is through another room opened up; no walls
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    // three tries: as tagged; the enclosed rooms whose only way in is through another room opened up; no walls (not
+    // in homes: a floor of flats with no walls is no floor of flats, and the planner's older floors take it)
+    bool walked = false;
+    int flats = 0, studios = 0;
+    for (int attempt = 0; attempt < (prog.residential ? 2 : 3); ++attempt) {
+        flats = studios = 0;
         rp.rooms.clear();
         rp.walls.clear();
         std::vector<Poly2> open;
@@ -850,6 +1193,24 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
                     const Vec2 d = normalize(b - a), out(d.y, -d.x);
                     if (!pointInPolygon(Z.poly, a + (b - a) * mid - out * 0.6)) continue;
                     if (run > best) { best = run; doorMid = mid; doorEdge = i; }
+                }
+            }
+            // A HOME'S FLAT is laid out inside, its front door tried at the middle of its run onto the corridor and
+            // at either end of it (a narrow back wants the hall at one end, the bath beside it); else it stays one
+            // room, a studio
+            std::vector<Room> flatRooms;
+            std::vector<RoomWall> flatWalls;
+            bool flatLaid = false;
+            if (prog.residential && R.kind == RoomKind::Flat && enclosed && best >= kDoorRun && doorEdge < Z.poly.size()) {
+                const Vec2 ea = Z.poly[doorEdge], eb = Z.poly[(doorEdge + 1) % Z.poly.size()];
+                const Real EL = std::max(Real(1e-6), (eb - ea).length()), m = (kRoomDoorW * 0.5 + 0.35) / EL;
+                const Real tLo = doorMid - best / (2 * EL) + m, tHi = doorMid + best / (2 * EL) - m;
+                std::vector<Real> tries = {doorMid};
+                if (tHi > tLo) { tries.push_back(tLo); tries.push_back(tHi); }
+                for (Real t : tries) {
+                    flatRooms.clear();
+                    flatWalls.clear();
+                    if (layFlat(Z, ea + (eb - ea) * t, flatRooms, flatWalls)) { doorMid = t; flatLaid = true; break; }
                 }
             }
             // the frame: side 0 the glass for a window lot; else the side away from the door
@@ -900,8 +1261,16 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
                     doorCut = true;
             if (!doorCut && std::getenv("RT_ZONE_DEBUG"))
                 std::fprintf(stderr, "[zones] storey %d: a %s's doorway was lost to a shared wall\n", storey, cellUseName(R.kind));
+            if (flatLaid) {
+                rp.rooms.pop_back();
+                for (Room& r : flatRooms) { r.edge = rm.edge; rp.rooms.push_back(r); }
+                for (const RoomWall& w : flatWalls) addWall(rp.walls, w);
+                ++flats;
+            } else if (prog.residential && R.kind == RoomKind::Flat) {
+                ++studios;
+            }
         }
-        if (floorIsWalkable(rp, plan, entry, stairWell)) break;
+        if (floorIsWalkable(rp, plan, entry, stairWell)) { walked = true; break; }
         if (std::getenv("RT_ZONE_DEBUG"))
             std::fprintf(stderr, "[zones] storey %d: try %d not walkable (%zu rooms, %zu walls)\n", storey, attempt,
                          rp.rooms.size(), rp.walls.size());
@@ -916,6 +1285,14 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
                      tags.style.c_str(), fp.fieldArea);
         for (const Room& r : rp.rooms) std::fprintf(stderr, " %s", cellUseName(r.kind));
         std::fprintf(stderr, "\n");
+        if (prog.residential) std::fprintf(stderr, "[zones] storey %d: %d flats, %d studios, walked %d\n", storey, flats, studios, walked ? 1 : 0);
+    }
+    // (a floor of homes with no flat on it -- every lot too small or shut off -- is left to the older floors too)
+    if (prog.residential && (!walked || flats + studios == 0) && !std::getenv("RT_ZONE_KEEP_FAILED")) {
+        RoomPlan none;
+        none.topology = rp.topology;
+        none.office = false;
+        return none;
     }
     return rp;
 }

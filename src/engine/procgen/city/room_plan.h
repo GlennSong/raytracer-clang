@@ -37,6 +37,7 @@
 #include "shape_grammar.h"
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace engine {
@@ -206,6 +207,13 @@ RoomPlan transferLoungePlan(const Poly2& storeyPlan, const BuildingParams& param
 // inflated by the player's radius, so a doorway that a capsule cannot fit
 // through counts as closed. roomPlan runs this and simplifies the floor
 // until it passes, so a blocked interior is never grown.
+// ONE APARTMENT laid out into rooms and walls: the unit x0..x1 along its window wall, from the glass (depth vIn) to
+// its front (vFront; D the depth), its front door at xd along it. P maps (along, depth in) to the plan. The front
+// wall with its door (frontWall) and a party wall at x1 (partyWallRight) are emitted when asked; a zoned flat
+// (floor_zones.cpp) walls its own outline.
+void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
+                     Real vIn, Real vFront, Real D, Real xd, bool partyWallRight, bool frontWall = true);
+
 bool floorIsWalkable(const RoomPlan& rp, const Poly2& storeyPlan, const Vec2& entry,
                      const Poly2& stairWell = Poly2{});
 

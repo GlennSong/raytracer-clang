@@ -56,13 +56,15 @@ furniture_rooms = {
     { wall = { 1.2, 0.6 }, sides = { 1, 3, 0, 2 }, tall = true, clear = 0.7, pick = { family = "storage", tags = { "bedroom" } } },
   },
 
-  flat = {   -- a studio: the bed, and a sofa in place of the wardrobe
+  flat = {   -- a studio: the bed, the kitchenette along a wall, and a sofa in place of the wardrobe
     { wall = { 2.6, 2.12 }, sides = "long", ring_sides = { 1, 3, 0 },
       set = {
         { pick = { family = "storage", tags = { "bedroom" } }, x = 0.25, fit = { 0.5, 0.5 } },
         { pick = { family = "sleeping", tags = { "bedroom" } }, x = 1.3 },
         { pick = { family = "storage", tags = { "bedroom" } }, x = 2.35, fit = { 0.5, 0.5 } },
       } },
+    { counter = "kitchenette", wall = { 0, 0.64 }, sides = { 2, 1, 3 }, tall = true,
+      base = "kitchen_base", sink = "kitchen_sink", tall_unit = "kitchen_tall" },
     { wall = { 2.16, 1.75 }, sides = { 2, 0, 1, 3 },
       set = {
         { pick = { family = "seating", tags = { "living" } }, x = 1.08, fit = { 2.16, 1.0 } },

@@ -365,11 +365,14 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
             z.lotWidth = numField(L, t, "lot_width", z.lotWidth);
             z.interiorLot = numField(L, t, "interior_lot", z.interiorLot);
             z.minSide = numField(L, t, "min_side", z.minSide);
+            z.minAccess = numField(L, t, "min_access", z.minAccess);
+            z.minLotArea = numField(L, t, "min_lot_area", z.minLotArea);
         }
         lua_pop(L, 1);
         if (const std::string f = strField(L, pt, "fill"); !f.empty()) prog.fill = f;
         if (const std::string f = strField(L, pt, "shallow"); !f.empty()) prog.shallow = f;
         prog.shallowDepth = numField(L, pt, "shallow_depth", prog.shallowDepth);
+        prog.residential = boolField(L, pt, "residential", false);
         lua_getfield(L, pt, "zones");
         if (!lua_istable(L, -1)) return bad(where + ": no zones");
         {

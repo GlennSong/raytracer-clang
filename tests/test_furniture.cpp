@@ -2,6 +2,7 @@
 // placed in.
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/roads/lanes/geom2d.h"
 #include "../src/engine/procgen/furniture_kit.h"
 #include "../src/engine/procgen/city/furniture.h"
 #include "../src/engine/procgen/city/room_plan.h"
@@ -151,22 +152,25 @@ TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
         }
         std::printf("    [apts] %zu rooms: %d apartments, %d bedrooms, %d kitchens, %d closets\n", rp.rooms.size(), halls,
                     beds, kitchens, closets);
-        CHECK(halls >= 6);
-        CHECK(baths == halls);
-        CHECK(livings == halls);
-        CHECK(kitchens == halls);
-        // A 7 m unit is a studio with no bedroom; the rest have one or two (an END unit one, at its far end, so its
-        // hall faces the living room -- the space graph's gate found the two-bedroom end unit a dead end past its
-        // bath, issue #105, 2026-10-15), and every room is reached from the street.
-        CHECK(beds >= halls / 2);
+        // THE ZONED FLOOR (floor_zones.h, 2026-10-16): every flat its bath, and a living room -- or, where it is too
+        // narrow for a bedroom or a kitchen of its own, a studio's one room (a Flat) with its kitchenette
+        int studios = 0;
+        for (const Room& r : rp.rooms) studios += r.kind == RoomKind::Flat;
+        CHECK(baths >= 6);
+        CHECK(livings + studios == baths);
+        CHECK(kitchens >= livings);
+        // most have a bedroom or two (an END unit one, at its far end, so its hall faces the living room -- the space
+        // graph's gate found the two-bedroom end unit a dead end past its bath, issue #105, 2026-10-15), and every
+        // room is reached from the street.
+        CHECK(beds >= baths / 2);
         CHECK(unreachableCells(spaceGraphOf(plan, p, 0.0)).empty());
-        // No two rooms overlap (rectangles, 2 cm shrunk: touching is not overlapping).
+        // No two rooms overlap (their outlines may be L-shaped: the overlap's area, 1 dm2 slack).
         for (std::size_t i = 0; i < rp.rooms.size(); ++i)
             for (std::size_t j = i + 1; j < rp.rooms.size(); ++j) {
-                Real lo1 = 1e9, hi1 = -1e9, lo2 = 1e9, hi2 = -1e9, lo3 = 1e9, hi3 = -1e9, lo4 = 1e9, hi4 = -1e9;
-                for (const Vec2& v : rp.rooms[i].rect) { lo1 = std::min(lo1, v.x); hi1 = std::max(hi1, v.x); lo2 = std::min(lo2, v.y); hi2 = std::max(hi2, v.y); }
-                for (const Vec2& v : rp.rooms[j].rect) { lo3 = std::min(lo3, v.x); hi3 = std::max(hi3, v.x); lo4 = std::min(lo4, v.y); hi4 = std::max(hi4, v.y); }
-                const bool ov = lo1 < hi3 - 0.02 && lo3 < hi1 - 0.02 && lo2 < hi4 - 0.02 && lo4 < hi2 - 0.02;
+                Poly2 a = rp.rooms[i].rect, b = rp.rooms[j].rect;
+                ensureCCW(a);
+                ensureCCW(b);
+                const bool ov = roads::lanes::setArea(roads::lanes::intersectSets(roads::lanes::fromRing(a), roads::lanes::fromRing(b))) > 0.01;
                 CHECK(!ov);
             }
         CHECK(floorIsWalkable(rp, plan, core.frame.toWorld({core.length * 0.5, -1.1})));
@@ -183,7 +187,7 @@ TEST_CASE(a_residential_tower_floor_is_whole_apartments) {
                     shelves, pictures);
         CHECK(pbeds >= beds);   // every bedroom gets its bed
         CHECK(shelves >= closets / 2);
-        CHECK(pictures >= halls);
+        CHECK(pictures >= baths);
     }
 }
 
