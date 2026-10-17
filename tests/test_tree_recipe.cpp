@@ -164,7 +164,9 @@ TEST_CASE(welded_branches_start_on_their_parent_not_inside_it) {
     std::printf("    [weld] oak seed 3: %zu bark vertices as overlapping tubes, %zu welded\n", tube.branches.vertices.size(),
                 weld.branches.vertices.size());
     CHECK(whole);
-    CHECK(weld.branches.vertices.size() < tube.branches.vertices.size());
+    // (the crotches' stubs add rings where a thick limb splits; the buried rings dropped take some back -- a weld costs
+    // at most a third more bark)
+    CHECK(weld.branches.vertices.size() < tube.branches.vertices.size() * 4 / 3);
     CHECK(weld.branches.indices.size() % 3 == 0);
 }
 

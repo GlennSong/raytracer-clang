@@ -29,7 +29,7 @@ const std::vector<Field>& fields() {
         {"meander", &TreeParams::meander}, {"lean", &TreeParams::lean}, {"flare", &TreeParams::flare},
         {"lobes", nullptr, &TreeParams::lobes}, {"lobeDepth", &TreeParams::lobeDepth}, {"lobeHeight", &TreeParams::lobeHeight},
         {"nodeSwell", &TreeParams::nodeSwell}, {"barkNoise", &TreeParams::barkNoise}, {"twist", &TreeParams::twist},
-        {"collar", &TreeParams::collar},
+        {"collar", &TreeParams::collar}, {"forkRatio", &TreeParams::forkRatio}, {"forkMinRadius", &TreeParams::forkMinRadius},
         {"rootCount", nullptr, &TreeParams::rootCount}, {"rootSpread", &TreeParams::rootSpread},
         {"tipRadius", &TreeParams::tipRadius}, {"pipeExponent", &TreeParams::pipeExponent},
         {"radiusScale", &TreeParams::radiusScale}, {"ringSegments", nullptr, &TreeParams::ringSegments},

@@ -464,10 +464,19 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
 
     // Walk chains from a worklist of (anchor, first) starts; the anchor is the
     // fork point, included so the curve passes through the joint.
+    // A FORK INTO NEAR-EQUAL HALVES (the weld's crotch): a side child as thick as the continuing one -- neither is the
+    // limb carried on; the limb ends there and both weld into it
+    std::vector<char> equalFork(nodes.size(), 0);
+    if (params.collar > 0.0f)
+        for (size_t n = 0; n < nodes.size(); n++) {
+            if (cont[n] < 0 || nodes[n].radius < params.forkMinRadius) continue;
+            for (int c : children[n])
+                if (c != cont[n] && nodes[c].radius >= params.forkRatio * nodes[cont[n]].radius) equalFork[n] = 1;
+        }
     std::vector<std::pair<int, int>> work;
     auto pushStarts = [&](int node) {
         for (int c : children[node])
-            if (c != cont[node]) work.push_back({node, c});
+            if (c != cont[node] || equalFork[node]) work.push_back({node, c});
     };
     if (cont[0] != -1) work.push_back({0, cont[0]});
     pushStarts(0);
@@ -490,6 +499,29 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         for (int cur = first; cur != -1; cur = cont[cur]) {
             append(cur);
             pushStarts(cur);
+            if (equalFork[cur]) {
+                // THE STUB the halves weld into: on along the limb as far as they leave its surface, then capped round
+                const int par = nodes[cur].parent;
+                const Vec3 dIn = par >= 0 ? normalize(nodes[cur].pos - nodes[par].pos) : nodes[cur].heading;
+                const float r = nodes[cur].radius;
+                double ls = 0.6 * r;
+                for (int ch : children[cur]) {
+                    const Vec3 dc = normalize(nodes[ch].pos - nodes[cur].pos);
+                    const double cs = std::clamp(dot(dc, dIn), -1.0, 1.0), sn = std::sqrt(std::max(1e-6, 1.0 - cs * cs));
+                    ls = std::max(ls, (r + 1.7 * nodes[ch].radius) * cs / sn);
+                }
+                ls = std::min(ls, 4.0 * static_cast<double>(r));
+                const Vec3 p0 = nodes[cur].pos;
+                const float d0 = nodes[cur].distFromRoot;
+                auto stub = [&](double t, float rad) {
+                    path.points.push_back(p0 + dIn * t);
+                    path.radius.push_back(rad);
+                    path.dist.push_back(d0 + static_cast<float>(t));
+                };
+                stub(ls, r * 0.98f);
+                stub(ls + 0.5 * r, r * 0.12f);
+                break;
+            }
         }
         Vec3 color = params.barkColor * vary(rng);
         Socket sock;
@@ -499,7 +531,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             const Vec3 dIn = par >= 0 ? normalize(nodes[anchor].pos - nodes[par].pos) : nodes[anchor].heading;
             const Vec3 dOut = cont[anchor] >= 0 ? normalize(nodes[cont[anchor]].pos - nodes[anchor].pos) : dIn;
             sock.c = nodes[anchor].pos;
-            sock.d = normalize(dIn + dOut);
+            sock.d = equalFork[anchor] ? dIn : normalize(dIn + dOut);   // (a crotch: the stub runs on along the limb)
             sock.r = nodes[anchor].radius;
             sock.collar = params.collar;
             sp = &sock;

@@ -58,6 +58,10 @@ struct TreeParams {
     float collar        = 0.0f;     // THE WELD: a side branch starts on its parent's surface and flares into it by
                                     //   this (a fraction of its radius) -- no tube buried in the fork, no crease;
                                     //   0 = the old overlapping tubes
+    float forkRatio     = 0.7f;     // ...and where a limb splits into near-equal halves (a side child at least this
+                                    //   share of the continuing one's radius) neither carries on through the fork:
+                                    //   the limb ends in a short capped stub and BOTH halves weld into it (a crotch)
+    float forkMinRadius = 0.06f;    // ...on limbs at least this thick (m): a twig's fork is not worth the rings
 
     // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
     int   rootCount     = 5;        // number of surface roots (0 = none)
