@@ -291,7 +291,9 @@ void RenderSystem::render(FrameContext& ctx) {
     // One drawable's cull + draw (reached through the draw index's visible cells, or the ECS walk with
     // RT_NO_DRAW_INDEX=1): the same tests whichever way it is found.
     auto drawEntity = [&](uint32_t entityIndex, Transform& t, PrevTransform& prev, Renderable& r) {
-            if (entityIndex == ctx.view.activeCameraEntity.index) return;
+            // (the camera's own body is not drawn -- but only when there IS a camera entity: an empty handle's index is
+            // 0, the first entity a level makes, and skipping that hid every lab's ground in play since 28fc0763)
+            if (ctx.view.activeCameraEntity.valid() && entityIndex == ctx.view.activeCameraEntity.index) return;
             ++encEnt;
             if (audit) {
                 BoundingSphere ab = ctx.renderer.getMeshBounds(r.mesh);
