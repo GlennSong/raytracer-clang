@@ -165,6 +165,11 @@ Field2 fieldWarp(Field2 a, Field2 du, Field2 dv, double amount) {
     };
 }
 
+Field2 fieldRepeat(Field2 a, int ku, int kv) {
+    const double fu = std::max(1, ku), fv = std::max(1, kv);
+    return [a, fu, fv](double u, double v) { return a(wrap01(u * fu), wrap01(v * fv)); };
+}
+
 ColorField2 colorConstant(const Vec3& c) { return [c](double, double) { return c; }; }
 ColorField2 colorMixBy(ColorField2 a, ColorField2 b, Field2 t) {
     return [a, b, t](double u, double v) {

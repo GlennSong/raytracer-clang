@@ -924,9 +924,18 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
         r.material.roughness = 1.0f;
         // Per-species bark relief: value pattern (modulates vertex color) + normal map.
-        BarkMaps bm = barkMaps(barkStyleFromName(barkStyle), 256, seed);
-        r.material.albedoMap = upload(bm.albedo);
-        r.material.normalMap = upload(bm.normal);
+        // THE BARK by kind (material_recipes.h: furrowed, plated, smooth, papery, ringed; the old style names map on),
+        // one tile a kind (cached), else the old per-style maps
+        BarkKind barkKind;
+        if (barkKindFromName(barkStyle, barkKind)) {
+            const BarkTextures bt = barkTextures(barkKind, 1u);
+            r.material.albedoMap = upload(bt.albedo);
+            r.material.normalMap = upload(bt.normal);
+        } else {
+            BarkMaps bm = barkMaps(barkStyleFromName(barkStyle), 256, seed);
+            r.material.albedoMap = upload(bm.albedo);
+            r.material.normalMap = upload(bm.normal);
+        }
         if (ent.contains("material")) applyMaterial(ent["material"], r.material);
         world.add<Renderable>(e, r);
 

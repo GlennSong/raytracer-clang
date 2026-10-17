@@ -266,6 +266,9 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
     const bool shaped = g && (g->nodeSwell > 0.0f || g->barkNoise > 0.0f || (trunk && (g->flare > 0.0f || (g->lobes > 0 && g->lobeDepth > 0.0f))));
     const float twistRad = g ? g->twist * static_cast<float>(PI) / 180.0f : 0.0f;
     const float footR = path.radius.empty() ? 0.0f : path.radius.front();
+    // the bark tile ROUND the limb a whole number of times by its girth (a tile is 1 / vScale metres, as along it):
+    // not stretched round a trunk, not squeezed round a twig
+    const float uRep = std::max(1.0f, std::round(2.0f * static_cast<float>(PI) * footR * vScale));
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
     for (int k = 0; k < rings; k++) {
         const Vec3 right = frames[k].right;
@@ -303,7 +306,7 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
                 r *= m;
             }
             Vertex vert(centers[k] + dir * r, dir, tan,
-                        static_cast<float>(i) / segs, v);
+                        uRep * static_cast<float>(i) / segs, v);
             vert.color = color;
             mesh.vertices.push_back(vert);
         }

@@ -18,7 +18,8 @@
 --     girth    tipRadius pipeExponent radiusScale ringSegments
 --     leaves   leaves leafSize leavesPerTip leafThickness leafClump (how far back along a twig its cards spread)
 --              leafPitch (deg a card tilts out from its twig) maxLeafCards
---   bark                the bark texture: "oak" (furrows), "birch" (pale, lenticels), "pine" (plates)
+--   bark                the bark (procgen/material_recipes.h): "furrowed" (oak), "plated" (pine, spruce), "smooth"
+--                       (beech), "papery" (birch: white, dark dashes and patches), "ringed" (palms, cherry)
 --   bark_color, leaf_color   {r, g, b} linear, or {{lo}, {hi}} drawn per tree
 --   card                THE LEAF CARD the tree's foliage wears (procgen/leaf_card.h): a small 2D twig grammar drawn by a
 --                       2D turtle -- F(len) a stem, +(a) -(a) turns, [ ] a side shoot, L(scale) a leaf -- and the leaf:
@@ -54,7 +55,7 @@ tree_recipes = {
       tipRadius = 0.012, pipeExponent = {2.2, 2.5}, radiusScale = 1.8, ringSegments = 10,
       leafSize = {0.36, 0.46}, leavesPerTip = 4, leafThickness = 0.05, leafClump = 0.9, maxLeafCards = 6000,
     },
-    bark = "oak",
+    bark = "furrowed",
     bark_color = { {0.26, 0.21, 0.16}, {0.34, 0.27, 0.20} },
     leaf_color = { {0.14, 0.30, 0.08}, {0.20, 0.38, 0.11} },
     card = {
@@ -90,7 +91,7 @@ tree_recipes = {
       tipRadius = 0.010, pipeExponent = 2.3, radiusScale = 1.2, ringSegments = 8,
       leafSize = {0.38, 0.46}, leavesPerTip = 7, leafThickness = 0.035, leafClump = 0.9, maxLeafCards = 9000,
     },
-    bark = "birch",
+    bark = "papery",
     bark_color = { {0.74, 0.72, 0.68}, {0.82, 0.80, 0.76} },
     leaf_color = { {0.20, 0.40, 0.10}, {0.27, 0.48, 0.12} },
     card = {
@@ -127,7 +128,7 @@ tree_recipes = {
       leafSize = {0.40, 0.50}, leavesPerTip = 4, leafThickness = 0.07, leafClump = 1.0, leafPitch = {18, 30},
       maxLeafCards = 16000,
     },
-    bark = "pine",
+    bark = "plated",
     bark_color = { {0.22, 0.16, 0.12}, {0.28, 0.20, 0.15} },
     leaf_color = { {0.06, 0.16, 0.06}, {0.09, 0.21, 0.08} },
     -- a SPRAY: a shoot with side shoots off it, each a bottlebrush -- needles all round the twig, so seen flat they

@@ -73,7 +73,89 @@ Recipe masonry(uint32_t s) {
 }
 
 constexpr int kStoneVersion = 2;   // 2: darker granite, broken basalt cracks
+
+// THE BARKS: a brightness (the vertex colour tints it) and a height.
+struct BarkRecipe { Field2 bright; Field2 height; double relief; };
+
+// FURROWED: continuous ridges running up the limb, parting and merging, with WIDE dark furrows between -- noise
+// squeezed six times across the limb (features long along it), warped so the ridges wander, cut to ridge / furrow;
+// a fine grain over the ridges, the furrows darkest at their floor.
+BarkRecipe furrowed(uint32_t s) {
+    // (two squeezes at co-prime counts, 5 and 7 across, so no column repeats the one beside it)
+    const Field2 squeezed = fieldAdd(fieldScaleBias(fieldRepeat(fieldTileFbm(s, 3, 3), 5, 1), 0.5, 0.0),
+                                     fieldScaleBias(fieldRepeat(fieldTileFbm(s + 9, 3, 3), 7, 1), 0.5, 0.0));
+    const Field2 n = fieldWarp(squeezed, fieldTileFbm(s + 1, 3, 3), fieldTileFbm(s + 2, 2, 2), 0.04);
+    const Field2 ridge = fieldSmoothstep(n, 0.40, 0.62), fine = fieldTileFbm(s + 3, 14, 3);
+    const Field2 floor = fieldSmoothstep(n, 0.25, 0.45);
+    return {fieldAdd(fieldScaleBias(ridge, 0.42, 0.30), fieldAdd(fieldScaleBias(floor, 0.18, 0.0), fieldScaleBias(fine, 0.12, 0.0))),
+            fieldAdd(fieldScaleBias(ridge, 0.7, 0.0), fieldAdd(fieldScaleBias(floor, 0.15, 0.0), fieldScaleBias(fine, 0.15, 0.0))), 7.0};
+}
+// PLATED: flat plates a little wider than tall, each its own tone, flaking at its edges, thin cracks between.
+BarkRecipe plated(uint32_t s) {
+    const Field2 edges = fieldWarp(fieldRepeat(fieldCellEdges(s, 5), 1, 2), fieldTileFbm(s + 1, 4, 2), fieldTileFbm(s + 2, 4, 2), 0.02);
+    const Field2 plate = fieldSmoothstep(edges, 0.0, 0.07), tone = fieldRepeat(fieldCellId(s, 5), 1, 2);
+    const Field2 flake = fieldTileFbm(s + 3, 12, 3);
+    return {fieldAdd(fieldScaleBias(plate, 0.45, 0.3), fieldAdd(fieldScaleBias(tone, 0.18, 0.0), fieldScaleBias(flake, 0.1, 0.0))),
+            fieldAdd(fieldScaleBias(plate, 0.65, 0.0), fieldAdd(fieldScaleBias(tone, 0.15, 0.0), fieldScaleBias(flake, 0.2, 0.0))), 4.5};
+}
+// SMOOTH: a thin skin, bright, with a soft mottle and a few faint wrinkles across it that break off.
+BarkRecipe smooth(uint32_t s) {
+    const Field2 mottle = fieldTileFbm(s, 3, 3);
+    const Field2 wrinkle = fieldMul(fieldSmoothstep(fieldRepeat(fieldTileNoise(s + 1, 5), 1, 6), 0.72, 0.85),
+                                    fieldSmoothstep(fieldTileFbm(s + 2, 4, 2), 0.5, 0.7));
+    return {fieldAdd(fieldScaleBias(mottle, 0.16, 0.78), fieldScaleBias(wrinkle, -0.10, 0.0)),
+            fieldAdd(fieldScaleBias(mottle, 0.3, 0.0), fieldScaleBias(wrinkle, 0.15, 0.0)), 1.2};
+}
+// PAPERY: white; LENTICELS -- dark dashes running round the trunk (noise squeezed along it, so its features lie
+// across it, cut to its darkest), long and short; black patches where the noise's slow octave runs low; peeling bands
+// paler and lifted.
+BarkRecipe papery(uint32_t s) {
+    // (many cells across the trunk -- a dash a few centimetres long -- squeezed along it so each is a thin line)
+    const Field2 dash = fieldSmoothstep(fieldRepeat(fieldTileNoise(s, 18), 1, 7), 0.83, 0.89);
+    const Field2 dash2 = fieldSmoothstep(fieldRepeat(fieldTileNoise(s + 6, 26), 1, 9), 0.87, 0.92);
+    const Field2 patch = fieldInvert(fieldSmoothstep(fieldWarp(fieldTileFbm(s + 1, 2, 3), fieldTileFbm(s + 2, 4, 2), fieldTileFbm(s + 3, 4, 2), 0.06), 0.24, 0.30));
+    const Field2 peel = fieldSmoothstep(fieldWarp(fieldRepeat(fieldTileNoise(s + 4, 3), 1, 5), fieldTileFbm(s + 5, 3, 2), fieldConstant(0.5), 0.08), 0.7, 0.8);
+    const Field2 tone = fieldTileFbm(s + 7, 3, 3);
+    Field2 b = fieldAdd(fieldScaleBias(tone, 0.08, 0.86), fieldScaleBias(peel, 0.06, 0.0));
+    b = fieldMul(b, fieldScaleBias(fieldMax(dash, dash2), -0.8, 1.0));
+    b = fieldMul(b, fieldScaleBias(patch, -0.85, 1.0));
+    return {b, fieldAdd(fieldScaleBias(peel, 0.4, 0.3), fieldScaleBias(fieldMax(dash, dash2), -0.3, 0.0)), 2.0};
+}
+// RINGED: sharp rings round the limb, long fibres along it between.
+BarkRecipe ringed(uint32_t s) {
+    const Field2 rings = fieldSmoothstep(fieldWarp(fieldBands(12), fieldTileFbm(s, 4, 2), fieldConstant(0.5), 0.03), 0.82, 0.95);
+    const Field2 fibre = fieldRepeat(fieldTileFbm(s + 1, 6, 3), 6, 1);
+    return {fieldAdd(fieldScaleBias(fibre, 0.22, 0.6), fieldScaleBias(rings, -0.3, 0.0)),
+            fieldAdd(fieldScaleBias(fibre, 0.4, 0.2), fieldScaleBias(rings, 0.5, 0.0)), 3.0};
+}
+
+constexpr int kBarkVersion = 4;   // 2: furrows, not scales; dashes, not dots
 }  // namespace
+
+bool barkKindFromName(const std::string& n, BarkKind& out) {
+    if (n == "furrowed" || n == "oak") out = BarkKind::Furrowed;
+    else if (n == "plated" || n == "pine" || n == "spruce") out = BarkKind::Plated;
+    else if (n == "smooth" || n == "beech" || n == "aspen") out = BarkKind::Smooth;
+    else if (n == "papery" || n == "birch") out = BarkKind::Papery;
+    else if (n == "ringed" || n == "palm" || n == "cherry") out = BarkKind::Ringed;
+    else return false;
+    return true;
+}
+
+BarkTextures barkTextures(BarkKind kind, uint32_t seed, int size) {
+    const uint32_t s = seed * 7451u + static_cast<uint32_t>(kind) * 92821u + 3u;
+    const BarkRecipe r = kind == BarkKind::Plated ? plated(s) : kind == BarkKind::Smooth ? smooth(s)
+                       : kind == BarkKind::Papery ? papery(s) : kind == BarkKind::Ringed ? ringed(s) : furrowed(s);
+    char key[96];
+    BarkTextures t;
+    std::snprintf(key, sizeof key, "bark/v%d/%d/%u/%d/albedo", kBarkVersion, static_cast<int>(kind), seed, size);
+    const Field2 b = fieldClamp(r.bright, 0.0, 1.0);
+    t.albedo = bakeCached(key, [&] { return bakeFieldRGBA([b](double u, double v) { const double x = b(u, v); return Vec3(x, x, x); },
+                                                           fieldConstant(1.0), size, false); });
+    std::snprintf(key, sizeof key, "bark/v%d/%d/%u/%d/normal", kBarkVersion, static_cast<int>(kind), seed, size);
+    t.normal = bakeCached(key, [&] { return bakeFieldNormal(r.height, r.relief, size); });
+    return t;
+}
 
 StoneTextures stoneTextures(StoneKind kind, uint32_t seed, int size) {
     const uint32_t s = seed * 6007u + static_cast<uint32_t>(kind) * 31337u;

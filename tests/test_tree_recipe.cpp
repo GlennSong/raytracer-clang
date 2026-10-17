@@ -5,6 +5,7 @@
 #include "../src/engine/scripting/tree_recipes_lua.h"
 #include "../src/engine/procgen/leaf_card.h"
 #include "../src/image.h"
+#include "../src/engine/procgen/material_recipes.h"
 
 #include <algorithm>
 #include <cmath>
@@ -276,4 +277,41 @@ TEST_CASE(every_part_of_a_tree_hangs_on_it) {
             CHECK(floating == 0);
             CHECK(adrift == 0);
         }
+}
+
+// THE BARKS (material_recipes.h): every kind bakes, TILES (its left column meets its right, its top its bottom, as
+// closely as two neighbouring columns inside it do), and each reads differently -- an oak's furrows rough, a beech's
+// skin smooth.
+// RT_BARK_DUMP=<dir> writes each tile, 2 x 2, tinted a bark brown.
+TEST_CASE(barks_by_kind_tile_and_differ) {
+    const char* names[] = {"furrowed", "plated", "smooth", "papery", "ringed"};
+    std::vector<double> means;
+    for (const char* n : names) {
+        BarkKind k;
+        CHECK(barkKindFromName(n, k));
+        const BarkTextures t = barkTextures(k, 1u, 256);
+        const int W = t.albedo.width, H = t.albedo.height, C = t.albedo.channels;
+        CHECK(W == 256 && H == 256 && !t.normal.pixels.empty());
+        auto px = [&](int x, int y) { return static_cast<double>(t.albedo.pixels[(static_cast<std::size_t>(y) * W + x) * C]); };
+        // the seam against the step between two neighbouring columns (rows) inside, the same way
+        double seamU = 0, seamV = 0, innerU = 0, innerV = 0, mean = 0, sq = 0;
+        for (int i = 0; i < H; ++i) { seamU += std::fabs(px(0, i) - px(W - 1, i)); innerU += std::fabs(px(W / 2, i) - px(W / 2 - 1, i)); }
+        for (int i = 0; i < W; ++i) { seamV += std::fabs(px(i, 0) - px(i, H - 1)); innerV += std::fabs(px(i, H / 2) - px(i, H / 2 - 1)); }
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) { mean += px(x, y); sq += px(x, y) * px(x, y); }
+        mean /= W * H;
+        const double sd = std::sqrt(std::max(0.0, sq / (W * H) - mean * mean)) / 255.0;
+        means.push_back(sd);
+        std::printf("    [bark] %-8s mean %.2f contrast %.3f, seam %.1f / %.1f, inner step %.1f / %.1f\n", n, mean / 255.0, sd,
+                    seamU / H, seamV / W, innerU / H, innerV / W);
+        CHECK(seamU < 2.5 * innerU + H * 2.0);
+        CHECK(seamV < 2.5 * innerV + W * 2.0);
+        if (const char* dir = std::getenv("RT_BARK_DUMP")) {
+            Image img(W * 2, H * 2);
+            for (int y = 0; y < H * 2; ++y)
+                for (int x = 0; x < W * 2; ++x)
+                    img.setPixel(x, y, Vec3(0.42, 0.33, 0.25) * (px(x % W, y % H) / 255.0) * 1.6);
+            img.writePng(std::string(dir) + "/bark_" + n + ".png");
+        }
+    }
+    CHECK(means[0] > 2.0 * means[2]);   // an oak's furrows far rougher than a beech's skin (the colour is the vertex's)
 }

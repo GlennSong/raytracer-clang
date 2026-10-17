@@ -66,6 +66,9 @@ Field2 fieldPow(Field2 a, double e);
 // Domain warp: sample `a` at (u, v) displaced by (du, dv) (fields in [0, 1], centred on 0.5)
 // times `amount`, wrapped to the unit square -- tile-preserving when du, dv tile.
 Field2 fieldWarp(Field2 a, Field2 du, Field2 dv, double amount);
+// `a` repeated ku times across u and kv times along v: still tileable (whole repeats), and the way to stretch a
+// pattern one way -- cells squeezed across u read as bark's vertical furrows, across v as a birch's dashes.
+Field2 fieldRepeat(Field2 a, int ku, int kv);
 
 // --- colour fields: an RGB value over (u, v), LINEAR albedo ---
 using ColorField2 = std::function<Vec3(double u, double v)>;
