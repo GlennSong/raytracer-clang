@@ -1293,10 +1293,14 @@ void main() {
                 own = abs(dot(d.xz, u)) <= g.viewerBoxA.w && abs(dot(d.xz, vec2(-u.y, u.x))) <= g.viewerBoxB.z &&
                       abs(d.y) <= g.viewerBoxB.w;
             }
-            vec3 fs = own ? vec3(0.04) * brdf.x + brdf.y : f0 * brdf.x + brdf.y;   // the split-sum reflectance
+            // (an office window is DOUBLE GLAZED: four faces at 4 % each reflect about 15 % head-on -- what makes a
+            // window read as glass from inside: the bright room and its lights faint in it; Glenn: "it just seems
+            // like there's no glass there" at one face's 4 %)
+            vec3 fs = own ? vec3(0.15) * brdf.x + brdf.y : f0 * brdf.x + brdf.y;   // the split-sum reflectance
             vec3 Rv = reflect(-V, dot(N, V) < 0.0 ? -N : N);
-            vec3 reflected = own ? fs * (g.ambient.rgb * 0.08 + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv))
-                                 // (the room: dim by day; at night its lit self, the ceiling's panels in the glass)
+            vec3 reflected = own ? fs * (g.ambient.rgb * 0.35 + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv))
+                                 // (the room: by day its walls lit by the daylight through these windows -- the sky's
+                                 // light on a 0.7 wall, half of it; at night its lamps, the ceiling's panels in it)
                                  : prefiltered * fs * g.ambient.rgb * ambientShadow;
             float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0);
             float T = 1.0 - 0.4 * opacity;
