@@ -91,6 +91,25 @@ void assignRadii(std::vector<SkeletonNode>& nodes, const TreeParams& p) {
     }
 }
 
+// Smooth 3D value noise in [0,1) (the gnarl's meander and the bark's irregular cross-section).
+float gnarlHash(int x, int y, int z, uint32_t seed) {
+    uint32_t h = static_cast<uint32_t>(x) * 374761393u ^ static_cast<uint32_t>(y) * 668265263u ^
+                 static_cast<uint32_t>(z) * 2246822519u ^ seed * 3266489917u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return (h ^ (h >> 16)) / 4294967296.0f;
+}
+float gnarlNoise(const Vec3& p, uint32_t seed) {
+    const int xi = static_cast<int>(std::floor(p.x)), yi = static_cast<int>(std::floor(p.y)), zi = static_cast<int>(std::floor(p.z));
+    const float fx = static_cast<float>(p.x - xi), fy = static_cast<float>(p.y - yi), fz = static_cast<float>(p.z - zi);
+    const float sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy), sz = fz * fz * (3 - 2 * fz);
+    auto L = [](float a, float b, float t) { return a + (b - a) * t; };
+    float c[2][2];
+    for (int j = 0; j < 2; ++j)
+        for (int k = 0; k < 2; ++k)
+            c[j][k] = L(gnarlHash(xi, yi + j, zi + k, seed), gnarlHash(xi + 1, yi + j, zi + k, seed), sx);
+    return L(L(c[0][0], c[1][0], sy), L(c[0][1], c[1][1], sy), sz);
+}
+
 // Organic shaping: bend branches under gravity (droop) and add a lateral
 // meander (wander), thin branches bending most. The key is that the bend
 // *accumulates* down a limb — each apical segment bends relative to its parent's
@@ -99,8 +118,14 @@ void assignRadii(std::vector<SkeletonNode>& nodes, const TreeParams& p) {
 // lateral child bends from its *own* direction, preserving the branch angle.
 // Runs in parent-before-child order, so children inherit the bent positions and
 // joints stay connected; the thick ~vertical trunk (thin~0) barely moves.
-void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, std::mt19937& rng) {
-    if (nodes.empty() || (p.droop <= 0.0f && p.wander <= 0.0f)) return;
+//
+// THE GNARL's centreline terms ride the same pass: the thin ends turn back up to the light (light: a sagging limb's
+// S), a limb now and then KINKS (crookChance: a lost leader, a lateral taking over -- the kink persists, since the
+// next segment bends from this one's direction), and a smooth multi-octave MEANDER (coherent noise of position, so
+// a limb wanders in curves, not per-node jitter).
+void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, std::mt19937& rng, uint32_t seed) {
+    if (nodes.empty() || (p.droop <= 0.0f && p.wander <= 0.0f && p.light <= 0.0f && p.crookChance <= 0.0f &&
+                          p.meander <= 0.0f)) return;
 
     // Apical (straightest) child per node, from the original geometry.
     std::vector<int> cont(nodes.size(), -1);
@@ -138,12 +163,27 @@ void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, std::m
             base = normalize(nodes[par].pos - nodes[nodes[par].parent].pos);
 
         float thin = std::clamp(1.0f - nodes[i].radius / trunkR, 0.0f, 1.0f);
-        Vec3 bent = normalize(base + Vec3(0, -1, 0) * static_cast<double>(p.droop * thin));
+        if (p.crookChance > 0.0f && cont[par] == static_cast<int>(i)) {
+            std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+            if (u01(rng) < p.crookChance) {   // a kink: the limb carries on from a new direction
+                Vec3 r0 = std::abs(base.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+                Vec3 s0 = normalize(cross(base, r0)), u0 = normalize(cross(s0, base));
+                const double az = u01(rng) * 2.0 * PI, ang = p.crookAngle * (0.5 + u01(rng)) * PI / 180.0;
+                base = normalize(base * std::cos(ang) + (s0 * std::cos(az) + u0 * std::sin(az)) * std::sin(ang));
+            }
+        }
+        Vec3 bent = normalize(base + Vec3(0, -1, 0) * static_cast<double>(p.droop * thin) +
+                              Vec3(0, 1, 0) * static_cast<double>(p.light * thin * thin));
         Vec3 ref = std::abs(bent.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
         Vec3 side = normalize(cross(bent, ref));
         Vec3 up = normalize(cross(side, bent));
-        Vec3 jitter = (side * jit(rng) + up * jit(rng)) *
-                      static_cast<double>(p.wander * thin);
+        Vec3 jitter = p.wander > 0.0f ? (side * jit(rng) + up * jit(rng)) * static_cast<double>(p.wander * thin) : Vec3(0, 0, 0);
+        if (p.meander > 0.0f) {   // two octaves of coherent noise at the node's place: 3 m and 1 m wavelengths
+            const Vec3 q = orig[i];
+            const double m1 = gnarlNoise(q * 0.33, seed) - 0.5 + 0.5 * (gnarlNoise(q * 1.0 + Vec3(17, 3, 5), seed) - 0.5);
+            const double m2 = gnarlNoise(q * 0.33 + Vec3(41, 7, 13), seed) - 0.5 + 0.5 * (gnarlNoise(q * 1.0 + Vec3(5, 29, 11), seed) - 0.5);
+            jitter = jitter + (side * m1 + up * m2) * static_cast<double>(2.0f * p.meander);
+        }
         nodes[i].pos = nodes[par].pos + normalize(bent + jitter) * len;
     }
 }
@@ -174,8 +214,14 @@ float lerpAt(const std::vector<float>& a, double u) {
 // orient each ring with a rotation-minimizing frame (no twist), and sweep a
 // tapered ring strip with bark UVs flowing along the length. Ring winding/normal
 // layout matches MeshBuilder::cylinder.
+//
+// THE GNARL's cross-section (`g`, when given): the ring is not a circle -- the trunk (`trunk`) flutes into `lobes`
+// ridges that fade up from the foot (`footY`) and swells into its root flare; every limb bulges at its nodes and
+// pinches between, and its outline is knotty (barkNoise, coherent round the ring and along the limb); the lobes and
+// the knots spiral with the grain (twist). The normals then come from the displaced surface, not the radial.
 void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color,
-                     int segs, float vScale, int ringsPerSegment) {
+                     int segs, float vScale, int ringsPerSegment,
+                     const TreeParams* g = nullptr, bool trunk = false, float footY = 0.0f, uint32_t seed = 0) {
     if (path.points.size() < 2) return;
     Spline<Vec3> spline = Spline<Vec3>::catmullRom(path.points);
     int rings = std::max(2, spline.segments() * std::max(1, ringsPerSegment) + 1);
@@ -188,24 +234,73 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
     }
     std::vector<CurveFrame> frames = rotationMinimizingFrames(centers, tangents);
 
+    const bool shaped = g && (g->nodeSwell > 0.0f || g->barkNoise > 0.0f || (trunk && (g->flare > 0.0f || (g->lobes > 0 && g->lobeDepth > 0.0f))));
+    const float twistRad = g ? g->twist * static_cast<float>(PI) / 180.0f : 0.0f;
+    const float footR = path.radius.empty() ? 0.0f : path.radius.front();
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
     for (int k = 0; k < rings; k++) {
         const Vec3 right = frames[k].right;
         const Vec3 up = frames[k].up;
         float rad = lerpAt(path.radius, us[k]);
         float v = lerpAt(path.dist, us[k]) * vScale;
+        const float sAlong = lerpAt(path.dist, us[k]);
+        float ringScale = 1.0f, lobeA = 0.0f;
+        if (shaped) {
+            const float hy = static_cast<float>(centers[k].y) - footY;
+            if (trunk && g->flare > 0.0f) ringScale *= 1.0f + g->flare * std::exp(-std::max(0.0f, hy) / std::max(0.3f, 2.5f * footR));
+            if (trunk && g->lobes > 0) lobeA = g->lobeDepth * std::exp(-std::max(0.0f, hy) / std::max(0.2f, g->lobeHeight));
+            if (g->nodeSwell > 0.0f) {   // the knots of the path (its nodes) at whole u: a bulge there, a pinch between
+                const double fu = us[k] - std::floor(us[k]), d = std::min(fu, 1.0 - fu);
+                ringScale *= 1.0f + g->nodeSwell * static_cast<float>(std::exp(-(d / 0.14) * (d / 0.14)) - 0.35);
+            }
+        }
         for (int i = 0; i <= segs; i++) {
             float phi = 2.0f * static_cast<float>(PI) * i / segs;
             float c = std::cos(phi), s = std::sin(phi);
             Vec3 dir = right * c + up * s;        // outward radial = normal
             Vec3 tan = right * (-s) + up * c;     // around the circumference
-            Vertex vert(centers[k] + dir * rad, dir, tan,
+            float r = rad;
+            if (shaped) {
+                float m = ringScale;
+                const float ph = phi + twistRad * sAlong;
+                if (lobeA > 0.0f) m *= 1.0f + lobeA * (0.5f + 0.5f * std::cos(g->lobes * ph + static_cast<float>(seed % 97)));
+                if (g->barkNoise > 0.0f) {   // round the ring (periodic) and along the limb, at a scale set by its girth
+                    const float k2 = 2.2f, kz = 1.4f / std::max(0.05f, rad * 4.0f);
+                    const Vec3 q(std::cos(ph) * k2, std::sin(ph) * k2, sAlong * kz);
+                    m *= 1.0f + g->barkNoise * (2.0f * gnarlNoise(q + Vec3(static_cast<double>(seed % 251), 0, 0), seed) - 1.0f);
+                }
+                r *= m;
+            }
+            Vertex vert(centers[k] + dir * r, dir, tan,
                         static_cast<float>(i) / segs, v);
             vert.color = color;
             mesh.vertices.push_back(vert);
         }
     }
     const int stride = segs + 1;
+    if (shaped) {   // the normals of the displaced surface: across the ring x along the limb, turned outward
+        auto P = [&](int k, int i) { return mesh.vertices[base + static_cast<uint32_t>(k * stride + i)].position; };
+        std::vector<Vec3> nrm(static_cast<std::size_t>(rings * stride));
+        for (int k = 0; k < rings; k++)
+            for (int i = 0; i <= segs; i++) {
+                const int ip = i == segs ? 1 : i + 1, im = i == 0 ? segs - 1 : i - 1;
+                const Vec3 around = P(k, ip) - P(k, im);
+                const Vec3 along = P(std::min(rings - 1, k + 1), i) - P(std::max(0, k - 1), i);
+                Vec3 n = cross(around, along);
+                const Vertex& vx = mesh.vertices[base + static_cast<uint32_t>(k * stride + i)];
+                if (n.length() < 1e-12) n = vx.normal;
+                n = normalize(n);
+                if (dot(n, vx.normal) < 0) n = n * -1.0;
+                nrm[static_cast<std::size_t>(k * stride + i)] = n;
+            }
+        for (int k = 0; k < rings; k++)
+            for (int i = 0; i <= segs; i++) {
+                Vertex& vx = mesh.vertices[base + static_cast<uint32_t>(k * stride + i)];
+                vx.normal = nrm[static_cast<std::size_t>(k * stride + i)];
+                const Vec3 t = vx.tangent - vx.normal * dot(vx.tangent, vx.normal);
+                if (t.length() > 1e-9) vx.tangent = normalize(t);
+            }
+    }
     for (int k = 0; k < rings - 1; k++) {
         for (int i = 0; i < segs; i++) {
             uint32_t a = base + k * stride + i;            // ring k, vert i
@@ -260,7 +355,18 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     Skeleton skel = buildSkeleton(s, params.angleJitter, rng);
     std::vector<SkeletonNode>& nodes = skel.nodes;
     assignRadii(nodes, params);
-    shapeBranches(nodes, params, rng);
+    shapeBranches(nodes, params, rng, seed);
+    // THE LEAN: the whole tree tipped off vertical about its foot, toward a seeded azimuth
+    if (params.lean > 0.0f && !nodes.empty()) {
+        std::uniform_real_distribution<float> az(0.0f, 2.0f * static_cast<float>(PI));
+        const float a = az(rng);
+        const Quat q = Quat::fromAxisAngle(Vec3(std::cos(a), 0, std::sin(a)), params.lean * PI / 180.0);
+        const Vec3 foot = nodes[0].pos;
+        for (SkeletonNode& n : nodes) {
+            n.pos = foot + q.rotate(n.pos - foot);
+            n.heading = normalize(q.rotate(n.heading));
+        }
+    }
 
     TreeMesh out;
 
@@ -304,9 +410,12 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
 
     float vScale = params.barkVScale;
     std::uniform_real_distribution<float> vary(0.85f, 1.0f);
+    const float footY = nodes.empty() ? 0.0f : static_cast<float>(nodes[0].pos.y);
+    const int trunkFirst = cont.empty() ? -1 : cont[0];
     while (!work.empty()) {
         auto [anchor, first] = work.back();
         work.pop_back();
+        const bool trunk = anchor == 0 && first == trunkFirst;
         BranchPath path;
         auto append = [&](int idx) {
             path.points.push_back(nodes[idx].pos);
@@ -319,7 +428,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             pushStarts(cur);
         }
         Vec3 color = params.barkColor * vary(rng);
-        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3);
+        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3, &params, trunk, footY, seed);
     }
 
     // Buttress roots: from the base, swept out and down, flattening to run along

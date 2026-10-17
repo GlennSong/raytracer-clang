@@ -1,3 +1,4 @@
+#include "procgen/tree_recipe.h"
 #include "level_params.h"
 #include "procgen/terrain_weather.h"   // the weathered ground (ADR-0126)
 #include "procgen/terrain_maps.h"      // its maps (ADR-0128)
@@ -272,6 +273,9 @@ TreeParams readTreeParams(const json& ent, uint32_t& seedOut) {
     tp.leafSize        = j.value("leafSize", tp.leafSize);
     tp.leavesPerTip    = j.value("leavesPerTip", tp.leavesPerTip);
     tp.leafThickness   = j.value("leafThickness", tp.leafThickness);
+    for (const std::string& name : treeParamNames())   // every knob by its name, the gnarl's too (tree_recipe.h)
+        if (j.contains(name) && (j[name].is_number() || j[name].is_boolean()))
+            setTreeParam(tp, name, j[name].is_boolean() ? (j[name].get<bool>() ? 1.0 : 0.0) : j[name].get<double>());
     tp.barkColor       = parseVec3(j.value("barkColor", json()), tp.barkColor);
     tp.leafColor       = parseVec3(j.value("leafColor", json()), tp.leafColor);
     seedOut            = j.value("seed", 0u);

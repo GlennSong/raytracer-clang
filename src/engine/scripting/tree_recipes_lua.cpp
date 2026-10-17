@@ -1,0 +1,193 @@
+#include "tree_recipes_lua.h"
+#include "lua_state.h"
+#include "lua_helpers.h"
+#include "script_vm.h"
+#include "../script_assets.h"
+#include "../../log.h"
+
+#include <algorithm>
+
+namespace engine {
+
+namespace {
+
+bool fail(std::string* err, const std::string& msg) {
+    if (err) *err = msg;
+    return false;
+}
+
+// A number or a {lo, hi} range at the top of the stack.
+bool readRange(lua_State* L, double& lo, double& hi) {
+    if (lua_isnumber(L, -1)) { lo = hi = lua_tonumber(L, -1); return true; }
+    if (lua_isboolean(L, -1)) { lo = hi = lua_toboolean(L, -1) ? 1.0 : 0.0; return true; }
+    if (!lua_istable(L, -1)) return false;
+    lua_rawgeti(L, -1, 1);
+    lua_rawgeti(L, -2, 2);
+    const bool ok = lua_isnumber(L, -2) && lua_isnumber(L, -1);
+    if (ok) { lo = lua_tonumber(L, -2); hi = lua_tonumber(L, -1); }
+    lua_pop(L, 2);
+    return ok;
+}
+
+// A colour {r, g, b} or a range {{r, g, b}, {r, g, b}} at field `key` of table t.
+void readColour(lua_State* L, int t, const char* key, Vec3& lo, Vec3& hi) {
+    lua_getfield(L, t, key);
+    if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        const bool range = lua_istable(L, -1);
+        lua_pop(L, 1);
+        auto vec = [&](int idx) {
+            Vec3 v;
+            for (int k = 0; k < 3; ++k) {
+                lua_rawgeti(L, idx, k + 1);
+                const double x = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0.0;
+                lua_pop(L, 1);
+                (k == 0 ? v.x : k == 1 ? v.y : v.z) = x;
+            }
+            return v;
+        };
+        if (range) {
+            lua_rawgeti(L, -1, 1); lo = vec(lua_gettop(L)); lua_pop(L, 1);
+            lua_rawgeti(L, -1, 2); hi = vec(lua_gettop(L)); lua_pop(L, 1);
+        } else {
+            lo = hi = vec(lua_gettop(L));
+        }
+    }
+    lua_pop(L, 1);
+}
+
+// Every name/value of the table at field `key` of t as ranges, in name order (deterministic whatever the walk).
+bool readRanges(lua_State* L, int t, const char* key, std::vector<TreeRecipe::Range>& out, const std::string& where,
+                std::string* err) {
+    lua_getfield(L, t, key);
+    if (lua_istable(L, -1)) {
+        const int rt = lua_gettop(L);
+        lua_pushnil(L);
+        while (lua_next(L, rt) != 0) {
+            if (!lua_isstring(L, -2)) { lua_pop(L, 3); return fail(err, where + "." + key + ": a key is not a name"); }
+            TreeRecipe::Range g;
+            g.name = lua_tostring(L, -2);
+            if (!readRange(L, g.lo, g.hi)) {
+                lua_pop(L, 3);
+                return fail(err, where + "." + key + "." + g.name + ": not a number or {lo, hi}");
+            }
+            out.push_back(g);
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    std::sort(out.begin(), out.end(), [](const TreeRecipe::Range& a, const TreeRecipe::Range& b) { return a.name < b.name; });
+    return true;
+}
+
+}  // namespace
+
+bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "tree_recipes");
+    if (!lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "no global `tree_recipes`"); }
+    const int book = lua_gettop(L);
+    std::vector<TreeRecipe> got;
+    lua_pushnil(L);
+    while (lua_next(L, book) != 0) {
+        if (!lua_isstring(L, -2) || !lua_istable(L, -1)) { lua_settop(L, base); return fail(err, "a recipe is not name = {...}"); }
+        TreeRecipe r;
+        r.name = lua_tostring(L, -2);
+        const std::string where = "tree_recipes." + r.name;
+        const int t = lua_gettop(L);
+        if (const std::string a = strField(L, t, "axiom"); !a.empty()) r.axiom = a;
+        r.iterations = static_cast<int>(numField(L, t, "iterations", r.iterations));
+        if (const std::string b = strField(L, t, "bark"); !b.empty()) r.bark = b;
+        readColour(L, t, "bark_color", r.barkColor, r.barkColorHi);
+        readColour(L, t, "leaf_color", r.leafColor, r.leafColorHi);
+        if (!readRanges(L, t, "params", r.params, where, err) || !readRanges(L, t, "vars", r.vars, where, err)) {
+            lua_settop(L, base);
+            return false;
+        }
+        for (const TreeRecipe::Range& g : r.params) {
+            const auto& names = treeParamNames();
+            if (std::find(names.begin(), names.end(), g.name) == names.end()) {
+                lua_settop(L, base);
+                return fail(err, where + ".params: unknown param '" + g.name + "'");
+            }
+        }
+        lua_getfield(L, t, "rules");
+        if (lua_istable(L, -1)) {
+            const int rt = lua_gettop(L), n = static_cast<int>(luaL_len(L, rt));
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, rt, i);
+                const int e = lua_gettop(L);
+                TreeRecipe::Rule rule;
+                if (lua_istable(L, e)) {
+                    lua_rawgeti(L, e, 1);
+                    if (lua_isstring(L, -1)) rule.predecessor = lua_tostring(L, -1);
+                    lua_rawgeti(L, e, 2);
+                    if (lua_isstring(L, -1)) rule.successor = lua_tostring(L, -1);
+                    lua_rawgeti(L, e, 3);
+                    rule.weight = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : numField(L, e, "weight", 1.0);
+                    lua_pop(L, 3);
+                }
+                lua_pop(L, 1);
+                if (rule.predecessor.empty() || rule.successor.empty()) {
+                    lua_settop(L, base);
+                    return fail(err, where + ".rules[" + std::to_string(i) + "]: not {predecessor, successor [, weight]}");
+                }
+                r.rules.push_back(rule);
+            }
+        }
+        lua_pop(L, 1);
+        // every $name the grammar uses has a var
+        std::map<std::string, double> mid;
+        for (const TreeRecipe::Range& g : r.vars) mid[g.name] = 0.5 * (g.lo + g.hi);
+        std::string missing;
+        substituteVars(r.axiom, mid, &missing);
+        for (const TreeRecipe::Rule& rule : r.rules) {
+            substituteVars(rule.predecessor, mid, &missing);
+            substituteVars(rule.successor, mid, &missing);
+        }
+        if (!missing.empty()) { lua_settop(L, base); return fail(err, where + ": $" + missing + " has no var"); }
+        got.push_back(std::move(r));
+        lua_pop(L, 1);
+    }
+    lua_settop(L, base);
+    std::sort(got.begin(), got.end(), [](const TreeRecipe& a, const TreeRecipe& b) { return a.name < b.name; });
+    for (TreeRecipe& r : got) out.set(std::move(r));
+    return true;
+}
+
+bool loadTreeRecipesSource(const std::string& source, TreeRecipeBook& out, std::string* err) {
+    ScriptVM vm;
+    std::string e;
+    if (!vm.doString(source, &e)) return fail(err, "tree_recipes.lua: " + e);
+    return readTreeRecipes(vm, out, err);
+}
+
+TreeRecipeBook loadShippedTreeRecipes(std::string* path) {
+    TreeRecipeBook book;
+    if (path) *path = resolveScriptPath("tree_recipes.lua", "");
+    const std::string src = loadScriptCode("tree_recipes.lua", "");
+    if (src.empty()) { LOG_WARN << "[trees] no tree_recipes.lua: recipe trees grow nothing"; return book; }
+    std::string err;
+    if (!loadTreeRecipesSource(src, book, &err)) { LOG_WARN << "[trees] " << err; return TreeRecipeBook{}; }
+    LOG_INFO << "[trees] " << book.size() << " tree recipes";
+    return book;
+}
+
+const TreeRecipeBook& shippedTreeRecipes(std::string* path) {
+    static std::string lastSrc;
+    static TreeRecipeBook book;
+    if (path) *path = resolveScriptPath("tree_recipes.lua", "");
+    const std::string src = loadScriptCode("tree_recipes.lua", "");
+    if (src != lastSrc) {
+        lastSrc = src;
+        book = TreeRecipeBook{};
+        std::string err;
+        if (src.empty()) LOG_WARN << "[trees] no tree_recipes.lua: recipe trees grow nothing";
+        else if (!loadTreeRecipesSource(src, book, &err)) { LOG_WARN << "[trees] " << err; book = TreeRecipeBook{}; }
+        else LOG_INFO << "[trees] " << book.size() << " tree recipes";
+    }
+    return book;
+}
+
+}  // namespace engine

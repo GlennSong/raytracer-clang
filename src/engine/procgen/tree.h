@@ -41,6 +41,21 @@ struct TreeParams {
     float droop         = 0.22f;    // gravity sag per segment, accumulates down a limb
     float wander        = 0.06f;    // lateral random meander (kills the stiffness)
 
+    // --- Gnarl (Glenn, 2026-10-17: "trees aren't just tubes, there's all kinds of craggly movement in a tree
+    //     branch/trunk"). The centreline's wander and the cross-section's shape; 0 = the plain swept tube. ---
+    float light         = 0.0f;     // phototropism: the thin ends turn back up toward the sky (the S of a sagging limb)
+    float crookChance   = 0.0f;     // per node, the chance a limb kinks (a lost leader, a lateral taking over)
+    float crookAngle    = 25.0f;    // ...by this much (deg)
+    float meander       = 0.0f;     // smooth multi-octave meander, as a fraction of the internode length
+    float lean          = 0.0f;     // the whole tree leans this far (deg) off vertical, toward a seeded azimuth
+    float flare         = 0.0f;     // the trunk's radius swells toward the ground by 1 + flare (the root flare)
+    int   lobes         = 0;        // flutes / buttress ridges round the trunk
+    float lobeDepth     = 0.0f;     // ...their depth as a fraction of the radius at the foot
+    float lobeHeight    = 2.0f;     // ...fading to nothing over this height (m)
+    float nodeSwell     = 0.0f;     // each node bulges by this fraction of the radius (and pinches between)
+    float barkNoise     = 0.0f;     // irregular cross-section (knotty, uneven), a fraction of the radius
+    float twist         = 0.0f;     // grain twist: the lobes and bumps spiral by this many degrees a metre
+
     // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
     int   rootCount     = 5;        // number of surface roots (0 = none)
     float rootSpread    = 5.0f;     // root length = base radius * this

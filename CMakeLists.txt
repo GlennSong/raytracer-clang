@@ -87,6 +87,7 @@ add_library(engine_core STATIC
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
+    src/engine/procgen/tree_recipe.cpp
     src/engine/procgen/surface_maps.cpp
     src/engine/procgen/vehicle_mesh.cpp
     src/engine/procgen/vehicle/car_mesh.cpp
@@ -412,6 +413,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/script_system.cpp
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
+        src/engine/scripting/tree_recipes_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -832,6 +834,7 @@ add_executable(run_tests
     tests/test_envelope.cpp
     tests/test_section.cpp
     tests/test_floor_zones.cpp
+    tests/test_tree_recipe.cpp
     tests/test_room_plan.cpp
     tests/test_ladders.cpp
     tests/test_furniture.cpp

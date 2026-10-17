@@ -1,0 +1,410 @@
+{
+  "version": 1,
+  "name": "tree_lab",
+  "watch_scripts": true,
+  "_note": "TREE LAB (Glenn, 2026-10-17): recipe trees from assets/scripts/tree_recipes.lua -- a row of six seeds per species (z), and a gnarl row (z = -14): one oak from a plain tube (left) to the full gnarl (right). Edit the recipes and the level reloads.",
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.45,
+        0.62,
+        -0.4
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.88
+      ],
+      "intensity": 7.0,
+      "castsShadow": true
+    },
+    "exposure": 0.6,
+    "ambientMultiplier": 0.7
+  },
+  "player": {
+    "position": [
+      0,
+      1.8,
+      -34
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.6
+    }
+  },
+  "entities": [
+    {
+      "name": "ground",
+      "shape": "box",
+      "position": [
+        0.0,
+        -0.2,
+        10.0
+      ],
+      "size": [
+        160.0,
+        0.4,
+        120.0
+      ],
+      "material": {
+        "albedo": [
+          0.33,
+          0.4,
+          0.24
+        ],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0,
+        "emission": [
+          0,
+          0,
+          0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9
+      }
+    },
+    {
+      "id": 2,
+      "name": "oak_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 1
+      }
+    },
+    {
+      "id": 3,
+      "name": "oak_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2
+      }
+    },
+    {
+      "id": 4,
+      "name": "oak_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3
+      }
+    },
+    {
+      "id": 5,
+      "name": "oak_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 4
+      }
+    },
+    {
+      "id": 6,
+      "name": "oak_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 5
+      }
+    },
+    {
+      "id": 7,
+      "name": "oak_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 6
+      }
+    },
+    {
+      "id": 8,
+      "name": "birch_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 1
+      }
+    },
+    {
+      "id": 9,
+      "name": "birch_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 2
+      }
+    },
+    {
+      "id": 10,
+      "name": "birch_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 3
+      }
+    },
+    {
+      "id": 11,
+      "name": "birch_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 4
+      }
+    },
+    {
+      "id": 12,
+      "name": "birch_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 5
+      }
+    },
+    {
+      "id": 13,
+      "name": "birch_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 6
+      }
+    },
+    {
+      "id": 14,
+      "name": "spruce_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 1
+      }
+    },
+    {
+      "id": 15,
+      "name": "spruce_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 2
+      }
+    },
+    {
+      "id": 16,
+      "name": "spruce_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3
+      }
+    },
+    {
+      "id": 17,
+      "name": "spruce_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 4
+      }
+    },
+    {
+      "id": 18,
+      "name": "spruce_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 5
+      }
+    },
+    {
+      "id": 19,
+      "name": "spruce_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 6
+      }
+    },
+    {
+      "id": 20,
+      "name": "gnarl_plain",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "lobes": 0,
+          "lobeDepth": 0,
+          "barkNoise": 0,
+          "nodeSwell": 0,
+          "flare": 0,
+          "crookChance": 0,
+          "meander": 0,
+          "lean": 0,
+          "light": 0
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "gnarl_bend",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "lobes": 0,
+          "lobeDepth": 0,
+          "barkNoise": 0,
+          "nodeSwell": 0,
+          "flare": 0
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "gnarl_flare_lobes",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "barkNoise": 0,
+          "nodeSwell": 0
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "gnarl_full",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {}
+      }
+    }
+  ]
+}

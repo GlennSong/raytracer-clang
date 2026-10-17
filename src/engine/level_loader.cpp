@@ -1,6 +1,7 @@
 #include "level_loader.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/furniture_library_lua.h"
+#include "scripting/tree_recipes_lua.h"
 #endif
 #include "interaction.h"
 #include "furniture_draw.h"
@@ -83,6 +84,7 @@
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
+#include "procgen/tree_recipe.h"
 #include "procgen/surface_maps.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
@@ -861,7 +863,34 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
     uint32_t seed = 0;
     TreeParams tp = readTreeParams(ent, seed);
 
-    TreeMesh tm = growTree(tp, seed);
+    // A RECIPE TREE (tree_recipe.h; the tree lab): "tree": {"recipe": "oak", "seed": 3, "set": {"lobeDepth": 0}} --
+    // the species from assets/scripts/tree_recipes.lua, the seed drawing within its ranges, `set` pinning knobs
+    std::string barkStyle = ent.contains("tree") ? ent["tree"].value("barkStyle", std::string()) : std::string();
+    TreeMesh tm;
+    bool fromRecipe = false;
+#ifdef RT_ENABLE_SCRIPTING
+    if (ent.contains("tree") && ent["tree"].contains("recipe")) {
+        std::string path;
+        const TreeRecipeBook& book = shippedTreeRecipes(&path);
+        if (!path.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), path) == g_loadedScriptFiles.end())
+            g_loadedScriptFiles.push_back(path);   // (the script watcher reloads the level on an edit)
+        const std::string name = ent["tree"]["recipe"].get<std::string>();
+        if (const TreeRecipe* r = book.find(name)) {
+            std::map<std::string, double> overrides;
+            if (ent["tree"].contains("set") && ent["tree"]["set"].is_object())
+                for (auto it = ent["tree"]["set"].begin(); it != ent["tree"]["set"].end(); ++it)
+                    if (it.value().is_number()) overrides[it.key()] = it.value().get<double>();
+            tm = growRecipeTree(*r, seed, overrides);
+            if (barkStyle.empty()) barkStyle = r->bark;
+            fromRecipe = true;
+        } else {
+            LOG_WARN << "tree e" << index << ": no recipe '" << name << "' in tree_recipes.lua";
+            return;
+        }
+    }
+#endif
+    if (!fromRecipe) tm = growTree(tp, seed);
+    if (barkStyle.empty()) barkStyle = "oak";
     if (tm.branches.vertices.empty()) return;
 
     auto upload = [&](const TextureData& td) -> TextureHandle {
@@ -888,9 +917,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
         r.material.roughness = 1.0f;
         // Per-species bark relief: value pattern (modulates vertex color) + normal map.
-        std::string styleName = ent.contains("tree")
-            ? ent["tree"].value("barkStyle", std::string("oak")) : "oak";
-        BarkMaps bm = barkMaps(barkStyleFromName(styleName), 256, seed);
+        BarkMaps bm = barkMaps(barkStyleFromName(barkStyle), 256, seed);
         r.material.albedoMap = upload(bm.albedo);
         r.material.normalMap = upload(bm.normal);
         if (ent.contains("material")) applyMaterial(ent["material"], r.material);
