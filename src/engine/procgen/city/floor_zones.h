@@ -67,6 +67,7 @@ struct FloorZone {
     Real toLobby = 1e9;      // its centre's distance to the lift lobby's mouth
     Real toCore = 1e9;       // ...and to the corridor round the core
     Real accessLen = 0;      // the longest run of its edge onto the floor's circulation (corridor, streets, aisle)
+    bool onStub = false;     // one of the two lots either side of a stub of corridor (a stadium's end), as it stays
 };
 
 struct FloorPartition {

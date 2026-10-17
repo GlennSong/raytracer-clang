@@ -538,7 +538,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
         for (const G::Ring& h : p.holes) piece.push_back(h);
         fp.circulation.push_back(piece);
     }
-    const G::PreparedSet walk(walkC);
+    G::PreparedSet walk(walkC);   // (a stub of corridor cut below joins it)
     for (FloorZone& z : fp.zones) {
         z.area = area(z.poly);
         if (z.frame.size() == 4) z.depth = (z.frame[3] - z.frame[0]).length();
@@ -551,9 +551,29 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
         }
     }
     // a window lot too narrow on the corridor joins a window lot beside it -- the one it shares the most wall with of
-    // those that leave it wider on the corridor -- until it is wide enough (the end of a stadium: three wedges a metre
-    // wide at the back are one flat; a rounded corner's two halves, which meet the corridor only at its corner, join
-    // the flat beside them)
+    // those that together are wide enough there (a rounded corner's two halves, which meet the corridor only at its
+    // corner, join the flat beside them)
+    // a window lot made of two (or of one and half of another): its facts again
+    auto joined = [&](Poly2 poly, const FloorZone& A, const FloorZone& B) {
+        ensureCCW(poly);
+        FloorZone z = A.area > B.area ? A : B;
+        const Vec2 ax = z.frame.size() == 4 ? z.frame[1] - z.frame[0] : Vec2(1, 0);
+        z.poly = poly;
+        z.area = area(poly);
+        z.frontage = A.frontage + B.frontage;
+        z.curved = A.curved || B.curved;
+        z.site = A.site == ZoneSite::Corner || B.site == ZoneSite::Corner ? ZoneSite::Corner : ZoneSite::Window;
+        z.frame = inscribedRect(poly, ax);
+        z.depth = z.frame.size() == 4 ? (z.frame[3] - z.frame[0]).length() : 0;
+        z.toLobby = (centroid(poly) - fp.lobby).length();
+        z.toCore = coreRing.empty() ? 1e9 : distToRing(centroid(poly), coreRing);
+        z.accessLen = 0;
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            Real mid;
+            z.accessLen = std::max(z.accessLen, accessRun(poly, i, walk, mid));
+        }
+        return z;
+    };
     for (bool merged = zp.minAccess > 0 || zp.minLotArea > 0; merged;) {
         merged = false;
         for (std::size_t a = 0; a < fp.zones.size() && !merged; ++a) {
@@ -572,31 +592,187 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
             std::sort(cands.begin(), cands.end(), [](const Cand& x, const Cand& y) { return x.gain > y.gain; });
             for (Cand& cd : cands) {
                 const FloorZone& B = fp.zones[cd.b];
-                if (area(cd.poly) > 1.6 * zp.lotWidth * zp.windowDepth) continue;   // no flat the size of a floor
-                ensureCCW(cd.poly);
-                FloorZone z = A.area > B.area ? A : B;
-                const Vec2 ax = z.frame.size() == 4 ? z.frame[1] - z.frame[0] : Vec2(1, 0);
-                z.poly = cd.poly;
-                z.area = area(cd.poly);
-                z.frontage = A.frontage + B.frontage;
-                z.curved = A.curved || B.curved;
-                z.site = A.site == ZoneSite::Corner || B.site == ZoneSite::Corner ? ZoneSite::Corner : ZoneSite::Window;
-                z.frame = inscribedRect(cd.poly, ax);
-                z.depth = z.frame.size() == 4 ? (z.frame[3] - z.frame[0]).length() : 0;
-                z.toLobby = (centroid(cd.poly) - fp.lobby).length();
-                z.toCore = coreRing.empty() ? 1e9 : distToRing(centroid(cd.poly), coreRing);
-                z.accessLen = 0;
-                for (std::size_t i = 0; i < cd.poly.size(); ++i) {
-                    Real mid;
-                    z.accessLen = std::max(z.accessLen, accessRun(cd.poly, i, walk, mid));
-                }
-                if (!small && z.accessLen < A.accessLen + 0.5) continue;   // no wider on the corridor than it was
+                if (area(cd.poly) > 1.8 * zp.lotWidth * zp.windowDepth) continue;   // no flat the size of a floor
+                const FloorZone z = joined(cd.poly, A, B);
+                if (!small && z.accessLen < zp.minAccess) continue;   // still too narrow on the corridor
+
                 fp.zones[cd.b] = z;
                 fp.zones.erase(fp.zones.begin() + static_cast<std::ptrdiff_t>(a));
                 merged = true;
                 break;
             }
         }
+    }
+    // ...and a RUN of lots still too narrow there (a stadium's end: its wedges meet the corridor in a point) is taken
+    // whole, halved down its middle -- the line from the core out through it -- and each half goes to the flat on its
+    // side: the end's two flats share its arc and meet on the centreline
+    if (zp.minAccess > 0) {
+        const Vec2 hub = coreRing.empty() ? centroid(plate) : centroid(coreRing);
+        std::vector<char> seen(fp.zones.size(), 0);
+        auto narrow = [&](std::size_t k) { return fp.zones[k].site != ZoneSite::Interior && fp.zones[k].accessLen < zp.minAccess; };
+        auto touches = [&](const Poly2& p0, const Poly2& p1) {
+            const G::PolySet un = G::unionSets(G::fromRing(p0), G::fromRing(p1));
+            return un.size() == 1 && un.front().holes.empty() && perimeter(p0) + perimeter(p1) - perimeter(un.front().outer) > 0.5;
+        };
+        std::vector<std::size_t> drop;
+        for (std::size_t s0 = 0; s0 < fp.zones.size(); ++s0) {
+            if (seen[s0] || !narrow(s0)) continue;
+            std::vector<std::size_t> run = {s0};
+            seen[s0] = 1;
+            for (std::size_t q = 0; q < run.size(); ++q)
+                for (std::size_t k = 0; k < fp.zones.size(); ++k)
+                    if (!seen[k] && narrow(k) && touches(fp.zones[run[q]].poly, fp.zones[k].poly)) { seen[k] = 1; run.push_back(k); }
+            std::vector<Poly2> parts;
+            for (std::size_t k : run) parts.push_back(fp.zones[k].poly);
+            const G::PolySet R = unionAll(parts);
+            if (R.size() != 1 || !R.front().holes.empty()) continue;
+            const Poly2 whole = R.front().outer;
+            const Vec2 c = centroid(whole), out = c - hub;
+            if (out.length() < 1e-3) continue;
+            std::size_t to[2] = {fp.zones.size(), fp.zones.size()};
+            Poly2 un[2];
+            bool ok = true;
+            for (int h = 0; h < 2 && ok; ++h) {
+                const Poly2 half = largestOuter(G::intersectSets(G::fromRing(whole), halfPlane(c, out, h == 0)));
+                if (half.size() < 3) { ok = false; break; }
+                Real bestGain = 0.5;
+                for (std::size_t b = 0; b < fp.zones.size(); ++b) {
+                    if (narrow(b) || fp.zones[b].site == ZoneSite::Interior || (h == 1 && b == to[0])) continue;
+                    if (std::find(drop.begin(), drop.end(), b) != drop.end()) continue;
+                    const G::PolySet u2 = G::unionSets(G::fromRing(half), G::fromRing(fp.zones[b].poly));
+                    if (u2.size() != 1 || !u2.front().holes.empty()) continue;
+                    if (area(u2.front().outer) > 2.2 * zp.lotWidth * zp.windowDepth) continue;
+                    const Real gain = perimeter(half) + perimeter(fp.zones[b].poly) - perimeter(u2.front().outer);
+                    if (gain > bestGain) { bestGain = gain; to[h] = b; un[h] = u2.front().outer; }
+                }
+                ok = to[h] < fp.zones.size();
+            }
+            if (!ok) {
+                // too much for the flats beside it: a STUB of corridor runs out along the middle from the core's side,
+                // stopping a room short of the glass, and the run is two flats either side of it, their doors on it,
+                // meeting on the centreline beyond its end
+                // square to the building (the core's axes): a hallway runs straight, never off at a slant
+                Vec2 d = normalize(out);
+                if (core.valid) {
+                    const Vec2 axes[4] = {core.frame.u, core.frame.u * -1.0, core.frame.v, core.frame.v * -1.0};
+                    Vec2 bestAx = axes[0];
+                    for (const Vec2& ax : axes) if (dot(ax, d) > dot(bestAx, d)) bestAx = ax;
+                    d = normalize(bestAx);
+                }
+                Real tIn = 1e30, tOut = -1e30;
+                for (const Vec2& q : whole) { tIn = std::min(tIn, dot(q - c, d)); tOut = std::max(tOut, dot(q - c, d)); }
+                const Real t1 = tOut - 6.0, w = zp.aisle * 0.5;
+                if (t1 - tIn < 3.0) continue;
+                const Vec2 n = perp(d), a0 = c + d * (tIn - 1.0), a1 = c + d * t1;
+                Poly2 stub = {a0 - n * w, a1 - n * w, a1 + n * w, a0 + n * w};
+                ensureCCW(stub);
+                const G::PolySet rest = G::differenceSets(G::fromRing(whole), G::fromRing(stub));
+                const G::PreparedSet walk2(G::unionSets(walkC, G::fromRing(stub)));
+                std::vector<FloorZone> halves;
+                for (int h = 0; h < 2; ++h) {
+                    const Poly2 hp = largestOuter(G::intersectSets(rest, halfPlane(c, d, h == 0)));
+                    if (hp.size() < 3 || area(hp) < zp.minLotArea) break;
+                    FloorZone z = fp.zones[s0];
+                    z.poly = hp;
+                    z.onStub = true;
+                    ensureCCW(z.poly);
+                    z.area = area(z.poly);
+                    z.frontage = 0;
+                    for (std::size_t k : run) z.frontage += fp.zones[k].frontage * 0.5;
+                    const Vec2 ax = z.frame.size() == 4 ? z.frame[1] - z.frame[0] : n;
+                    z.frame = inscribedRect(z.poly, ax);
+                    z.depth = z.frame.size() == 4 ? (z.frame[3] - z.frame[0]).length() : 0;
+                    z.toLobby = (centroid(z.poly) - fp.lobby).length();
+                    z.toCore = coreRing.empty() ? 1e9 : distToRing(centroid(z.poly), coreRing);
+                    z.accessLen = 0;
+                    for (std::size_t i = 0; i < z.poly.size(); ++i) {
+                        Real mid;
+                        z.accessLen = std::max(z.accessLen, accessRun(z.poly, i, walk2, mid));
+                    }
+                    halves.push_back(z);
+                }
+                if (halves.size() != 2) continue;
+                fp.circulation.push_back({stub});
+                walkC = G::unionSets(walkC, G::fromRing(stub));
+                walk = G::PreparedSet(walkC);
+                for (FloorZone& z : halves) fp.zones.push_back(z);
+                seen.resize(fp.zones.size(), 1);
+                drop.insert(drop.end(), run.begin(), run.end());
+                continue;
+            }
+            FloorZone half = fp.zones[s0];   // (a half's facts never win: the flat keeps its own frame's axis)
+            half.area = 0;
+            half.frontage = 0;
+            for (std::size_t k : run) half.frontage += fp.zones[k].frontage * 0.5;
+            fp.zones[to[0]] = joined(un[0], fp.zones[to[0]], half);
+            fp.zones[to[1]] = joined(un[1], fp.zones[to[1]], half);
+            drop.insert(drop.end(), run.begin(), run.end());
+        }
+        std::sort(drop.begin(), drop.end());
+        for (auto it = drop.rbegin(); it != drop.rend(); ++it) fp.zones.erase(fp.zones.begin() + static_cast<std::ptrdiff_t>(*it));
+    }
+    // A CREVICE: floor no lot took that does not reach the corridor (a scrap between a tight corner's lots, cut off
+    // by them) is walled in by flats and good to no one -- it joins the window lot it shares the most wall with
+    if (zp.minAccess > 0 && !K.empty()) {
+        // the corridor network: every piece of circulation, joined, and the parts of it that reach the core
+        std::vector<Poly2> outs;
+        for (const std::vector<Poly2>& piece : fp.circulation) outs.push_back(piece.front());
+        G::PolySet net = G::offsetSet(G::unionSets(unionAll(outs), K), 0.05);
+        G::PolySet reach;
+        for (const G::Polygon2& q : net)
+            if (G::setArea(G::intersectSets(G::PolySet{q}, K)) > 0.05) reach.push_back(q);
+        for (std::size_t ci = fp.circulation.size(); ci-- > 0;) {
+            const std::vector<Poly2>& piece = fp.circulation[ci];
+            if (piece.size() != 1 || area(piece.front()) > 15.0) continue;
+            Poly2 scrap = piece.front();
+            ensureCCW(scrap);
+            if (G::setArea(G::intersectSets(G::fromRing(scrap), reach)) > 0.05) continue;   // on the way in: corridor
+            std::size_t best = fp.zones.size();
+            Real bestGain = 0.3;
+            Poly2 bestPoly;
+            for (std::size_t b = 0; b < fp.zones.size(); ++b) {
+                if (fp.zones[b].site == ZoneSite::Interior) continue;
+                const G::PolySet un = G::unionSets(G::fromRing(scrap), G::fromRing(fp.zones[b].poly));
+                if (un.size() != 1 || !un.front().holes.empty()) continue;
+                const Real gain = perimeter(scrap) + perimeter(fp.zones[b].poly) - perimeter(un.front().outer);
+                if (gain > bestGain) { bestGain = gain; best = b; bestPoly = un.front().outer; }
+            }
+            if (best >= fp.zones.size()) continue;
+            FloorZone none = fp.zones[best];
+            none.area = 0;
+            none.frontage = 0;
+            fp.zones[best] = joined(bestPoly, fp.zones[best], none);
+            fp.circulation.erase(fp.circulation.begin() + static_cast<std::ptrdiff_t>(ci));
+        }
+    }
+    // ...and what is still narrow pairs up with a narrow neighbour (a small drum: all its wedges meet the corridor at
+    // the core's corners, none wide enough alone): two lots a flat, never more
+    if (zp.minAccess > 0) {
+        std::vector<char> paired(fp.zones.size(), 0), folded(fp.zones.size(), 0);
+        for (std::size_t a = 0; a < fp.zones.size(); ++a) {
+            const FloorZone& A = fp.zones[a];
+            if (paired[a] || A.onStub || A.site == ZoneSite::Interior || A.accessLen >= zp.minAccess) continue;
+            std::size_t best = fp.zones.size();
+            Real bestScore = -1e30;
+            Poly2 bestPoly;
+            for (std::size_t b = 0; b < fp.zones.size(); ++b) {
+                const FloorZone& B = fp.zones[b];
+                if (b == a || paired[b] || B.onStub || B.site == ZoneSite::Interior || B.accessLen >= zp.minAccess) continue;
+                const G::PolySet un = G::unionSets(G::fromRing(A.poly), G::fromRing(B.poly));
+                if (un.size() != 1 || !un.front().holes.empty()) continue;
+                if (area(un.front().outer) > 1.8 * zp.lotWidth * zp.windowDepth) continue;
+                const Real gain = perimeter(A.poly) + perimeter(B.poly) - perimeter(un.front().outer);
+                if (gain < 0.5) continue;
+                const Real score = B.accessLen + 0.01 * gain;   // (the partner with the most way in)
+                if (score > bestScore) { bestScore = score; best = b; bestPoly = un.front().outer; }
+            }
+            if (best >= fp.zones.size()) continue;
+            fp.zones[a] = joined(bestPoly, A, fp.zones[best]);
+            paired[a] = paired[best] = 1;
+            folded[best] = 1;
+        }
+        for (std::size_t k = fp.zones.size(); k-- > 0;)
+            if (folded[k]) fp.zones.erase(fp.zones.begin() + static_cast<std::ptrdiff_t>(k));
     }
     return fp;
 }
@@ -890,8 +1066,7 @@ bool layFlatIn(const FloorZone& Z, const Poly2& frame, const Vec2& door, std::ve
     if (!kitchen || !bed)
         for (Room& r : lay.rooms) if (r.kind == RoomKind::Living) r.kind = RoomKind::Flat;
     const Real far = 1000.0;
-    // the back strip: rooms whose far side is the frame's back (they reach on to the corridor, not sideways); the
-    // front rooms at either end take the lot beside the back strip as well (a wedge's wide end), cut round it
+    // the back strip: the rooms whose far side is the frame's back
     const Real vb = [&] {
         Real m = v1;
         for (const Room& r : lay.rooms) {
@@ -906,103 +1081,34 @@ bool layFlatIn(const FloorZone& Z, const Poly2& frame, const Vec2& door, std::ve
         for (const Vec2& q : r.rect) lo = std::min(lo, dot(q - O, nIn));
         return lo >= vb - 1e-4;
     };
-    RoomKind backEnd[2] = {RoomKind::Hall, RoomKind::Hall}, frontEnd[2] = {RoomKind::Living, RoomKind::Living};
-    for (const Room& r : lay.rooms) {
-        Real lo = 1e30, hi = -1e30;
-        for (const Vec2& q : r.rect) { lo = std::min(lo, dot(q - O, u)); hi = std::max(hi, dot(q - O, u)); }
-        RoomKind* ends = isBack(r) ? backEnd : frontEnd;
-        if (std::fabs(lo - x0) < 1e-4) ends[0] = r.kind;
-        if (std::fabs(hi - x1) < 1e-4) ends[1] = r.kind;
-    }
-    G::PolySet backSet;
-    std::vector<G::PolySet> sides(lay.rooms.size());   // a front end room's share of the lot beside the back strip
-    for (std::size_t ri = 0; ri < lay.rooms.size(); ++ri) {
-        Room& r = lay.rooms[ri];
+    // every room runs on to the lot's walls -- no crevice left between a room and a wall: the window rooms out to
+    // the glass (a curve's bulge) and, at the ends, out to the lot's sides; the back strip's rooms (hall, bath,
+    // kitchen, closet) back to the corridor wall and, at the ends, out to the sides as well, so a bath in a wedge's
+    // corner takes the whole trapezoid
+    for (Room& r : lay.rooms) {
         const bool back = isBack(r);
         for (Vec2& q : r.rect) {
             const Real x = dot(q - O, u), v = dot(q - O, nIn);
             Vec2 d(0, 0);
-            if (!back && std::fabs(x - x0) < 1e-4) d = d - u * far;
-            if (!back && std::fabs(x - x1) < 1e-4) d = d + u * far;
-            if (std::fabs(v - v0) < 1e-4) d = d - nIn * far;
-            if (!back) {
-                if (std::fabs(x - x0) < 1e-4 && std::fabs(v - vb) < 1e-4) {
-                    Poly2 sq = {P(x0 - far, vb), P(x0, vb), P(x0, v1), P(x0 - far, v1)};
-                    ensureCCW(sq);
-                    sides[ri] = G::fromRing(sq);
-                }
-                if (std::fabs(x - x1) < 1e-4 && std::fabs(v - vb) < 1e-4) {
-                    Poly2 sq = {P(x1, vb), P(x1 + far, vb), P(x1 + far, v1), P(x1, v1)};
-                    ensureCCW(sq);
-                    sides[ri] = sides[ri].empty() ? G::fromRing(sq) : G::unionSets(sides[ri], G::fromRing(sq));
-                }
-            }
+            if (std::fabs(x - x0) < 1e-4) d = d - u * far;
+            if (std::fabs(x - x1) < 1e-4) d = d + u * far;
+            if (!back && std::fabs(v - v0) < 1e-4) d = d - nIn * far;
+            if (back && std::fabs(v - v1) < 1e-4) d = d + nIn * far;
             q = q + d;
         }
         ensureCCW(r.rect);
-        if (back) backSet = backSet.empty() ? G::fromRing(r.rect) : G::unionSets(backSet, G::fromRing(r.rect));
-    }
-    // THE FOYER: the lot past the frame's back, toward the corridor (a wedge's narrow end, beyond its largest
-    // rectangle), is the hall's -- the way in from the front door; the private rooms beside it walled off from it
-    {
-        Poly2 beyond = {P(-far, v1), P(far, v1), P(far, v1 + far), P(-far, v1 + far)};
-        ensureCCW(beyond);
-        G::PolySet foyer = G::fromRing(beyond);
-        // (a kitchen in the back strip, open to the hall, takes what lies behind it: a deeper kitchen, a smaller hall)
-        for (Room& r : lay.rooms) {
-            if (r.kind != RoomKind::Kitchen || !isBack(r)) continue;
-            Real lo = 1e30, hi = -1e30;
-            for (const Vec2& q : r.rect) { lo = std::min(lo, dot(q - O, u)); hi = std::max(hi, dot(q - O, u)); }
-            Poly2 behind = {P(lo, v1), P(hi, v1), P(hi, v1 + far), P(lo, v1 + far)};
-            ensureCCW(behind);
-            const Poly2 whole = largestOuter(G::unionSets(G::fromRing(r.rect), G::fromRing(behind)));
-            if (whole.size() >= 3) r.rect = whole;
-            foyer = G::differenceSets(foyer, G::fromRing(behind));
-        }
-        for (Room& r : lay.rooms) {
-            if (r.kind != RoomKind::Hall || !isBack(r)) continue;
-            const Poly2 whole = largestOuter(G::unionSets(G::fromRing(r.rect), foyer));
-            if (whole.size() >= 3) r.rect = whole;
-            break;
-        }
-        for (const Room& r : lay.rooms) {
-            if (!isBack(r) || (r.kind != RoomKind::Bath && r.kind != RoomKind::Closet)) continue;
-            Real lo = 1e30, hi = -1e30;
-            for (const Vec2& q : r.rect) { lo = std::min(lo, dot(q - O, u)); hi = std::max(hi, dot(q - O, u)); }
-            RoomWall w;
-            w.a = P(lo, v1);
-            w.b = P(hi, v1);
-            lay.walls.push_back(w);
-        }
     }
     for (RoomWall& w : lay.walls) {
         const Vec2 door0 = w.a + (w.b - w.a) * std::max(Real(0), w.doorAt);
         const bool alongU = std::fabs(dot(w.b - w.a, nIn)) < 1e-4;
         for (Vec2* q : {&w.a, &w.b}) {
             const Real x = dot(*q - O, u), v = dot(*q - O, nIn);
-            const bool divider = alongU && std::fabs(v - vb) < 1e-4;   // (stays the back strip's width)
-            if (!divider && std::fabs(x - x0) < 1e-4) *q = *q - u * far;
-            if (!divider && std::fabs(x - x1) < 1e-4) *q = *q + u * far;
+            if (alongU && std::fabs(x - x0) < 1e-4) *q = *q - u * far;
+            if (alongU && std::fabs(x - x1) < 1e-4) *q = *q + u * far;
             if (!alongU && std::fabs(v - v0) < 1e-4) *q = *q - nIn * far;
+            if (!alongU && std::fabs(v - v1) < 1e-4) *q = *q + nIn * far;
         }
         if (w.doorAt >= 0) w.doorAt = dot(door0 - w.a, normalize(w.b - w.a)) / std::max(Real(1e-6), (w.b - w.a).length());
-    }
-    // the back strip's ends, where the end rooms beside it are private (a bedroom in front, a bath or closet behind)
-    for (int e = 0; e < 2; ++e) {
-        const bool priv = frontEnd[e] == RoomKind::Bed || backEnd[e] == RoomKind::Bath || backEnd[e] == RoomKind::Closet;
-        if (!priv) continue;
-        RoomWall w;
-        w.a = P(e == 0 ? x0 : x1, vb);
-        w.b = P(e == 0 ? x0 : x1, v1);
-        lay.walls.push_back(w);
-    }
-    // the front end rooms with the lot beside the back strip
-    for (std::size_t ri = 0; ri < lay.rooms.size(); ++ri) {
-        if (sides[ri].empty()) continue;
-        Room& r = lay.rooms[ri];
-        const G::PolySet un = G::unionSets(G::fromRing(r.rect), sides[ri]);
-        const Poly2 whole = largestOuter(un);
-        if (whole.size() >= 3) r.rect = whole;
     }
     std::vector<Room> rs;
     for (Room r : lay.rooms) {
@@ -1020,6 +1126,15 @@ bool layFlatIn(const FloorZone& Z, const Poly2& frame, const Vec2& door, std::ve
             return false;
         }
         rs.push_back(r);
+    }
+    // every bit of the flat is some room's: a scrap cut off a room by a slanted wall is a crevice no one can use
+    {
+        Real covered = 0;
+        for (const Room& r : rs) covered += area(r.rect);
+        if (covered < 0.97 * area(Z.poly)) {
+            if (std::getenv("RT_FLAT_DEBUG")) std::fprintf(stderr, "[flat] rooms cover %.1f of %.1f m2\n", covered, area(Z.poly));
+            return false;
+        }
     }
     // a hall that is most of the flat is no layout (a frame far from the corridor leaves it all to the foyer)
     Real hallA = 0, allA = 0;
@@ -1081,6 +1196,16 @@ bool layFlat(const FloorZone& Z, const Vec2& door, std::vector<Room>& rooms, std
         for (const Room& r : rs) {
             const Real a = area(r.rect);
             if (r.kind == RoomKind::Hall) score -= 0.5 * a;
+            // (a bath, closet or hall much bigger than the rectangle in it is mostly a sliver along a slanted wall; a
+            // living room or a bedroom wider at the glass is just a wedge's)
+            const bool service = r.kind == RoomKind::Bath || r.kind == RoomKind::Closet || r.kind == RoomKind::Hall;
+            if (service && r.frame.size() == 4) {
+                const Real fa = (r.frame[1] - r.frame[0]).length() * (r.frame[3] - r.frame[0]).length();
+                score -= 1.5 * std::max(Real(0), a - std::max(1.6 * fa, fa + 4.0));
+            }
+            // (a bath or a closet run on to a far wall has room to spare: a layout nearer the corridor is better)
+            else if (r.kind == RoomKind::Bath) score -= 2.0 * std::max(Real(0), a - 8.0);
+            else if (r.kind == RoomKind::Closet) score -= std::max(Real(0), a - 6.0);
             else if (r.kind == RoomKind::Bed) score += a + 25.0;
             else if (r.kind == RoomKind::Kitchen) score += a + 15.0;
             else if (r.kind == RoomKind::Living || r.kind == RoomKind::Flat) score += a;
