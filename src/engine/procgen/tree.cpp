@@ -209,6 +209,14 @@ float lerpAt(const std::vector<float>& a, double u) {
     return a[i] * (1.0f - t) + a[i + 1] * t;
 }
 
+// THE SOCKET a side branch is welded into (Glenn: "the tree trunks and branches were not seamless"): its parent's
+// axis (through `c` along `d`) and radius `r` at the fork, and the collar's flare.
+struct Socket {
+    Vec3 c, d;
+    float r = 0.0f;
+    float collar = 0.0f;
+};
+
 // Skin a branch as a continuous generalized cylinder: fit a Catmull-Rom curve
 // through the centerline, sample it at even arc length (so curvature shows),
 // orient each ring with a rotation-minimizing frame (no twist), and sweep a
@@ -219,9 +227,16 @@ float lerpAt(const std::vector<float>& a, double u) {
 // ridges that fade up from the foot (`footY`) and swells into its root flare; every limb bulges at its nodes and
 // pinches between, and its outline is knotty (barkNoise, coherent round the ring and along the limb); the lobes and
 // the knots spiral with the grain (twist). The normals then come from the displaced surface, not the radial.
+//
+// THE WELD (`sock`, a side branch): the branch does not start at the fork's centre, buried in its parent with a hard
+// crease where the two tubes cross -- it starts where its axis leaves the parent, its first ring projected back along
+// it onto the parent's surface (the contact curve), and FLARES into it (a collar: the radius swells toward the
+// parent, so the branch meets it at a shallow angle, a fillet); its normals there are the parent's, blending to its
+// own along the collar, so the shading runs across the joint without a seam.
 void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color,
                      int segs, float vScale, int ringsPerSegment,
-                     const TreeParams* g = nullptr, bool trunk = false, float footY = 0.0f, uint32_t seed = 0) {
+                     const TreeParams* g = nullptr, bool trunk = false, float footY = 0.0f, uint32_t seed = 0,
+                     const Socket* sock = nullptr) {
     if (path.points.size() < 2) return;
     Spline<Vec3> spline = Spline<Vec3>::catmullRom(path.points);
     int rings = std::max(2, spline.segments() * std::max(1, ringsPerSegment) + 1);
@@ -234,6 +249,20 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
     }
     std::vector<CurveFrame> frames = rotationMinimizingFrames(centers, tangents);
 
+    // the socket: the first ring whose centre is out of the parent (k0), the ring before it the contact ring (k0 - 1)
+    int k0 = -1;
+    float r0 = 0.0f;
+    std::vector<float> sFrom(static_cast<std::size_t>(rings), 0.0f);
+    auto parentDist = [&](const Vec3& p) { const Vec3 q = p - sock->c; return static_cast<float>((q - sock->d * dot(q, sock->d)).length()); };
+    if (sock && sock->collar > 0.0f && sock->r > 0.0f) {
+        for (int k = 0; k < rings; k++)
+            if (parentDist(centers[k]) >= sock->r) { k0 = k; break; }
+        if (k0 < 1 || k0 > rings - 2) k0 = -1;   // (out at once, or never: no weld)
+        if (k0 > 0) {
+            r0 = lerpAt(path.radius, us[k0]);
+            for (int k = k0; k < rings; k++) sFrom[static_cast<std::size_t>(k)] = static_cast<float>((centers[k] - centers[k0]).length());
+        }
+    }
     const bool shaped = g && (g->nodeSwell > 0.0f || g->barkNoise > 0.0f || (trunk && (g->flare > 0.0f || (g->lobes > 0 && g->lobeDepth > 0.0f))));
     const float twistRad = g ? g->twist * static_cast<float>(PI) / 180.0f : 0.0f;
     const float footR = path.radius.empty() ? 0.0f : path.radius.front();
@@ -260,6 +289,8 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
             Vec3 dir = right * c + up * s;        // outward radial = normal
             Vec3 tan = right * (-s) + up * c;     // around the circumference
             float r = rad;
+            if (k0 > 0 && k >= k0)   // the collar: swelling into the parent over about a radius and a half
+                r *= 1.0f + sock->collar * std::exp(-sFrom[static_cast<std::size_t>(k)] / std::max(1e-3f, 1.3f * r0));
             if (shaped) {
                 float m = ringScale;
                 const float ph = phi + twistRad * sAlong;
@@ -278,7 +309,30 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
         }
     }
     const int stride = segs + 1;
-    if (shaped) {   // the normals of the displaced surface: across the ring x along the limb, turned outward
+    if (k0 > 0) {
+        // the contact ring: ring k0 carried back along the branch onto the parent (a hair inside it, so the parent's
+        // knots and lobes do not open a gap); the rings before it (inside the parent) dropped
+        const Vec3 T = normalize(tangents[k0]);
+        const float R = sock->r * 0.94f;
+        for (int i = 0; i <= segs; i++) {
+            const Vec3 P = mesh.vertices[base + static_cast<uint32_t>(k0 * stride + i)].position;
+            const Vec3 q = P - sock->c, a = cross(T, sock->d), b = cross(q, sock->d);
+            const double A = dot(a, a), B = dot(a, b), C = dot(b, b) - double(R) * R;
+            double t = 0.0;
+            if (C > 0.0 && A > 1e-12) {
+                const double disc = B * B - A * C;
+                t = disc >= 0.0 ? (B - std::sqrt(disc)) / A : B / A;
+                if (t < 0.0) t = 0.0;
+            }
+            Vertex& vx = mesh.vertices[base + static_cast<uint32_t>((k0 - 1) * stride + i)];
+            vx.position = P - T * t;
+        }
+        mesh.vertices.erase(mesh.vertices.begin() + base, mesh.vertices.begin() + base + static_cast<std::ptrdiff_t>((k0 - 1) * stride));
+        centers.erase(centers.begin(), centers.begin() + (k0 - 1));
+        sFrom.erase(sFrom.begin(), sFrom.begin() + (k0 - 1));
+        rings -= k0 - 1;
+    }
+    if (shaped || k0 > 0) {   // the normals of the displaced surface: across the ring x along the limb, turned outward
         auto P = [&](int k, int i) { return mesh.vertices[base + static_cast<uint32_t>(k * stride + i)].position; };
         std::vector<Vec3> nrm(static_cast<std::size_t>(rings * stride));
         for (int k = 0; k < rings; k++)
@@ -296,7 +350,14 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
         for (int k = 0; k < rings; k++)
             for (int i = 0; i <= segs; i++) {
                 Vertex& vx = mesh.vertices[base + static_cast<uint32_t>(k * stride + i)];
-                vx.normal = nrm[static_cast<std::size_t>(k * stride + i)];
+                Vec3 n = nrm[static_cast<std::size_t>(k * stride + i)];
+                if (k0 > 0) {   // across the weld: the parent's own normal at the contact, the branch's along the collar
+                    const float w = k == 0 ? 1.0f : std::exp(-sFrom[static_cast<std::size_t>(k)] / std::max(1e-3f, 0.8f * r0)) * 0.8f;
+                    const Vec3 q = vx.position - sock->c;
+                    const Vec3 radial = q - sock->d * dot(q, sock->d);
+                    if (w > 0.01f && radial.length() > 1e-9) n = normalize(n * (1.0 - w) + normalize(radial) * w);
+                }
+                vx.normal = n;
                 const Vec3 t = vx.tangent - vx.normal * dot(vx.tangent, vx.normal);
                 if (t.length() > 1e-9) vx.tangent = normalize(t);
             }
@@ -428,7 +489,19 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             pushStarts(cur);
         }
         Vec3 color = params.barkColor * vary(rng);
-        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3, &params, trunk, footY, seed);
+        Socket sock;
+        const Socket* sp = nullptr;
+        if (!trunk && params.collar > 0.0f) {   // a side branch: welded into its parent at the fork
+            const int par = nodes[anchor].parent;
+            const Vec3 dIn = par >= 0 ? normalize(nodes[anchor].pos - nodes[par].pos) : nodes[anchor].heading;
+            const Vec3 dOut = cont[anchor] >= 0 ? normalize(nodes[cont[anchor]].pos - nodes[anchor].pos) : dIn;
+            sock.c = nodes[anchor].pos;
+            sock.d = normalize(dIn + dOut);
+            sock.r = nodes[anchor].radius;
+            sock.collar = params.collar;
+            sp = &sock;
+        }
+        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3, &params, trunk, footY, seed, sp);
     }
 
     // Buttress roots: from the base, swept out and down, flattening to run along

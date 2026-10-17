@@ -146,3 +146,22 @@ TEST_CASE(tree_recipe_reader_rejects_typos) {
     CHECK(setTreeParam(tp, "lobes", 6) && tp.lobes == 6);
     CHECK(!setTreeParam(tp, "lobez", 6));
 }
+
+// THE WELD (Glenn: "the tree trunks and branches were not seamless"): with a collar, every side branch starts on its
+// parent's surface -- the rings it had buried inside the parent are gone (fewer bark vertices than the same tree's
+// overlapping tubes), and its normals stay whole across the joint.
+TEST_CASE(welded_branches_start_on_their_parent_not_inside_it) {
+    const TreeRecipeBook book = shipped();
+    const TreeRecipe* oak = book.find("oak");
+    CHECK(oak != nullptr);
+    if (!oak) return;
+    const TreeMesh tube = growRecipeTree(*oak, 3, {{"collar", 0}}), weld = growRecipeTree(*oak, 3, {{"collar", 0.6}});
+    bool whole = true;
+    for (const Vertex& v : weld.branches.vertices)
+        whole = whole && std::isfinite(v.normal.x) && std::fabs(v.normal.length() - 1.0) < 1e-3 && std::isfinite(v.position.y);
+    std::printf("    [weld] oak seed 3: %zu bark vertices as overlapping tubes, %zu welded\n", tube.branches.vertices.size(),
+                weld.branches.vertices.size());
+    CHECK(whole);
+    CHECK(weld.branches.vertices.size() < tube.branches.vertices.size());
+    CHECK(weld.branches.indices.size() % 3 == 0);
+}

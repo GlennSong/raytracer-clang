@@ -314,7 +314,8 @@
           "crookChance": 0,
           "meander": 0,
           "lean": 0,
-          "light": 0
+          "light": 0,
+          "collar": 0
         }
       }
     },

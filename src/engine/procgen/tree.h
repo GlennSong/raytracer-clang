@@ -55,6 +55,9 @@ struct TreeParams {
     float nodeSwell     = 0.0f;     // each node bulges by this fraction of the radius (and pinches between)
     float barkNoise     = 0.0f;     // irregular cross-section (knotty, uneven), a fraction of the radius
     float twist         = 0.0f;     // grain twist: the lobes and bumps spiral by this many degrees a metre
+    float collar        = 0.0f;     // THE WELD: a side branch starts on its parent's surface and flares into it by
+                                    //   this (a fraction of its radius) -- no tube buried in the fork, no crease;
+                                    //   0 = the old overlapping tubes
 
     // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
     int   rootCount     = 5;        // number of surface roots (0 = none)

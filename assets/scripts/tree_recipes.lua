@@ -14,6 +14,7 @@
 --   params              the grower's knobs (tree.h TreeParams, by name), each a value or {lo, hi}:
 --     shape    droop light crookChance crookAngle meander wander lean angleJitter
 --     trunk    flare lobes lobeDepth lobeHeight nodeSwell barkNoise twist rootCount rootSpread
+--     joints   collar (a side branch welds into its parent, flaring by this; 0 = overlapping tubes)
 --     girth    tipRadius pipeExponent radiusScale ringSegments
 --     leaves   leaves leafSize leavesPerTip leafThickness leafClump maxLeafCards
 --   bark                the bark texture: "oak" (furrows), "birch" (pale, lenticels), "pine" (plates)
@@ -42,7 +43,7 @@ tree_recipes = {
       droop = {0.10, 0.20}, light = {0.15, 0.30}, crookChance = {0.15, 0.30}, crookAngle = {15, 30},
       meander = {0.08, 0.15}, lean = {0, 6}, angleJitter = {8, 14},
       flare = {0.5, 0.9}, lobes = {4, 7}, lobeDepth = {0.12, 0.22}, lobeHeight = {1.2, 2.2}, nodeSwell = {0.08, 0.15},
-      barkNoise = {0.04, 0.08}, twist = {4, 12}, rootCount = 5, rootSpread = {2.5, 3.5},
+      barkNoise = {0.04, 0.08}, twist = {4, 12}, rootCount = 5, rootSpread = {2.5, 3.5}, collar = {0.5, 0.7},
       tipRadius = 0.012, pipeExponent = {2.2, 2.5}, radiusScale = 1.8, ringSegments = 10,
       leafSize = {0.36, 0.46}, leavesPerTip = 4, leafThickness = 0.05, leafClump = 0.9, maxLeafCards = 6000,
     },
@@ -67,7 +68,7 @@ tree_recipes = {
     params = {
       droop = {0.25, 0.40}, light = {0.05, 0.15}, crookChance = {0.05, 0.12}, crookAngle = {8, 18},
       meander = {0.05, 0.10}, lean = {0, 8}, angleJitter = {8, 12},
-      flare = 0.3, nodeSwell = 0.05, barkNoise = 0.03, twist = 0, rootCount = 3, rootSpread = 2.0,
+      flare = 0.3, nodeSwell = 0.05, barkNoise = 0.03, twist = 0, rootCount = 3, rootSpread = 2.0, collar = 0.4,
       tipRadius = 0.010, pipeExponent = 2.3, radiusScale = 1.2, ringSegments = 8,
       leafSize = {0.28, 0.34}, leavesPerTip = 4, leafThickness = 0.035, leafClump = 0.8, maxLeafCards = 5000,
     },
@@ -92,7 +93,7 @@ tree_recipes = {
       droop = {0.06, 0.12}, light = {0.10, 0.18}, crookChance = 0.0, crookAngle = 10,
       meander = 0.012, lean = {0, 2}, angleJitter = {6, 10},
       flare = 0.6, lobes = {5, 8}, lobeDepth = 0.10, lobeHeight = 1.0, nodeSwell = 0.04, barkNoise = 0.05,
-      twist = 0, rootCount = 4, rootSpread = 2.0,
+      twist = 0, rootCount = 4, rootSpread = 2.0, collar = 0.3,
       tipRadius = 0.010, pipeExponent = 2.4, radiusScale = 1.4, ringSegments = 8,
       leafSize = {0.28, 0.34}, leavesPerTip = 3, leafThickness = 0.05, leafClump = 0.5, maxLeafCards = 9000,
     },
