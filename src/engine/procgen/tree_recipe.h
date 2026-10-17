@@ -40,15 +40,32 @@ struct LeafCardSpec {
     int iterations = 6;
     std::vector<RecipeRule> rules;
     std::vector<RecipeRange> vars;        // drawn per card variant
-    std::string shape = "oval";           // oval | lobed | serrate | needle | leaflet
+    std::string shape = "oval";           // oval | lobed | serrate | needle | leaflet | palmate
     double leafLength = 0.30, leafWidth = 0.14;   // a leaf at L(1), in the grammar's units
-    int lobes = 3;                        // lobed: lobes down each side
+    int lobes = 3;                        // lobed: lobes down each side; palmate: lobes in all (a maple's 5 or 7)
     int teeth = 9;                        // serrate: teeth down each side
     double stemWidth = 0.012;             // the twig's stroke
     double cup = 0.5;                     // how far a leaf's normal tips across it (0: flat)
     double shadeJitter = 0.18;            // leaf-to-leaf brightness variation
     double tipBright = 0.0;               // the new growth: leaves lighter toward the card's far end (0 none)
     int variants = 2;                     // cards a side of the atlas
+    // COLOUR in the card (Glenn, 2026-10-17: "more color"): the atlas RGB is each part's brightness times its tint,
+    // and the tree's vertex colour multiplies that. White (the default) leaves the vertex colour the whole colour;
+    // a card with blossoms on it tints them apart from its leaves and its twig.
+    Vec3 leafTint{1, 1, 1}, stemTint{1, 1, 1};
+    // THE FLOWER the card grammar draws at every W(scale), facing along the turtle:
+    //   blossom  `petals` round petals, each notched at its tip by `notch` (sakura, apple)
+    //   daisy    `petals` narrow rays round a disc (euryops, cosmos, marguerite)
+    //   floret   one small two-lipped flower: stacked up a stem they make a spike (salvia, lavender)
+    // `eye` is the centre's share of the radius, coloured eyeTint (a sakura's pink eye, a daisy's disc).
+    struct Flower {
+        bool set = false;
+        std::string shape = "blossom";
+        double size = 0.08;               // across, at W(1), in the grammar's units
+        int petals = 5;
+        double notch = 0.2, eye = 0.25;
+        Vec3 tint{1, 1, 1}, eyeTint{1, 1, 1};
+    } flower;
 };
 
 struct TreeRecipe {
@@ -63,6 +80,10 @@ struct TreeRecipe {
     std::string bark = "oak";        // the bark maps' style (tree.h barkStyleFromName)
     Vec3 barkColor{0.33, 0.24, 0.16}, barkColorHi{0.33, 0.24, 0.16};   // drawn between
     Vec3 leafColor{0.19, 0.44, 0.13}, leafColorHi{0.19, 0.44, 0.13};
+    // LEAF PALETTES: a tree's cards take their colour from a palette, blended across the crown in patches of
+    // paletteScale metres (one limb red, the next orange: an autumn maple). Several palettes: each seed picks one.
+    // Empty: leafColor..leafColorHi, one colour a tree.
+    std::vector<std::vector<Vec3>> leafPalettes;
     LeafCardSpec card;
 };
 

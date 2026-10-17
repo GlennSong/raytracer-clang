@@ -372,6 +372,258 @@
         "seed": 2,
         "set": {}
       }
+    },
+    {
+      "id": 24,
+      "name": "sakura_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 1
+      }
+    },
+    {
+      "id": 25,
+      "name": "sakura_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 2
+      }
+    },
+    {
+      "id": 26,
+      "name": "sakura_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3
+      }
+    },
+    {
+      "id": 27,
+      "name": "sakura_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 4
+      }
+    },
+    {
+      "id": 28,
+      "name": "sakura_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 5
+      }
+    },
+    {
+      "id": 29,
+      "name": "sakura_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 6
+      }
+    },
+    {
+      "id": 30,
+      "name": "maple_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 1
+      }
+    },
+    {
+      "id": 31,
+      "name": "maple_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 2
+      }
+    },
+    {
+      "id": 32,
+      "name": "maple_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 3
+      }
+    },
+    {
+      "id": 33,
+      "name": "maple_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 4
+      }
+    },
+    {
+      "id": 34,
+      "name": "maple_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 5
+      }
+    },
+    {
+      "id": 35,
+      "name": "maple_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 6
+      }
+    },
+    {
+      "id": 36,
+      "name": "pine_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 1
+      }
+    },
+    {
+      "id": 37,
+      "name": "pine_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 2
+      }
+    },
+    {
+      "id": 38,
+      "name": "pine_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 3
+      }
+    },
+    {
+      "id": 39,
+      "name": "pine_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 4
+      }
+    },
+    {
+      "id": 40,
+      "name": "pine_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 5
+      }
+    },
+    {
+      "id": 41,
+      "name": "pine_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 6
+      }
     }
   ],
   "terrain": {

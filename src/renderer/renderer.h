@@ -139,6 +139,11 @@ struct RenderMaterial {
     // faint self-light (interior drywall) stays in proportion to its paint, so an oxblood bar wall is not lifted to
     // grey. Vulkan + WebGPU (Metal owed).
     static constexpr uint32_t FLAG_EMISSION_FOLLOWS_PAINT = 1u << 21;
+    // FLAG_FOLIAGE (bit 22): alpha-cut tree leaf cards lit AS FOLIAGE -- the normal faces the viewer (a card's back
+    // is not a dark side), bends part way to the sky, and the sun shines through -- as the forest's banded crowns
+    // (FLAG_LOD_BAND) always were. For a crown with no band: the tree lab's recipe trees (Glenn, 2026-10-17: the
+    // sakura came out a dusky mauve, half its cards their dark backs). Vulkan.
+    static constexpr uint32_t FLAG_FOLIAGE = 1u << 22;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the

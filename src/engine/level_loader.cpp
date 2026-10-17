@@ -963,7 +963,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         } else {
             r.material.albedoMap = upload(leafTexture(128));
         }
-        r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
+        r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
         world.add<Renderable>(e, r);
     }
 }

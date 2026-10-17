@@ -93,6 +93,9 @@ struct TreeParams {
     // --- Colors (baked into vertex color; multiply the material albedo) ---
     Vec3  barkColor     = Vec3(0.33, 0.24, 0.16);
     Vec3  leafColor     = Vec3(0.19, 0.44, 0.13);
+    std::vector<Vec3> leafPalette;    // non-empty: each card's colour blends along this palette by a noise over the
+                                      //   crown (patches paletteScale metres across) instead of leafColor
+    float paletteScale  = 2.5f;
 };
 
 // A grown tree: bark and leaves as separate meshes (different materials — bark

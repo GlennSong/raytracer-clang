@@ -208,8 +208,11 @@ TEST_CASE(leaf_cards_are_drawn_whole_inside_the_card) {
             for (int y = 0; y < H; ++y)
                 for (int x = 0; x < W; ++x) {
                     const uint8_t* p = &at.albedo.pixels[(static_cast<std::size_t>(y) * W + x) * 4];
-                    const double a = p[3] / 255.0, b = p[0] / 255.0;
-                    const Vec3 leaf = Vec3(0.20, 0.42, 0.12) * b, bg(0.55, 0.55, 0.58);
+                    // (as the tree wears it: the atlas colour times the tree's vertex colour)
+                    const Vec3 vc = r->leafPalettes.empty() ? r->leafColor : r->leafPalettes[0][1 % r->leafPalettes[0].size()];
+                    const double a = p[3] / 255.0;
+                    const Vec3 rgb(p[0] / 255.0, p[1] / 255.0, p[2] / 255.0);
+                    const Vec3 leaf(rgb.x * vc.x, rgb.y * vc.y, rgb.z * vc.z), bg(0.55, 0.55, 0.58);
                     img.setPixel(x, H - 1 - y, bg * (1.0 - a) + leaf * a);
                 }
             img.writePng(std::string(dir) + "/card_" + name + ".png");
@@ -314,4 +317,35 @@ TEST_CASE(barks_by_kind_tile_and_differ) {
         }
     }
     CHECK(means[0] > 2.0 * means[2]);   // an oak's furrows far rougher than a beech's skin (the colour is the vertex's)
+}
+
+// COLOUR (Glenn, 2026-10-17: "more color"): a sakura's card carries its blossoms' pink apart from the twig, and a
+// maple's palette varies its cards across the crown -- several colours on one tree, not one.
+TEST_CASE(cards_carry_colour_and_palettes_vary_the_crown) {
+    const TreeRecipeBook book = shipped();
+    const TreeRecipe* sakura = book.find("sakura");
+    const TreeRecipe* maple = book.find("maple");
+    CHECK(sakura && maple);
+    if (!sakura || !maple) return;
+    CHECK(sakura->card.flower.set);
+    const LeafCardAtlas at = leafCardAtlas(sakura->card, 3u);
+    int pink = 0, solid = 0;
+    for (std::size_t o = 0; o < at.albedo.pixels.size(); o += 4) {
+        const uint8_t* p = &at.albedo.pixels[o];
+        if (p[3] < 128) continue;
+        ++solid;
+        if (p[0] > p[1] + 40 && p[2] > p[1]) ++pink;   // red over green, blue over green: pink
+    }
+    std::printf("    [colour] sakura card: %d of %d texels pink\n", pink, solid);
+    CHECK(solid > 0 && pink > solid / 3);
+    // a maple's leaf vertex colours: more than one hue across the crown
+    const TreeMesh m = growRecipeTree(*maple, 2u);
+    double lo = 1e9, hi = -1e9;
+    for (const Vertex& v : m.leaves.vertices) {
+        const double ratio = v.color.x / std::max(1e-6, v.color.x + v.color.y);   // red's share
+        lo = std::min(lo, ratio);
+        hi = std::max(hi, ratio);
+    }
+    std::printf("    [colour] maple red share across the crown %.2f .. %.2f\n", lo, hi);
+    CHECK(hi - lo > 0.08);
 }

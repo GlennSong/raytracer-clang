@@ -968,7 +968,7 @@ void main() {
         // grass cards: keep the cut-out's coverage down the mips (Golus) -- a thin blade's alpha
         // averages toward nothing, and a far card would vanish
         // (and tree cards, FLAG_LOD_BAND: a far crown's needles average away the same way)
-        if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19))) != 0u)
+        if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19) | (1u << 22))) != 0u)
             cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
         // an impostor's TOP card seen edge-on is a bright dash through the crown (Glenn: "the tree cards in the
         // distance are still pretty visibly tree cards" -- a far forest striped with them): it thins away as
@@ -1001,7 +1001,8 @@ void main() {
     vec3 cardN = N;
     {
         const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u;
-        const bool leafCard = (pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u);
+        // (a tree card: alpha-cut, and banded (the forest) or foliage (FLAG_FOLIAGE, a crown with no band))
+        const bool leafCard = (pc.surfaceFlags.y & 2u) != 0u && (pc.surfaceFlags.y & ((1u << 19) | (1u << 22))) != 0u;
         if (leafCard && (texFlags & 4u) != 0u) {
             impostorCard = true;
             cardBack = dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0;
@@ -1154,12 +1155,14 @@ void main() {
     // LEAF TRANSMISSION (ADR-0129): tree foliage -- alpha-cut cards in a LOD band -- lets the sun through
     // as grass does, so a crown seen against the sun glows at its sunlit rim instead of going black.
     // The shadow map already keeps it to the leaves the sun reaches (the crown's outside).
-    if ((pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u)) {
+    if ((pc.surfaceFlags.y & 2u) != 0u && (pc.surfaceFlags.y & ((1u << 19) | (1u << 22))) != 0u) {
         for (int i = 0; i < min(g.counts.x, 32); ++i) {
             if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
             vec3 L = normalize(g.lights[i].directionInner.xyz);
             float toward = pow(max(dot(-V, L), 0.0), 4.0);
-            vec3 transColor = albedo * vec3(1.7, 2.1, 0.9);
+            // (green leaves glow yellow-green; any other colour -- a blossom, a red maple -- glows its own hue)
+            float greenness = clamp((albedo.g - max(albedo.r, albedo.b)) * 10.0, 0.0, 1.0);
+            vec3 transColor = albedo * mix(vec3(1.8), vec3(1.7, 2.1, 0.9), greenness);
             direct += transColor * g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w
                     * (0.06 + 0.75 * toward) * sunVis / PI;
             break;

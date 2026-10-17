@@ -37,6 +37,7 @@ const std::vector<Field>& fields() {
         {"leafSize", &TreeParams::leafSize}, {"leavesPerTip", nullptr, &TreeParams::leavesPerTip},
         {"leafThickness", &TreeParams::leafThickness}, {"leafClump", &TreeParams::leafClump}, {"leafPitch", &TreeParams::leafPitch},
         {"maxLeafCards", nullptr, &TreeParams::maxLeafCards}, {"cardTiles", nullptr, &TreeParams::cardTiles},
+        {"paletteScale", &TreeParams::paletteScale},
     };
     return v;
 }
@@ -103,6 +104,10 @@ TreeParams drawTreeParams(const TreeRecipe& r, uint32_t seed, std::map<std::stri
     const double tb = draw01(seed, "c:bark"), tl = draw01(seed, "c:leaf");
     p.barkColor = r.barkColor + (r.barkColorHi - r.barkColor) * tb;
     p.leafColor = r.leafColor + (r.leafColorHi - r.leafColor) * tl;
+    if (!r.leafPalettes.empty()) {
+        const std::size_t k = static_cast<std::size_t>(draw01(seed, "c:palette") * r.leafPalettes.size());
+        p.leafPalette = r.leafPalettes[std::min(k, r.leafPalettes.size() - 1)];
+    }
     return p;
 }
 

@@ -57,6 +57,56 @@ void readColour(lua_State* L, int t, const char* key, Vec3& lo, Vec3& hi) {
     lua_pop(L, 1);
 }
 
+// A list of colours {{r,g,b}, ...} at the top of the stack.
+std::vector<Vec3> readColourList(lua_State* L) {
+    std::vector<Vec3> out;
+    const int lt = lua_gettop(L), n = static_cast<int>(luaL_len(L, lt));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, lt, i);
+        if (lua_istable(L, -1)) {
+            Vec3 v;
+            for (int k = 0; k < 3; ++k) {
+                lua_rawgeti(L, -1, k + 1);
+                (k == 0 ? v.x : k == 1 ? v.y : v.z) = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0.0;
+                lua_pop(L, 1);
+            }
+            out.push_back(v);
+        }
+        lua_pop(L, 1);
+    }
+    return out;
+}
+
+// LEAF PALETTES at field `key`: one palette {{r,g,b}, ...} or several {{{r,g,b}, ...}, ...}.
+bool readPalettes(lua_State* L, int t, const char* key, std::vector<std::vector<Vec3>>& out, const std::string& where,
+                  std::string* err) {
+    lua_getfield(L, t, key);
+    if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        bool nested = false;
+        if (lua_istable(L, -1)) {
+            lua_rawgeti(L, -1, 1);
+            nested = lua_istable(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        if (nested) {
+            const int pt = lua_gettop(L), n = static_cast<int>(luaL_len(L, pt));
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, pt, i);
+                if (lua_istable(L, -1)) out.push_back(readColourList(L));
+                lua_pop(L, 1);
+            }
+        } else {
+            out.push_back(readColourList(L));
+        }
+        for (const auto& pal : out)
+            if (pal.empty()) { lua_pop(L, 1); return fail(err, where + "." + key + ": an empty palette"); }
+    }
+    lua_pop(L, 1);
+    return true;
+}
+
 // Every name/value of the table at field `key` of t as ranges, in name order (deterministic whatever the walk).
 bool readRanges(lua_State* L, int t, const char* key, std::vector<TreeRecipe::Range>& out, const std::string& where,
                 std::string* err) {
@@ -147,6 +197,7 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
         if (const std::string b = strField(L, t, "bark"); !b.empty()) r.bark = b;
         readColour(L, t, "bark_color", r.barkColor, r.barkColorHi);
         readColour(L, t, "leaf_color", r.leafColor, r.leafColorHi);
+        if (!readPalettes(L, t, "leaf_palette", r.leafPalettes, where, err)) { lua_settop(L, base); return false; }
         if (!readRanges(L, t, "params", r.params, where, err) || !readRanges(L, t, "vars", r.vars, where, err)) {
             lua_settop(L, base);
             return false;
@@ -189,13 +240,38 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
                 cs.leafWidth = numField(L, lt, "width", cs.leafWidth);
                 cs.lobes = static_cast<int>(numField(L, lt, "lobes", cs.lobes));
                 cs.teeth = static_cast<int>(numField(L, lt, "teeth", cs.teeth));
+                Vec3 hi;
+                readColour(L, lt, "color", cs.leafTint, hi);
             }
             lua_pop(L, 1);
-            static const char* kShapes[] = {"oval", "lobed", "serrate", "needle", "leaflet"};
+            { Vec3 hi; readColour(L, ct, "stem_color", cs.stemTint, hi); }
+            static const char* kShapes[] = {"oval", "lobed", "serrate", "needle", "leaflet", "palmate"};
             if (std::find(std::begin(kShapes), std::end(kShapes), cs.shape) == std::end(kShapes)) {
                 lua_settop(L, base);
                 return fail(err, cw + ".leaf: unknown shape '" + cs.shape + "'");
             }
+            // THE FLOWER (drawn at every W)
+            lua_getfield(L, ct, "flower");
+            if (lua_istable(L, -1)) {
+                const int ft = lua_gettop(L);
+                auto& fl = cs.flower;
+                fl.set = true;
+                if (const std::string sh = strField(L, ft, "shape"); !sh.empty()) fl.shape = sh;
+                fl.size = numField(L, ft, "size", fl.size);
+                fl.petals = static_cast<int>(numField(L, ft, "petals", fl.petals));
+                fl.notch = numField(L, ft, "notch", fl.notch);
+                fl.eye = numField(L, ft, "eye", fl.eye);
+                Vec3 hi;
+                readColour(L, ft, "color", fl.tint, hi);
+                fl.eyeTint = fl.tint;
+                readColour(L, ft, "eye_color", fl.eyeTint, hi);
+                static const char* kFlowers[] = {"blossom", "daisy", "floret"};
+                if (std::find(std::begin(kFlowers), std::end(kFlowers), fl.shape) == std::end(kFlowers)) {
+                    lua_settop(L, base);
+                    return fail(err, cw + ".flower: unknown shape '" + fl.shape + "'");
+                }
+            }
+            lua_pop(L, 1);
         }
         lua_pop(L, 1);
         got.push_back(std::move(r));

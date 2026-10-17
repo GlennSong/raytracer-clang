@@ -583,10 +583,32 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         std::uniform_real_distribution<float> vary(0.8f, 1.15f);
         std::uniform_real_distribution<float> off(-1.0f, 1.0f);
         int cards = 0;
+        // THE PALETTE: a smooth noise over the crown walks each card's colour along it, so colour comes in patches
+        // (a limb that has turned, its neighbour not yet), not card by card
+        const std::vector<Vec3>& pal = params.leafPalette;
+        auto leafColourAt = [&](const Vec3& at) -> Vec3 {
+            if (pal.empty()) return params.leafColor;
+            if (pal.size() == 1) return pal[0];
+            const Vec3 q = at * (1.0 / std::max(0.2f, params.paletteScale));
+            const float nz = 0.65f * gnarlNoise(q, seed ^ 0x9a1e77u) + 0.35f * gnarlNoise(q * 2.3, seed ^ 0x51c3u);
+            const float g = std::clamp((nz - 0.5f) * 2.2f + 0.5f, 0.0f, 0.9999f) * static_cast<float>(pal.size() - 1);
+            const int i = static_cast<int>(g);
+            return pal[i] + (pal[i + 1] - pal[i]) * static_cast<double>(g - i);
+        };
+        // THE BUDGET thins the cards evenly over the crown: a tree that wants more than maxLeafCards keeps each card
+        // at the same odds, not the first maxLeafCards in turtle order (which left the last-grown limbs -- the top --
+        // bare)
+        auto leafyNode = [&](const SkeletonNode& n) {
+            return n.isTip || (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
+        };
+        std::size_t wanted = 0;
+        for (const SkeletonNode& n : nodes)
+            if (leafyNode(n)) wanted += static_cast<std::size_t>(std::max(0, params.leavesPerTip));
+        const double keep = wanted > static_cast<std::size_t>(params.maxLeafCards)
+                                ? static_cast<double>(params.maxLeafCards) / static_cast<double>(wanted) : 1.0;
+        std::uniform_real_distribution<double> odds(0.0, 1.0);
         for (const SkeletonNode& n : nodes) {
-            bool leafy = n.isTip ||
-                         (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
-            if (!leafy) continue;
+            if (!leafyNode(n)) continue;
             // the twig the cards hang on: this node's internode (parent to node), or for the root its heading
             const Vec3 a = n.parent >= 0 ? nodes[n.parent].pos : n.pos - n.heading * 0.1;
             Vec3 h = n.pos - a;
@@ -597,6 +619,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             std::uniform_real_distribution<float> along(1.0f - std::clamp(params.leafClump, 0.0f, 1.0f), 1.0f);
             for (int j = 0; j < params.leavesPerTip; j++) {
                 if (cards >= params.maxLeafCards) break;
+                if (keep < 1.0 && odds(rng) >= keep) continue;
                 // spiralled round the twig, each card's FOOT on the twig's bark somewhere along its last stretch, the
                 // card tilted out from the twig by leafPitch (about the twig's own axis: a sideways limb's cards lie
                 // along it, not across it)
@@ -613,7 +636,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                     tile = pick(rng);
                 }
                 addLeaf(out.leaves, jpos, dir, params.leafSize,
-                        params.leafColor * vary(rng), params.cardTiles, tile);
+                        leafColourAt(jpos) * vary(rng), params.cardTiles, tile);
                 cards++;
             }
             if (cards >= params.maxLeafCards) break;
