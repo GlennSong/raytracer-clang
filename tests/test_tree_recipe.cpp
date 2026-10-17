@@ -11,6 +11,9 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <functional>
+#include <map>
+#include <tuple>
 #include <set>
 #include <sstream>
 #include <string>
@@ -415,4 +418,181 @@ TEST_CASE(spruce_sprays_are_built_from_strands_and_hang_on_the_tree) {
     CHECK(off == 0);
     const TreeMesh again = growRecipeTree(*r, 3u, {{"foliage", 1.0}, {"leafSize", 0.7}});
     CHECK(again.leaves.vertices.size() == t.leaves.vertices.size());
+}
+
+// THE JOINTS (ADR-0181; Glenn: "I can see the seams between the branches and looking at them in wireframe it's
+// obviously not one continuous structure"): grown with joints = 1, a tree's forks of wood are joined as one surface --
+// nearly every fork built whole (not the plain-hull fallback), and the trunk and its limbs one connected mesh (the
+// largest piece of the bark, vertices joined by index and at the u seam by position, carries most of the bark;
+// what is left are the twigs welded on as before).
+TEST_CASE(limbs_meet_in_one_surface_at_their_joints) {
+    const TreeRecipeBook book = shipped();
+    for (const char* name : {"oak", "birch", "sakura", "maple", "pine", "spruce"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r != nullptr);
+        if (!r) continue;
+        const TreeMesh t = growRecipeTree(*r, 2u, {{"joints", 1.0}});
+        const RenderMesh& m = t.branches;
+        // union-find over vertices: by triangle, and by position (the u seam's duplicates)
+        std::vector<uint32_t> up(m.vertices.size());
+        for (uint32_t i = 0; i < up.size(); ++i) up[i] = i;
+        std::function<uint32_t(uint32_t)> find = [&](uint32_t x) { return up[x] == x ? x : up[x] = find(up[x]); };
+        auto join = [&](uint32_t a, uint32_t b) { up[find(a)] = find(b); };
+        for (std::size_t k = 0; k + 2 < m.indices.size(); k += 3) { join(m.indices[k], m.indices[k + 1]); join(m.indices[k], m.indices[k + 2]); }
+        std::map<std::tuple<long, long, long>, uint32_t> at;
+        for (uint32_t i = 0; i < m.vertices.size(); ++i) {
+            const Vec3& p = m.vertices[i].position;
+            const auto key = std::make_tuple(std::lround(p.x * 1e5), std::lround(p.y * 1e5), std::lround(p.z * 1e5));
+            auto it = at.find(key);
+            if (it == at.end()) at[key] = i; else join(i, it->second);
+        }
+        // the wood the joints joined: every end ring in one piece
+        std::map<uint32_t, std::size_t> ringPieces;
+        for (uint32_t r : t.jointRingStarts) ++ringPieces[find(r)];
+        std::size_t inBiggest = 0;
+        for (const auto& [root, n] : ringPieces) inBiggest = std::max(inBiggest, n);
+        if (std::getenv("RT_JOINT_DEBUG")) {
+            uint32_t bigRoot = 0;
+            for (const auto& [root, n] : ringPieces) if (n == inBiggest) bigRoot = root;
+            int shown = 0;
+            for (uint32_t r : t.jointRingStarts)
+                if (find(r) != bigRoot && shown++ < 6) {
+                    const Vec3 p = m.vertices[r].position;
+                    std::printf("    [apart] ring at (%.2f %.2f %.2f), piece of %zu rings\n", p.x, p.y, p.z, ringPieces[find(r)]);
+                }
+        }
+        std::map<uint32_t, std::size_t> tris;
+        for (std::size_t k = 0; k + 2 < m.indices.size(); k += 3) ++tris[find(m.indices[k])];
+        std::size_t biggest = 0;
+        for (const auto& [root, n] : tris) biggest = std::max(biggest, n);
+        const double share = m.indices.empty() ? 0.0 : static_cast<double>(biggest) / (m.indices.size() / 3);
+        // SLIVERS: the joints' triangles with a least angle under 8 deg
+        std::size_t slivers = 0, jointTris = 0;
+        for (std::size_t k = t.jointIndexStart; k + 2 < t.jointIndexEnd; k += 3) {
+            const Vec3 &A = m.vertices[m.indices[k]].position, &B = m.vertices[m.indices[k + 1]].position, &C = m.vertices[m.indices[k + 2]].position;
+            auto ang = [](const Vec3& p, const Vec3& q, const Vec3& r) {
+                const Vec3 u = q - p, w = r - p;
+                return std::acos(std::clamp(dot(u, w) / std::max(Real(1e-18), u.length() * w.length()), Real(-1), Real(1)));
+            };
+            const Real least = std::min({ang(A, B, C), ang(B, C, A), ang(C, A, B)});
+            slivers += least < 8.0 * 3.14159265 / 180.0;
+            ++jointTris;
+        }
+        std::printf("    [joints] %-7s %d joints whole, %d plain; %zu of %zu end rings in one piece; %zu pieces, largest %.0f%% of the bark; %zu joint tris, %.1f%% slivers\n",
+                    name, t.joints, t.jointsPlain, inBiggest, t.jointRingStarts.size(), tris.size(), share * 100.0, jointTris,
+                    jointTris ? 100.0 * slivers / jointTris : 0.0);
+        CHECK(slivers * 10 <= jointTris);
+        CHECK(inBiggest * 10 >= t.jointRingStarts.size() * 9);
+        CHECK(t.joints >= 3);
+        CHECK(t.jointsPlain * 2 <= t.joints + 1);   // (a plain joint is shaped the same; its rings' caps just cut)
+        // RT_TREE_WIRE=<dir>: the bark round the lowest forks, shaded and wired, the joints' triangles tinted
+        if (const char* dir = std::getenv("RT_TREE_WIRE")) {
+            Vec3 lo(1e9, 1e9, 1e9);
+            for (std::size_t k = t.jointIndexStart; k < t.jointIndexEnd; ++k) {
+                const Vec3& p = m.vertices[m.indices[k]].position;
+                if (p.y < lo.y) lo = p;
+            }
+            const double half = std::string(name) == "spruce" ? 0.8 : 1.4;
+            const Vec3 ctr(lo.x, lo.y + half * 0.7, lo.z);
+            const int W = 900, H = 900;
+            const double yaw = 0.5, tilt = -0.25;
+            auto view = [&](const Vec3& p) {   // turned about y, tipped about x; x right, y up, z depth
+                const Vec3 q = p - ctr;
+                const double x1 = q.x * std::cos(yaw) - q.z * std::sin(yaw), z1 = q.x * std::sin(yaw) + q.z * std::cos(yaw);
+                const double y2 = q.y * std::cos(tilt) - z1 * std::sin(tilt), z2 = q.y * std::sin(tilt) + z1 * std::cos(tilt);
+                return Vec3((x1 / half * 0.5 + 0.5) * W, (0.5 - y2 / half * 0.5) * H, z2);
+            };
+            std::vector<double> zb(static_cast<std::size_t>(W) * H, 1e9);
+            Image img(W, H);
+            for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) img.setPixel(x, y, Vec3(0.85, 0.87, 0.9));
+            const Vec3 light = normalize(Vec3(-0.4, 0.7, -0.6));
+            auto drawTris = [&](bool wire) {
+                for (std::size_t k = 0; k + 2 < m.indices.size(); k += 3) {
+                    const Vec3 a = view(m.vertices[m.indices[k]].position), b = view(m.vertices[m.indices[k + 1]].position),
+                               c = view(m.vertices[m.indices[k + 2]].position);
+                    const bool joint = k >= t.jointIndexStart && k < t.jointIndexEnd;
+                    if (!wire) {
+                        const Vec3 wn = normalize(cross(m.vertices[m.indices[k + 1]].position - m.vertices[m.indices[k]].position,
+                                                        m.vertices[m.indices[k + 2]].position - m.vertices[m.indices[k]].position));
+                        const double sh = 0.35 + 0.65 * std::max(0.0, std::fabs(dot(wn, light)));
+                        bool sliver = false;
+                        if (joint) {
+                            const Vec3 &A = m.vertices[m.indices[k]].position, &B = m.vertices[m.indices[k + 1]].position, &Cc = m.vertices[m.indices[k + 2]].position;
+                            auto ang = [](const Vec3& p, const Vec3& q, const Vec3& r) {
+                                const Vec3 u = q - p, w = r - p;
+                                return std::acos(std::clamp(dot(u, w) / std::max(Real(1e-18), u.length() * w.length()), Real(-1), Real(1)));
+                            };
+                            sliver = std::min({ang(A, B, Cc), ang(B, Cc, A), ang(Cc, A, B)}) < 8.0 * 3.14159265 / 180.0;
+                        }
+                        const Vec3 col = (sliver ? Vec3(0.9, 0.1, 0.1) : joint ? Vec3(0.85, 0.55, 0.30) : Vec3(0.55, 0.45, 0.38)) * sh;
+                        const int x0 = std::max(0, static_cast<int>(std::min({a.x, b.x, c.x}))), x1 = std::min(W - 1, static_cast<int>(std::max({a.x, b.x, c.x})) + 1);
+                        const int y0 = std::max(0, static_cast<int>(std::min({a.y, b.y, c.y}))), y1 = std::min(H - 1, static_cast<int>(std::max({a.y, b.y, c.y})) + 1);
+                        const double area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                        if (std::fabs(area) < 1e-9) continue;
+                        for (int y = y0; y <= y1; ++y)
+                            for (int x = x0; x <= x1; ++x) {
+                                const double px = x + 0.5, py = y + 0.5;
+                                const double w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) / area;
+                                const double w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) / area;
+                                const double w2 = 1.0 - w0 - w1;
+                                if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+                                const double z = w0 * a.z + w1 * b.z + w2 * c.z;
+                                const std::size_t o = static_cast<std::size_t>(y) * W + x;
+                                if (z < zb[o]) { zb[o] = z; img.setPixel(x, y, col); }
+                            }
+                    } else {
+                        const Vec3 pts[3] = {a, b, c};
+                        for (int e = 0; e < 3; ++e) {
+                            const Vec3 p = pts[e], q = pts[(e + 1) % 3];
+                            const int n = static_cast<int>(std::max(std::fabs(q.x - p.x), std::fabs(q.y - p.y))) + 1;
+                            for (int i = 0; i <= n; ++i) {
+                                const double u = static_cast<double>(i) / n;
+                                const int x = static_cast<int>(p.x + (q.x - p.x) * u), y = static_cast<int>(p.y + (q.y - p.y) * u);
+                                if (x < 0 || y < 0 || x >= W || y >= H) continue;
+                                const double z = p.z + (q.z - p.z) * u;
+                                if (z <= zb[static_cast<std::size_t>(y) * W + x] + 0.01)
+                                    img.setPixel(x, y, joint ? Vec3(0.45, 0.15, 0.02) : Vec3(0.12, 0.1, 0.1));
+                            }
+                        }
+                    }
+                }
+            };
+            drawTris(false);
+            drawTris(true);
+            img.writePng(std::string(dir) + "/wire_" + name + ".png");
+        }
+    }
+}
+
+// NEAR LEAVES (foliage_kit.h LeafKitSpec; Glenn: the card leaves "look bad and also really big especially for sakura"):
+// grown with foliage = 2 a broadleaf wears real-sized leaves one by one on leafy shoots, within its budget, and a
+// sakura its blossoms as small cups -- every piece near the tree (within a shoot's reach of a limb).
+TEST_CASE(near_leaves_are_one_by_one_on_shoots) {
+    const TreeRecipeBook book = shipped();
+    for (const char* name : {"oak", "birch", "maple", "sakura"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r && r->leafKit.set);
+        if (!r) continue;
+        const TreeMesh t = growRecipeTree(*r, 2u, {{"foliage", 2.0}});
+        CHECK(t.foliage == 2);
+        const LeafKitSpec& lk = r->leafKit;
+        // a leaf is 9 vertices, a blossom 1 + 7
+        const std::size_t verts = t.leaves.vertices.size();
+        std::printf("    [leaves] %-7s %zu leaf tris, %zu bark tris\n", name, t.leaves.indices.size() / 3, t.branches.indices.size() / 3);
+        CHECK(verts > 1000);
+        CHECK(verts <= static_cast<std::size_t>(lk.budget) * 9 + static_cast<std::size_t>(lk.blossomBudget) * 8 + 9 * 64);
+        int off = 0;
+        const Real reach = lk.shootLength * 1.3 + lk.size * 1.5 + lk.blossomSize * 2.0 + 0.1;
+        for (std::size_t v = 0; v < verts; v += 97) {
+            const Vec3 p = t.leaves.vertices[v].position;
+            Real best = 1e9;
+            for (const TreeMesh::Limb& l : t.limbs) {
+                const Vec3 ab = l.b - l.a;
+                const Real s = std::clamp(dot(p - l.a, ab) / std::max(Real(1e-12), dot(ab, ab)), Real(0), Real(1));
+                best = std::min(best, (p - (l.a + ab * s)).length());
+            }
+            off += best > reach;
+        }
+        CHECK(off == 0);
+    }
 }

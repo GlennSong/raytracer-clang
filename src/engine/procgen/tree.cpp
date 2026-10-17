@@ -7,6 +7,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstdio>
+#include <map>
 #include <random>
 #include <sstream>
 
@@ -236,7 +239,7 @@ struct Socket {
 void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color,
                      int segs, float vScale, int ringsPerSegment,
                      const TreeParams* g = nullptr, bool trunk = false, float footY = 0.0f, uint32_t seed = 0,
-                     const Socket* sock = nullptr) {
+                     const Socket* sock = nullptr, bool pointTip = false) {
     if (path.points.size() < 2) return;
     Spline<Vec3> spline = Spline<Vec3>::catmullRom(path.points);
     int rings = std::max(2, spline.segments() * std::max(1, ringsPerSegment) + 1);
@@ -365,6 +368,22 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
                 if (t.length() > 1e-9) vx.tangent = normalize(t);
             }
     }
+    if (pointTip && rings >= 2) {   // the end closed in a short point: one apex, a fan to the last ring
+        const uint32_t last = base + static_cast<uint32_t>((rings - 1) * stride);
+        Vec3 c(0, 0, 0);
+        for (int i = 0; i < segs; ++i) c = c + mesh.vertices[last + i].position;
+        c = c * (1.0 / segs);
+        const Vec3 d = normalize(c - centers[rings - 2]);
+        const float r = (mesh.vertices[last].position - c).length();
+        Vertex apex(c + d * (2.5 * r), d, mesh.vertices[last].tangent, 0.5f * uRep, mesh.vertices[last].v + 2.5f * r * vScale);
+        apex.color = mesh.vertices[last].color;
+        mesh.vertices.push_back(apex);
+        const uint32_t ap = static_cast<uint32_t>(mesh.vertices.size() - 1);
+        for (int i = 0; i < segs; ++i) {
+            const Vec3 mid = (mesh.vertices[last + i].position + mesh.vertices[last + i + 1].position) * 0.5;
+            MeshBuilder::triFacing(mesh, last + static_cast<uint32_t>(i), last + static_cast<uint32_t>(i) + 1, ap, mid - c + d * (0.3 * r));
+        }
+    }
     for (int k = 0; k < rings - 1; k++) {
         for (int i = 0; i < segs; i++) {
             uint32_t a = base + k * stride + i;            // ring k, vert i
@@ -476,11 +495,16 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         double L = d.length();
         return L > 1e-9 ? d * (1.0 / L) : nodes[n].heading;
     };
+    // (the limb carried on is the best-aligned of the THICK children: a twig lined up with the limb does not take
+    // over from the limb that goes on the other way)
     std::vector<int> cont(nodes.size(), -1);
     for (size_t n = 0; n < nodes.size(); n++) {
         Vec3 inDir = incomingDir(static_cast<int>(n));
         double best = -2.0;
+        float thickest = 0.0f;
+        for (int c : children[n]) thickest = std::max(thickest, nodes[c].radius);
         for (int c : children[n]) {
+            if (nodes[c].radius < 0.6f * thickest) continue;
             Vec3 d = nodes[c].pos - nodes[n].pos;
             double L = d.length();
             if (L < 1e-9) continue;
@@ -493,9 +517,99 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     // fork point, included so the curve passes through the joint.
     // A FORK INTO NEAR-EQUAL HALVES (the weld's crotch): a side child as thick as the continuing one -- neither is the
     // limb carried on; the limb ends there and both weld into it
+    // THE JOINTS (ADR-0181): at a fork of wood at least jointMinRadius thick, every limb meeting there -- the one
+    // coming in and the ones going out -- is CUT BACK, just far enough that its end ring clears the other limbs and
+    // lies on the near side of every other end ring's plane; the end rings are then joined by one surface, the convex
+    // hull of the rings found on a sphere round the fork (so a ring's own bumps cannot unseat it) less each ring's own
+    // cap. A twig off a thick limb is still welded on (its tube starts buried in the joint). Planned here, before the
+    // limbs are swept; the joints are built after, from the rings the limbs actually ended in.
+    struct Arm { int child = -1; Vec3 u; float r = 0.0f; double d = 0.0, maxD = 0.0; };
+    std::vector<char> isJoint(nodes.size(), 0), cutStart(nodes.size(), 0);
+    std::vector<double> cutIn(nodes.size(), 0.0), cutOut(nodes.size(), 0.0);
+    std::vector<std::vector<Arm>> jointArms(nodes.size());
+    if (params.joints == 1) {
+        auto candidate = [&](int n) { return children[n].size() >= 2 && nodes[n].radius >= params.jointMinRadius; };
+        if (std::getenv("RT_JOINT_DEBUG")) {
+            int cands = 0, multi = 0;
+            float rmax = 0;
+            for (size_t n = 0; n < nodes.size(); n++) { cands += candidate(static_cast<int>(n)); multi += children[n].size() >= 2; rmax = std::max(rmax, nodes[n].radius); }
+            std::fprintf(stderr, "[joint] %zu nodes, %d forks, %d candidates, max radius %.3f\n", nodes.size(), multi, cands, rmax);
+        }
+        for (size_t n = 0; n < nodes.size(); n++) {
+            if (!candidate(static_cast<int>(n))) continue;
+            const int par = nodes[n].parent;
+            const float rJ = nodes[n].radius;
+            std::vector<Arm> arms;
+            if (par >= 0) {
+                const Vec3 seg = nodes[n].pos - nodes[par].pos;
+                const double L = seg.length();
+                if (L < 1e-6) continue;
+                arms.push_back({-1, seg * (-1.0 / L), rJ, 0.0, L * (candidate(par) ? 0.45 : 0.7)});
+            }
+            for (int c : children[n]) {
+                // a twig, or a limb far thinner than the fork (a spruce's whorl off its trunk): welded with a collar --
+                // a joint's triangles cannot resolve a collar that small without thousands of them
+                if (nodes[c].radius < 0.4f * params.jointMinRadius || nodes[c].radius < 0.3f * rJ) continue;
+                const Vec3 seg = nodes[c].pos - nodes[n].pos;
+                const double L = seg.length();
+                if (L < 1e-6) continue;
+                arms.push_back({c, seg * (1.0 / L), nodes[c].radius * 1.05f, 0.0, L * (candidate(c) ? 0.45 : 0.7)});
+            }
+            bool ok = false;
+            for (;;) {
+                int outs = 0;
+                for (const Arm& a : arms) outs += a.child >= 0;
+                if (outs < 2) break;   // (a bend, not a fork)
+                for (Arm& a : arms) a.d = std::min(a.maxD, 0.75 * std::max(static_cast<double>(a.r), 0.5 * rJ));
+                // each end ring a face of the joint's hull: every other ring on the near side of its plane (with a
+                // margin), and clear of every other limb's tube
+                for (int it = 0; it < 12; ++it)
+                    for (Arm& a : arms) {
+                        for (const Arm& b : arms) {
+                            if (&a == &b) continue;
+                            const double c = std::clamp(dot(a.u, b.u), -1.0, 1.0), sn = std::sqrt(std::max(0.0, 1.0 - c * c));
+                            if (c > 0.0) a.d = std::max(a.d, (1.06 * b.r + a.r * c) / std::max(sn, 0.15));   // clear of b's limb
+                            a.d = std::max(a.d, b.d * c + b.r * sn + 0.12 * a.r);                            // past b's ring
+                        }
+                        a.d = std::min(a.d, a.maxD);
+                    }
+                int worst = -1;
+                for (std::size_t i = 0; i < arms.size(); ++i)
+                    for (std::size_t j = 0; j < arms.size(); ++j) {
+                        if (i == j) continue;
+                        const Arm &a = arms[i], &b = arms[j];
+                        const double c = std::clamp(dot(a.u, b.u), -1.0, 1.0), sn = std::sqrt(std::max(0.0, 1.0 - c * c));
+                        // (the joint is built from the rings the limbs really end in, retreating them until it is
+                        // whole -- only a limb running nearly alongside another is beyond that)
+                        const bool bad = c > std::cos(2.0 * PI / 180.0);   // (only limbs on top of each other)
+                        if (!bad) continue;
+                        // drop the thinner of the two going out (never the limb coming in)
+                        const int pick = a.child < 0 ? static_cast<int>(j) : b.child < 0 ? static_cast<int>(i)
+                                       : (a.r < b.r ? static_cast<int>(i) : static_cast<int>(j));
+                        if (worst < 0 || arms[pick].r < arms[worst].r) worst = pick;
+                    }
+                if (std::getenv("RT_JOINT_DEBUG")) {
+                    std::fprintf(stderr, "[joint] node %zu rJ %.3f arms:", n, rJ);
+                    for (const Arm& a : arms) std::fprintf(stderr, " (%d r %.3f d %.3f max %.3f)", a.child, a.r, a.d, a.maxD);
+                    std::fprintf(stderr, " -> %s\n", worst < 0 ? "ok" : "drop");
+                }
+                if (worst < 0) { ok = true; break; }
+                arms.erase(arms.begin() + worst);
+            }
+            if (!ok) continue;
+            isJoint[n] = 1;
+            for (const Arm& a : arms) {
+                if (a.child < 0) cutIn[n] = a.d;
+                else { cutOut[a.child] = a.d; cutStart[a.child] = 1; }
+            }
+            jointArms[n] = arms;
+        }
+    }
+
     std::vector<char> equalFork(nodes.size(), 0);
     if (params.collar > 0.0f)
         for (size_t n = 0; n < nodes.size(); n++) {
+            if (isJoint[n]) continue;
             if (cont[n] < 0 || nodes[n].radius < params.forkMinRadius) continue;
             for (int c : children[n])
                 if (c != cont[n] && nodes[c].radius >= params.forkRatio * nodes[cont[n]].radius) equalFork[n] = 1;
@@ -503,10 +617,16 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     std::vector<std::pair<int, int>> work;
     auto pushStarts = [&](int node) {
         for (int c : children[node])
-            if (c != cont[node] || equalFork[node]) work.push_back({node, c});
+            if (c != cont[node] || equalFork[node] || isJoint[node]) work.push_back({node, c});
     };
-    if (cont[0] != -1) work.push_back({0, cont[0]});
+    if (cont[0] != -1 && !isJoint[0]) work.push_back({0, cont[0]});
     pushStarts(0);
+    // each joint's end rings, as the limbs leave them: which limb's tube, and which end of it
+    struct Tube { uint32_t vBase = 0, rings = 0; std::size_t iBase = 0, iEnd = 0; int startBack = 0, endBack = 0; };
+    struct EndRing { int tube = -1; bool start = true; };
+    std::vector<Tube> tubes;
+    std::vector<std::vector<EndRing>> jointRings(nodes.size());
+    const uint32_t ringStride = static_cast<uint32_t>(params.ringSegments + 1);
 
     float vScale = params.barkVScale;
     std::uniform_real_distribution<float> vary(0.85f, 1.0f);
@@ -522,10 +642,30 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             path.radius.push_back(nodes[idx].radius);
             path.dist.push_back(nodes[idx].distFromRoot);
         };
-        append(anchor);
+        const bool cut = isJoint[anchor] && cutStart[first];
+        int endsAt = -1, lastNode = -1;
+        if (cut) {   // out from the joint by its cut-back
+            const Vec3 u = normalize(nodes[first].pos - nodes[anchor].pos);
+            path.points.push_back(nodes[anchor].pos + u * cutOut[first]);
+            path.radius.push_back(nodes[first].radius * 1.05f);
+            path.dist.push_back(nodes[anchor].distFromRoot + static_cast<float>(cutOut[first]));
+        } else {
+            append(anchor);
+        }
         for (int cur = first; cur != -1; cur = cont[cur]) {
+            if (isJoint[cur]) {   // ending short of the joint by its cut-back
+                const int par = nodes[cur].parent;
+                const Vec3 u = normalize(nodes[cur].pos - nodes[par].pos);
+                path.points.push_back(nodes[cur].pos - u * cutIn[cur]);
+                path.radius.push_back(nodes[cur].radius);
+                path.dist.push_back(nodes[cur].distFromRoot - static_cast<float>(cutIn[cur]));
+                pushStarts(cur);
+                endsAt = cur;
+                break;
+            }
             append(cur);
             pushStarts(cur);
+            lastNode = cur;
             if (equalFork[cur]) {
                 // THE STUB the halves weld into: on along the limb as far as they leave its surface, then capped round
                 const int par = nodes[cur].parent;
@@ -550,10 +690,12 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 break;
             }
         }
+        // A TIP ends in a point, not a sawn-off end (near foliage only -- a card hides it)
+        const bool pointTip = params.foliage != 0 && endsAt < 0 && lastNode >= 0 && children[lastNode].empty();
         Vec3 color = params.barkColor * vary(rng);
         Socket sock;
         const Socket* sp = nullptr;
-        if (!trunk && params.collar > 0.0f) {   // a side branch: welded into its parent at the fork
+        if (!trunk && !cut && params.collar > 0.0f) {   // a side branch: welded into its parent at the fork
             const int par = nodes[anchor].parent;
             const Vec3 dIn = par >= 0 ? normalize(nodes[anchor].pos - nodes[par].pos) : nodes[anchor].heading;
             const Vec3 dOut = cont[anchor] >= 0 ? normalize(nodes[cont[anchor]].pos - nodes[anchor].pos) : dIn;
@@ -563,8 +705,433 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             sock.collar = params.collar;
             sp = &sock;
         }
-        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3, &params, trunk, footY, seed, sp);
+        if (std::getenv("RT_JOINT_DEBUG") && endsAt >= 0 && !cut && !trunk)
+            std::fprintf(stderr, "[joint] limb into joint %d starts welded at node %d (joint %d, %zu children, r %.3f, first %d r %.3f, stub %d)\n",
+                         endsAt, anchor, isJoint[anchor], children[anchor].size(), nodes[anchor].radius, first,
+                         nodes[first].radius, equalFork[anchor]);
+        Tube tb;
+        tb.vBase = static_cast<uint32_t>(out.branches.vertices.size());
+        tb.iBase = out.branches.indices.size();
+        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3, &params, trunk, footY, seed, sp, pointTip);
+        tb.rings = (static_cast<uint32_t>(out.branches.vertices.size()) - tb.vBase) / ringStride;
+        tb.iEnd = out.branches.indices.size();
+        if (tb.rings >= 2 && (cut || endsAt >= 0)) {
+            tubes.push_back(tb);
+            if (cut) jointRings[anchor].push_back({static_cast<int>(tubes.size()) - 1, true});
+            if (endsAt >= 0) jointRings[endsAt].push_back({static_cast<int>(tubes.size()) - 1, false});
+        }
     }
+
+    // THE JOINTS, from the rings the limbs ended in. Each ring is taken as the circle it would be (its vertices' own
+    // bearings round its centre, at its mean radius, in its own plane -- so a knotty ring's dents cannot leave a vertex
+    // off the hull) with an apex a little out along its limb (so its cap is a cone the hull cannot cut across); the
+    // hull of all of them, less the apexes' faces, joins ring to ring. A joint is WHOLE when every ring edge lies on
+    // exactly one remaining face. Where it is not, a limb is in the way of a ring -- the plan's ideal limbs were not
+    // the gnarled ones swept -- and that ring RETREATS one ring further along its own tube (the band it leaves goes),
+    // as a road is cut back from a junction until its end is clear; up to a few rings. A joint still not whole is
+    // closed by the plain hull of its rings (covered, if not as tidy). Wound outward; a ring vertex at the u seam takes
+    // its duplicate where its face reaches round from the far side, so the bark does not smear back across the tile.
+    int jointsBuilt = 0, jointsPlain = 0;
+    const int segs = params.ringSegments;
+    const std::size_t jointIdxStart = out.branches.indices.size();
+    auto ringStart = [&](const EndRing& e) {
+        const Tube& t = tubes[static_cast<std::size_t>(e.tube)];
+        const uint32_t k = e.start ? static_cast<uint32_t>(t.startBack) : t.rings - 1 - static_cast<uint32_t>(t.endBack);
+        return t.vBase + k * ringStride;
+    };
+    if (std::getenv("RT_JOINT_DEBUG")) {
+        int short_ = 0;
+        for (size_t j = 0; j < nodes.size(); ++j)
+            if (isJoint[j] && jointRings[j].size() != jointArms[j].size()) {
+                ++short_;
+                if (short_ <= 5) std::fprintf(stderr, "[joint] node %zu: %zu arms, %zu rings\n", j, jointArms[j].size(), jointRings[j].size());
+            }
+        std::fprintf(stderr, "[joint] %d joints missing rings\n", short_);
+    }
+    for (size_t j = 0; j < nodes.size(); ++j) {
+        if (!isJoint[j] || jointRings[j].size() < 3) continue;
+        const std::vector<EndRing>& ends = jointRings[j];
+        const Vec3 C = nodes[j].pos;
+        std::vector<Vec3> pts;
+        std::vector<int> ringOf, idxOf;   // per hull point: its ring (-1 an apex) and its index round the ring
+        std::vector<std::array<uint32_t, 3>> keep;
+        std::vector<uint32_t> rings(ends.size());
+        bool whole = false;
+        for (int attempt = 0; attempt < 8 && !whole; ++attempt) {
+            pts.clear(); ringOf.clear(); idxOf.clear(); keep.clear();
+            std::vector<Vec3> cen(ends.size()), nrmOf(ends.size());
+            std::vector<double> rhoOf(ends.size(), 0.0);
+            for (std::size_t a = 0; a < ends.size(); ++a) {
+                rings[a] = ringStart(ends[a]);
+                Vec3 centroid(0, 0, 0);
+                for (int i = 0; i < segs; ++i) centroid = centroid + out.branches.vertices[rings[a] + i].position;
+                centroid = centroid * (1.0 / segs);
+                Vec3 nrm(0, 0, 0);
+                for (int i = 0; i < segs; ++i)
+                    nrm = nrm + cross(out.branches.vertices[rings[a] + i].position - centroid,
+                                      out.branches.vertices[rings[a] + (i + 1) % segs].position - centroid);
+                nrm = nrm.length() > 1e-12 ? normalize(nrm) : normalize(centroid - C);
+                if (dot(nrm, centroid - C) < 0.0) nrm = nrm * -1.0;
+                cen[a] = centroid;
+                nrmOf[a] = nrm;
+                const Vec3 ref = std::fabs(nrm.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+                const Vec3 e1 = normalize(cross(nrm, ref)), e2 = cross(nrm, e1);
+                double rho = 0.0;
+                for (int i = 0; i < segs; ++i) {
+                    const Vec3 v = out.branches.vertices[rings[a] + i].position - centroid;
+                    rho += (v - nrm * dot(v, nrm)).length();
+                }
+                rho /= segs;
+                pts.push_back(centroid + nrm * (0.03 * rho));
+                rhoOf[a] = rho;
+                ringOf.push_back(-1);
+                idxOf.push_back(static_cast<int>(a));
+                for (int i = 0; i < segs; ++i) {
+                    const Vec3 v = out.branches.vertices[rings[a] + i].position - centroid;
+                    const double phi = std::atan2(dot(v, e2), dot(v, e1));
+                    pts.push_back(centroid + (e1 * std::cos(phi) + e2 * std::sin(phi)) * rho);
+                    ringOf.push_back(static_cast<int>(a));
+                    idxOf.push_back(i);
+                }
+            }
+            const auto faces = MeshBuilder::convexHull(pts);
+            for (const auto& f : faces)
+                if (ringOf[f[0]] >= 0 && ringOf[f[1]] >= 0 && ringOf[f[2]] >= 0) keep.push_back(f);
+            whole = !faces.empty();
+            for (std::size_t a = 0; a < ends.size() && whole; ++a)
+                for (int i = 0; i < segs && whole; ++i) {
+                    int found = 0;
+                    for (const auto& f : keep)
+                        for (int e = 0; e < 3; ++e) {
+                            const uint32_t x = f[e], y = f[(e + 1) % 3];
+                            const auto same = [&](uint32_t q, int ii) { return ringOf[q] == static_cast<int>(a) && idxOf[q] == ii; };
+                            if ((same(x, i) && same(y, (i + 1) % segs)) || (same(y, i) && same(x, (i + 1) % segs))) ++found;
+                        }
+                    whole = found == 1;
+                }
+            if (!whole) {
+                if (const char* dump = std::getenv("RT_JOINT_DUMP")) {
+                    static int dumped = 0;
+                    if (dumped < 3) {
+                        std::string fn = std::string(dump) + "/joint" + std::to_string(dumped++) + ".txt";
+                        if (FILE* fp = std::fopen(fn.c_str(), "w")) {
+                            for (std::size_t q = 0; q < pts.size(); ++q)
+                                std::fprintf(fp, "p %d %d %.9f %.9f %.9f\n", ringOf[q], idxOf[q], pts[q].x, pts[q].y, pts[q].z);
+                            for (const auto& f : faces) std::fprintf(fp, "f %u %u %u\n", f[0], f[1], f[2]);
+                            std::fclose(fp);
+                        }
+                    }
+                }
+            }
+            if (whole) break;
+            // retreat each ring another limb's ring reaches past (on the far side of its plane)
+            bool moved = false;
+            for (std::size_t a = 0; a < ends.size(); ++a) {
+                bool crossed = false;
+                for (std::size_t b2 = 0; b2 < ends.size() && !crossed; ++b2) {
+                    if (b2 == a) continue;
+                    for (int i = 0; i < segs && !crossed; ++i)
+                        crossed = dot(out.branches.vertices[rings[b2] + i].position - cen[a], nrmOf[a]) > -0.06 * rhoOf[a];
+                }
+                if (!crossed) continue;
+                Tube& t = tubes[static_cast<std::size_t>(ends[a].tube)];
+                if (static_cast<uint32_t>(t.startBack + t.endBack) + 2 > t.rings) continue;   // (keep a band of the limb)
+                (ends[a].start ? t.startBack : t.endBack) += 1;
+                moved = true;
+                if (std::getenv("RT_JOINT_DEBUG"))
+                    std::fprintf(stderr, "[retreat] joint %zu ring %zu (%s, r %.3f) attempt %d\n", j, a, ends[a].start ? "out" : "in", rhoOf[a], attempt);
+            }
+            if (!moved) break;
+        }
+        if (std::getenv("RT_JOINT_DEBUG") && !whole)
+            std::fprintf(stderr, "[joint] node %zu PLAIN: %zu rings\n", j, ends.size());
+        auto vertexOf = [&](uint32_t q, const std::array<uint32_t, 3>& f) -> uint32_t {
+            const int a = ringOf[q], i = idxOf[q];
+            int idx = i;
+            if (i == 0)   // the seam: the duplicate (u = 1) when this face reaches round from the far side
+                for (uint32_t o : f)
+                    if (ringOf[o] == a && idxOf[o] > segs / 2) idx = segs;
+            return rings[static_cast<std::size_t>(a)] + static_cast<uint32_t>(idx);
+        };
+        {
+            // THE JOINT'S SHAPE: the hull is only the joint's topology -- its spans are straight and it bulges out to
+            // every ring (a diamond round a thin limb, a web across a crotch). Refined (every edge but the rings' own
+            // split until it is about a ring segment long) and its new vertices PROJECTED onto the limbs' smooth
+            // union -- each limb a capsule from the fork to its ring, blended in by a fillet a fifth of its radius --
+            // it becomes the crotch's saddle and a twig's collar.
+            struct Cap { Vec3 a, b; double r, k; };
+            std::vector<Cap> caps;
+            double rhoMin = 1e9;
+            for (std::size_t a = 0; a < ends.size(); ++a) {
+                Vec3 cen(0, 0, 0);
+                for (int i = 0; i < segs; ++i) cen = cen + out.branches.vertices[rings[a] + i].position;
+                cen = cen * (1.0 / segs);
+                double rho = 0.0;
+                for (int i = 0; i < segs; ++i) rho += (out.branches.vertices[rings[a] + i].position - cen).length();
+                rho /= segs;
+                rhoMin = std::min(rhoMin, rho);
+                const Vec3 ax = normalize(cen - C);
+                caps.push_back({C, cen + ax * (0.5 * rho), rho, 0.2 * rho});
+            }
+            // the thickest first, the rest blended into it
+            std::sort(caps.begin(), caps.end(), [](const Cap& x, const Cap& y) { return x.r > y.r; });
+            auto field = [&](const Vec3& p) {
+                double acc = 1e9;
+                for (std::size_t q = 0; q < caps.size(); ++q) {
+                    const Cap& c = caps[q];
+                    const Vec3 ab = c.b - c.a;
+                    const double t = std::clamp(dot(p - c.a, ab) / std::max(1e-12, dot(ab, ab)), 0.0, 1.0);
+                    const double d = (p - (c.a + ab * t)).length() - c.r;
+                    if (q == 0) { acc = d; continue; }
+                    const double h = std::clamp(0.5 + 0.5 * (d - acc) / c.k, 0.0, 1.0);   // (polynomial smooth min)
+                    acc = d + (acc - d) * h - c.k * h * (1.0 - h);
+                }
+                return acc;
+            };
+            const double eps = 0.02 * rhoMin;
+            auto grad = [&](const Vec3& p) {
+                return Vec3(field(p + Vec3(eps, 0, 0)) - field(p - Vec3(eps, 0, 0)),
+                            field(p + Vec3(0, eps, 0)) - field(p - Vec3(0, eps, 0)),
+                            field(p + Vec3(0, 0, eps)) - field(p - Vec3(0, 0, eps))) * (0.5 / eps);
+            };
+            // the joint's triangles, as vertex indices into out.branches (the rings' own vertices): the whole hull's,
+            // or (not whole) the plain hull of the rings themselves less each ring's own cap
+            std::vector<std::array<uint32_t, 3>> tris;
+            if (whole) {
+                for (const auto& f : keep) tris.push_back({vertexOf(f[0], f), vertexOf(f[1], f), vertexOf(f[2], f)});
+            } else {
+                std::vector<Vec3> real;
+                std::vector<uint32_t> realIdx;
+                std::vector<int> realRing;
+                for (std::size_t a = 0; a < rings.size(); ++a)
+                    for (int i = 0; i < segs; ++i) {
+                        real.push_back(out.branches.vertices[rings[a] + i].position);
+                        realIdx.push_back(rings[a] + i);
+                        realRing.push_back(static_cast<int>(a));
+                    }
+                for (const auto& f : MeshBuilder::convexHull(real))
+                    if (!(realRing[f[0]] == realRing[f[1]] && realRing[f[1]] == realRing[f[2]]))
+                        tris.push_back({realIdx[f[0]], realIdx[f[1]], realIdx[f[2]]});
+            }
+            auto ringEdge = [&](uint32_t x, uint32_t y) {   // two neighbours round one ring: never split
+                for (uint32_t r : rings) {
+                    const bool inX = x >= r && x <= r + static_cast<uint32_t>(segs), inY = y >= r && y <= r + static_cast<uint32_t>(segs);
+                    if (inX && inY) {
+                        const int dx = static_cast<int>(x - r), dy = static_cast<int>(y - r);
+                        const int dd = std::abs(dx - dy);
+                        return dd == 1 || dd == segs - 1;
+                    }
+                }
+                return false;
+            };
+            // (an edge is split to the ring spacing of the limb it lies on: coarse round the trunk, fine at a twig)
+            // (near a thin limb, its fine spacing, easing back to the coarse with the distance from it)
+            constexpr double kGrow = 1.8, kFloor = 0.35;
+            auto targetAt = [&](const Vec3& p) {
+                double best = 1e9;
+                for (const Cap& c : caps) {
+                    const Vec3 ab = c.b - c.a;
+                    const double t = std::clamp(dot(p - c.a, ab) / std::max(1e-12, dot(ab, ab)), 0.0, 1.0);
+                    const double d = std::max(0.0, (p - (c.a + ab * t)).length() - c.r);
+                    best = std::min(best, 2.0 * PI * c.r / segs * 1.7 + kGrow * d);
+                }
+                return std::max(best, kFloor * 2.0 * PI * caps.front().r / segs * 1.7);   // (no finer than this share of the joint's own)
+            };
+            const std::size_t firstNew = out.branches.vertices.size();
+            for (int level = 0; level < 4; ++level) {
+                std::map<std::pair<uint32_t, uint32_t>, uint32_t> mids;
+                bool any = false;
+                auto midOf = [&](uint32_t x, uint32_t y) -> int64_t {
+                    if (ringEdge(x, y)) return -1;
+                    const Vertex &vx = out.branches.vertices[x], &vy = out.branches.vertices[y];
+                    if ((vx.position - vy.position).length() < targetAt((vx.position + vy.position) * 0.5)) return -1;
+                    const auto key = std::make_pair(std::min(x, y), std::max(x, y));
+                    auto it = mids.find(key);
+                    if (it != mids.end()) return it->second;
+                    Vertex m = vx;
+                    m.position = (vx.position + vy.position) * 0.5;
+                    float uy = vy.u;   // (u unwrapped toward x's: the bark tile does not run back across the seam)
+                    if (uy - vx.u > 0.5f * std::max(1.0f, std::fabs(vx.u) + std::fabs(vy.u))) uy -= std::round(uy - vx.u);
+                    m.u = 0.5f * (vx.u + uy);
+                    m.v = 0.5f * (vx.v + vy.v);
+                    m.color = (vx.color + vy.color) * 0.5;
+                    out.branches.vertices.push_back(m);
+                    const uint32_t id = static_cast<uint32_t>(out.branches.vertices.size() - 1);
+                    mids[key] = id;
+                    any = true;
+                    return id;
+                };
+                std::vector<std::array<uint32_t, 3>> next;
+                for (const auto& t : tris) {
+                    int64_t m[3];
+                    for (int e = 0; e < 3; ++e) m[e] = midOf(t[e], t[(e + 1) % 3]);
+                    const int nSplit = (m[0] >= 0) + (m[1] >= 0) + (m[2] >= 0);
+                    if (nSplit == 0) { next.push_back(t); continue; }
+                    if (nSplit == 3) {
+                        const uint32_t a = t[0], b = t[1], c = t[2];
+                        const uint32_t ab = static_cast<uint32_t>(m[0]), bc = static_cast<uint32_t>(m[1]), ca = static_cast<uint32_t>(m[2]);
+                        next.push_back({a, ab, ca}); next.push_back({ab, b, bc}); next.push_back({ca, bc, c}); next.push_back({ab, bc, ca});
+                        continue;
+                    }
+                    // one or two split: turn the triangle so its first edge is split
+                    int r0 = 0;
+                    while (m[r0] < 0) ++r0;
+                    if (nSplit == 2 && m[(r0 + 2) % 3] >= 0) r0 = (r0 + 2) % 3;   // (the two split edges r0, r0+1)
+                    const uint32_t a = t[r0], b = t[(r0 + 1) % 3], c = t[(r0 + 2) % 3];
+                    const uint32_t m1 = static_cast<uint32_t>(m[r0]);
+                    if (nSplit == 1) { next.push_back({a, m1, c}); next.push_back({m1, b, c}); continue; }
+                    const uint32_t m2 = static_cast<uint32_t>(m[(r0 + 1) % 3]);
+                    next.push_back({a, m1, m2}); next.push_back({m1, b, m2}); next.push_back({a, m2, c});
+                }
+                tris.swap(next);
+                // the new vertices onto the limbs' union (a few Newton steps), as they come
+                for (std::size_t v = firstNew; v < out.branches.vertices.size(); ++v) {
+                    Vec3 p = out.branches.vertices[v].position;
+                    for (int it = 0; it < 6; ++it) {
+                        const double fv = field(p);
+                        const Vec3 g = grad(p);
+                        const double g2 = dot(g, g);
+                        if (g2 < 1e-12 || std::fabs(fv) < 1e-5 * rhoMin) break;
+                        Vec3 step = g * (fv / g2);
+                        if (step.length() > 0.5 * rhoMin) step = normalize(step) * (0.5 * rhoMin);
+                        p = p - step;
+                    }
+                    out.branches.vertices[v].position = p;
+                }
+                if (!any) break;
+            }
+            // NO SLIVERS (Glenn: "some of those joins look like they have a lot of degenerate triangles"): the hull and
+            // the midpoint splits leave long thin triangles fanned off the ring vertices. Edges FLIP where the two
+            // triangles either side are fatter the other way (the smaller of their least angles grows), ring edges
+            // never; the new vertices RELAX toward their neighbours' middle and go back onto the surface; three rounds.
+            auto minAngle = [&](uint32_t a, uint32_t b, uint32_t c) {
+                const Vec3 &A = out.branches.vertices[a].position, &B = out.branches.vertices[b].position, &Cc = out.branches.vertices[c].position;
+                auto ang = [](const Vec3& p, const Vec3& q, const Vec3& r) {
+                    const Vec3 u = q - p, w = r - p;
+                    const double lu = u.length(), lw = w.length();
+                    if (lu < 1e-12 || lw < 1e-12) return 0.0;
+                    return std::acos(std::clamp(dot(u, w) / (lu * lw), -1.0, 1.0));
+                };
+                return std::min({ang(A, B, Cc), ang(B, Cc, A), ang(Cc, A, B)});
+            };
+            auto project = [&](Vec3 p) {
+                for (int it = 0; it < 6; ++it) {
+                    const double fv = field(p);
+                    const Vec3 g = grad(p);
+                    const double g2 = dot(g, g);
+                    if (g2 < 1e-12 || std::fabs(fv) < 1e-5 * rhoMin) break;
+                    Vec3 step = g * (fv / g2);
+                    if (step.length() > 0.5 * rhoMin) step = normalize(step) * (0.5 * rhoMin);
+                    p = p - step;
+                }
+                return p;
+            };
+            for (int pass = 0; pass < 3; ++pass) {
+                for (int sweep = 0; sweep < 4; ++sweep) {   // flips
+                    std::map<std::pair<uint32_t, uint32_t>, std::vector<std::pair<std::size_t, int>>> edgeTris;
+                    for (std::size_t q = 0; q < tris.size(); ++q)
+                        for (int e = 0; e < 3; ++e) {
+                            const uint32_t x = tris[q][e], y = tris[q][(e + 1) % 3];
+                            edgeTris[{std::min(x, y), std::max(x, y)}].push_back({q, e});
+                        }
+                    std::vector<char> touched(tris.size(), 0);
+                    int flips = 0;
+                    for (const auto& [edge, users] : edgeTris) {
+                        if (users.size() != 2 || ringEdge(edge.first, edge.second)) continue;
+                        const auto [q1, e1] = users[0];
+                        const auto [q2, e2] = users[1];
+                        if (touched[q1] || touched[q2]) continue;
+                        const uint32_t a = tris[q1][e1], b = tris[q1][(e1 + 1) % 3], c = tris[q1][(e1 + 2) % 3];
+                        uint32_t d = tris[q2][0] + tris[q2][1] + tris[q2][2] - a - b;   // q2's third vertex
+                        if (d == c || d == a || d == b) continue;
+                        // (a duplicate seam vertex can stand for one of a b: then the sum trick fails -- check it)
+                        if (!((tris[q2][0] == d) || (tris[q2][1] == d) || (tris[q2][2] == d))) continue;
+                        const double before = std::min(minAngle(a, b, c), minAngle(b, a, d));
+                        const double after = std::min(minAngle(c, d, a), minAngle(d, c, b));
+                        // (only where the quad is convex enough that the new diagonal stays on the surface)
+                        const Vec3 nOld = cross(out.branches.vertices[b].position - out.branches.vertices[a].position,
+                                                out.branches.vertices[c].position - out.branches.vertices[a].position);
+                        const Vec3 n1 = cross(out.branches.vertices[d].position - out.branches.vertices[c].position,
+                                              out.branches.vertices[a].position - out.branches.vertices[c].position);
+                        const Vec3 n2 = cross(out.branches.vertices[c].position - out.branches.vertices[d].position,
+                                              out.branches.vertices[b].position - out.branches.vertices[d].position);
+                        if (after > before * 1.05 + 1e-3 && dot(n1, nOld) * dot(n2, nOld) > 0.0) {
+                            tris[q1] = {c, d, a};
+                            tris[q2] = {d, c, b};
+                            touched[q1] = touched[q2] = 1;
+                            ++flips;
+                        }
+                    }
+                    if (!flips) break;
+                }
+                if (pass == 2) break;
+                // relax the new vertices: toward their neighbours' middle, back onto the surface
+                std::vector<Vec3> sum(out.branches.vertices.size() - firstNew, Vec3(0, 0, 0));
+                std::vector<int> cnt(sum.size(), 0);
+                for (const auto& t : tris)
+                    for (int e = 0; e < 3; ++e) {
+                        const uint32_t x = t[e];
+                        if (x < firstNew) continue;
+                        for (int o = 1; o < 3; ++o) { sum[x - firstNew] = sum[x - firstNew] + out.branches.vertices[t[(e + o) % 3]].position; cnt[x - firstNew] += 1; }
+                    }
+                for (std::size_t v = 0; v < sum.size(); ++v)
+                    if (cnt[v]) {
+                        Vertex& vx = out.branches.vertices[firstNew + v];
+                        vx.position = project(vx.position * 0.4 + sum[v] * (0.6 / cnt[v]));
+                    }
+            }
+            for (std::size_t v = firstNew; v < out.branches.vertices.size(); ++v) {
+                Vertex& vx = out.branches.vertices[v];
+                const Vec3 g = grad(vx.position);
+                if (g.length() > 1e-9) vx.normal = normalize(g);
+                const Vec3 tg = vx.tangent - vx.normal * dot(vx.tangent, vx.normal);
+                if (tg.length() > 1e-9) vx.tangent = normalize(tg);
+            }
+            for (const auto& t : tris) {
+                const Vec3 mid = (out.branches.vertices[t[0]].position + out.branches.vertices[t[1]].position +
+                                  out.branches.vertices[t[2]].position) * (1.0 / 3.0);
+                Vec3 outward = grad(mid);
+                if (outward.length() < 1e-9) outward = mid - C;
+                MeshBuilder::triFacing(out.branches, t[0], t[1], t[2], outward);
+            }
+            ++(whole ? jointsBuilt : jointsPlain);
+        }
+        for (uint32_t r : rings) out.jointRingStarts.push_back(r);
+    }
+    out.jointIndexEnd = out.branches.indices.size();
+    out.jointIndexStart = jointIdxStart;
+    // the bands the retreating rings left: gone from their tubes
+    {
+        std::vector<char> drop(out.branches.indices.size() / 3, 0);
+        bool any = false;
+        for (const Tube& t : tubes) {
+            if (t.startBack == 0 && t.endBack == 0) continue;
+            for (std::size_t k = t.iBase; k + 2 < t.iEnd; k += 3) {
+                uint32_t lo = ~0u, hi = 0;
+                for (int e = 0; e < 3; ++e) {
+                    const uint32_t ring = (out.branches.indices[k + e] - t.vBase) / ringStride;
+                    lo = std::min(lo, ring);
+                    hi = std::max(hi, ring);
+                }
+                if (hi <= static_cast<uint32_t>(t.startBack) || lo >= t.rings - 1 - static_cast<uint32_t>(t.endBack)) {
+                    drop[k / 3] = 1;
+                    any = true;
+                }
+            }
+        }
+        if (any) {
+            std::vector<uint32_t> kept;
+            kept.reserve(out.branches.indices.size());
+            for (std::size_t k = 0; k + 2 < out.branches.indices.size(); k += 3)
+                if (!drop[k / 3]) kept.insert(kept.end(), {out.branches.indices[k], out.branches.indices[k + 1], out.branches.indices[k + 2]});
+            const std::size_t gone = out.branches.indices.size() - kept.size();   // (all of them tube bands, before the joints)
+            out.jointIndexStart -= gone;
+            out.jointIndexEnd -= gone;
+            out.branches.indices.swap(kept);
+        }
+    }
+    out.joints = jointsBuilt;
+    out.jointsPlain = jointsPlain;
 
     // Buttress roots: from the base, swept out and down, flattening to run along
     // the ground (local y~0). Widens the flare and grounds the tree.
@@ -630,15 +1197,25 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         std::vector<RenderMesh> sprays;
         if (params.foliage == 1) sprays = buildSprays(params.spray, params.cardTiles, seed ^ 0x5b7au);
         out.foliage = sprays.empty() ? 0 : 1;
-        const int perNode = sprays.empty() ? params.leavesPerTip : params.spray.perNode;
-        const int budget = sprays.empty() ? params.maxLeafCards : params.spray.budget;
+        const bool kit = params.foliage == 2 && params.leafKit.set;
+        if (kit) out.foliage = 2;
+        const int perNode = kit ? params.leafKit.perTwig : sprays.empty() ? params.leavesPerTip : params.spray.perNode;
+        const int budget = kit ? params.leafKit.budget : sprays.empty() ? params.maxLeafCards : params.spray.budget;
         std::uniform_real_distribution<double> sprayRoll(-0.35, 0.35), sprayColour(0.0, 1.0);
-        std::size_t wanted = 0;
+        std::size_t wanted = 0, wantedBlossoms = 0;
         for (const SkeletonNode& n : nodes)
-            if (leafyNode(n)) wanted += static_cast<std::size_t>(std::max(0, perNode));
+            if (leafyNode(n)) {
+                wanted += static_cast<std::size_t>(std::max(0, kit ? params.leafKit.shoots * params.leafKit.perTwig : perNode));
+                if (kit) wantedBlossoms += static_cast<std::size_t>(std::max(0, params.leafKit.shoots * params.leafKit.clusters * params.leafKit.perCluster));
+            }
+        const double blossomKeep = kit && wantedBlossoms > static_cast<std::size_t>(params.leafKit.blossomBudget)
+                                       ? static_cast<double>(params.leafKit.blossomBudget) / static_cast<double>(wantedBlossoms) : 1.0;
+        int blossoms = 0;
         const double keep = wanted > static_cast<std::size_t>(budget)
                                 ? static_cast<double>(budget) / static_cast<double>(wanted) : 1.0;
         std::uniform_real_distribution<double> odds(0.0, 1.0);
+        // (the leaf kit's shoots, thinned to whichever budget -- leaves or blossoms -- binds first)
+        const double shootKeep = std::min(keep, blossomKeep);
         for (const SkeletonNode& n : nodes) {
             if (!leafyNode(n)) continue;
             // the twig the cards hang on: this node's internode (parent to node), or for the root its heading
@@ -649,6 +1226,89 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             const Vec3 ref = std::abs(h.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
             const Vec3 s1 = normalize(cross(h, ref)), s2 = normalize(cross(h, s1));
             std::uniform_real_distribution<float> along(1.0f - std::clamp(params.leafClump, 0.0f, 1.0f), 1.0f);
+            // LEAFY SHOOTS (the leaf kit): a real tree has more orders of fine twigs than the skeleton grows -- each
+            // leafy twig puts out a few thin SHOOTS, fanned off it and lifted toward the light, and the leaves (and a
+            // sakura's blossom clusters) ride along them, alternate or in opposite pairs, a leaf at the tip
+            if (kit) {
+                const LeafKitSpec& lk = params.leafKit;
+                for (int sh = 0; sh < lk.shoots; ++sh) {
+                    if (cards >= budget) break;
+                    if (shootKeep < 1.0 && odds(rng) >= shootKeep) continue;
+                    const double sroll = (params.phyllotaxis * sh) * PI / 180.0 + off(rng) * 0.6;
+                    const Vec3 so = s1 * std::cos(sroll) + s2 * std::sin(sroll);
+                    const double sang = (lk.shootAngle + tilt(rng) * 30.0) * PI / 180.0;
+                    Vec3 sd = normalize(h * std::cos(sang) + so * std::sin(sang));
+                    sd = normalize(sd + Vec3(0, lk.lift, 0));
+                    const double slen = lk.shootLength * (0.7 + 0.6 * odds(rng));
+                    const float u = along(rng);
+                    const float rr = (n.parent >= 0 ? nodes[n.parent].radius * (1.0f - u) : 0.0f) + n.radius * u;
+                    const Vec3 s0 = a + (n.pos - a) * u + so * (rr * 0.5);
+                    // the shoot: a thin tapered twig, sagging a little under its leaves
+                    BranchPath tw;
+                    Vec3 tp = s0, td = sd;
+                    for (int q = 0; q <= 2; ++q) {
+                        tw.points.push_back(tp);
+                        tw.radius.push_back(std::max(0.0015f, rr * 0.5f * (1.0f - 0.35f * q)));
+                        tw.dist.push_back(n.distFromRoot + static_cast<float>(slen * q / 2.0));
+                        td = normalize(td + Vec3(0, -1.5 * lk.sag, 0));
+                        tp = tp + td * (slen / 2.0);
+                    }
+                    addCurvedBranch(out.branches, tw, params.barkColor * vary(rng), 3, vScale, 1);
+                    auto shootAt = [&](double t, Vec3& p, Vec3& d) {   // a point and heading along the shoot
+                        const double x = std::clamp(t, 0.0, 1.0) * 2.0;
+                        const int i = std::min(1, static_cast<int>(x));
+                        p = tw.points[i] + (tw.points[i + 1] - tw.points[i]) * (x - i);
+                        d = normalize(tw.points[i + 1] - tw.points[i]);
+                    };
+                    const Vec3 refs = std::abs(sd.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+                    const Vec3 t1 = normalize(cross(sd, refs)), t2 = normalize(cross(sd, t1));
+                    // its leaves
+                    const int nl = std::max(1, lk.perTwig);
+                    for (int j = 0; j < nl; ++j) {
+                        const double tpos = lk.pairs ? 0.25 + 0.75 * ((j / 2) * 2.0 + 1.0) / nl : 0.2 + 0.8 * (j + 1.0) / nl;
+                        const double kroll = lk.pairs ? (j / 2) * (PI * 0.5) + (j % 2) * PI + off(rng) * 0.25
+                                                      : (params.phyllotaxis * j) * PI / 180.0 + off(rng) * 0.3;
+                        Vec3 at, hd;
+                        shootAt(tpos, at, hd);
+                        const Vec3 ok = normalize((t1 * std::cos(kroll) + t2 * std::sin(kroll)) - hd * dot(t1 * std::cos(kroll) + t2 * std::sin(kroll), hd));
+                        const double ang = (lk.angle + tilt(rng) * 20.0) * PI / 180.0;
+                        Vec3 ld = normalize(hd * std::cos(ang) + ok * std::sin(ang));
+                        ld = normalize(ld * (1.0 - lk.droop) + Vec3(0, -1, 0) * lk.droop);
+                        const Vec3 hang = normalize(ok - ld * dot(ok, ld));
+                        Vec3 skyward = Vec3(0, 1, 0) - ld * dot(Vec3(0, 1, 0), ld);
+                        skyward = skyward.length() > 1e-6 ? normalize(skyward) : hang;
+                        const Vec3 face = normalize(hang * (1.0 - lk.face) + skyward * lk.face);
+                        std::uniform_int_distribution<int> leafTile(0, lk.blossomSize > 0.0 ? 1 : 3);
+                        addKitLeaf(out.leaves, at, ld, face, lk.size * vary(rng), lk.fold, lk.curl * (0.7 + 0.6 * odds(rng)),
+                                   2, leafTile(rng), leafColourAt(at) * vary(rng));
+                        ++cards;
+                    }
+                    // its blossom clusters (a sakura): umbels on spurs along it, the cups opening outward and up
+                    for (int c = 0; c < lk.clusters && lk.blossomSize > 0.0; ++c) {
+                        if (blossoms >= lk.blossomBudget) break;
+                        Vec3 sp, hd;
+                        shootAt(0.15 + 0.85 * (c + 0.5) / lk.clusters, sp, hd);
+                        const double croll = (params.phyllotaxis * (c + 2)) * PI / 180.0 + off(rng) * 0.5;
+                        const Vec3 oc = normalize(t1 * std::cos(croll) + t2 * std::sin(croll));
+                        const Vec3 clusterAxis = normalize(oc + hd * 0.5 + Vec3(0, 0.5, 0));
+                        const Vec3 ref2 = std::fabs(clusterAxis.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+                        const Vec3 c1 = normalize(cross(clusterAxis, ref2)), c2 = cross(clusterAxis, c1);
+                        for (int bl = 0; bl < lk.perCluster; ++bl) {
+                            const double phi = 2.0 * PI * bl / lk.perCluster + off(rng) * 0.4;
+                            const double spread = 0.5 + 0.35 * odds(rng);
+                            const Vec3 stalk = normalize(clusterAxis * std::cos(spread) + (c1 * std::cos(phi) + c2 * std::sin(phi)) * std::sin(spread));
+                            const double sz = lk.blossomSize * (0.85 + 0.3 * odds(rng));
+                            const Vec3 centre = sp + stalk * (0.8 * sz);
+                            std::uniform_int_distribution<int> flowerTile(2, 3);
+                            addKitBlossom(out.leaves, centre, normalize(stalk + Vec3(0, 0.3, 0)), sz, lk.cup, odds(rng) * 2.0 * PI,
+                                          2, flowerTile(rng), leafColourAt(centre) * vary(rng));
+                            ++blossoms;
+                        }
+                    }
+                }
+                if (cards >= budget) break;
+                continue;
+            }
             for (int j = 0; j < perNode; j++) {
                 if (cards >= budget) break;
                 if (keep < 1.0 && odds(rng) >= keep) continue;

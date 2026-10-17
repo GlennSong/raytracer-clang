@@ -984,6 +984,278 @@
           "leafSize": 0.7
         }
       }
+    },
+    {
+      "id": 66,
+      "name": "oak_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 67,
+      "name": "oak_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 68,
+      "name": "oak_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 69,
+      "name": "oak_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 70,
+      "name": "birch_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 71,
+      "name": "birch_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 72,
+      "name": "birch_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 73,
+      "name": "birch_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 74,
+      "name": "sakura_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 75,
+      "name": "sakura_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 76,
+      "name": "sakura_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 77,
+      "name": "sakura_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 78,
+      "name": "maple_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 79,
+      "name": "maple_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 80,
+      "name": "maple_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 81,
+      "name": "maple_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
     }
   ],
   "terrain": {

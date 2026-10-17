@@ -90,6 +90,7 @@ struct TreeRecipe {
     // shoots are built into. A tree grown with foliage = 1 wears these instead of the card.
     LeafCardSpec strand;
     SpraySpec spray;
+    LeafKitSpec leafKit;             // foliage = 2: every leaf a blade, blossoms cups (wearing the card's leaf and flower)
 };
 
 class TreeRecipeBook {

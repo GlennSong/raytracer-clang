@@ -805,4 +805,63 @@ std::vector<MeshBuilder::CellChunk> MeshBuilder::chunkByCell(const RenderMesh& m
     return out;
 }
 
+std::vector<std::array<uint32_t, 3>> MeshBuilder::convexHull(const std::vector<Vec3>& pts) {
+    using Face = std::array<uint32_t, 3>;
+    std::vector<Face> faces;
+    const std::size_t n = pts.size();
+    if (n < 4) return faces;
+    double scale = 0.0;
+    for (const Vec3& p : pts) scale = std::max(scale, (p - pts[0]).length());
+    if (scale <= 0.0) return faces;
+    const double eps = 1e-9 * scale;
+    // a first tetrahedron: the farthest point from 0, from that line, from that plane
+    uint32_t i0 = 0, i1 = 0, i2 = 0, i3 = 0;
+    double best = -1.0;
+    for (uint32_t i = 1; i < n; ++i)
+        if (double d = (pts[i] - pts[i0]).length(); d > best) { best = d; i1 = i; }
+    best = -1.0;
+    const Vec3 ab = pts[i1] - pts[i0];
+    for (uint32_t i = 0; i < n; ++i)
+        if (double d = cross(ab, pts[i] - pts[i0]).length(); d > best) { best = d; i2 = i; }
+    if (best <= eps * scale) return faces;
+    const Vec3 nrm = cross(ab, pts[i2] - pts[i0]);
+    best = -1.0;
+    for (uint32_t i = 0; i < n; ++i)
+        if (double d = std::fabs(dot(nrm, pts[i] - pts[i0])); d > best) { best = d; i3 = i; }
+    if (best <= eps * scale * scale) return faces;
+    auto normalOf = [&](const Face& f) { return cross(pts[f[1]] - pts[f[0]], pts[f[2]] - pts[f[0]]); };
+    const Vec3 inside = (pts[i0] + pts[i1] + pts[i2] + pts[i3]) * 0.25;
+    for (Face f : {Face{i0, i1, i2}, Face{i0, i1, i3}, Face{i0, i2, i3}, Face{i1, i2, i3}}) {
+        if (dot(normalOf(f), pts[f[0]] - inside) < 0) std::swap(f[1], f[2]);
+        faces.push_back(f);
+    }
+    for (uint32_t p = 0; p < n; ++p) {
+        if (p == i0 || p == i1 || p == i2 || p == i3) continue;
+        std::vector<char> seen(faces.size(), 0);
+        bool any = false;
+        for (std::size_t f = 0; f < faces.size(); ++f) {
+            const Vec3 fn = normalOf(faces[f]);
+            const double len = fn.length();
+            if (len > 0 && dot(fn, pts[p] - pts[faces[f][0]]) / len > eps) { seen[f] = 1; any = true; }
+        }
+        if (!any) continue;
+        // the horizon: the visible faces' edges whose other side is not visible, kept in their winding
+        std::vector<std::pair<uint32_t, uint32_t>> edges;
+        for (std::size_t f = 0; f < faces.size(); ++f) {
+            if (!seen[f]) continue;
+            for (int e = 0; e < 3; ++e) edges.push_back({faces[f][e], faces[f][(e + 1) % 3]});
+        }
+        std::vector<Face> next;
+        for (std::size_t f = 0; f < faces.size(); ++f)
+            if (!seen[f]) next.push_back(faces[f]);
+        for (const auto& [a, b] : edges) {
+            bool twin = false;
+            for (const auto& [c, d] : edges) twin = twin || (c == b && d == a);
+            if (!twin) next.push_back(Face{a, b, p});
+        }
+        faces.swap(next);
+    }
+    return faces;
+}
+
 }  // namespace engine

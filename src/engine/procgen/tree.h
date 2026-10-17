@@ -63,6 +63,11 @@ struct TreeParams {
                                     //   share of the continuing one's radius) neither carries on through the fork:
                                     //   the limb ends in a short capped stub and BOTH halves weld into it (a crotch)
     float forkMinRadius = 0.06f;    // ...on limbs at least this thick (m): a twig's fork is not worth the rings
+    // THE JOINTS (ADR-0181; Glenn: "I can see the seams between the branches ... it's obviously not one continuous
+    // structure"): 1 = at every fork of wood at least jointMinRadius thick, each limb meeting there is cut back and the
+    // end rings are joined by ONE surface (their hull) -- the trunk and limbs one mesh. 0 = the welds above.
+    int   joints        = 0;
+    float jointMinRadius = 0.03f;
 
     // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
     int   rootCount     = 5;        // number of surface roots (0 = none)
@@ -97,8 +102,9 @@ struct TreeParams {
                                     //   this, so one tree can't blow up the triangle count
     // THE FOLIAGE: 0 crossed cards (the mid distance), 1 SPRAYS (foliage_kit.h: shoots of strands, near trees) --
     // leavesPerTip sprays a leafy node, maxLeafCards the sprays' budget, leafSize a spray's length
-    int   foliage       = 0;
+    int   foliage       = 0;        // ... 2 LEAVES (foliage_kit.h LeafKitSpec: each leaf its own blade, blossoms cups)
     SpraySpec spray;
+    LeafKitSpec leafKit;
 
     // --- Colors (baked into vertex color; multiply the material albedo) ---
     Vec3  barkColor     = Vec3(0.33, 0.24, 0.16);
@@ -119,8 +125,11 @@ struct TreeMesh {
     // every leaf and every piece of bark hangs on the tree; later the LODs)
     struct Limb { Vec3 a, b; float ra = 0, rb = 0; };
     std::vector<Limb> limbs;
-    int foliage = 0;                      // what `leaves` is: 0 crossed cards (both windings), 1 sprays (one winding:
-                                          //   draw it two-sided) -- TreeParams::foliage
+    int joints = 0, jointsPlain = 0;      // forks joined as one surface (ADR-0181), and those closed by a plain hull
+    std::vector<uint32_t> jointRingStarts;   // ...the first vertex of every limb end ring a joint joined
+    std::size_t jointIndexStart = 0, jointIndexEnd = 0;   // ...and the joints' own triangles in branches.indices
+    int foliage = 0;                      // what `leaves` is: 0 crossed cards (both windings), 1 sprays or 2 leaves (one
+                                          //   winding: draw it two-sided) -- TreeParams::foliage
     std::vector<Vec3>     collisionVertices;
     std::vector<uint32_t> collisionIndices;
 };

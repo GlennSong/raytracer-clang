@@ -45,6 +45,43 @@ struct SpraySpec {
 // The species' spray variants, each in the spray frame at unit length; the strand atlas is `tiles` x `tiles`.
 std::vector<RenderMesh> buildSprays(const SpraySpec& spec, int tiles, uint32_t seed);
 
+// LEAVES AND BLOSSOMS (TreeParams::foliage = 2; Glenn: the leaves "look bad and also really big especially for
+// sakura ... Have you updated to leaves to what we discussed?"): broadleaf near foliage as EVERY LEAF ITS OWN small
+// blade -- a few quads folded along the midrib and curled down at the tip, wearing one leaf of the species'
+// ELEMENT ATLAS (leaf_card.h foliageElementAtlas: square tiles, a whole leaf or a whole flower each) -- set along
+// each leafy twig in its arrangement (alternate, or opposite pairs), hanging off it and turned to the light; and
+// BLOSSOMS as small CUPS (a shallow cone wearing a flower) in clusters on short stalks along the twigs.
+struct LeafKitSpec {
+    bool set = false;
+    double size = 0.10;          // a blade's length (m), stalk to tip
+    int shoots = 3;              // LEAFY SHOOTS each leafy twig puts out (the fine twigs the skeleton does not grow)
+    double shootLength = 0.25;   // ...their length (m), drawn 0.7 .. 1.3 x
+    double shootAngle = 45.0;    // ...off the twig (deg)
+    double lift = 0.3;           // ...lifted toward the light
+    double sag = 0.08;           // ...and sagging under their leaves, per third of their length
+    int perTwig = 8;             // leaves along each shoot
+    bool pairs = false;          // opposite pairs, each pair turned 90 deg from the last (maple); else alternate
+    double angle = 50.0;         // a leaf's stalk off the twig (deg)
+    double fold = 20.0;          // each half of the blade raised about the midrib (deg)
+    double curl = 0.35;          // the blade's tip bent down (rad)
+    double droop = 0.35;         // the blade hangs: 0 on along its stalk, 1 straight down
+    double face = 0.6;           // the blade turned to face the sky: 0 as it hangs, 1 flat to the sky
+    int budget = 30000;          // leaves on a tree at most (thinned evenly over the crown)
+    double blossomSize = 0.0;    // a blossom across (m); 0: no blossoms
+    int perCluster = 4;          // blossoms in a cluster (an umbel), on stalks spread round it
+    int clusters = 3;            // clusters along each shoot
+    double cup = 0.35;           // the cup's depth, a fraction of its radius
+    int blossomBudget = 20000;
+};
+
+// One LEAF: its stalk's end at `base`, the blade along `dir`, its face toward `normal`, `len` long; `tile` of the
+// element atlas (`tiles` a side). One winding (the leaf material is two-sided).
+void addKitLeaf(RenderMesh& m, const Vec3& base, const Vec3& dir, const Vec3& normal, double len, double fold,
+                double curl, int tiles, int tile, const Vec3& color);
+// One BLOSSOM: a cup `size` across round `centre`, opening toward `facing`, turned `roll` about it.
+void addKitBlossom(RenderMesh& m, const Vec3& centre, const Vec3& facing, double size, double cup, double roll,
+                   int tiles, int tile, const Vec3& color);
+
 }  // namespace engine
 
 #endif

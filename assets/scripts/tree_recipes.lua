@@ -14,7 +14,8 @@
 --   params              the grower's knobs (tree.h TreeParams, by name), each a value or {lo, hi}:
 --     shape    droop light crookChance crookAngle meander wander lean angleJitter
 --     trunk    flare lobes lobeDepth lobeHeight nodeSwell barkNoise twist rootCount rootSpread
---     joints   collar (a side branch welds into its parent, flaring by this; 0 = overlapping tubes)
+--     joints   joints = 1: every fork of wood (jointMinRadius on) one surface -- each limb cut back and the end rings
+--              joined by their hull (ADR-0181); collar (a twig still welds into its parent, flaring by this)
 --     girth    tipRadius pipeExponent radiusScale ringSegments
 --     leaves   leaves leafSize leavesPerTip leafThickness leafClump (how far back along a twig its cards spread)
 --              leafPitch (deg a card tilts out from its twig) maxLeafCards
@@ -27,6 +28,11 @@
 --   roots. params.tipCards puts the card atlas's first row at the stems' tips (flower spikes, daisies, berries) and
 --   the other rows along them (leaves); the card grammar reads $row to know which it is drawing. clipX/Y/Z prune
 --   the growth to a box (a clipped hedge: the cut twigs' leaves crowd its faces).
+--   leaves              NEAR LEAVES (foliage = 2; procgen/foliage_kit.h): every leaf its own small blade wearing one leaf of
+--                       the card's shape, folded on its midrib and curled at the tip, riding along leafy SHOOTS each leafy
+--                       twig puts out -- { size (m), shoots, shoot_length, shoot_angle, lift, sag, per_shoot, pairs (1:
+--                       opposite), angle, fold, curl, droop, face, budget, blossom = { size, per_cluster, clusters (per
+--                       shoot), cup, budget } } (blossoms: small cups of the card's flower, in clusters along the shoots)
 --   card                THE LEAF CARD the tree's foliage wears (procgen/leaf_card.h): a small 2D twig grammar drawn by a
 --                       2D turtle -- F(len) a stem, +(a) -(a) turns, [ ] a side shoot, L(scale) a leaf -- and the leaf:
 --     axiom, iterations, rules, vars   as the tree's (vars drawn per card variant)
@@ -56,6 +62,7 @@ tree_recipes = {
     vars = { roll = {70, 110}, pitch = {42, 58}, pitch2 = {30, 46}, side = {0.80, 0.86}, side2 = {0.76, 0.84},
              lead = {0.80, 0.86} },
     params = {
+      joints = 1,
       droop = {0.10, 0.20}, light = {0.15, 0.30}, crookChance = {0.15, 0.30}, crookAngle = {15, 30},
       meander = {0.08, 0.15}, lean = {0, 6}, angleJitter = {8, 14},
       flare = {0.5, 0.9}, lobes = {4, 7}, lobeDepth = {0.12, 0.22}, lobeHeight = {1.2, 2.2}, nodeSwell = {0.08, 0.15},
@@ -66,6 +73,8 @@ tree_recipes = {
     bark = "furrowed",
     bark_color = { {0.26, 0.21, 0.16}, {0.34, 0.27, 0.20} },
     leaf_color = { {0.14, 0.30, 0.08}, {0.20, 0.38, 0.11} },
+    leaves = { size = 0.11, shoots = 4, shoot_length = 0.30, per_shoot = 7, angle = 55, fold = 15, curl = 0.3, droop = 0.3,
+               face = 0.6, budget = 30000 },
     card = {
       -- oak leaves crowd at the end of each shoot: a couple along it, a rosette at its tip
       axiom = "S(2)", iterations = 3, variants = 2,
@@ -93,6 +102,7 @@ tree_recipes = {
     },
     vars = { pitch = {35, 50}, side = {0.55, 0.65}, lead = {0.88, 0.92} },
     params = {
+      joints = 1,
       droop = {0.25, 0.40}, light = {0.05, 0.15}, crookChance = {0.05, 0.12}, crookAngle = {8, 18},
       meander = {0.05, 0.10}, lean = {0, 8}, angleJitter = {8, 12},
       flare = 0.3, nodeSwell = 0.05, barkNoise = 0.03, twist = 0, rootCount = 3, rootSpread = 2.0, collar = 0.4,
@@ -102,6 +112,8 @@ tree_recipes = {
     bark = "papery",
     bark_color = { {0.74, 0.72, 0.68}, {0.82, 0.80, 0.76} },
     leaf_color = { {0.20, 0.40, 0.10}, {0.27, 0.48, 0.12} },
+    leaves = { size = 0.06, shoots = 4, shoot_length = 0.30, shoot_angle = 40, lift = 0.0, sag = 0.25, per_shoot = 9,
+               angle = 50, fold = 10, curl = 0.25, droop = 0.55, face = 0.4, budget = 34000 },
     card = {
       -- small toothed leaves, alternate, well apart along a slender drooping twig
       axiom = "S(5)", iterations = 6, variants = 2,
@@ -128,6 +140,7 @@ tree_recipes = {
     },
     vars = { pitch = {58, 68}, reach = {1.6, 2.0}, len = {0.36, 0.48}, whorls = {26, 36} },
     params = {
+      joints = 1,
       droop = {0.06, 0.12}, light = {0.10, 0.18}, crookChance = 0.0, crookAngle = 10,
       meander = 0.012, lean = {0, 2}, angleJitter = {6, 10},
       flare = 0.6, lobes = {5, 8}, lobeDepth = 0.10, lobeHeight = 1.0, nodeSwell = 0.04, barkNoise = 0.05,
@@ -194,10 +207,11 @@ tree_recipes = {
     },
     vars = { p0 = {32, 44}, roll = {80, 110}, pitch = {35, 50}, side = {0.76, 0.84}, lead = {0.80, 0.86}, up = {4, 10} },
     params = {
+      joints = 1,
       droop = {0.18, 0.28}, light = {0.15, 0.25}, crookChance = {0.10, 0.20}, crookAngle = {12, 22},
       meander = {0.08, 0.12}, lean = {0, 5}, angleJitter = {8, 12},
       flare = 0.45, nodeSwell = 0.08, barkNoise = 0.04, twist = 0, rootCount = 4, rootSpread = 2.5, collar = 0.5,
-      tipRadius = 0.010, pipeExponent = 2.3, radiusScale = 1.6, ringSegments = 10,
+      tipRadius = 0.008, pipeExponent = 2.4, radiusScale = 1.15, ringSegments = 10,
       leafSize = {0.46, 0.54}, leavesPerTip = 4, leafThickness = 0.06, leafClump = 1.0, leafPitch = 50,
       maxLeafCards = 9000, paletteScale = 2.0,
     },
@@ -205,6 +219,9 @@ tree_recipes = {
     bark_color = { {0.20, 0.13, 0.12}, {0.26, 0.17, 0.15} },
     leaf_color = {1, 1, 1},
     leaf_palette = { {1.0, 1.0, 1.0}, {1.0, 0.93, 0.96}, {0.96, 0.86, 0.90} },
+    leaves = { size = 0.05, shoots = 6, shoot_length = 0.22, per_shoot = 1, angle = 50, fold = 12, curl = 0.2, droop = 0.3,
+               face = 0.5, budget = 8000,
+               blossom = { size = 0.035, per_cluster = 5, clusters = 5, cup = 0.35, budget = 32000 } },
     card = {
       -- in bloom the twigs vanish under BALLS of blossom: umbels of 5-7 flowers on short stalks, packed along the
       -- shoot, a bronze leaf showing here and there
@@ -238,6 +255,7 @@ tree_recipes = {
     },
     vars = { s0 = {25, 38}, pitch = {50, 66}, side = {0.70, 0.76}, lead = {0.78, 0.84} },
     params = {
+      joints = 1,
       droop = {0.12, 0.20}, light = {0.25, 0.35}, crookChance = {0.10, 0.20}, crookAngle = {10, 20},
       meander = {0.06, 0.10}, lean = {0, 6}, angleJitter = {8, 12},
       flare = 0.35, nodeSwell = 0.06, barkNoise = 0.03, twist = 0, rootCount = 3, rootSpread = 2.0, collar = 0.5,
@@ -254,6 +272,8 @@ tree_recipes = {
       { {0.20, 0.34, 0.07}, {0.55, 0.38, 0.05}, {0.60, 0.14, 0.03} },   -- turning
       { {0.13, 0.30, 0.06}, {0.20, 0.38, 0.08}, {0.28, 0.40, 0.09} },   -- summer green
     },
+    leaves = { size = 0.08, shoots = 3, shoot_length = 0.28, per_shoot = 8, pairs = 1, angle = 65, fold = 8, curl = 0.2,
+               droop = 0.3, face = 0.7, budget = 30000 },
     card = {
       -- leaves in opposite pairs on long stalks along the shoot, a pair and a single at its end
       axiom = "S(3)", iterations = 4, variants = 2,
@@ -283,6 +303,7 @@ tree_recipes = {
     vars = { bare = {1.6, 2.6}, len = {0.45, 0.6}, whorls = {7, 10}, pitch = {62, 80}, reach = {2.2, 2.8},
              roll = {70, 110}, fan = {30, 45} },
     params = {
+      joints = 1,
       droop = {0.04, 0.08}, light = {0.25, 0.35}, crookChance = {0.25, 0.40}, crookAngle = {14, 24},
       meander = {0.10, 0.16}, lean = {4, 14}, angleJitter = {10, 16},
       flare = 0.5, lobes = {4, 6}, lobeDepth = 0.08, lobeHeight = 1.0, nodeSwell = 0.06, barkNoise = 0.06,

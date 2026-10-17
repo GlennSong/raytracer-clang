@@ -96,4 +96,72 @@ std::vector<RenderMesh> buildSprays(const SpraySpec& s, int tiles, uint32_t seed
     return out;
 }
 
+// (the element atlas's square tiles: a leaf drawn up the middle, stalk at the foot, filling 6% .. 94% of the height;
+// a flower centred, its petals' tips 0.4375 of the tile from its centre)
+namespace {
+constexpr double kLeafFoot = 0.06, kLeafSpan = 0.88, kFlowerR = 0.4375;
+}
+
+void addKitLeaf(RenderMesh& m, const Vec3& base, const Vec3& dir, const Vec3& normal, double len, double fold,
+                double curl, int tiles, int tile, const Vec3& color) {
+    const int n = std::max(1, tiles);
+    const double ts = 1.0 / n, u0 = (tile % n) * ts, v0 = (tile / n) * ts;
+    const double Q = len / kLeafSpan;   // the tile's side, in metres
+    const Vec3 f = normalize(dir), nrm = normalize(normal - f * dot(normal, f)), side = normalize(cross(nrm, f));
+    // three rows up the blade (foot, middle, tip), the tip bent down by `curl`; three columns, the halves raised
+    const Vec3 r0 = base - f * (kLeafFoot * Q);
+    const Vec3 r1 = r0 + f * (0.5 * Q);
+    const Vec3 fTip = normalize(f * std::cos(curl) - nrm * std::sin(curl));
+    const Vec3 r2 = r1 + fTip * (0.5 * Q);
+    const Vec3 rows[3] = {r0, r1, r2};
+    const Vec3 rowF[3] = {f, normalize(f + fTip), fTip};
+    const double fr = fold * 3.14159265358979323846 / 180.0;
+    const uint32_t b = static_cast<uint32_t>(m.vertices.size());
+    for (int r = 0; r < 3; ++r) {
+        const Vec3 rn = normalize(cross(side, rowF[r]) * -1.0);   // the blade's face here (toward `normal`)
+        const Vec3 up = dot(rn, nrm) < 0 ? rn * -1.0 : rn;
+        for (int c = 0; c < 3; ++c) {
+            const double sgn = c - 1.0;   // -1 left half, 0 midrib, 1 right half
+            const Vec3 across = side * (std::cos(fr) * sgn) + up * (std::sin(fr) * std::fabs(sgn));
+            const Vec3 p = rows[r] + across * (0.5 * Q);
+            const Vec3 vn = normalize(up - side * (sgn * std::sin(fr)));
+            Vertex v(p, vn, side, static_cast<float>(u0 + ts * (0.5 + 0.5 * sgn)), static_cast<float>(v0 + ts * (0.5 * r)));
+            v.color = color;
+            m.vertices.push_back(v);
+        }
+    }
+    for (int r = 0; r < 2; ++r)
+        for (int c = 0; c < 2; ++c) {
+            const uint32_t a = b + r * 3 + c;
+            MeshBuilder::quadFacing(m, a, a + 1, a + 4, a + 3, m.vertices[a].normal + m.vertices[a + 4].normal);
+        }
+}
+
+void addKitBlossom(RenderMesh& m, const Vec3& centre, const Vec3& facing, double size, double cup, double roll,
+                   int tiles, int tile, const Vec3& color) {
+    const int n = std::max(1, tiles);
+    const double ts = 1.0 / n, uc = (tile % n + 0.5) * ts, vc = (tile / n + 0.5) * ts;
+    const Vec3 a = normalize(facing);
+    const Vec3 ref = std::fabs(a.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+    const Vec3 e1 = normalize(cross(a, ref)), e2 = cross(a, e1);
+    const double R = 0.5 * size;
+    constexpr int kRim = 7;
+    const uint32_t b = static_cast<uint32_t>(m.vertices.size());
+    Vertex c(centre, a, e1, static_cast<float>(uc), static_cast<float>(vc));
+    c.color = color;
+    m.vertices.push_back(c);
+    for (int k = 0; k < kRim; ++k) {
+        const double th = roll + 2.0 * 3.14159265358979323846 * k / kRim;
+        const Vec3 radial = e1 * std::cos(th) + e2 * std::sin(th);
+        const Vec3 p = centre + radial * R + a * (cup * R);   // the rim raised: a cup opening toward `facing`
+        const Vec3 nrm = normalize(a - radial * (cup * 0.8));
+        const double ang = th - roll;
+        Vertex v(p, nrm, e1, static_cast<float>(uc + ts * kFlowerR * std::cos(ang)), static_cast<float>(vc + ts * kFlowerR * std::sin(ang)));
+        v.color = color;
+        m.vertices.push_back(v);
+    }
+    for (int k = 0; k < kRim; ++k)
+        MeshBuilder::triFacing(m, b, b + 1 + k, b + 1 + (k + 1) % kRim, a);
+}
+
 }  // namespace engine

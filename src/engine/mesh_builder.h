@@ -262,6 +262,11 @@ struct MeshBuilder {
     // every normal is `normal` (straight up for ground cover, so it lights like the ground it
     // stands on). White. Grass cards, flowers, reeds, distant-tree impostors.
     static RenderMesh crossCards(double width, double height, int planes, const Vec3& normal = Vec3(0, 1, 0));
+    // THE CONVEX HULL of `points` as triangles (indices into `points`), each wound counter-clockwise seen from
+    // outside (its right-hand normal points out). Points inside, or on a face within a hair of it, are left out.
+    // Fewer than four non-coplanar points: empty. Incremental (O(n^2)) -- for the small sets of a joint, a cap, a
+    // rock (the tree's branch junctions: the hull of the limbs' end rings, ADR-0181).
+    static std::vector<std::array<uint32_t, 3>> convexHull(const std::vector<Vec3>& points);
     // A tapered generalized cylinder through `points` (a `sides`-gon ring at each, radial
     // normals), colour per ring (`colours` may be empty: white).
     static RenderMesh tube(const std::vector<Vec3>& points, const std::vector<double>& radii, int sides,

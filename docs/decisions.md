@@ -10372,3 +10372,36 @@ Almost: the one opening the complex lacked was a shared wall simply ABSENT along
 - **Owed.** The true bend (a second spine cell at an angle, the court as the hinge); a court cell spanning
   levels; the parking lot in front where the block allows it (the American mall's lot pass does this, the cells
   mall does not yet).
+
+## ADR-0181 — Tree joints: limbs cut back, joined by their hull, shaped on their smooth union
+
+Glenn, 2026-10-17: "I don't think the trunks work... I can see the seams between the branches and looking at them in
+wireframe it's obviously not one continuous structure." Each limb was its own swept tube, a side branch welded on by
+a flared collar pushed into its parent. He asked whether the road lanes' way of merging would do (it is: a junction
+cut back and filled).
+
+- **The cut-back** (`TreeParams::joints = 1`, forks of wood at least `jointMinRadius`): every limb meeting at a fork
+  -- the one coming in and the ones going out -- ends short of it, planned so each end ring clears the other limbs'
+  tubes and lies on the near side of every other ring's plane. The plan's limbs are ideal; the swept ones are
+  gnarled, so the joint is checked on the REAL rings and a ring another limb reaches past RETREATS one ring further
+  along its own tube (its band dropped), as a road is cut back until its end is clear -- the measured fix that
+  took the oak from 26 fallbacks to 11 of 237.
+- **The fill**: the convex hull (`MeshBuilder::convexHull`, a new mesh word) of the end rings -- each taken as the
+  circle it would be at its vertices' own bearings, with an apex 3% of its radius out along its limb so its cap
+  is a cone the hull cannot cut across -- less the apexes' faces. WHOLE when every ring edge lies on exactly one
+  face left; else the plain hull of the rings less their caps (same shape step, at worst a crack where a knotty ring
+  dents in).
+- **The shape**: the hull is only topology (straight spans, bulging to every ring). Refined (each edge but the rings'
+  split to the ring spacing of the nearest limb, easing to the joint's own away from a thin one, never finer than a
+  third of it) and the new vertices projected (Newton) onto the limbs' SMOOTH UNION -- capsules from the fork to
+  each ring, blended by a fillet a fifth of each one's radius -- it becomes a crotch's saddle. Edges flip toward
+  fatter triangles and the new vertices relax and re-project, three rounds: slivers (least angle under 8 deg)
+  1-4% of a broadleaf's joint triangles.
+- **Not joined**: a limb under 30% of the fork's radius (a spruce's whorl branch off its trunk) is welded with its
+  collar as before -- the joint's triangles cannot resolve a collar that small without thousands of them.
+- **The leader** at a fork is now the best-aligned of the THICK children (a twig lined up with the limb no longer
+  takes over from the limb going on the other way).
+- **Cost**: bark triangles about doubled on the hero tree (oak 34k to 80k, sakura 43k to 90k); the joints are a
+  hero-LOD feature (Glenn: "hero trees have everything welded ... mid level doesn't have to weld them all").
+- **Tests**: `limbs_meet_in_one_surface_at_their_joints` (joints whole, end rings in one piece, slivers; RT_TREE_WIRE
+  renders the bark round the lowest forks, joints tinted, slivers red); RT_JOINT_DEBUG / RT_JOINT_DUMP trace them.

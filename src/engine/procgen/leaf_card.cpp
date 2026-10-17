@@ -375,4 +375,17 @@ LeafCardAtlas leafCardAtlas(const LeafCardSpec& spec, uint32_t seed, int tileW, 
     return out;
 }
 
+LeafCardAtlas foliageElementAtlas(const LeafCardSpec& card, bool flowers, uint32_t seed, int tile) {
+    LeafCardSpec s = card;
+    s.axiom = "X($row)";
+    s.iterations = 1;
+    s.vars.clear();
+    s.rules.clear();
+    s.rules.push_back({"X(r):r<0.5", "L(1)", 1.0});
+    s.rules.push_back({"X(r):r>=0.5", flowers && card.flower.set ? "W(1)" : "L(1)", 1.0});
+    s.variants = 2;
+    s.tipBright = 0.0;
+    return leafCardAtlas(s, seed, tile, tile);
+}
+
 }  // namespace engine

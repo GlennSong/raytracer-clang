@@ -32,6 +32,11 @@ struct LeafCardAtlas {
 // The atlas: tiles of tileW x tileH pixels (the card's own aspect -- tree.cpp's cards are 1 wide by 1.7 long).
 LeafCardAtlas leafCardAtlas(const LeafCardSpec& spec, uint32_t seed, int tileW = 256, int tileH = 436);
 
+// THE ELEMENT ATLAS for near foliage (foliage_kit.h addKitLeaf / addKitBlossom): 2 x 2 square tiles, each ONE leaf of
+// the card's shape (drawn up the tile, its stalk at the foot) -- or, with `flowers`, the second row one flower each
+// (centred). The same leaf and flower the species' cards draw, whole, one at a time.
+LeafCardAtlas foliageElementAtlas(const LeafCardSpec& card, bool flowers, uint32_t seed, int tile = 256);
+
 }  // namespace engine
 
 #endif

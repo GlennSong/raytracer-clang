@@ -281,6 +281,37 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
         lua_getfield(L, t, "strand");
         if (lua_istable(L, -1) && !readCard(L, r.strand, where + ".strand", err)) { lua_settop(L, base); return false; }
         lua_pop(L, 1);
+        lua_getfield(L, t, "leaves");
+        if (lua_istable(L, -1)) {   // NEAR LEAVES (foliage = 2; foliage_kit.h LeafKitSpec)
+            const int lt = lua_gettop(L);
+            LeafKitSpec& lk = r.leafKit;
+            lk.set = true;
+            lk.size = numField(L, lt, "size", lk.size);
+            lk.shoots = std::max(1, static_cast<int>(numField(L, lt, "shoots", lk.shoots)));
+            lk.shootLength = numField(L, lt, "shoot_length", lk.shootLength);
+            lk.shootAngle = numField(L, lt, "shoot_angle", lk.shootAngle);
+            lk.lift = numField(L, lt, "lift", lk.lift);
+            lk.sag = numField(L, lt, "sag", lk.sag);
+            lk.perTwig = std::max(1, static_cast<int>(numField(L, lt, "per_shoot", lk.perTwig)));
+            lk.pairs = numField(L, lt, "pairs", lk.pairs ? 1.0 : 0.0) != 0.0;
+            lk.angle = numField(L, lt, "angle", lk.angle);
+            lk.fold = numField(L, lt, "fold", lk.fold);
+            lk.curl = numField(L, lt, "curl", lk.curl);
+            lk.droop = numField(L, lt, "droop", lk.droop);
+            lk.face = numField(L, lt, "face", lk.face);
+            lk.budget = std::max(1, static_cast<int>(numField(L, lt, "budget", lk.budget)));
+            lua_getfield(L, lt, "blossom");
+            if (lua_istable(L, -1)) {
+                const int bt = lua_gettop(L);
+                lk.blossomSize = numField(L, bt, "size", 0.035);
+                lk.perCluster = std::max(1, static_cast<int>(numField(L, bt, "per_cluster", lk.perCluster)));
+                lk.clusters = std::max(0, static_cast<int>(numField(L, bt, "clusters", lk.clusters)));
+                lk.cup = numField(L, bt, "cup", lk.cup);
+                lk.blossomBudget = std::max(1, static_cast<int>(numField(L, bt, "budget", lk.blossomBudget)));
+            }
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
         lua_getfield(L, t, "spray");
         if (lua_istable(L, -1)) {
             const int st = lua_gettop(L);
