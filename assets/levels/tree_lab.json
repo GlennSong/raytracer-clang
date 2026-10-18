@@ -1480,6 +1480,174 @@
         "recipe": "fan_palm",
         "seed": 3
       }
+    },
+    {
+      "id": 98,
+      "name": "multistem_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -34.0
+      ],
+      "tree": {
+        "recipe": "multistem",
+        "seed": 1
+      }
+    },
+    {
+      "id": 99,
+      "name": "multistem_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -34.0
+      ],
+      "tree": {
+        "recipe": "multistem",
+        "seed": 2
+      }
+    },
+    {
+      "id": 100,
+      "name": "multistem_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -34.0
+      ],
+      "tree": {
+        "recipe": "multistem",
+        "seed": 3
+      }
+    },
+    {
+      "id": 101,
+      "name": "river_birch_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -52.0
+      ],
+      "tree": {
+        "recipe": "river_birch",
+        "seed": 1
+      }
+    },
+    {
+      "id": 102,
+      "name": "river_birch_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -52.0
+      ],
+      "tree": {
+        "recipe": "river_birch",
+        "seed": 2
+      }
+    },
+    {
+      "id": 103,
+      "name": "river_birch_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -52.0
+      ],
+      "tree": {
+        "recipe": "river_birch",
+        "seed": 3
+      }
+    },
+    {
+      "id": 104,
+      "name": "magnolia_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -70.0
+      ],
+      "tree": {
+        "recipe": "magnolia",
+        "seed": 1
+      }
+    },
+    {
+      "id": 105,
+      "name": "magnolia_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -70.0
+      ],
+      "tree": {
+        "recipe": "magnolia",
+        "seed": 2
+      }
+    },
+    {
+      "id": 106,
+      "name": "magnolia_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -70.0
+      ],
+      "tree": {
+        "recipe": "magnolia",
+        "seed": 3
+      }
+    },
+    {
+      "id": 107,
+      "name": "weeping_willow_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -90.0
+      ],
+      "tree": {
+        "recipe": "weeping_willow",
+        "seed": 1
+      }
+    },
+    {
+      "id": 108,
+      "name": "weeping_willow_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -90.0
+      ],
+      "tree": {
+        "recipe": "weeping_willow",
+        "seed": 2
+      }
+    },
+    {
+      "id": 109,
+      "name": "weeping_willow_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -90.0
+      ],
+      "tree": {
+        "recipe": "weeping_willow",
+        "seed": 3
+      }
     }
   ],
   "terrain": {

@@ -640,4 +640,165 @@ tree_recipes = {
                skirt = 18, color = { {0.18, 0.33, 0.12}, {0.24, 0.38, 0.14} }, rachis_color = {0.40, 0.36, 0.22},
                skirt_color = {0.36, 0.27, 0.17} },
   },
+
+  ---------------------------------------------------------------------------------------------------------------
+  -- STREET AND PARK TREES (Glenn's walking photos, 2026-10-17)
+
+  -- THE MULTI-STEM STREET TREE (an Australian willow / peppermint kind): a short pale fluted bole splitting low into
+  -- three or four leaning, sinuous leaders, the crown open -- narrow grey-green leaves in sparse tufts at the ends,
+  -- the limbs showing through.
+  multistem = {
+    axiom = "T(0.7,2)",
+    iterations = 13,
+    rules = {
+      { "T(l,n):n>0",   "F(l)/(83)T(l*0.95,n-1)" },
+      { "T(l,n):n<=0",  "[&($s0)E(1.25)]/(95)[&($s0)E(1.2)]/(110)[&($s1)E(1.3)]/(90)[&($s1*0.6)E(1.1)]" },
+      { "E(l):l>0.25", "F(l)/($roll)[&($pitch)E(l*$side)]^(6)E(l*$lead)", 3 },
+      { "E(l):l>0.25", "F(l)/($roll)E(l*0.9)", 1 },
+      { "E(l):l<=0.25","F(l)/(137.5)[&(40)A(l)]A(l)" },
+    },
+    vars = { s0 = {18, 30}, s1 = {28, 40}, roll = {80, 120}, pitch = {28, 40}, side = {0.64, 0.72}, lead = {0.80, 0.86} },
+    params = {
+      joints = 1,
+      droop = {0.10, 0.18}, light = {0.25, 0.35}, crookChance = {0.20, 0.35}, crookAngle = {14, 26},
+      meander = {0.14, 0.22}, lean = {2, 10}, angleJitter = {10, 16},
+      flare = 0.6, lobes = {5, 8}, lobeDepth = {0.16, 0.26}, lobeHeight = {1.4, 2.2}, nodeSwell = 0.08, barkNoise = 0.07,
+      twist = {20, 40}, rootCount = 5, rootSpread = 2.6, collar = 0.5,
+      tipRadius = 0.009, pipeExponent = 2.4, radiusScale = 1.4, ringSegments = 10, barkMottle = 0.25,
+      leafSize = {0.34, 0.40}, leavesPerTip = 5, leafThickness = 0.02, leafClump = 0.6, maxLeafCards = 5000,
+    },
+    bark = "smooth",
+    bark_color = { {0.50, 0.47, 0.42}, {0.58, 0.55, 0.50} },
+    leaf_color = { {0.22, 0.30, 0.18}, {0.28, 0.35, 0.22} },
+    leaves = { size = 0.10, shoots = 3, shoot_length = 0.35, shoot_angle = 35, lift = 0.4, sag = 0.12, per_shoot = 9,
+               angle = 35, fold = 18, curl = 0.25, droop = 0.35, face = 0.3, budget = 22000 },
+    card = {
+      axiom = "S(4)", iterations = 5, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.08)+($bend)[+($a)L($s)][-($a)L($s*0.95)]S(n-1)" },
+        { "S(n):n<=0", "F(0.04)[+(20)L(0.9)][-(20)L(0.9)]L(1)" },
+      },
+      vars = { a = {25, 40}, s = {0.9, 1.05}, bend = {-6, 6} },
+      leaf = { shape = "leaflet", length = 0.20, width = 0.03 },
+      stem_width = 0.007, cup = 0.4,
+    },
+  },
+
+  -- RIVER BIRCH (the street row's tree): one trunk, a dense oval crown with drooping edges, small toothed leaves
+  -- turning yellow here and there; the bark tan and peeling.
+  river_birch = {
+    axiom = "T(1.2,2)",
+    iterations = 16,
+    rules = {
+      { "T(l,n):n>0",   "F(l)/(70)T(l*0.96,n-1)" },
+      { "T(l,n):n<=0",  "C(l,8)" },
+      { "C(l,n):n>0",   "F(l)/(137.5)[&($pitch)B(l*$side)]/(137.5)[&($pitch)B(l*$side*0.9)]C(l*$lead,n-1)" },
+      { "C(l,n):n<=0",  "F(l)A(l)" },
+      { "B(l):l>0.2",   "F(l)/(137.5)[&(38)B(l*0.72)]B(l*0.84)" },
+      { "B(l):l<=0.2",  "F(l)[&(55)A(l)][^(35)A(l)]A(l)" },
+    },
+    vars = { pitch = {40, 55}, side = {0.66, 0.74}, lead = {0.86, 0.90} },
+    params = {
+      joints = 1,
+      droop = {0.28, 0.40}, light = {0.08, 0.15}, crookChance = {0.05, 0.12}, crookAngle = {8, 16},
+      meander = {0.05, 0.10}, lean = {0, 5}, angleJitter = {8, 12},
+      flare = 0.35, nodeSwell = 0.05, barkNoise = 0.05, rootCount = 3, rootSpread = 2.0, collar = 0.4,
+      tipRadius = 0.009, pipeExponent = 2.3, radiusScale = 1.25, ringSegments = 9, barkMottle = 0.45,
+      leafSize = {0.38, 0.46}, leavesPerTip = 7, leafThickness = 0.035, leafClump = 0.9, maxLeafCards = 9000,
+      paletteScale = 1.2,
+    },
+    bark = "papery",
+    bark_color = { {0.52, 0.42, 0.33}, {0.60, 0.49, 0.38} },
+    leaf_color = { {0.20, 0.33, 0.08}, {0.26, 0.38, 0.10} },
+    leaf_palette = { {0.18, 0.31, 0.07}, {0.24, 0.36, 0.09}, {0.40, 0.42, 0.08}, {0.24, 0.36, 0.09} },
+    leaves = { size = 0.07, shoots = 4, shoot_length = 0.32, shoot_angle = 40, lift = 0.0, sag = 0.25, per_shoot = 9,
+               angle = 50, fold = 12, curl = 0.25, droop = 0.5, face = 0.4, budget = 34000 },
+    card = {
+      axiom = "S(5)", iterations = 6, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.10)+($bend)[+($a)L($s)]F(0.10)+($bend)[-($a)L($s)]S(n-1)" },
+        { "S(n):n<=0", "F(0.05)L(0.9)" },
+      },
+      vars = { a = {42, 56}, s = {0.85, 1.0}, bend = {-3, 2} },
+      leaf = { shape = "serrate", length = 0.16, width = 0.12, teeth = 9 },
+      stem_width = 0.008, cup = 0.45,
+    },
+  },
+
+  -- MAGNOLIA (the park's lakeside tree): a short trunk branching low into a dense oval crown of big glossy dark
+  -- leaves; smooth grey bark.
+  magnolia = {
+    axiom = "T(0.8,2)",
+    iterations = 12,
+    rules = {
+      { "T(l,n):n>0",   "F(l)/(97)T(l*0.95,n-1)" },
+      { "T(l,n):n<=0",  "[&($s0)B(l*1.3)]/(120)[&($s0)B(l*1.25)]/(120)[&($s0*0.5)B(l*1.35)]" },
+      { "B(l):l>0.2",   "F(l)/($roll)[&($pitch)B(l*$side)]^(8)B(l*$lead)", 3 },
+      { "B(l):l>0.2",   "F(l)/($roll)[&($pitch)B(l*$side)]/(180)[&($pitch)B(l*$side)]", 1 },
+      { "B(l):l<=0.2",  "F(l)/(137.5)[&(45)A(l)]/(137.5)[&(40)A(l)]A(l)" },
+    },
+    vars = { s0 = {22, 34}, roll = {80, 110}, pitch = {30, 42}, side = {0.76, 0.82}, lead = {0.82, 0.88} },
+    params = {
+      joints = 1,
+      droop = {0.08, 0.14}, light = {0.25, 0.35}, crookChance = {0.08, 0.15}, crookAngle = {10, 18},
+      meander = {0.06, 0.10}, lean = {0, 5}, angleJitter = {8, 12},
+      flare = 0.4, nodeSwell = 0.06, barkNoise = 0.03, rootCount = 4, rootSpread = 2.2, collar = 0.5,
+      tipRadius = 0.010, pipeExponent = 2.3, radiusScale = 1.3, ringSegments = 10,
+      leafSize = {0.46, 0.54}, leavesPerTip = 6, leafThickness = 0.04, leafClump = 1.0, maxLeafCards = 9000,
+    },
+    bark = "smooth",
+    bark_color = { {0.40, 0.39, 0.36}, {0.46, 0.45, 0.42} },
+    leaf_color = { {0.08, 0.19, 0.05}, {0.11, 0.24, 0.07} },
+    leaves = { size = 0.16, shoots = 3, shoot_length = 0.25, shoot_angle = 45, lift = 0.4, sag = 0.06, per_shoot = 6,
+               angle = 55, fold = 20, curl = 0.15, droop = 0.25, face = 0.65, budget = 18000 },
+    card = {
+      axiom = "S(3)", iterations = 4, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.08)+($bend)[+($a)L($s)][-($a)L($s*0.95)]S(n-1)" },
+        { "S(n):n<=0", "F(0.04)[+(35)L(0.95)][-(35)L(0.95)][+(10)L(1.0)]" },
+      },
+      vars = { a = {40, 60}, s = {0.9, 1.05}, bend = {-6, 6} },
+      leaf = { shape = "oval", length = 0.24, width = 0.09 },
+      stem_width = 0.010, cup = 0.55,
+    },
+  },
+
+  -- WEEPING WILLOW (by the water): a stout trunk, limbs arching up and out, and from them long curtains of thin
+  -- hanging shoots with narrow leaves, swaying to the ground.
+  weeping_willow = {
+    axiom = "T(1.0,2)",
+    iterations = 12,
+    rules = {
+      { "T(l,n):n>0",   "F(l)/(97)T(l*0.95,n-1)" },
+      { "T(l,n):n<=0",  "[&($s0)B(l*1.5)]/(120)[&($s0)B(l*1.45)]/(120)[&($s0)B(l*1.5)]" },
+      { "B(l):l>0.25",  "F(l)/($roll)[&($pitch)B(l*$side)]^(4)B(l*$lead)" },
+      { "B(l):l<=0.25", "F(l)[&(70)A(l)][^(20)A(l)]A(l)" },
+    },
+    vars = { s0 = {30, 40}, roll = {80, 110}, pitch = {32, 44}, side = {0.76, 0.82}, lead = {0.84, 0.88} },
+    params = {
+      joints = 1,
+      droop = {0.30, 0.45}, light = {0.05, 0.10}, crookChance = {0.10, 0.20}, crookAngle = {10, 20},
+      meander = {0.06, 0.10}, lean = {0, 8}, angleJitter = {8, 12},
+      flare = 0.6, lobes = {4, 7}, lobeDepth = 0.15, lobeHeight = 1.5, nodeSwell = 0.08, barkNoise = 0.06,
+      rootCount = 5, rootSpread = 2.6, collar = 0.5,
+      tipRadius = 0.009, pipeExponent = 2.3, radiusScale = 1.5, ringSegments = 10,
+      leafSize = {0.50, 0.60}, leavesPerTip = 6, leafThickness = 0.03, leafClump = 1.0, leafPitch = 150, maxLeafCards = 9000,
+    },
+    bark = "furrowed",
+    bark_color = { {0.30, 0.26, 0.21}, {0.36, 0.31, 0.25} },
+    leaf_color = { {0.30, 0.42, 0.12}, {0.36, 0.48, 0.14} },
+    -- the curtains: long shoots hanging straight down off every leafy twig, narrow leaves all along them
+    leaves = { size = 0.10, shoots = 5, shoot_length = 2.0, shoot_angle = 90, lift = -6.0, sag = 0.0, per_shoot = 34,
+               angle = 30, fold = 10, curl = 0.1, droop = 0.5, face = 0.3, budget = 60000 },
+    card = {
+      axiom = "S(6)", iterations = 7, variants = 2,
+      rules = {
+        { "S(n):n>0",  "F(0.07)[+($a)L($s)][-($a)L($s*0.95)]S(n-1)" },
+        { "S(n):n<=0", "F(0.03)L(0.9)" },
+      },
+      vars = { a = {18, 28}, s = {0.9, 1.05} },
+      leaf = { shape = "leaflet", length = 0.14, width = 0.02 },
+      stem_width = 0.006, cup = 0.3,
+    },
+  },
 }
