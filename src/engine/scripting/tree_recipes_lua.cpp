@@ -404,6 +404,7 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             nd.sideAngle = numField(L, nt, "side_angle", nd.sideAngle);
             nd.reach = std::clamp(numField(L, nt, "reach", nd.reach), 0.05, 1.0);
             nd.limbRadius = numField(L, nt, "limb_radius", nd.limbRadius);
+            nd.hang = std::clamp(numField(L, nt, "hang", nd.hang), 0.0, 1.0);
             readColour(L, nt, "color", nd.color, nd.colorHi);
             Vec3 hi;
             readColour(L, nt, "tip_color", nd.tipColor, hi);

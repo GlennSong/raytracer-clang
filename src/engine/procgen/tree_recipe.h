@@ -108,6 +108,8 @@ struct NeedleSpec {
     int sideShoots = 4;              // side shoots each twig puts out (each side, in its plane)
     double sideAngle = 50.0;         // ...off it (deg)
     double reach = 1.0;              // the share of a twig, from its end, that carries needles (a pine's: its last 0.4)
+    double hang = 0.0;               // the share of side shoots that HANG from the branch (a spruce's curtains of
+                                     //   pendant shoots, filling the gap to the whorl below)
     double limbRadius = 0.0;         // the modelled limbs this thin carry needles and side shoots too (a spruce's whole
                                      //   branches are clothed; a pine's bare inside: 0)
     Vec3 color{0.07, 0.17, 0.07}, colorHi{0.10, 0.22, 0.09};

@@ -87,7 +87,8 @@ BranchCardSet bakeNeedleCards(const TreeRecipe& r, int variants, uint32_t seed);
 // to `twigTris`) and its needles --
 // two crossed cards along it (a flat fir's one, opened in a shallow V), the share `reach` from its end -- and its side
 // shoots, `shoots` (0..1) of the recipe's, from points ON it, in the branch's plane, forward; a pine's tufts at its end.
-int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, double shoots, int twigTris, uint32_t seed);
+int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, double shoots, int twigTris, int maxPlanes,
+                uint32_t seed);   // (at most `maxPlanes` card planes: the side shoots, then the shoots, thinned evenly)
 
 }  // namespace engine
 

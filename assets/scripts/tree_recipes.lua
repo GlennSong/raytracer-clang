@@ -212,10 +212,10 @@ tree_recipes = {
     -- NEEDLES (Glenn's spruce sprig: a bottlebrush -- short stiff needles all round the twig, swept forward): every
     -- twig's needles and its side shoots in a fishbone in the branch's plane, this year's growth lighter at the ends
     needles = { kind = "brush", length = 0.025, width = 0.0019, density = 14, forward = 55,
-                shoot_length = 0.24, side_shoots = 6, side_angle = 55, limb_radius = 0.035,
+                shoot_length = 0.26, side_shoots = 8, side_angle = 55, limb_radius = 0.035, hang = 0.5,
                 color = { {0.08, 0.17, 0.12}, {0.12, 0.22, 0.16} }, tip_color = {0.22, 0.36, 0.20},
                 twig_color = {0.30, 0.19, 0.11} },
-    branch_cards = { sprig = 1.6 },
+    branch_cards = { sprig = 1.6, near_leaves = 16000 },   -- (needle card planes: two a "leaf")
   },
 
   -- SAKURA (Somei-yoshino): a short trunk splits into three scaffold limbs that climb and then spread, an umbrella

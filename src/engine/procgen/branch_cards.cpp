@@ -769,7 +769,8 @@ BranchCardSet bakeNeedleCards(const TreeRecipe& r, int variants, uint32_t seed) 
     return set;
 }
 
-int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, double shoots, int twigTris, uint32_t seed) {
+int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, double shoots, int twigTris, int maxPlanes,
+                uint32_t seed) {
     const NeedleSpec& nd = r.needles;
     if (!nd.set || set.empty() || tree.twigs.empty()) return 0;
     tree.foliage = 5;
@@ -867,7 +868,18 @@ int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, d
     if (nd.limbRadius > 0.0)
         for (const TreeMesh::Limb& l : tree.limbs)
             if (l.rb <= nd.limbRadius && l.ra <= 1.6 * nd.limbRadius && l.b.y > 0.3) along.push_back({l.a, l.b, false});
+    // THE BUDGET (card planes): each shoot's own planes, and its side shoots' as many as fit -- thinned evenly
+    const int perShoot = flat ? 2 : 3;
+    double planned = 0.0, sides = 0.0;
     for (const Shoot& t : along) {
+        const double len = (t.b - t.a).length();
+        planned += perShoot;
+        sides += 2.0 * perShoot * std::lround(nd.sideShoots * shoots * std::min(1.0, len / 0.3));
+    }
+    const double keepOwn = std::min(1.0, maxPlanes / std::max(1.0, planned));
+    const double keepSide = std::clamp((maxPlanes - planned) / std::max(1.0, sides), 0.0, 1.0);
+    for (const Shoot& t : along) {
+        if (keepOwn < 1.0 && rnd() >= keepOwn) continue;
         const Vec3 d = t.b - t.a;
         const double len = d.length();
         if (len < 1e-3) continue;
@@ -882,10 +894,15 @@ int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, d
         // its side shoots, from points ON it, in its plane, forward, shorter toward its end
         const int n = static_cast<int>(std::lround(nd.sideShoots * shoots * std::min(1.0, len / 0.3)));
         for (int k = 0; k < 2 * n; ++k) {
+            if (keepSide < 1.0 && rnd() >= keepSide) continue;
             const double tt = from + (1.0 - from) * (0.12 + 0.8 * (k / 2 + rnd() * 0.6) / std::max(1, n));
             const double sgn = k % 2 ? 1.0 : -1.0;
             const double a = (nd.sideAngle + (rnd() - 0.5) * 16.0) * PI / 180.0;
-            const Vec3 sd = normalize(ax * std::cos(a) + side * (sgn * std::sin(a)) + Vec3(0, 0.08, 0));
+            // (in the branch's plane, and fanned up or down out of it: a spray has depth, not one flat comb)
+            const Vec3 upOut = normalize(cross(side, ax)) * ((rnd() - 0.5) * 0.9);
+            Vec3 sd = normalize(ax * std::cos(a) + side * (sgn * std::sin(a)) + upOut + Vec3(0, 0.08, 0));
+            if (rnd() < nd.hang)   // (a pendant shoot: down from the branch, a little forward and out -- the curtain)
+                sd = normalize(ax * 0.35 + side * (sgn * 0.3) + Vec3(0, -1, 0));
             const double sl = nd.shootLength * (1.15 - 0.6 * tt) * (0.8 + 0.4 * rnd());
             needles(1, t.a + d * tt, sd, sl, normalize(cross(Vec3(0, 1, 0), sd)));
         }
