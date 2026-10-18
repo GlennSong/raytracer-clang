@@ -39,6 +39,11 @@ struct BarkTextures {
 };
 BarkTextures barkTextures(BarkKind kind, uint32_t seed, int size = 512);   // cached
 
+// A STRAP LEAF's surface (foliage_kit.h addBlade: flax, iris, rush, a palm's leaflets): u across the blade, v
+// along it -- fine veins running its length, a paler midrib, the margins a shade darker, a little mottle; the
+// normal map ribs it along the veins. Brightness (the blade's vertex colours give the hue); tiles along v.
+BarkTextures bladeTextures(uint32_t seed, int size = 256);   // cached
+
 }  // namespace engine
 
 #endif

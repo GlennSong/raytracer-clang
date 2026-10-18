@@ -253,8 +253,11 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
         r.iterations = static_cast<int>(numField(L, t, "iterations", r.iterations));
         if (const std::string b = strField(L, t, "bark"); !b.empty()) r.bark = b;
         if (const std::string k = strField(L, t, "kind"); !k.empty()) {
-            if (k != "tree" && k != "shrub") { lua_settop(L, base); return fail(err, where + ".kind: not \"tree\" or \"shrub\""); }
-            r.shrub = k == "shrub";
+            if (k != "tree" && k != "shrub" && k != "blades") {
+                lua_settop(L, base);
+                return fail(err, where + ".kind: not \"tree\", \"shrub\" or \"blades\"");
+            }
+            r.shrub = k != "tree";
         }
         readColour(L, t, "bark_color", r.barkColor, r.barkColorHi);
         readColour(L, t, "leaf_color", r.leafColor, r.leafColorHi);
@@ -280,6 +283,28 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
         lua_pop(L, 1);
         lua_getfield(L, t, "strand");
         if (lua_istable(L, -1) && !readCard(L, r.strand, where + ".strand", err)) { lua_settop(L, base); return false; }
+        lua_pop(L, 1);
+        lua_getfield(L, t, "blades");
+        if (lua_istable(L, -1)) {   // A BLADE PLANT (foliage_kit.h BladeSpec)
+            const int bt = lua_gettop(L);
+            BladeSpec& b = r.blades;
+            b.set = true;
+            b.count = std::max(1, static_cast<int>(numField(L, bt, "count", b.count)));
+            b.length = numField(L, bt, "length", b.length);
+            b.lengthJitter = numField(L, bt, "length_jitter", b.lengthJitter);
+            b.width = numField(L, bt, "width", b.width);
+            b.rise = numField(L, bt, "rise", b.rise);
+            b.spread = numField(L, bt, "spread", b.spread);
+            b.fan = numField(L, bt, "fan", b.fan);
+            b.arch = numField(L, bt, "arch", b.arch);
+            b.fold = numField(L, bt, "fold", b.fold);
+            b.twist = numField(L, bt, "twist", b.twist);
+            b.taper = numField(L, bt, "taper", b.taper);
+            b.crown = numField(L, bt, "crown", b.crown);
+            readColour(L, bt, "color", b.color, b.colorHi);
+            Vec3 hi;
+            readColour(L, bt, "edge_color", b.edgeColor, hi);
+        }
         lua_pop(L, 1);
         lua_getfield(L, t, "leaves");
         if (lua_istable(L, -1)) {   // NEAR LEAVES (foliage = 2; foliage_kit.h LeafKitSpec)

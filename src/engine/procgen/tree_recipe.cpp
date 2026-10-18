@@ -138,6 +138,15 @@ std::string substituteVars(const std::string& text, const std::map<std::string, 
 }
 
 TreeMesh growRecipeTree(const TreeRecipe& r, uint32_t seed, const std::map<std::string, double>& overrides) {
+    if (r.blades.set) {   // a BLADE PLANT: no grammar, no wood -- its blades and the crown they rise from
+        TreeMesh t;
+        buildBladePlant(r.blades, seed, t.leaves, t.branches);
+        t.foliage = 3;
+        t.collisionVertices.reserve(t.branches.vertices.size());
+        for (const Vertex& v : t.branches.vertices) t.collisionVertices.push_back(v.position);
+        t.collisionIndices = t.branches.indices;
+        return t;
+    }
     std::map<std::string, double> vars;
     TreeParams p = drawTreeParams(r, seed, &vars);
     for (const auto& [name, v] : overrides)

@@ -141,6 +141,9 @@ Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, doubl
 Field2 fieldBands(double count) {
     return [count](double, double v) { return 0.5 + 0.5 * std::sin(v * count * 6.283185307179586); };
 }
+Field2 fieldStripes(double count) {
+    return [count](double u, double) { return 0.5 + 0.5 * std::sin(u * count * 6.283185307179586); };
+}
 Field2 fieldSmoothstep(Field2 a, double lo, double hi) {
     return [a, lo, hi](double u, double v) {
         const double t = clamp01((a(u, v) - lo) / (hi - lo));

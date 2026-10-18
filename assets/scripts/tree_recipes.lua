@@ -34,6 +34,9 @@
 --                       twig puts out -- { size (m), shoots, shoot_length, shoot_angle, lift, sag, per_shoot, pairs (1:
 --                       opposite), angle, fold, curl, droop, face, budget, blossom = { size, per_cluster, clusters (per
 --                       shoot), cup, budget } } (blossoms: small cups of the card's flower, in clusters along the shoots)
+--   kind = "blades"     A BLADE PLANT -- no grammar, no wood: strap leaves from a crown (procgen/foliage_kit.h BladeSpec),
+--                       blades = { count, length, length_jitter, width, rise, spread (deg off upright, inner .. outer),
+--                       fan (0 a round clump .. 1 a flat fan), arch, fold, twist, taper, crown, color, edge_color }
 --   card                THE LEAF CARD the tree's foliage wears (procgen/leaf_card.h): a small 2D twig grammar drawn by a
 --                       2D turtle -- F(len) a stem, +(a) -(a) turns, [ ] a side shoot, L(scale) a leaf -- and the leaf:
 --     axiom, iterations, rules, vars   as the tree's (vars drawn per card variant)
@@ -554,5 +557,33 @@ tree_recipes = {
       leaf = { shape = "oval", length = 0.08, width = 0.04, color = {0.16, 0.34, 0.07} },
       stem_color = {0.35, 0.28, 0.20}, stem_width = 0.006, cup = 0.5, shade_jitter = 0.3,
     },
+  },
+
+  ---------------------------------------------------------------------------------------------------------------
+  -- BLADE PLANTS (Glenn's street-planting photos, 2026-10-17)
+
+  -- NEW ZEALAND FLAX (Phormium): a fan of long stiff strap leaves, keeled, the outer ones arching over at the tip;
+  -- olive with bronze-red margins.
+  flax = {
+    kind = "blades",
+    blades = { count = 46, length = 1.6, length_jitter = 0.3, width = 0.08, rise = 4, spread = 42, fan = 0.8,
+               arch = 0.45, fold = 34, twist = 0.25, taper = 0.65, crown = 0.18,
+               color = { {0.19, 0.26, 0.09}, {0.25, 0.31, 0.12} }, edge_color = {0.30, 0.17, 0.09} },
+  },
+
+  -- CAPE RUSH (Elegia / Chondropetalum): a dense upright clump of fine, nearly round stems, a few bending out.
+  rush = {
+    kind = "blades",
+    blades = { count = 130, length = 1.25, length_jitter = 0.3, width = 0.012, rise = 2, spread = 16, fan = 0,
+               arch = 0.25, fold = 65, twist = 0, taper = 0.92, crown = 0.2,
+               color = { {0.20, 0.27, 0.12}, {0.27, 0.32, 0.15} } },
+  },
+
+  -- BLUE FESCUE: a low round tuft of fine blue-grey blades fountaining out.
+  fescue = {
+    kind = "blades",
+    blades = { count = 90, length = 0.32, length_jitter = 0.3, width = 0.007, rise = 8, spread = 60, fan = 0,
+               arch = 0.7, fold = 50, twist = 0.1, taper = 0.8, crown = 0.08,
+               color = { {0.28, 0.36, 0.37}, {0.36, 0.42, 0.42} } },
   },
 }

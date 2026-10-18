@@ -134,8 +134,8 @@ struct TreeMesh {
     int joints = 0, jointsPlain = 0;      // forks joined as one surface (ADR-0181), and those closed by a plain hull
     std::vector<uint32_t> jointRingStarts;   // ...the first vertex of every limb end ring a joint joined
     std::size_t jointIndexStart = 0, jointIndexEnd = 0;   // ...and the joints' own triangles in branches.indices
-    int foliage = 0;                      // what `leaves` is: 0 crossed cards (both windings), 1 sprays or 2 leaves (one
-                                          //   winding: draw it two-sided) -- TreeParams::foliage
+    int foliage = 0;                      // what `leaves` is: 0 crossed cards (both windings), 1 sprays, 2 leaves or 3
+                                          //   blades (one winding: draw it two-sided) -- TreeParams::foliage
     std::vector<Vec3>     collisionVertices;
     std::vector<uint32_t> collisionIndices;
 };

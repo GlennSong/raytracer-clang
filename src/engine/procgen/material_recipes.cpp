@@ -1,6 +1,8 @@
 #include "material_recipes.h"
 #include "texture_field.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 namespace engine {
@@ -154,6 +156,27 @@ BarkTextures barkTextures(BarkKind kind, uint32_t seed, int size) {
                                                            fieldConstant(1.0), size, false); });
     std::snprintf(key, sizeof key, "bark/v%d/%d/%u/%d/normal", kBarkVersion, static_cast<int>(kind), seed, size);
     t.normal = bakeCached(key, [&] { return bakeFieldNormal(r.height, r.relief, size); });
+    return t;
+}
+
+BarkTextures bladeTextures(uint32_t seed, int size) {
+    constexpr int kBladeVersion = 1;
+    const Field2 veins = fieldMix(fieldStripes(23.0), fieldStripes(9.0), 0.35);
+    const Field2 mid = [](double u, double) { const double d = std::fabs(u - 0.5); return d < 0.035 ? 1.0 - d / 0.035 : 0.0; };
+    const Field2 edge = [](double u, double) { const double d = std::min(u, 1.0 - u); return d < 0.08 ? 1.0 - d / 0.08 : 0.0; };
+    const Field2 mottle = fieldRepeat(fieldTileFbm(seed + 3u, 4, 3), 1, 3);
+    const Field2 bright = [veins, mid, edge, mottle](double u, double v) {
+        return 0.80 + 0.10 * veins(u, v) + 0.14 * mid(u, v) - 0.12 * edge(u, v) + 0.10 * (mottle(u, v) - 0.5);
+    };
+    const Field2 height = [veins, mid](double u, double v) { return 0.6 * veins(u, v) + 0.8 * mid(u, v); };
+    char key[96];
+    BarkTextures t;
+    std::snprintf(key, sizeof key, "blade/v%d/%u/%d/albedo", kBladeVersion, seed, size);
+    const Field2 b = fieldClamp(bright, 0.0, 1.0);
+    t.albedo = bakeCached(key, [&] { return bakeFieldRGBA([b](double u, double v) { const double x = b(u, v); return Vec3(x, x, x); },
+                                                           fieldConstant(1.0), size, false); });
+    std::snprintf(key, sizeof key, "blade/v%d/%u/%d/normal", kBladeVersion, seed, size);
+    t.normal = bakeCached(key, [&] { return bakeFieldNormal(height, 2.0, size); });
     return t;
 }
 

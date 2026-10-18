@@ -894,6 +894,13 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
             uint32_t h = 2166136261u;
             for (unsigned char ch : r->name) h = (h ^ ch) * 16777619u;
             auto atlasFor = [&](const TreeMesh& tm) {
+                if (tm.foliage == 3) {   // BLADES: the strap leaf's veins (material_recipes.h)
+                    const BarkTextures bt = bladeTextures(h);
+                    LeafCardAtlas a;
+                    a.albedo = bt.albedo;
+                    a.normal = bt.normal;
+                    return a;
+                }
                 if (tm.foliage == 2)   // NEAR LEAVES: each leaf / blossom one whole picture of the species' (foliage_kit.h)
                     return foliageElementAtlas(r->card, r->leafKit.blossomSize > 0.0, h);
                 if (tm.foliage == 1)   // NEAR FOLIAGE: sprays wearing the species' strands (foliage_kit.h), tiles its shape

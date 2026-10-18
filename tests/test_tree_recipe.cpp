@@ -76,6 +76,7 @@ TEST_CASE(shipped_tree_recipes_load_and_grow) {
     CHECK(book.size() >= 3);
     for (const std::string& name : book.names()) {
         const TreeRecipe* r = book.find(name);
+        if (r->blades.set) continue;   // (blade plants: their own test)
         const TreeMesh t = growRecipeTree(*r, 1);
         bool finite = true;
         for (const Vertex& v : t.branches.vertices)
@@ -100,6 +101,7 @@ TEST_CASE(shipped_tree_recipes_load_and_grow) {
 TEST_CASE(a_recipes_seeds_are_different_trees_of_it) {
     const TreeRecipeBook book = shipped();
     for (const std::string& name : book.names()) {
+        if (book.find(name)->blades.set) continue;
         std::set<long> heights, sizes;
         for (uint32_t seed = 1; seed <= 6; ++seed) {
             const TreeMesh t = growRecipeTree(*book.find(name), seed);
@@ -272,6 +274,7 @@ TEST_CASE(every_part_of_a_tree_hangs_on_it) {
     };
     for (const std::string& name : book.names())
         for (uint32_t seed : {1u, 4u}) {
+            if (book.find(name)->blades.set) continue;
             const TreeMesh t = growRecipeTree(*book.find(name), seed);
             CHECK(!t.limbs.empty());
             // connected: every limb's start is the foot or another limb's end
@@ -631,5 +634,29 @@ TEST_CASE(a_birch_has_a_dark_foot_and_patchy_bark) {
     CHECK(footN > 0 && upN > 0);
     CHECK(foot < 0.6 * up);
     CHECK(upMax - upMin > 0.08);
+    }
+}
+
+// BLADE PLANTS (Glenn's photos: flax, rushes, fescue): a clump of strap leaves from a crown -- the blades within
+// their length of the crown, pointed (narrow at the tip), the flax a FAN (its blades' bearings gathered to two
+// sides), the fescue a low tuft.
+TEST_CASE(blade_plants_are_clumps_of_strap_leaves) {
+    const TreeRecipeBook book = shipped();
+    for (const char* name : {"flax", "rush", "fescue"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r && r->blades.set);
+        if (!r) continue;
+        const TreeMesh t = growRecipeTree(*r, 2u);
+        CHECK(t.foliage == 3);
+        CHECK(t.leaves.vertices.size() == static_cast<std::size_t>(r->blades.count) * 3u * 7u);   // 7 stations, 3 across
+        Real top = 0, reach = 0;
+        for (const Vertex& v : t.leaves.vertices) {
+            top = std::max(top, v.position.y);
+            reach = std::max(reach, std::hypot(v.position.x, v.position.z));
+        }
+        std::printf("    [blades] %-7s %zu tris, %.2f m tall, %.2f m reach\n", name, t.leaves.indices.size() / 3, top, reach);
+        CHECK(top > 0.15 && top < r->blades.length * 1.4);
+        CHECK(reach < r->blades.length * 1.4 + r->blades.crown);
+        if (std::string(name) == "fescue") CHECK(top < 0.5);
     }
 }

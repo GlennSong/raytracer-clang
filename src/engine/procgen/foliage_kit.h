@@ -82,6 +82,39 @@ void addKitLeaf(RenderMesh& m, const Vec3& base, const Vec3& dir, const Vec3& no
 void addKitBlossom(RenderMesh& m, const Vec3& centre, const Vec3& facing, double size, double cup, double roll,
                    int tiles, int tile, const Vec3& color);
 
+// BLADES (Glenn's street-planting photos: New Zealand flax, rushes, grass tufts; and a palm's leaflets): a STRAP
+// LEAF as geometry -- a strip up its own curve, keeled along the midrib (`fold`), arching over toward the tip
+// (`arch`), twisting as it goes, full width to `taper` of its length then narrowing to a point -- wearing the blade
+// texture (material_recipes.h bladeTextures: u across, v along). Its edges may take their own colour (a flax's
+// bronze-red margins); the midrib takes the blade's.
+struct BladeShape {
+    double length = 1.0, width = 0.06;
+    double arch = 0.6;           // the tip bent down by this (rad), the bend growing along the blade
+    double fold = 25.0;          // each half raised about the midrib (deg)
+    double twist = 0.3;          // turned about its own midrib by this (rad) by the tip
+    double taper = 0.7;          // full width to here (a fraction of the length), then narrowing to the point
+    int segments = 6;
+};
+void addBlade(RenderMesh& m, const Vec3& base, const Vec3& dir, const Vec3& across, const BladeShape& shape,
+              const Vec3& color, const Vec3& edgeColor);
+
+// A BLADE PLANT (a recipe of kind = "blades"): blades from a crown at the ground -- a radial clump, or (fan -> 1)
+// flattened into a fan as a flax's are; the outer blades leaning out further than the inner, longest in the middle.
+struct BladeSpec {
+    bool set = false;
+    int count = 40;
+    double length = 1.2, lengthJitter = 0.35;   // a blade's length (m), drawn +- lengthJitter of it
+    double width = 0.06;
+    double rise = 10.0, spread = 45.0;          // the inner blades this far off upright (deg), the outer this more
+    double fan = 0.0;                           // 0 a round clump, 1 a flat fan
+    double arch = 0.6, fold = 25.0, twist = 0.3, taper = 0.7;
+    double crown = 0.08;                        // the crown's radius (m): where the blades rise from
+    Vec3 color{0.2, 0.3, 0.1}, colorHi{0.2, 0.3, 0.1};   // a blade's colour, drawn between
+    Vec3 edgeColor{-1, -1, -1};                 // its margins' colour (negative: the blade's own)
+};
+// The plant: its blades into `leaves`, its crown (a low dark mound the blades rise from) into `crown`.
+void buildBladePlant(const BladeSpec& spec, uint32_t seed, RenderMesh& leaves, RenderMesh& crown);
+
 }  // namespace engine
 
 #endif

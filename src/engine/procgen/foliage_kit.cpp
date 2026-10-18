@@ -164,4 +164,82 @@ void addKitBlossom(RenderMesh& m, const Vec3& centre, const Vec3& facing, double
         MeshBuilder::triFacing(m, b, b + 1 + k, b + 1 + (k + 1) % kRim, a);
 }
 
+void addBlade(RenderMesh& m, const Vec3& base, const Vec3& dir, const Vec3& across, const BladeShape& b,
+              const Vec3& color, const Vec3& edgeColor) {
+    const int n = std::max(2, b.segments);
+    const double step = b.length / n, fr = b.fold * 3.14159265358979323846 / 180.0;
+    Vec3 p = base, d = normalize(dir);
+    Vec3 side = normalize(across - d * dot(across, d));
+    const uint32_t first = static_cast<uint32_t>(m.vertices.size());
+    for (int i = 0; i <= n; ++i) {
+        const double s = static_cast<double>(i) / n;
+        // the width: narrower at the very base, full to `taper`, then to a point
+        const double w = 0.5 * b.width * (s < b.taper ? (0.65 + 0.35 * std::min(1.0, s / 0.12)) : (1.0 - s) / (1.0 - b.taper));
+        const Vec3 up = normalize(cross(side, d));   // the blade's face
+        const double tw = b.twist * s;
+        const Vec3 sideT = side * std::cos(tw) + up * std::sin(tw), upT = normalize(cross(sideT, d));
+        for (int c = 0; c < 3; ++c) {
+            const double sgn = c - 1.0;
+            const Vec3 off = sideT * (std::cos(fr) * sgn * w) + upT * (std::sin(fr) * std::fabs(sgn) * w);
+            const Vec3 nrm = normalize(upT - sideT * (sgn * std::sin(fr)));
+            Vertex v(p + off, nrm, sideT, static_cast<float>(0.5 + 0.5 * sgn), static_cast<float>(s * b.length / 0.6));
+            // (the margin's colour only half way out to the edge vertex: the gradient across the half-blade otherwise
+            // dyes it all)
+            v.color = (c == 1 || edgeColor.x < 0.0) ? color : (color + edgeColor) * 0.5;
+            m.vertices.push_back(v);
+        }
+        // on up the blade: the arch grows along it (the bend toward the ground strongest near the tip)
+        const Vec3 down(0, -1, 0);
+        const Vec3 dn = normalize(down - d * dot(down, d));
+        d = normalize(d + dn * (b.arch * 2.0 * s / n));
+        side = normalize(side - d * dot(side, d));
+        p = p + d * step;
+    }
+    for (int i = 0; i < n; ++i)
+        for (int c = 0; c < 2; ++c) {
+            const uint32_t a = first + static_cast<uint32_t>(i * 3 + c);
+            MeshBuilder::quadFacing(m, a, a + 1, a + 4, a + 3, m.vertices[a].normal + m.vertices[a + 4].normal);
+        }
+}
+
+void buildBladePlant(const BladeSpec& sp, uint32_t seed, RenderMesh& leaves, RenderMesh& crown) {
+    std::mt19937 rng(seed * 2246822519u + 11u);
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    const double pi = 3.14159265358979323846;
+    const double fanAxis = u01(rng) * pi;   // the fan's own bearing
+    for (int i = 0; i < sp.count; ++i) {
+        const double rank = static_cast<double>(i) / std::max(1, sp.count - 1);   // 0 the outermost .. 1 the innermost
+        // the bearing: round the clump by the golden angle, or (fan) gathered to the fan's two sides
+        double az = i * 2.39996323 + u01(rng) * 0.4;
+        if (sp.fan > 0.0) {
+            const double fanAz = fanAxis + (i % 2 ? pi : 0.0) + (u01(rng) - 0.5) * pi * (1.0 - sp.fan);
+            az = az * (1.0 - sp.fan) + fanAz * sp.fan;
+        }
+        const Vec3 out(std::cos(az), 0.0, std::sin(az));
+        const double lean = (sp.rise + sp.spread * (1.0 - rank) * (0.7 + 0.6 * u01(rng))) * pi / 180.0;
+        const Vec3 dir = normalize(Vec3(0, 1, 0) * std::cos(lean) + out * std::sin(lean));
+        BladeShape b;
+        // longest in the middle of the clump, the outer ones shorter, each its own
+        b.length = sp.length * (0.75 + 0.35 * std::sin(pi * (0.25 + 0.6 * rank))) * (1.0 + sp.lengthJitter * (u01(rng) * 2.0 - 1.0));
+        b.width = sp.width * (0.85 + 0.3 * u01(rng));
+        b.arch = sp.arch * (0.6 + 0.8 * u01(rng)) * (0.5 + (1.0 - rank));
+        b.fold = sp.fold;
+        b.twist = sp.twist * (u01(rng) * 2.0 - 1.0);
+        b.taper = sp.taper;
+        const Vec3 across = normalize(cross(Vec3(0, 1, 0), out)) * (sp.fan > 0.5 ? 1.0 : 1.0);
+        const Vec3 base = out * (sp.crown * (0.3 + 0.7 * (1.0 - rank)) * u01(rng)) + Vec3(0, -0.02, 0);
+        const Vec3 col = sp.color + (sp.colorHi - sp.color) * u01(rng);
+        addBlade(leaves, base, dir, across, b, col, sp.edgeColor.x < 0.0 ? col : sp.edgeColor);
+    }
+    // the crown: a low dark mound, so the blades rise out of something
+    const RenderMesh mound = MeshBuilder::sphere(static_cast<float>(sp.crown * 1.4), 6, 10);
+    const uint32_t base = static_cast<uint32_t>(crown.vertices.size());
+    for (Vertex v : mound.vertices) {
+        v.position = Vec3(v.position.x, std::max(-0.02, v.position.y * 0.45), v.position.z);
+        v.color = sp.color * 0.45;
+        crown.vertices.push_back(v);
+    }
+    for (uint32_t ix : mound.indices) crown.indices.push_back(base + ix);
+}
+
 }  // namespace engine

@@ -1256,11 +1256,151 @@
           "foliage": 2
         }
       }
+    },
+    {
+      "id": 82,
+      "name": "flax_1",
+      "shape": "tree",
+      "position": [
+        -20.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "flax",
+        "seed": 1
+      }
+    },
+    {
+      "id": 83,
+      "name": "flax_2",
+      "shape": "tree",
+      "position": [
+        -16.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "flax",
+        "seed": 2
+      }
+    },
+    {
+      "id": 84,
+      "name": "flax_3",
+      "shape": "tree",
+      "position": [
+        -13.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "flax",
+        "seed": 3
+      }
+    },
+    {
+      "id": 85,
+      "name": "rush_1",
+      "shape": "tree",
+      "position": [
+        -9.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "rush",
+        "seed": 1
+      }
+    },
+    {
+      "id": 86,
+      "name": "rush_2",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "rush",
+        "seed": 2
+      }
+    },
+    {
+      "id": 87,
+      "name": "rush_3",
+      "shape": "tree",
+      "position": [
+        -2.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "rush",
+        "seed": 3
+      }
+    },
+    {
+      "id": 88,
+      "name": "fescue_1",
+      "shape": "tree",
+      "position": [
+        1.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 1
+      }
+    },
+    {
+      "id": 89,
+      "name": "fescue_2",
+      "shape": "tree",
+      "position": [
+        4.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 2
+      }
+    },
+    {
+      "id": 90,
+      "name": "fescue_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 3
+      }
+    },
+    {
+      "id": 91,
+      "name": "fescue_4",
+      "shape": "tree",
+      "position": [
+        11.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 4
+      }
     }
   ],
   "terrain": {
-    "size": 220,
-    "resolution": 128,
+    "size": 480,
+    "resolution": 256,
     "heightScale": 0.04,
     "noiseScale": 0.02,
     "octaves": 1,
@@ -1284,7 +1424,7 @@
     "clumpRadius": 0.22,
     "fadeEnd": 60,
     "fadeStart": 44,
-    "height": 0.55,
+    "height": 0.35,
     "lean": 0.35,
     "maxSlopeDeg": 32,
     "nearRadius": 24,

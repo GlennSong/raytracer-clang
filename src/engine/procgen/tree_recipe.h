@@ -70,7 +70,7 @@ struct LeafCardSpec {
 
 struct TreeRecipe {
     std::string name;
-    bool shrub = false;              // kind = "shrub": a shrub or a perennial (knee to head height), not a tree
+    bool shrub = false;              // kind = "shrub" (or "blades"): a shrub or a perennial (knee to head height), not a tree
     std::string axiom = "A(1.6)";   // module literals once its $vars are substituted
     int iterations = 5;
     using Rule = RecipeRule;
@@ -91,6 +91,7 @@ struct TreeRecipe {
     LeafCardSpec strand;
     SpraySpec spray;
     LeafKitSpec leafKit;             // foliage = 2: every leaf a blade, blossoms cups (wearing the card's leaf and flower)
+    BladeSpec blades;                // kind = "blades": no wood, a clump of strap leaves (flax, rushes, grass tufts)
 };
 
 class TreeRecipeBook {
