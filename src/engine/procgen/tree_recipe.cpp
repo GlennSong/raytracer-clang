@@ -40,6 +40,8 @@ const std::vector<Field>& fields() {
         {"paletteScale", &TreeParams::paletteScale}, {"tipCards", nullptr, nullptr, &TreeParams::tipCards},
         {"foliage", nullptr, &TreeParams::foliage},
         {"joints", nullptr, &TreeParams::joints}, {"jointMinRadius", &TreeParams::jointMinRadius},
+        {"barkMottle", &TreeParams::barkMottle}, {"barkFootDark", &TreeParams::barkFootDark},
+        {"barkFootHeight", &TreeParams::barkFootHeight},
         {"clipX", &TreeParams::clipX}, {"clipY", &TreeParams::clipY}, {"clipZ", &TreeParams::clipZ},
     };
     return v;

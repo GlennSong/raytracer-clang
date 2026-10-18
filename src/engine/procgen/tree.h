@@ -106,6 +106,12 @@ struct TreeParams {
     SpraySpec spray;
     LeafKitSpec leafKit;
 
+    // --- Bark variety (Glenn, 2026-10-17: "the birch texture is good, but looks to repetitive") ---
+    float barkMottle    = 0.0f;     // soft darker / greyer patches over the bark, about a metre across (0 none)
+    float barkFootDark  = 0.0f;     // the foot of the trunk darkened toward barkFootColor (a birch's black base)
+    float barkFootHeight = 1.0f;    // ...fading out over this height (m)
+    Vec3  barkFootColor = Vec3(0.045, 0.042, 0.04);   // (near black: a birch's base under full sun)
+
     // --- Colors (baked into vertex color; multiply the material albedo) ---
     Vec3  barkColor     = Vec3(0.33, 0.24, 0.16);
     Vec3  leafColor     = Vec3(0.19, 0.44, 0.13);

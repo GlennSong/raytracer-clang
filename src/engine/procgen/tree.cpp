@@ -272,6 +272,11 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
     // the bark tile ROUND the limb a whole number of times by its girth (a tile is 1 / vScale metres, as along it):
     // not stretched round a trunk, not squeezed round a twig
     const float uRep = std::max(1.0f, std::round(2.0f * static_cast<float>(PI) * footR * vScale));
+    // (each limb starts the bark tile at its own place, round and along: neighbouring limbs do not line up)
+    const uint32_t tubeHash = static_cast<uint32_t>(std::lround(path.points.front().x * 1000.0)) * 73856093u ^
+                              static_cast<uint32_t>(std::lround(path.points.front().y * 1000.0)) * 19349663u ^
+                              static_cast<uint32_t>(std::lround(path.points.front().z * 1000.0)) * 83492791u ^ seed;
+    const float uOff = static_cast<float>((tubeHash & 1023u) / 1024.0), vOff = static_cast<float>(((tubeHash >> 10) & 1023u) / 1024.0);
     uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
     for (int k = 0; k < rings; k++) {
         const Vec3 right = frames[k].right;
@@ -309,8 +314,27 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
                 r *= m;
             }
             Vertex vert(centers[k] + dir * r, dir, tan,
-                        uRep * static_cast<float>(i) / segs, v);
+                        uRep * static_cast<float>(i) / segs + uOff, v + vOff);
             vert.color = color;
+            if (g && (g->barkMottle > 0.0f || g->barkFootDark > 0.0f)) {   // BARK VARIETY: patches, a dark foot
+                const Vec3 p = centers[k] + dir * r;
+                float m = 1.0f;
+                if (g->barkMottle > 0.0f) {   // patches with soft edges, two sizes
+                    const float n2 = 0.6f * gnarlNoise(p * 1.1, seed ^ 0x3b1du) + 0.4f * gnarlNoise(p * 3.7, seed ^ 0x51d7u);
+                    const float t = std::clamp((n2 - 0.52f) / 0.10f, 0.0f, 1.0f);
+                    m -= g->barkMottle * t * t * (3.0f - 2.0f * t);
+                }
+                Vec3 c = color * m;
+                if (g->barkFootDark > 0.0f) {
+                    const float hy = static_cast<float>(p.y) - footY;
+                    // the dark base rises unevenly round the trunk, in tongues
+                    const float reach = g->barkFootHeight * (0.6f + 0.8f * gnarlNoise(Vec3(p.x * 3.0, 0.0, p.z * 3.0), seed ^ 0x77u));
+                    // (whole up to two fifths of its reach, fading out above)
+                    const float w = g->barkFootDark * std::clamp((reach - hy) / std::max(0.05f, 0.6f * reach), 0.0f, 1.0f);
+                    c = c * (1.0f - w) + g->barkFootColor * w;
+                }
+                vert.color = c;
+            }
             mesh.vertices.push_back(vert);
         }
     }
@@ -1158,7 +1182,13 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             add(baseP + dir * (L * 0.6f), tipR * 2.0f);
             add(baseP + dir * L + Vec3(0, -0.02f, 0), tipR);
             Vec3 color = params.barkColor * vary(rng);
-            addCurvedBranch(out.branches, rp, color, params.ringSegments, vScale, 3);
+            // (the bark's variety only -- the dark foot and patches -- not the gnarl, which is for limbs)
+            TreeParams rootLook;
+            rootLook.barkMottle = params.barkMottle;
+            rootLook.barkFootDark = params.barkFootDark;
+            rootLook.barkFootHeight = params.barkFootHeight;
+            rootLook.barkFootColor = params.barkFootColor;
+            addCurvedBranch(out.branches, rp, color, params.ringSegments, vScale, 3, &rootLook, false, footY, seed);
             out.limbs.push_back({baseP, rp.points.front(), baseR, rp.radius.front()});   // (the root's own skeleton)
             for (std::size_t q = 0; q + 1 < rp.points.size(); ++q)
                 out.limbs.push_back({rp.points[q], rp.points[q + 1], rp.radius[q], rp.radius[q + 1]});

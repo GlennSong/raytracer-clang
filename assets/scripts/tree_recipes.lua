@@ -17,6 +17,7 @@
 --     joints   joints = 1: every fork of wood (jointMinRadius on) one surface -- each limb cut back and the end rings
 --              joined by their hull (ADR-0181); collar (a twig still welds into its parent, flaring by this)
 --     girth    tipRadius pipeExponent radiusScale ringSegments
+--     bark     barkMottle (soft dark patches) barkFootDark barkFootHeight (a dark base rising in tongues: a birch)
 --     leaves   leaves leafSize leavesPerTip leafThickness leafClump (how far back along a twig its cards spread)
 --              leafPitch (deg a card tilts out from its twig) maxLeafCards
 --   bark                the bark (procgen/material_recipes.h): "furrowed" (oak), "plated" (pine, spruce), "smooth"
@@ -105,7 +106,7 @@ tree_recipes = {
       joints = 1,
       droop = {0.25, 0.40}, light = {0.05, 0.15}, crookChance = {0.05, 0.12}, crookAngle = {8, 18},
       meander = {0.05, 0.10}, lean = {0, 8}, angleJitter = {8, 12},
-      flare = 0.3, nodeSwell = 0.05, barkNoise = 0.03, twist = 0, rootCount = 3, rootSpread = 2.0, collar = 0.4,
+      flare = 0.3, nodeSwell = 0.05, barkNoise = 0.03, barkMottle = 0.55, barkFootDark = 0.92, barkFootHeight = 1.8, twist = 0, rootCount = 3, rootSpread = 2.0, collar = 0.4,
       tipRadius = 0.010, pipeExponent = 2.3, radiusScale = 1.2, ringSegments = 8,
       leafSize = {0.38, 0.46}, leavesPerTip = 7, leafThickness = 0.035, leafClump = 0.9, maxLeafCards = 9000,
     },

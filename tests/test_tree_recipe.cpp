@@ -596,3 +596,40 @@ TEST_CASE(near_leaves_are_one_by_one_on_shoots) {
         CHECK(off == 0);
     }
 }
+
+// BARK VARIETY (Glenn: "the birch texture is good, but looks to repetitive"): a birch's foot is dark, rising in
+// tongues, and its bark carries patches -- the bark's vertex colours near the ground far darker than up the trunk,
+// and not one colour up it.
+TEST_CASE(a_birch_has_a_dark_foot_and_patchy_bark) {
+    const TreeRecipeBook book = shipped();
+    const TreeRecipe* r = book.find("birch");
+    CHECK(r != nullptr);
+    if (!r) return;
+    for (const auto& ov : {std::map<std::string, double>{}, std::map<std::string, double>{{"foliage", 2.0}}}) {
+    const TreeMesh t = growRecipeTree(*r, 1u, ov);
+    double footSum = 0, upSum = 0, upMin = 9, upMax = 0;
+    int footN = 0, upN = 0;
+    for (const Vertex& v : t.branches.vertices) {
+        const double lum = (v.color.x + v.color.y + v.color.z) / 3.0;
+        if (v.position.y > 0.1 && v.position.y < 0.4 && std::hypot(v.position.x, v.position.z) < 0.25) { footSum += lum; ++footN; }
+        if (v.position.y > 2.5 && v.position.y < 5.0 && std::hypot(v.position.x, v.position.z) < 0.6) {
+            upSum += lum; ++upN; upMin = std::min(upMin, lum); upMax = std::max(upMax, lum);
+        }
+    }
+    if (std::getenv("RT_BARK_BANDS")) {
+        for (double y0 : {0.0, 0.4, 0.8, 1.2, 1.6, 2.0, 2.5, 3.0}) {
+            double sum = 0; int cnt = 0;
+            for (const Vertex& v : t.branches.vertices)
+                if (v.position.y >= y0 && v.position.y < y0 + 0.4 && std::hypot(v.position.x, v.position.z) < 0.3) {
+                    sum += (v.color.x + v.color.y + v.color.z) / 3.0; ++cnt;
+                }
+            std::printf("    [birch] y %.1f: %.2f (%d)\n", y0, cnt ? sum / cnt : -1.0, cnt);
+        }
+    }
+    const double foot = footN ? footSum / footN : 0, up = upN ? upSum / upN : 0;
+    std::printf("    [birch] foot %.2f (%d verts), trunk %.2f (%.2f .. %.2f, %d verts)\n", foot, footN, up, upMin, upMax, upN);
+    CHECK(footN > 0 && upN > 0);
+    CHECK(foot < 0.6 * up);
+    CHECK(upMax - upMin > 0.08);
+    }
+}
