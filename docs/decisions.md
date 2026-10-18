@@ -10521,3 +10521,22 @@ many views").
   for it; sprites seen from their face fold no normal behind them.
 - **Far**: the impostors as they are; many-view impostors next.
 - Numbers: a near hero ~45-50k leaf + ~15k wood triangles; the recipe forest 9.3-11.6 ms GPU (was 8.3-9.5).
+
+## ADR-0185 — Conifer needles from needle geometry; tree textures uploaded once
+
+Glenn, 2026-10-18, with a photo of fir, pine and spruce sprigs: "the spruce leaves look pretty bad"; and "I see floating
+leaves on the trees" (fixed before this: near leaves ride only wood that is built, ADR-0184's wearNearLeaves).
+
+- **`needles = { kind = brush | flat | tuft, ... }`** (TreeRecipe::needles). `bakeNeedleCards` draws needle shoots from
+  geometry -- each needle a tapered blade off its shoot, turned round it, its normal out from the shoot (the normal
+  map rounds the shoot), this year's growth lighter at the end: a main shoot, a side shoot that is a small SPRAY (its
+  own pairs of sub-shoots, as the photo's spruce and fir sprigs), and a pine's TUFT (bundles of two or three long
+  needles crowded round a twig's end). `wearNeedles` plants them along the fine branching and, for a spruce, along the
+  modelled limbs up to `limb_radius` (its whole branches clothed; the first try left them bare): two crossed cards
+  along each (a fir's one plane in a shallow V), side shoots from points ON it in the branch's plane, a pine's tuft
+  as five planes round a twig's end; twig bark the thickest first to a cap per level. Every level wears them, fewer
+  side shoots further out.
+- **Tree textures by content** (`g_treeTextures`, cleared per load): Glenn's lab held 2197 textures, 4.9 GB -- every
+  tree uploaded its species' atlas and bark maps for every level -- and a second viewer beside it crashed in the
+  driver (ImGui's texture update, out of VRAM). Now 128 textures, 304 MB.
+- **Owed**: pine tufts still read a little fan-like; a fir recipe (`flat` is ready).

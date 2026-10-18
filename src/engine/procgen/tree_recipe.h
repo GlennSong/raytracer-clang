@@ -91,6 +91,30 @@ struct BranchCardSpec {
     int nearTwigTris = 9000;         // ...and its fine twigs' bark at most (triangles)
 };
 
+// THE NEEDLES of a conifer (branch_cards.h bakeNeedleCards / wearNeedles; Glenn, 2026-10-18, with a photo of a fir, a
+// pine and a spruce sprig: "the spruce leaves look pretty bad"): its needle shoots drawn from needle geometry and
+// planted along its fine branching.
+//   brush  a spruce: needles all round the twig, swept forward, a fishbone of side shoots in the branch's plane
+//   flat   a fir: needles in two rows to the sides, flat sprays
+//   tuft   a pine: long needles in bundles crowded toward the twig ends, the inner twig bare
+struct NeedleSpec {
+    bool set = false;
+    std::string kind = "brush";
+    double length = 0.02;            // a needle (m)
+    double width = 0.0012;           // ...across (m)
+    double density = 3.0;            // needles a centimetre of shoot
+    double forward = 50.0;           // a needle's angle off the shoot, toward its tip (deg)
+    double shootLength = 0.16;       // a side shoot (m), shortening toward the twig's end
+    int sideShoots = 4;              // side shoots each twig puts out (each side, in its plane)
+    double sideAngle = 50.0;         // ...off it (deg)
+    double reach = 1.0;              // the share of a twig, from its end, that carries needles (a pine's: its last 0.4)
+    double limbRadius = 0.0;         // the modelled limbs this thin carry needles and side shoots too (a spruce's whole
+                                     //   branches are clothed; a pine's bare inside: 0)
+    Vec3 color{0.07, 0.17, 0.07}, colorHi{0.10, 0.22, 0.09};
+    Vec3 tipColor{0.20, 0.36, 0.16};  // this year's growth at the shoot ends
+    Vec3 twigColor{0.45, 0.30, 0.18};
+};
+
 struct TreeRecipe {
     std::string name;
     bool shrub = false;              // kind = "shrub" (or "blades"): a shrub or a perennial (knee to head height), not a tree
@@ -117,6 +141,7 @@ struct TreeRecipe {
     BladeSpec blades;                // kind = "blades": no wood, a clump of strap leaves (flax, rushes, grass tufts)
     FrondSpec fronds;                // a palm's crown (params.foliage = 4)
     BranchCardSpec branchCards;      // branch_cards = {...}: the far side of the near kit (branch_cards.h)
+    NeedleSpec needles;              // needles = {...}: a conifer's foliage at every level (branch_cards.h)
 };
 
 class TreeRecipeBook {

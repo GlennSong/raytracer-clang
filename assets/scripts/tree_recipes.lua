@@ -209,7 +209,13 @@ tree_recipes = {
       aspect = 0.38, droop = 0.25, variants = 8, per_node = 2, budget = 3200,
       color = { {0.82, 0.82, 0.82}, {1.0, 1.0, 1.0} },
     },
-    branch_cards = { sprig = 3.6 },
+    -- NEEDLES (Glenn's spruce sprig: a bottlebrush -- short stiff needles all round the twig, swept forward): every
+    -- twig's needles and its side shoots in a fishbone in the branch's plane, this year's growth lighter at the ends
+    needles = { kind = "brush", length = 0.025, width = 0.0012, density = 9, forward = 55,
+                shoot_length = 0.24, side_shoots = 6, side_angle = 55, limb_radius = 0.035,
+                color = { {0.06, 0.15, 0.08}, {0.09, 0.19, 0.10} }, tip_color = {0.20, 0.34, 0.16},
+                twig_color = {0.30, 0.19, 0.11} },
+    branch_cards = { sprig = 1.6 },
   },
 
   -- SAKURA (Somei-yoshino): a short trunk splits into three scaffold limbs that climb and then spread, an umbrella
@@ -353,6 +359,11 @@ tree_recipes = {
       leaf = { shape = "needle", length = 0.13, width = 0.007 },
       stem_color = {0.45, 0.35, 0.28}, stem_width = 0.009, cup = 0.3, shade_jitter = 0.25, tip_bright = 0.25,
     },
+    -- NEEDLES (Glenn's pine sprig: long needles in bundles of two or three, crowded round the twig ends -- the inner
+    -- twig bare): a tuft at every twig's end, needles along its last 45%
+    needles = { kind = "tuft", length = 0.12, width = 0.0022, density = 3, forward = 35, side_shoots = 0, reach = 0.45,
+                color = { {0.06, 0.15, 0.06}, {0.09, 0.19, 0.08} }, tip_color = {0.14, 0.26, 0.10},
+                twig_color = {0.26, 0.20, 0.15} },
     branch_cards = { sprig = 1.0 },
   },
 

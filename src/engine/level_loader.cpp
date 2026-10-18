@@ -126,6 +126,17 @@ namespace engine {
 // every helper: loading is single-threaded and the alternative is an extra
 // out-param on a dozen call sites.
 static std::vector<std::string> g_loadedScriptFiles;
+// THE TREE TEXTURES uploaded this load, by content (Glenn's tree lab held 2197 textures, 4.9 GB: every tree uploaded
+// its own copy of its species' leaf atlas and bark maps, at every level -- identical pictures). Cleared as a level
+// load starts, as the renderer's textures are.
+static std::unordered_map<uint64_t, TextureHandle> g_treeTextures;
+static uint64_t textureKey(const TextureData& td) {
+    uint64_t h = 1469598103934665603ull ^ (static_cast<uint64_t>(td.width) << 32 | static_cast<uint64_t>(td.height) << 8 | td.channels);
+    const std::size_t n = td.pixels.size();
+    const std::size_t step = std::max<std::size_t>(1, n / 65536);   // (every byte of a small one; 64k spread over a big one)
+    for (std::size_t i = 0; i < n; i += step) h = (h ^ td.pixels[i]) * 1099511628211ull;
+    return h ^ n;
+}
 
 // The level being loaded, for producers that are keyed by it (the lanes road builder asks the
 // bundle for THIS level's city). Set once at the top of loadLevel, read far below.
@@ -918,9 +929,14 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
     if (barkStyle.empty()) barkStyle = "oak";
     if (levels.empty() || levels.front().tm.branches.vertices.empty()) return;
 
-    auto upload = [&](const TextureData& td) -> TextureHandle {
+    auto upload = [&](const TextureData& td) -> TextureHandle {   // (once a load per picture: g_treeTextures)
         if (td.pixels.empty()) return TextureHandle{};
-        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+        const uint64_t key = textureKey(td);
+        auto it = g_treeTextures.find(key);
+        if (it != g_treeTextures.end()) return it->second;
+        const TextureHandle t = renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+        g_treeTextures.emplace(key, t);
+        return t;
     };
     // the bark's maps, once for all its levels
     TextureHandle barkAlbedo, barkNormal;
@@ -3673,6 +3689,7 @@ bool LevelLoader::load(const std::string& path,
     std::function<void()> plantScatter;
     RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
+    g_treeTextures.clear();
     const auto tLoad0 = std::chrono::steady_clock::now();
     // Per-stage load timing (metropolis-scale-plan P4.3). One line at the end, so the cost of a
     // cold city is attributable without a profiler — which is what sizing a bundle producer needs.

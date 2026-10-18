@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace engine {
 
@@ -613,6 +614,262 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
                 const double sz = lk.blossomSize * std::min(1.6, grow) * (0.85 + 0.3 * rnd());
                 addKitBlossom(m, sp.b + stalk * (0.9 * sz), stalk, sz, lk.cup, rnd() * 2.0 * PI, 2, 2 + (b % 2), leafColour(sp.b));
             }
+        }
+    }
+    return laid;
+}
+
+
+BranchCardSet bakeNeedleCards(const TreeRecipe& r, int variants, uint32_t seed) {
+    BranchCardSet set;
+    const NeedleSpec& nd = r.needles;
+    if (!nd.set) return set;
+    const bool tuft = nd.kind == "tuft", flat = nd.kind == "flat";
+    const int nv = std::max(1, variants), kinds = tuft ? 3 : 2;
+    const int cw = 160, ch = 480, cols = nv, rows = kinds;
+    const int W = cols * cw, H = rows * ch;
+    for (TextureData* t : {&set.atlas.albedo, &set.atlas.normal}) {
+        t->width = W; t->height = H; t->channels = 4;
+        t->pixels.assign(static_cast<std::size_t>(W) * H * 4, 0);
+    }
+    for (std::size_t i = 3; i < set.atlas.normal.pixels.size(); i += 4) {
+        set.atlas.normal.pixels[i - 3] = 128; set.atlas.normal.pixels[i - 2] = 128; set.atlas.normal.pixels[i - 1] = 255;
+        set.atlas.normal.pixels[i] = 255;
+    }
+    TextureData white;   // (a needle is its vertex colour: a solid "leaf" texture)
+    white.width = white.height = 4; white.channels = 4;
+    white.pixels.assign(64, 255);
+    BarkKind barkKind;
+    BarkTextures barkMaps;
+    if (barkKindFromName(r.bark, barkKind)) barkMaps = barkTextures(barkKind, 1u, 256);
+    CardViewExtras extras;
+    extras.barkAlbedo = &barkMaps.albedo;
+    extras.barkNormal = &barkMaps.normal;
+    extras.depthShade = 0.3;
+    extras.trueNormals = true;
+    uint32_t h = seed * 2654435761u + 5u;
+    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    const double L = nd.length, w = nd.width;
+    const Vec3 X(1, 0, 0), Y(0, 1, 0), Z(0, 0, 1);
+    // one needle: from `p` along `d` (bending a little toward `bendTo`), its face turned to `radial`
+    auto needle = [&](RenderMesh& m, const Vec3& p, const Vec3& d, const Vec3& radial, double len, const Vec3& col) {
+        Vec3 wv = cross(d, radial);
+        if (wv.length() < 1e-6) wv = cross(d, Z);
+        wv = normalize(wv);
+        const Vec3 mid = p + d * (0.5 * len) + radial * (0.04 * len), tip = p + d * len + radial * (0.02 * len);
+        const Vec3 nrm = normalize(radial * 0.8 + Z * 0.4);
+        const uint32_t b = static_cast<uint32_t>(m.vertices.size());
+        const Vec3 pts[5] = {p - wv * (0.5 * w), p + wv * (0.5 * w), mid - wv * (0.45 * w), mid + wv * (0.45 * w), tip};
+        for (const Vec3& q : pts) {
+            Vertex v(q, nrm, wv, 0.5f, 0.5f);
+            v.color = col;
+            m.vertices.push_back(v);
+        }
+        MeshBuilder::quadFacing(m, b, b + 1, b + 3, b + 2, nrm);
+        MeshBuilder::triFacing(m, b + 2, b + 3, b + 4, nrm);
+    };
+    auto needleColour = [&](double t) {   // (lighter toward the shoot's end: this year's growth)
+        const Vec3 c = nd.color + (nd.colorHi - nd.color) * rnd();
+        const double k = std::clamp((t - 0.72) / 0.28, 0.0, 1.0);
+        return c * (1.0 - k) + nd.tipColor * k;
+    };
+    // a shoot along +Y, `S` long: its twig, and its needles from `from` (a share of it) to its end
+    // a shoot from `o` along `ax` (in the picture's plane), `S` long: its twig, and its needles from `from` (a share of
+    // it) to its end -- and, a SPRAY (`subs` pairs), its own side shoots off both sides, as a spruce or fir sprig has
+    std::function<void(RenderMesh&, RenderMesh&, const Vec3&, const Vec3&, double, double, int)> shootAt;
+    shootAt = [&](RenderMesh& wood, RenderMesh& ndl, const Vec3& o, const Vec3& axis, double S, double from, int subs) {
+        const double tr = 0.0015 + 0.004 * S;   // (a shoot is a few millimetres across; its needles make its width)
+        const Vec3 Ya = normalize(axis), Xa = normalize(cross(Ya, Z));
+        MeshBuilder::append(wood, barkTube({o, o + Ya * S}, {tr, 0.5 * tr}, 6, {nd.twigColor, nd.twigColor}));
+        for (int k = 0; k < 2 * subs; ++k) {
+            const double tt = 0.2 + 0.6 * (k / 2 + 0.5 * rnd()) / std::max(1, subs);
+            const double sgn = k % 2 ? 1.0 : -1.0, a = (nd.sideAngle + (rnd() - 0.5) * 12.0) * PI / 180.0;
+            shootAt(wood, ndl, o + Ya * (tt * S), normalize(Ya * std::cos(a) + Xa * (sgn * std::sin(a))), S * (0.45 - 0.2 * tt), 0.0, 0);
+        }
+        const int n = std::max(6, static_cast<int>(S * (1.0 - from) * nd.density * 100.0));
+        for (int i = 0; i < n; ++i) {
+            const double t = from + (1.0 - from) * (i + rnd()) / n;
+            const Vec3 p = o + Ya * (t * S);
+            double phi = flat ? (i % 2 ? 0.0 : PI) + (rnd() - 0.5) * 0.5 : i * 2.39996 + (rnd() - 0.5) * 0.4;
+            if (flat && rnd() < 0.25) phi = PI * 0.5 + (rnd() - 0.5) * 0.6;   // (a few above the twig, short)
+            const Vec3 radial = Xa * std::cos(phi) + Z * std::sin(phi);
+            const double fwd = (nd.forward + (rnd() - 0.5) * 16.0) * PI / 180.0;
+            const Vec3 d = normalize(Ya * std::cos(fwd) + radial * std::sin(fwd));
+            const double len = L * (0.8 + 0.4 * rnd()) * (flat && std::fabs(std::sin(phi)) > 0.7 ? 0.6 : 1.0) *
+                               (0.7 + 0.3 * std::min(1.0, (1.0 - t) * 6.0 + 0.3));
+            needle(ndl, p + radial * tr, d, radial, len, needleColour(t));
+        }
+    };
+    // a pine's tuft: bundles of two or three long needles round the twig's last stretch, crowded at its end
+    auto tuftShoot = [&](RenderMesh& wood, RenderMesh& ndl, double S) {
+        const double tr = 0.003;
+        wood = barkTube({Vec3(0, 0, 0), Vec3(0, S, 0)}, {tr, 0.6 * tr}, 6, {nd.twigColor, nd.twigColor});
+        const int bundles = std::max(8, static_cast<int>(S * nd.density * 100.0));
+        for (int i = 0; i < bundles; ++i) {
+            const double t = std::pow((i + rnd()) / bundles, 0.6);
+            const Vec3 p(0, t * S, 0);
+            const double phi0 = i * 2.39996;
+            const int k = rnd() < 0.5 ? 2 : 3;
+            for (int j = 0; j < k; ++j) {
+                const double phi = phi0 + (j - 0.5 * (k - 1)) * 0.35;
+                const Vec3 radial = X * std::cos(phi) + Z * std::sin(phi);
+                const double fwd = (nd.forward * (0.6 + 0.6 * t) + (rnd() - 0.5) * 14.0) * PI / 180.0;
+                needle(ndl, p + radial * tr, normalize(Y * std::cos(fwd) + radial * std::sin(fwd)), radial,
+                       L * (0.85 + 0.3 * rnd()), needleColour(0.5 + 0.5 * t));
+            }
+        }
+    };
+    int cell = 0;
+    for (int kind = 0; kind < kinds; ++kind)
+        for (int v = 0; v < nv; ++v, ++cell) {
+            RenderMesh wood, ndl;
+            const double S = kind == 0 ? 0.30 : kind == 1 ? 0.16 : 0.14;
+            if (kind == 2) tuftShoot(wood, ndl, S);
+            else   // (a pine's shoot card lies only on the needled share of its twig; a side shoot is a spray)
+                shootAt(wood, ndl, Vec3(0, 0, 0), Y, S, 0.0, kind == 1 && !tuft ? 3 : 0);
+            double half = 0.0, y1 = 0.0;
+            for (const RenderMesh* m : {&wood, &ndl})
+                for (const Vertex& vx : m->vertices) { half = std::max(half, std::fabs(vx.position.x)); y1 = std::max(y1, vx.position.y); }
+            half = half * 1.04 + 0.004;
+            y1 = y1 * 1.02 + 0.004;
+            const double y0 = -0.01 * S;
+            const int c = cell % cols, rr = cell / cols;
+            const std::size_t off = (static_cast<std::size_t>(rr) * ch * W + static_cast<std::size_t>(c) * cw) * 4;
+            renderCardView(wood, ndl, white, false, -half, half, y0, y1, cw, ch, set.colourScale,
+                           set.atlas.albedo.pixels.data() + off, W * 4, set.atlas.normal.pixels.data() + off, &extras);
+            BranchCardSet::Picture pic;
+            BranchCardSet::View vw;
+            vw.u0 = static_cast<float>(c) / cols; vw.u1 = static_cast<float>(c + 1) / cols;
+            vw.v0 = static_cast<float>(rr) / rows; vw.v1 = static_cast<float>(rr + 1) / rows;
+            vw.x0 = static_cast<float>(-half); vw.x1 = static_cast<float>(half);
+            vw.y0 = static_cast<float>(y0); vw.y1 = static_cast<float>(y1);
+            pic.views.push_back(vw);
+            pic.length = static_cast<float>(S);
+            pic.halfWidth = static_cast<float>(half);
+            pic.kind = kind;
+            set.pictures.push_back(pic);
+        }
+    set.twigLength = 0.30f;
+    return set;
+}
+
+int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, double shoots, int twigTris, uint32_t seed) {
+    const NeedleSpec& nd = r.needles;
+    if (!nd.set || set.empty() || tree.twigs.empty()) return 0;
+    tree.foliage = 5;
+    const bool tuft = nd.kind == "tuft", flat = nd.kind == "flat";
+    std::vector<int> byKind[3];
+    for (std::size_t i = 0; i < set.pictures.size(); ++i)
+        if (set.pictures[i].kind >= 0 && set.pictures[i].kind < 3) byKind[set.pictures[i].kind].push_back(static_cast<int>(i));
+    if (byKind[0].empty()) return 0;
+    uint32_t h = seed * 2246822519u + 9u;
+    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    Vec3 mid(0, 0, 0);
+    for (const TreeMesh::Twig& t : tree.twigs) mid = mid + t.b;
+    mid = mid * (1.0 / tree.twigs.size());
+    double crownR = 0.5;
+    for (const TreeMesh::Twig& t : tree.twigs) crownR = std::max(crownR, (t.b - mid).length());
+    const double inv = 1.0 / set.colourScale, bend = 0.45;
+    RenderMesh& m = tree.leaves;
+    RenderMesh& bark = tree.branches;
+    const bool data = bark.tangentIsData;
+    const Vec3 barkCol = r.barkColor * 0.5 + r.barkColorHi * 0.5;
+    int laid = 0;
+    auto pick = [&](int kind) {
+        const std::vector<int>& v = byKind[kind].empty() ? byKind[0] : byKind[kind];
+        return v[static_cast<std::size_t>(rnd() * v.size()) % v.size()];
+    };
+    // one plane of picture `pi` from `a` along `axis` for `len`, across `right`
+    auto plane = [&](int pi, const Vec3& a, const Vec3& axis, double len, const Vec3& right0) {
+        const BranchCardSet::Picture& pic = set.pictures[static_cast<std::size_t>(pi)];
+        const BranchCardSet::View& p = pic.views.front();
+        const double s = len / std::max(1e-3f, pic.length);
+        const double sw = std::clamp(s, 0.85, 1.2);   // (a needle keeps its length across the card)
+        const Vec3 right = normalize(right0 - axis * dot(right0, axis));
+        Vec3 face = normalize(cross(right, axis));
+        if (face.y < 0.0) face = face * -1.0;
+        const uint32_t b = static_cast<uint32_t>(m.vertices.size());
+        const double xs[2] = {p.x0, p.x1}, ys[2] = {p.y0, p.y1};
+        for (int yi = 0; yi < 2; ++yi)
+            for (int xi = 0; xi < 2; ++xi) {
+                const Vec3 pos = a + axis * (ys[yi] * s) + right * (xs[xi] * sw);
+                Vec3 out = pos - mid;
+                out = out.length() > 1e-6 ? normalize(out) : Vec3(0, 1, 0);
+                const Vec3 nrm = normalize(face * (1.0 - bend) + out * bend);
+                Vertex vx(pos, nrm, normalize(right - nrm * dot(right, nrm)), xi ? p.u1 : p.u0, yi ? p.v0 : p.v1);
+                const double ao = 0.5 + 0.5 * std::clamp((pos - mid).length() / crownR, 0.0, 1.0);
+                vx.color = Vec3(ao * inv, ao * inv, ao * inv);
+                m.vertices.push_back(vx);
+            }
+        MeshBuilder::quadFacing(m, b + 0, b + 1, b + 3, b + 2, face);
+    };
+    // a shoot's needles: crossed planes (a fir's: one in the branch's plane, opened in a shallow V)
+    auto needles = [&](int kind, const Vec3& a, const Vec3& axis, double len, const Vec3& side) {
+        const int pi = pick(kind);
+        const Vec3 up = normalize(cross(side, axis));
+        if (flat) {
+            plane(pi, a, axis, len, normalize(side + up * 0.25));
+            plane(pi, a, axis, len, normalize(side - up * 0.25));
+        } else if (kind == 2) {   // (a tuft: five planes round the twig -- three read as flat fans)
+            for (int k = 0; k < 5; ++k) {
+                const double rr = k * PI / 5.0 + rnd() * 0.2;
+                plane(pi, a, axis, len, side * std::cos(rr) + up * std::sin(rr));
+            }
+        } else {
+            const double rr = (rnd() - 0.5) * 0.4;
+            plane(pi, a, axis, len, side * std::cos(rr) + up * std::sin(rr));
+            plane(pick(kind), a, axis, len, up * std::cos(rr) - side * std::sin(rr));
+        }
+        ++laid;
+    };
+    // THE WOOD: the twigs' bark, the thickest first, to the budget (the thinnest wear their cards' own drawn twig)
+    {
+        std::vector<std::size_t> order(tree.twigs.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return tree.twigs[a].r > tree.twigs[b].r; });
+        int tris = 0;
+        for (std::size_t i : order) {
+            const TreeMesh::Twig& t = tree.twigs[i];
+            const double r0 = std::max(0.003, static_cast<double>(t.r));
+            const int sides = r0 < 0.008 ? 3 : r0 < 0.02 ? 4 : 5;
+            if (tris + 2 * sides > twigTris) break;
+            RenderMesh tube = barkTube({t.a, t.b}, {r0, std::max(0.002, 0.75 * r0)}, sides, {barkCol, barkCol});
+            for (Vertex& v : tube.vertices) {
+                v.u *= 0.5f;
+                if (data) v.tangent = Vec3(v.u, v.v, 0.0);
+            }
+            tris += static_cast<int>(tube.indices.size() / 3);
+            MeshBuilder::append(bark, tube);
+        }
+    }
+    // where the needles go: every twig, and (a spruce's) the modelled limbs thin enough -- its whole branches clothed
+    struct Shoot { Vec3 a, b; bool tip; };
+    std::vector<Shoot> along;
+    for (const TreeMesh::Twig& t : tree.twigs) along.push_back({t.a, t.b, t.leafy});
+    if (nd.limbRadius > 0.0)
+        for (const TreeMesh::Limb& l : tree.limbs)
+            if (l.rb <= nd.limbRadius && l.ra <= 1.6 * nd.limbRadius && l.b.y > 0.3) along.push_back({l.a, l.b, false});
+    for (const Shoot& t : along) {
+        const Vec3 d = t.b - t.a;
+        const double len = d.length();
+        if (len < 1e-3) continue;
+        const Vec3 ax = d * (1.0 / len);
+        // the branch's plane: its side, level (a conifer's sprays lie near flat)
+        Vec3 side = cross(ax, Vec3(0, 1, 0));
+        side = side.length() > 0.1 ? normalize(side) : normalize(cross(ax, Vec3(1, 0, 0)));
+        // its own needles, along the share `reach` from its end
+        const double from = 1.0 - nd.reach;
+        needles(0, t.a + d * from, ax, len * nd.reach, side);
+        if (tuft && t.tip) needles(2, t.b - ax * 0.02, normalize(ax + Vec3(0, 0.25, 0)), 0.14 * (0.9 + 0.2 * rnd()), side);
+        // its side shoots, from points ON it, in its plane, forward, shorter toward its end
+        const int n = static_cast<int>(std::lround(nd.sideShoots * shoots * std::min(1.0, len / 0.3)));
+        for (int k = 0; k < 2 * n; ++k) {
+            const double tt = from + (1.0 - from) * (0.12 + 0.8 * (k / 2 + rnd() * 0.6) / std::max(1, n));
+            const double sgn = k % 2 ? 1.0 : -1.0;
+            const double a = (nd.sideAngle + (rnd() - 0.5) * 16.0) * PI / 180.0;
+            const Vec3 sd = normalize(ax * std::cos(a) + side * (sgn * std::sin(a)) + Vec3(0, 0.08, 0));
+            const double sl = nd.shootLength * (1.15 - 0.6 * tt) * (0.8 + 0.4 * rnd());
+            needles(1, t.a + d * tt, sd, sl, normalize(cross(Vec3(0, 1, 0), sd)));
         }
     }
     return laid;

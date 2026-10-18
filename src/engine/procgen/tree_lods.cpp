@@ -50,7 +50,9 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
         // (a species with near leaves wears TWIG SEGMENTS along its fine branching -- baked below from its hero's
         // internodes; the others pictures of their sprigs, baked from a donor)
         const bool twigs = r.leafKit.set && bc.twigs;
-        if (set.empty() && !twigs) {
+        const bool needles = r.needles.set;   // (a conifer: its needle shoots, at every level)
+        if (set.empty() && needles) set = bakeNeedleCards(r, 3, nameHash(r.name));
+        if (set.empty() && !twigs && !needles) {
             std::map<std::string, double> o = overrides;
             o["foliage"] = foliage;
             o["sprigSize"] = bc.sprig;
@@ -82,6 +84,14 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 if (woodMin > 0.0 && !o.count("woodMinRadius")) o["woodMinRadius"] = woodMin;
                 RecipeTreeLevel L;
                 L.tree = growRecipeTree(r, seed, o);
+                if (needles) {   // (the hero all its side shoots; further, fewer)
+                    const bool mid = !near && edge <= bc.woodEdge * 1.7, light = !near && !mid && edge < 0.2;
+                    const double share = near ? 1.0 : mid ? 0.6 : light ? 0.3 : 0.15;
+                    const int wood = near ? bc.nearTwigTris : mid ? 3000 : light ? 800 : 0;
+                    wearNeedles(L.tree, r, set, share, wood, seed ^ 0x9e3779b9u);
+                    L.atlas = set.atlas;
+                    return L;
+                }
                 if (twigs && near) {   // (the hero: twigs of bark and leaves one by one)
                     wearNearLeaves(L.tree, r, bc.nearLeaves, bc.nearTwigTris, bc.fillRadius, bc.fillSpacing, seed ^ 0x51ed27u);
                     L.atlas = recipeLeafAtlas(r, L.tree);

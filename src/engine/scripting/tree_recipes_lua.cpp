@@ -383,6 +383,33 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             readColour(L, st, "color", sp.color, sp.colorHi);
         }
         lua_pop(L, 1);
+        lua_getfield(L, t, "needles");
+        if (lua_istable(L, -1)) {   // A CONIFER'S NEEDLES (procgen/branch_cards.h)
+            const int nt = lua_gettop(L);
+            NeedleSpec& nd = r.needles;
+            nd.set = true;
+            lua_getfield(L, nt, "kind");
+            if (lua_isstring(L, -1)) nd.kind = lua_tostring(L, -1);
+            lua_pop(L, 1);
+            if (nd.kind != "brush" && nd.kind != "flat" && nd.kind != "tuft") {
+                lua_settop(L, base);
+                return fail(err, where + ".needles: kind must be brush, flat or tuft (not " + nd.kind + ")");
+            }
+            nd.length = numField(L, nt, "length", nd.length);
+            nd.width = numField(L, nt, "width", nd.width);
+            nd.density = numField(L, nt, "density", nd.density);
+            nd.forward = numField(L, nt, "forward", nd.forward);
+            nd.shootLength = numField(L, nt, "shoot_length", nd.shootLength);
+            nd.sideShoots = std::max(0, static_cast<int>(numField(L, nt, "side_shoots", nd.sideShoots)));
+            nd.sideAngle = numField(L, nt, "side_angle", nd.sideAngle);
+            nd.reach = std::clamp(numField(L, nt, "reach", nd.reach), 0.05, 1.0);
+            nd.limbRadius = numField(L, nt, "limb_radius", nd.limbRadius);
+            readColour(L, nt, "color", nd.color, nd.colorHi);
+            Vec3 hi;
+            readColour(L, nt, "tip_color", nd.tipColor, hi);
+            readColour(L, nt, "twig_color", nd.twigColor, hi);
+        }
+        lua_pop(L, 1);
         lua_getfield(L, t, "branch_cards");
         if (lua_istable(L, -1)) {   // THE BRANCH CARDS (procgen/branch_cards.h)
             const int ct = lua_gettop(L);

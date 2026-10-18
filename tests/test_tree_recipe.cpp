@@ -884,7 +884,8 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
                     levels[1].tree.branches.indices.size() / 3, cache.pictures.size());
         // (a near hero: the trunk and limbs in 8000, its fine twigs' bark besides -- branch_cards.h wearNearLeaves)
         const bool near = r->leafKit.set && r->branchCards.twigs;
-        CHECK(bark <= 8000 + (near ? static_cast<std::size_t>(r->branchCards.nearTwigTris) : 0));
+        const bool needles = r->needles.set;   // (a conifer: needle shoot cards at every level, twig bark besides)
+        CHECK(bark <= 8000 + (near || needles ? static_cast<std::size_t>(r->branchCards.nearTwigTris) : 0));
         if (const char* dir = std::getenv("RT_CARD_ATLAS")) {   // the baked pictures, alpha over grey
             const TextureData& a = cache.atlas.albedo;
             Image img(a.width, a.height);
@@ -914,7 +915,7 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
                       hero.zoneIndexEnd > hero.zoneIndexStart ? hero.zoneIndexEnd : hero.branches.indices.size(),
                       std::string(dir) + "/hero_" + name + ".png", 2.2);
         CHECK(!hero.sprigs.empty());
-        const bool twigCards = near;
+        const bool twigCards = near || needles;
         const TreeMesh& carded = near ? levels[1].tree : hero;   // (a near hero's cards are its mid's)
         CHECK(carded.foliage == 5);
         if (near) {   // the hero: its leaves one by one, within their budget
@@ -924,8 +925,9 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
         }
         if (twigCards) {   // (a twig segment along every fine internode -- two planes each -- and the fill besides)
             CHECK(!carded.twigs.empty());
-            CHECK(carded.leaves.indices.size() / 3 >= carded.twigs.size() * 4);
+            CHECK(carded.leaves.indices.size() / 3 >= carded.twigs.size() * (needles ? 2 : 4));
             for (const BranchCardSet::Picture& pic : cache.pictures) CHECK(pic.kind >= 0 && pic.kind < 4);
+            if (needles) CHECK(hero.leaves.indices.size() / 3 >= hero.twigs.size() * 2);
         } else {
             CHECK(cards == hero.sprigs.size() * 4 * static_cast<std::size_t>(r->branchCards.views));
         }
@@ -941,8 +943,10 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
             for (int y = y0; y < y1; ++y)
                 for (int x = x0; x < x1; ++x, ++all) on += a.pixels[(static_cast<std::size_t>(y) * a.width + x) * 4 + 3] > 127;
             // (a bare twig is a thin line in its cell: a fortieth is drawn)
-            CHECK(on * (pic.kind >= 2 ? 60 : 20) >= all);
-            if (on * (pic.kind >= 2 ? 60 : 20) < all) std::printf("    [cards] %s: a picture %.1f%% drawn\n", name.c_str(), 100.0 * on / all);
+            // (a bare twig, a needle shoot: thin lines in their cells -- a sixtieth drawn)
+            const std::size_t share = pic.kind >= 2 || needles ? 60 : 20;
+            CHECK(on * share >= all);
+            if (on * share < all) std::printf("    [cards] %s: a picture %.1f%% drawn\n", name.c_str(), 100.0 * on / all);
           }
         // every card hangs on the tree: its base (the first vertex: x0 at the sprig's base) beside a limb -- or, twig
         // segments, every card's corners within a segment's reach of the tree's limbs

@@ -78,6 +78,17 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
 int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris, double fillRadius, double fillSpacing,
                    uint32_t seed);
 
+// A CONIFER'S NEEDLES (TreeRecipe::needles): `variants` of each of a main shoot (a twig's needles along it), a side
+// shoot (shorter) and, for a pine, a tuft (needles in bundles round a twig's end), drawn from needle geometry -- each
+// needle a thin blade off its shoot, turned round it, its normal out from the shoot (the normal map rounds the shoot),
+// this year's growth lighter at the end -- in the picture kinds 0, 1, 2.
+BranchCardSet bakeNeedleCards(const TreeRecipe& r, int variants, uint32_t seed);
+// ...worn along the tree's fine branching: each twig a bark tube (three to five sides by its girth; the thickest first,
+// to `twigTris`) and its needles --
+// two crossed cards along it (a flat fir's one, opened in a shallow V), the share `reach` from its end -- and its side
+// shoots, `shoots` (0..1) of the recipe's, from points ON it, in the branch's plane, forward; a pine's tufts at its end.
+int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, double shoots, int twigTris, uint32_t seed);
+
 }  // namespace engine
 
 #endif
