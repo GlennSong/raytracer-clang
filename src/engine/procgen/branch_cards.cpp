@@ -463,35 +463,49 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
     mid = mid * (1.0 / tree.twigs.size());
     double crownR = 0.5;
     for (const TreeMesh::Twig& t : tree.twigs) crownR = std::max(crownR, (t.b - mid).length());
-    // THE TWIGS: bark tubes, thickest first, to the budget
-    std::vector<std::size_t> order(tree.twigs.size());
-    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    // EVERY LEAF ON WOOD THAT IS THERE (Glenn, 2026-10-18: "I see floating leaves" -- shoots and sprouts whose wood
+    // the budget had run out on still wore their leaves): the twigs get their bark first, thickest first; the shoots
+    // are as many as the budget left gives each leafy twig WITH wood (fewer shoots, never bare-of-wood ones); the
+    // sprouts along the thin limbs only while it lasts; and the leaves ride only those -- each piece placed at an anchor
+    // on its parent (SpeedTree's anchor points)
+    // (the order: the branching first -- the twigs that fork on, thickest first -- then the leafy ends in a shuffled
+    // order, so a dense crown past the budget thins EVENLY, not all its ends at once)
+    std::vector<std::size_t> order, ends;
+    for (std::size_t i = 0; i < tree.twigs.size(); ++i) (tree.twigs[i].leafy ? ends : order).push_back(i);
     std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return tree.twigs[a].r > tree.twigs[b].r; });
+    for (std::size_t i = ends.size(); i > 1; --i) std::swap(ends[i - 1], ends[static_cast<std::size_t>(rnd() * i) % i]);
+    order.insert(order.end(), ends.begin(), ends.end());
     RenderMesh& wood = tree.branches;
     const bool data = wood.tangentIsData;   // (the bark blends: its tangent slot carries UVs)
     const Vec3 barkCol = r.barkColor * 0.5 + r.barkColorHi * 0.5;
     int tris = 0;
-    for (std::size_t i : order) {
-        const TreeMesh::Twig& t = tree.twigs[i];
-        if (tris + 6 > twigTris) break;
-        const double r0 = std::max(0.0025, static_cast<double>(t.r)), r1 = std::max(0.0015, 0.7 * r0);
-        RenderMesh tube = barkTube({t.a, t.b}, {r0, r1}, 3, {barkCol, barkCol});
+    auto addWood = [&](const Vec3& a, const Vec3& b, double r0, double r1) {
+        RenderMesh tube = barkTube({a, b}, {r0, r1}, 3, {barkCol, barkCol});
         for (Vertex& v : tube.vertices) {
             v.u *= 0.5f;
             if (data) v.tangent = Vec3(v.u, v.v, 0.0);
         }
         tris += static_cast<int>(tube.indices.size() / 3);
         MeshBuilder::append(wood, tube);
+    };
+    std::vector<char> hasWood(tree.twigs.size(), 0);
+    for (std::size_t i : order) {
+        const TreeMesh::Twig& t = tree.twigs[i];
+        if (tris + 6 > twigTris) break;
+        const double r0 = std::max(0.0025, static_cast<double>(t.r));
+        addWood(t.a, t.b, r0, std::max(0.0015, 0.7 * r0));
+        hasWood[i] = 1;
     }
-    // THE LEAVES: along each leafy twig (and sprouting along the thin modelled limbs), as many as the budget gives
     struct Spot { Vec3 a, b; };
     std::vector<Spot> spots;
     double total = 0.0;
-    // (each leafy twig puts out its SHOOTS, as the leaf kit has them -- fanned off it, lifted to the light, sagging --
-    // and the leaves ride the twig and the shoots: a crown hung only on the twigs' lines read sparse)
-    std::vector<Spot> shoots;
-    for (const TreeMesh::Twig& t : tree.twigs) {
-        if (!t.leafy) continue;
+    std::size_t leafyWithWood = 0;
+    for (std::size_t i = 0; i < tree.twigs.size(); ++i) leafyWithWood += tree.twigs[i].leafy && hasWood[i];
+    const int shootsEach = leafyWithWood == 0 ? 0
+        : std::clamp(static_cast<int>((twigTris - tris) / 6 / static_cast<int>(leafyWithWood)), 0, lk.shoots);
+    for (std::size_t i = 0; i < tree.twigs.size(); ++i) {
+        const TreeMesh::Twig& t = tree.twigs[i];
+        if (!t.leafy || !hasWood[i]) continue;
         spots.push_back({t.a, t.b});
         total += (t.b - t.a).length();
         const Vec3 d = t.b - t.a;
@@ -500,31 +514,21 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
         const Vec3 ax = d * (1.0 / len);
         const Vec3 ref = std::fabs(ax.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
         const Vec3 e1 = normalize(cross(ax, ref)), e2 = cross(ax, e1);
-        for (int k = 0; k < lk.shoots; ++k) {
+        for (int k = 0; k < shootsEach; ++k) {   // (each from a point ON its twig, with its own wood)
             const double roll = k * 2.399 + rnd() * 0.8;
             const Vec3 out = e1 * std::cos(roll) + e2 * std::sin(roll);
             const double ang = (lk.shootAngle + (rnd() - 0.5) * 30.0) * PI / 180.0;
-            Vec3 sd = normalize(ax * std::cos(ang) + out * std::sin(ang) + Vec3(0, lk.lift, 0));
+            const Vec3 sd = normalize(ax * std::cos(ang) + out * std::sin(ang) + Vec3(0, lk.lift, 0));
             const Vec3 from = t.a + d * (0.3 + 0.7 * rnd());
             const double sl = lk.shootLength * (0.7 + 0.6 * rnd());
             Vec3 to = from + sd * sl;
             to.y -= lk.sag * sl;
+            addWood(from, to, 0.0035, 0.0015);
             spots.push_back({from, to});
-            shoots.push_back({from, to});
             total += sl;
         }
     }
-    for (const Spot& sh : shoots) {   // (their wood: the thinnest tubes, while the twig budget lasts)
-        if (tris + 6 > twigTris) break;
-        RenderMesh tube = barkTube({sh.a, sh.b}, {0.0035, 0.0015}, 3, {barkCol, barkCol});
-        for (Vertex& v : tube.vertices) {
-            v.u *= 0.5f;
-            if (data) v.tangent = Vec3(v.u, v.v, 0.0);
-        }
-        tris += static_cast<int>(tube.indices.size() / 3);
-        MeshBuilder::append(wood, tube);
-    }
-    if (fillSpacing > 0.0)
+    if (fillSpacing > 0.0)   // (sprouts along the thin modelled limbs: from ON the limb, with wood, while it lasts)
         for (const TreeMesh::Limb& l : tree.limbs) {
             if (l.rb > fillRadius || l.rb <= 0.0f) continue;
             const Vec3 d = l.b - l.a;
@@ -533,13 +537,15 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
             const Vec3 ax = d * (1.0 / len);
             const Vec3 ref = std::fabs(ax.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
             const Vec3 e1 = normalize(cross(ax, ref)), e2 = cross(ax, e1);
-            for (double s = fillSpacing * rnd(); s < len; s += fillSpacing) {
+            for (double s = fillSpacing * rnd(); s < len && tris + 6 <= twigTris; s += fillSpacing) {
                 const double roll = rnd() * 2.0 * PI;
                 const Vec3 out = e1 * std::cos(roll) + e2 * std::sin(roll);
                 const Vec3 dir = normalize(ax * 0.6 + out + Vec3(0, 0.3, 0));
                 const Vec3 a = l.a + ax * s;
-                spots.push_back({a, a + dir * (lk.shootLength * (0.7 + 0.6 * rnd()))});
-                total += lk.shootLength;
+                const Vec3 b = a + dir * (lk.shootLength * (0.7 + 0.6 * rnd()));
+                addWood(a, b, 0.0045, 0.0018);
+                spots.push_back({a, b});
+                total += (b - a).length();
             }
         }
     if (spots.empty() || total <= 0.0) return 0;

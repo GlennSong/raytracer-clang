@@ -308,7 +308,7 @@ tree_recipes = {
       leaf = { shape = "palmate", length = 0.17, lobes = 7, teeth = 3 },
       stem_color = {0.55, 0.30, 0.25}, stem_width = 0.008, cup = 0.35, shade_jitter = 0.22,
     },
-    branch_cards = { sprig = 1.0 },
+    branch_cards = { sprig = 1.0, near_twig_tris = 18000 },   -- (a maple's fine branching is dense: 3600 twigs),
   },
 
   -- JAPANESE BLACK PINE (Pinus thunbergii): a crooked, leaning trunk, bare below; a few long limbs fanning out
