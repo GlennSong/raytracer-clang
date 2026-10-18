@@ -647,6 +647,7 @@ BranchCardSet bakeNeedleCards(const TreeRecipe& r, int variants, uint32_t seed) 
     extras.barkNormal = &barkMaps.normal;
     extras.depthShade = 0.3;
     extras.trueNormals = true;
+    extras.alphaGrow = 1;   // (Glenn, of the spruce: "your needles need more thickness")
     uint32_t h = seed * 2654435761u + 5u;
     auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
     const double L = nd.length, w = nd.width;
@@ -815,10 +816,12 @@ int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, d
                 const double rr = k * PI / 5.0 + rnd() * 0.2;
                 plane(pi, a, axis, len, side * std::cos(rr) + up * std::sin(rr));
             }
-        } else {
+        } else {   // (a brush: three planes round the shoot -- two crossed went edge-on and the shoot vanished)
             const double rr = (rnd() - 0.5) * 0.4;
-            plane(pi, a, axis, len, side * std::cos(rr) + up * std::sin(rr));
-            plane(pick(kind), a, axis, len, up * std::cos(rr) - side * std::sin(rr));
+            for (int k = 0; k < 3; ++k) {
+                const double a2 = rr + k * PI / 3.0;
+                plane(k == 0 ? pi : pick(kind), a, axis, len, side * std::cos(a2) + up * std::sin(a2));
+            }
         }
         ++laid;
     };

@@ -81,6 +81,7 @@ struct CardViewExtras {
     const TextureData* foliageNormal = nullptr;
     double depthShade = 0.0;
     bool trueNormals = false;   // the normal map in the card's frame as it is, no fold (a sprite seen from its face)
+    int alphaGrow = 0;          // the cut-out widened this many pixels (thin needles: they thin away further down the mips)
 };
 void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
                     double y0, double y1, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,

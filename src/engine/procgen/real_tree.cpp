@@ -864,6 +864,25 @@ void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const Tex
             }
             d[3] = static_cast<uint8_t>(255 * c / (S * S));
         }
+    for (int pass = 0; ex && pass < ex->alphaGrow; ++pass) {   // (a thin part widened: a neighbour's colour, most of its cover)
+        std::vector<uint8_t> prev = img;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                uint8_t* d = &img[(static_cast<std::size_t>(y) * w + x) * 4];
+                if (d[3] >= 128) continue;
+                int best = -1, bestA = 0;
+                const int nb[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                for (const auto& o : nb) {
+                    const int xx = x + o[0], yy = y + o[1];
+                    if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                    const int j = (yy * w + xx) * 4;
+                    if (prev[static_cast<std::size_t>(j) + 3] > bestA) { bestA = prev[static_cast<std::size_t>(j) + 3]; best = j; }
+                }
+                if (bestA < 128) continue;
+                for (int c = 0; c < 3; ++c) d[c] = d[3] ? static_cast<uint8_t>((d[c] + prev[static_cast<std::size_t>(best) + c]) / 2) : prev[static_cast<std::size_t>(best) + c];
+                d[3] = static_cast<uint8_t>(std::max<int>(d[3], 200));
+            }
+    }
     dilateRGB(img, w, h, w * 4, 6);
     for (std::size_t i = 3; i < img.size(); i += 4) if (img[i] == 1) img[i] = 0;
     for (int y = 0; y < h; ++y) std::memcpy(out + static_cast<std::size_t>(y) * stride, &img[static_cast<std::size_t>(y) * w * 4], static_cast<std::size_t>(w) * 4);

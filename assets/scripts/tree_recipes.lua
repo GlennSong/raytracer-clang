@@ -211,9 +211,9 @@ tree_recipes = {
     },
     -- NEEDLES (Glenn's spruce sprig: a bottlebrush -- short stiff needles all round the twig, swept forward): every
     -- twig's needles and its side shoots in a fishbone in the branch's plane, this year's growth lighter at the ends
-    needles = { kind = "brush", length = 0.025, width = 0.0012, density = 9, forward = 55,
+    needles = { kind = "brush", length = 0.025, width = 0.0019, density = 14, forward = 55,
                 shoot_length = 0.24, side_shoots = 6, side_angle = 55, limb_radius = 0.035,
-                color = { {0.06, 0.15, 0.08}, {0.09, 0.19, 0.10} }, tip_color = {0.20, 0.34, 0.16},
+                color = { {0.08, 0.17, 0.12}, {0.12, 0.22, 0.16} }, tip_color = {0.22, 0.36, 0.20},
                 twig_color = {0.30, 0.19, 0.11} },
     branch_cards = { sprig = 1.6 },
   },
