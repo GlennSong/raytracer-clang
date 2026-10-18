@@ -39,7 +39,9 @@ struct BranchCardSet {
     struct Picture {
         std::vector<View> views;
         float length = 0, halfWidth = 0;        // the sprig it shows (TreeMesh::Sprig)
+        int kind = -1;                          // a TWIG SEGMENT's: 0 leafy, 1 leafy Y, 2 bare, 3 bare Y (-1 a sprig)
     };
+    float twigLength = 0;                       // the twig segments' own length (m): a card scales from it
     std::vector<Picture> pictures;
     double colourScale = 3.0;
     bool empty() const { return pictures.empty(); }
@@ -52,6 +54,18 @@ BranchCardSet bakeBranchCards(const TreeMesh& donor, const LeafCardAtlas& leaves
 // Every sprig of `tree` (grown with sprigSize, not a donor) a card from `set`, into tree.leaves (foliage 5: one
 // winding, drawn two-sided). Returns the cards laid.
 int wearBranchCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec& spec, uint32_t seed);
+
+// TWIG SEGMENTS (Glenn, 2026-10-18, of the sprig pictures: "Those look like small trees ... It needs to be a branch
+// without leaves and with leaves or maybe a Y branch without leaves and with leaves ... smaller segments that can then
+// be planted along a bigger trunk to fill out"): for a species with near leaves (a leaf kit), the cards are not
+// pictures of sprigs but of TWIG SEGMENTS, `twigLength` long, grown from the species' own leaf and bark -- a straight
+// twig and a Y twig, each leafy and bare, `variants` of each -- drawn from above (the leaves face the sky).
+BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants, uint32_t seed);
+// ...laid along the tree's fine branching (TreeMesh::twigs: a segment along every internode a sprig stood for, leafy
+// where the tree carries leaves, bare inside, a Y now and then), and leafy segments sprouting along its thin modelled
+// limbs (under `fillRadius` m), every `fillSpacing` m -- each segment two planes in a shallow V about its axis.
+int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec& spec, double fillRadius, double fillSpacing,
+                  uint32_t seed);
 
 }  // namespace engine
 

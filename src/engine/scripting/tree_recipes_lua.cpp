@@ -392,6 +392,10 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             bc.woodEdge = numField(L, ct, "wood_edge", bc.woodEdge);
             bc.ringAngle = numField(L, ct, "ring_angle", bc.ringAngle);
             bc.pictures = std::clamp(static_cast<int>(numField(L, ct, "pictures", bc.pictures)), 1, 16);
+            bc.twigs = numField(L, ct, "twigs", bc.twigs ? 1.0 : 0.0) != 0.0;
+            bc.variants = std::clamp(static_cast<int>(numField(L, ct, "variants", bc.variants)), 1, 6);
+            bc.fillRadius = numField(L, ct, "fill_radius", bc.fillRadius);
+            bc.fillSpacing = numField(L, ct, "fill_spacing", bc.fillSpacing);
             bc.views = std::clamp(static_cast<int>(numField(L, ct, "views", bc.views)), 1, 4);
             bc.cell = std::clamp(static_cast<int>(numField(L, ct, "cell", bc.cell)), 64, 512);
             bc.fold = numField(L, ct, "fold", bc.fold);

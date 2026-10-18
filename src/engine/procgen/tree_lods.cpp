@@ -47,7 +47,10 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
         const double foliage = r.leafKit.set ? 2.0 : nearKit ? 1.0 : 0.0;
         BranchCardSet local;
         BranchCardSet& set = cardCache ? *cardCache : local;
-        if (set.empty()) {
+        // (a species with near leaves wears TWIG SEGMENTS along its fine branching -- baked below from its hero's
+        // internodes; the others pictures of their sprigs, baked from a donor)
+        const bool twigs = r.leafKit.set && bc.twigs;
+        if (set.empty() && !twigs) {
             std::map<std::string, double> o = overrides;
             o["foliage"] = foliage;
             o["sprigSize"] = bc.sprig;
@@ -55,7 +58,7 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
             const TreeMesh donor = growRecipeTree(r, seed, o);
             set = bakeBranchCards(donor, recipeLeafAtlas(r, donor), bc);
         }
-        if (!set.empty()) {
+        if (!set.empty() || twigs) {
             // each level: its wood's coarseness (sides apart, degrees a ring), joints, and the range it draws over
             // (the trunk zone, a recipe's: whole at the hero, a third of its triangles on a coarser cell at the mid,
             // none past -- tubes on the same limbs)
@@ -79,7 +82,18 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 if (woodMin > 0.0 && !o.count("woodMinRadius")) o["woodMinRadius"] = woodMin;
                 RecipeTreeLevel L;
                 L.tree = growRecipeTree(r, seed, o);
-                wearBranchCards(L.tree, set, bc, seed ^ 0x9e3779b9u);
+                if (twigs) {
+                    if (set.empty()) {   // (the segments as long as this tree's fine internodes, by their median)
+                        std::vector<double> lens;
+                        for (const TreeMesh::Twig& t : L.tree.twigs) lens.push_back((t.b - t.a).length());
+                        std::sort(lens.begin(), lens.end());
+                        const double med = lens.empty() ? 0.3 : lens[lens.size() / 2];
+                        set = bakeTwigCards(r, std::clamp(med * 1.15, 0.15, 0.6), bc.variants, nameHash(r.name));
+                    }
+                    wearTwigCards(L.tree, set, bc, bc.fillRadius, bc.fillSpacing, seed ^ 0x9e3779b9u);
+                } else {
+                    wearBranchCards(L.tree, set, bc, seed ^ 0x9e3779b9u);
+                }
                 L.atlas = set.atlas;
                 return L;
             };

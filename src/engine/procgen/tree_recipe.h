@@ -82,6 +82,11 @@ struct BranchCardSpec {
     int cell = 256;                  // a cell's side (px)
     double fold = 25.0;              // each half of a card lifts this many degrees off flat about its spine
     double bend = 0.55;              // its normals bent this far toward out of the crown (the crown shades as a volume)
+    // TWIG SEGMENTS (a species with near leaves): segments along the fine branching, not sprig pictures
+    bool twigs = true;
+    int variants = 2;                // of each segment (leafy, leafy Y, bare, bare Y)
+    double fillRadius = 0.025;       // leafy segments sprout along the modelled limbs thinner than this (m)...
+    double fillSpacing = 0.35;       // ...about this far apart (0: none)
 };
 
 struct TreeRecipe {

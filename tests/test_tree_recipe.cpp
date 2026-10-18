@@ -893,7 +893,14 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
                       std::string(dir) + "/hero_" + name + ".png", 2.2);
         CHECK(hero.foliage == 5);
         CHECK(!hero.sprigs.empty());
-        CHECK(cards == hero.sprigs.size() * 4 * static_cast<std::size_t>(r->branchCards.views));
+        const bool twigCards = r->leafKit.set && r->branchCards.twigs;
+        if (twigCards) {   // (a twig segment along every fine internode -- two planes each -- and the fill besides)
+            CHECK(!hero.twigs.empty());
+            CHECK(cards >= hero.twigs.size() * 4);
+            for (const BranchCardSet::Picture& pic : cache.pictures) CHECK(pic.kind >= 0 && pic.kind < 4);
+        } else {
+            CHECK(cards == hero.sprigs.size() * 4 * static_cast<std::size_t>(r->branchCards.views));
+        }
         CHECK(levels[1].tree.branches.indices.size() < hero.branches.indices.size());
         CHECK(levels[1].atlas.albedo.width == cache.atlas.albedo.width);
         // every picture drawn
@@ -905,12 +912,25 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
             std::size_t on = 0, all = 0;
             for (int y = y0; y < y1; ++y)
                 for (int x = x0; x < x1; ++x, ++all) on += a.pixels[(static_cast<std::size_t>(y) * a.width + x) * 4 + 3] > 127;
-            CHECK(on * 20 >= all);
-            if (on * 20 < all) std::printf("    [cards] %s: a picture %.1f%% drawn\n", name.c_str(), 100.0 * on / all);
+            // (a bare twig is a thin line in its cell: a fortieth is drawn)
+            CHECK(on * (pic.kind >= 2 ? 60 : 20) >= all);
+            if (on * (pic.kind >= 2 ? 60 : 20) < all) std::printf("    [cards] %s: a picture %.1f%% drawn\n", name.c_str(), 100.0 * on / all);
           }
-        // every card hangs on the tree: its base (the first vertex: x0 at the sprig's base) beside a limb
+        // every card hangs on the tree: its base (the first vertex: x0 at the sprig's base) beside a limb -- or, twig
+        // segments, every card's corners within a segment's reach of the tree's limbs
         int off = 0;
-        for (std::size_t c = 0; c < hero.sprigs.size(); ++c) {
+        if (twigCards)
+            for (std::size_t v = 0; v < hero.leaves.vertices.size(); v += 4) {
+                const Vec3 p = hero.leaves.vertices[v].position;
+                Real best = 1e9;
+                for (const TreeMesh::Limb& l : hero.limbs) {
+                    const Vec3 ab = l.b - l.a;
+                    const Real t = std::clamp(dot(p - l.a, ab) / std::max(Real(1e-12), dot(ab, ab)), Real(0), Real(1));
+                    best = std::min(best, (p - (l.a + ab * t)).length());
+                }
+                off += best > 2.0 * cache.twigLength + 0.1;
+            }
+        for (std::size_t c = 0; c < (twigCards ? 0 : hero.sprigs.size()); ++c) {
             const Vec3 b = hero.sprigs[c].base;
             Real best = 1e9;
             for (const TreeMesh::Limb& l : hero.limbs) {
@@ -949,7 +969,7 @@ TEST_CASE(a_trees_trunk_zone_is_one_closed_surface) {
         const TreeRecipe* r = book.find(name);
         CHECK(r != nullptr);
         if (!r) continue;
-        std::map<std::string, double> set{{"foliage", 2.0}, {"sprigSize", 0.8}, {"woodEdge", 0.05}, {"ringAngle", 12.0},
+        std::map<std::string, double> set{{"foliage", 2.0}, {"sprigSize", 0.8}, {"woodEdge", 0.06}, {"ringAngle", 12.0},
                                           {"trunkZone", 0.10}, {"trunkZoneTris", 2800.0}};
         for (const auto& [k, v] : knobsFromEnv()) set[k] = v;
         const auto t0 = std::chrono::steady_clock::now();

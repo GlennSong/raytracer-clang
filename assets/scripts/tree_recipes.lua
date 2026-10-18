@@ -227,7 +227,7 @@ tree_recipes = {
     },
     vars = { p0 = {32, 44}, roll = {80, 110}, pitch = {35, 50}, side = {0.76, 0.84}, lead = {0.80, 0.86}, up = {4, 10} },
     params = {
-      trunkZone = 0.07, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
+      trunkZone = 0.07, trunkZoneTris = 1600,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.18, 0.28}, light = {0.15, 0.25}, crookChance = {0.10, 0.20}, crookAngle = {12, 22},
       meander = {0.08, 0.12}, lean = {0, 5}, angleJitter = {8, 12},
@@ -259,7 +259,7 @@ tree_recipes = {
                  color = {1.0, 0.56, 0.70}, eye_color = {0.80, 0.16, 0.36} },
       stem_color = {0.62, 0.40, 0.42}, stem_width = 0.006, cup = 0.4,
     },
-    branch_cards = { sprig = 1.0 },
+    branch_cards = { sprig = 1.0, wood_edge = 0.065 },
   },
 
   -- JAPANESE MAPLE (Acer palmatum): stems from low down, branches in OPPOSITE pairs (each pair turned 90 deg from
@@ -752,7 +752,7 @@ tree_recipes = {
       leaf = { shape = "serrate", length = 0.16, width = 0.12, teeth = 9 },
       stem_width = 0.008, cup = 0.45,
     },
-    branch_cards = { sprig = 0.8 },
+    branch_cards = { sprig = 0.8, wood_edge = 0.065 },
   },
 
   -- MAGNOLIA (the park's lakeside tree): a short trunk branching low into a dense oval crown of big glossy dark

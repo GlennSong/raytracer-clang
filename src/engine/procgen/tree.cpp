@@ -324,7 +324,7 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
     std::vector<double> us = spline.uniformArcLengthParams(rings);
     if (g && g->ringAngle > 0.0f) {
         // RINGS BY NEED (TreeParams::ringAngle): from fine samples along the curve, a ring where the limb has turned by
-        // ringAngle since the last, gone ringSpacing of its radii, or thinned by a quarter -- a straight run of limb is
+        // ringAngle since the last, gone ringSpacing of its radii, or thinned by two fifths -- a straight run of limb is
         // one long band, a bend as many as it takes. (Near the start of a welded limb, its collar's flare: every
         // 0.7 radius for two radii -- a slanting limb's first band from its contact on the parent runs long.)
         const std::vector<double> fine = spline.uniformArcLengthParams(std::max(2, spline.segments() * 8 + 1));
@@ -342,7 +342,7 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
             const Vec3 t = normalize(spline.derivative(fine[i]));
             const float r = lerpAt(path.radius, fine[i]);
             const double gap = sock && s < 2.0 * r0w ? 0.7 * r0w : static_cast<double>(g->ringSpacing) * std::max(r, 0.5f * rLast);
-            if (dot(t, tLast) < cosTurn || s - sLast >= gap || std::fabs(r - rLast) > 0.25f * rLast) {
+            if (dot(t, tLast) < cosTurn || s - sLast >= gap || std::fabs(r - rLast) > std::max(0.4f * rLast, 0.008f)) {
                 keep.push_back(fine[i]);
                 tLast = t; sLast = s; rLast = r;
             }
@@ -1289,6 +1289,18 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         }
     }
     const bool donor = params.sprigDonor != 0 && !out.sprigs.empty();
+    if (!out.sprigs.empty() && !donor)   // (the fine branching the sprigs stand for: a twig card along each internode)
+        for (size_t n = 1; n < nodes.size(); ++n) {
+            const int par = nodes[n].parent;
+            if (par < 0 || sprigOf[n] < 0) continue;
+            TreeMesh::Twig tw;
+            tw.a = nodes[static_cast<std::size_t>(par)].pos;
+            tw.b = nodes[n].pos;
+            tw.r = nodes[n].radius;
+            tw.leafy = nodes[n].isTip || (params.leafThickness > 0.0f && nodes[n].radius <= params.leafThickness);
+            tw.forks = static_cast<int>(children[n].size());
+            out.twigs.push_back(tw);
+        }
     // (a donor's every vertex is owned: -1 the tree's wood and leaves, else its sprig's)
     std::vector<int> barkOwner, leafOwner;
     auto own = [&](int sprig) {
@@ -1510,9 +1522,17 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 path.radius.back() = std::min(0.8f * path.radius.back(), 0.85f * nodes[first].radius);
         }
         for (int cur = first; cur != -1; cur = cont[cur]) {
-            if (sprig < 0 && sprigOf[cur] >= 0) {   // the limb runs on into a sprig: the wood ends here, in a point
+            if (sprig < 0 && sprigOf[cur] >= 0) {   // the limb runs on into a sprig: the wood ends here
                 if (donor) work.push_back({lastNode >= 0 ? lastNode : anchor, cur});
                 intoSprig = true;
+                // (with twig cards on the sprig, the wood TAPERS on along its first internode to a twig's girth -- the
+                // card's drawn twig takes it from there; a cone or a sawn end at the node stood out as a horn or stump)
+                if (!donor && params.foliage == 2) {   // (on to the sprig's first node, down to a twig's girth)
+                    const Vec3 from = path.points.back();
+                    path.points.push_back(nodes[cur].pos);
+                    path.radius.push_back(std::max(params.tipRadius * params.radiusScale * 1.2f, 0.3f * path.radius.back()));
+                    path.dist.push_back(path.dist.back() + static_cast<float>((nodes[cur].pos - from).length()));
+                }
                 break;
             }
             if (isJoint[cur]) {   // ending short of the joint by its cut-back
@@ -1554,7 +1574,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         }
         // A TIP ends in a point, not a sawn-off end (near foliage only -- a card hides it)
         const bool pointTip = (params.foliage != 0 && endsAt < 0 && lastNode >= 0 && children[lastNode].empty()) ||
-                              (intoSprig && path.points.size() >= 2);
+                              (intoSprig && path.points.size() >= 2 && params.foliage != 2);
         Vec3 color = params.barkColor * vary(rng);
         Socket sock;
         const Socket* sp = nullptr;

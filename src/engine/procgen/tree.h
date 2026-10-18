@@ -183,6 +183,12 @@ struct TreeMesh {
         RenderMesh bark, leaves;
     };
     std::vector<Sprig> sprigs;
+    // THE FINE BRANCHING the sprigs stand for (Glenn, 2026-10-18, of baked mini-tree cards: "it needs to be a branch
+    // without leaves and with leaves or maybe a Y branch ... smaller segments planted along"): every internode inside a
+    // sprig, parent end to node, its radius and whether it carries leaves (a tip or thin enough: leafThickness) --
+    // branch_cards.h lays a twig segment card along each
+    struct Twig { Vec3 a, b; float r = 0; bool leafy = false; int forks = 0; };
+    std::vector<Twig> twigs;
     int foliage = 0;                      // what `leaves` is: 0 crossed cards (both windings), 1 sprays, 2 leaves, 3
                                           //   blades or 4 fronds (one winding: draw it two-sided) -- TreeParams::foliage
     std::vector<Vec3>     collisionVertices;
