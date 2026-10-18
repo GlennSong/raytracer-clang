@@ -549,11 +549,16 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
             }
         }
     if (spots.empty() || total <= 0.0) return 0;
-    // (as the leaf kit would hang them: per twig length; fewer and larger to the budget, the area kept)
-    const double natural = total / std::max(0.02, 0.45 * lk.size);
-    const double keep = std::min(1.0, leaves / std::max(1.0, natural));
-    const double grow = std::min(2.2, 1.0 / std::sqrt(std::max(keep, 1e-3)));
-    const double spacing = 0.45 * lk.size / keep;
+    // (the WHOLE tree's leaves as the leaf kit would hang them -- every leafy twig and its shoots -- and as many as the
+    // budget gives laid over the wood there is, each larger by the area they stand for: a crown whose budget ran
+    // out of wood keeps its leaf area -- the mid's cards have it all -- instead of thinning as one walks up to it)
+    double fullLength = 0.0;
+    for (const TreeMesh::Twig& t : tree.twigs)
+        if (t.leafy) fullLength += (t.b - t.a).length() + lk.shoots * lk.shootLength;
+    const double natural = std::max(total, fullLength) / std::max(0.02, 0.45 * lk.size);
+    const double count = std::min(static_cast<double>(leaves), natural);
+    const double grow = std::clamp(std::sqrt(natural / std::max(1.0, count)), 1.0, 2.5);
+    const double spacing = std::max(0.15 * lk.size, total / std::max(1.0, count));
     // (colour: the palette, in patches over the crown, or the leaf colour range)
     auto leafColour = [&](const Vec3& at) -> Vec3 {
         if (!r.leafPalettes.empty()) {
