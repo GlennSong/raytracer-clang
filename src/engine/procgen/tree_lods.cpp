@@ -63,7 +63,7 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
             // (the trunk zone, a recipe's: whole at the hero, a third of its triangles on a coarser cell at the mid,
             // none past -- tubes on the same limbs)
             const TreeParams drawn = drawTreeParams(r, seed);
-            auto level = [&](double edge, double angle, bool joints, bool roots, double woodMin, double zone = 0.0) {
+            auto level = [&](double edge, double angle, bool joints, bool roots, double woodMin, double zone = 0.0, bool near = false) {
                 std::map<std::string, double> o = overrides;
                 if (drawn.trunkZone > 0.0f && !o.count("trunkZone")) {
                     if (zone <= 0.0) o["trunkZone"] = 0.0;
@@ -82,6 +82,11 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 if (woodMin > 0.0 && !o.count("woodMinRadius")) o["woodMinRadius"] = woodMin;
                 RecipeTreeLevel L;
                 L.tree = growRecipeTree(r, seed, o);
+                if (twigs && near) {   // (the hero: twigs of bark and leaves one by one)
+                    wearNearLeaves(L.tree, r, bc.nearLeaves, bc.nearTwigTris, bc.fillRadius, bc.fillSpacing, seed ^ 0x51ed27u);
+                    L.atlas = recipeLeafAtlas(r, L.tree);
+                    return L;
+                }
                 if (twigs) {
                     if (set.empty()) {   // (the segments as long as this tree's fine internodes, by their median)
                         std::vector<double> lens;
@@ -105,7 +110,7 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 next.minDistance = std::max(0.0, b0 - 4.0);
                 out.push_back(std::move(next));
             };
-            out.push_back(level(bc.woodEdge, bc.ringAngle, true, true, 0.0, 1.0));                  // hero
+            out.push_back(level(bc.woodEdge, bc.ringAngle, true, true, 0.0, 1.0, true));            // hero
             if (bands.hero1 > bands.hero0) {
                 RecipeTreeLevel M = level(bc.woodEdge * 1.6, bc.ringAngle * 1.5, true, true, 0.0, 0.3);   // mid
                 fadeInto(M, bands.hero0, bands.hero1);

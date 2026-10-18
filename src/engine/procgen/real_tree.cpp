@@ -743,7 +743,8 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
 }
 
 void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
-                    double y0, double y1, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut) {
+                    double y0, double y1, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut,
+                    const CardViewExtras* ex) {
     const int S = 2, W = w * S, H = h * S;   // supersampled
     std::vector<float> depth(static_cast<std::size_t>(W) * H, -1e30f);
     std::vector<float> rgb(static_cast<std::size_t>(W) * H * 3, 0.0f);
@@ -751,7 +752,11 @@ void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const Tex
     std::vector<float> nrm(normalOut ? static_cast<std::size_t>(W) * H * 3 : 0, 0.0f);
     // the tree's normal in the card's tangent frame (see real_tree.h): side card T = +x, B = +y, N = +z;
     // top card T = +x, N = +y, B = N x T = -z
-    auto toCard = [top](const Vec3& n) {
+    auto toCard = [top, ex](const Vec3& n) {
+        if (ex && ex->trueNormals) {   // (a sprite is seen from its face: a part facing away is lit as its front)
+            const Vec3 c = top ? Vec3(n.x, -n.z, n.y) : n;
+            return Vec3(c.x, c.y, std::fabs(c.z));
+        }
         const double tx = n.x, ty = top ? -n.z : n.y, along = top ? n.y : n.z;
         // tilted at most ~50 deg off the card: steeper, the one-pixel rims of a far crown catch the sun
         // at full strength and read as glitter, not volume
@@ -763,6 +768,17 @@ void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const Tex
         if (!top) { iy = (1.0 - (p.y - y0) / (y1 - y0)) * H; dz = p.z; }
         else { iy = (p.z - y0) / (y1 - y0) * H; dz = p.y; }
     };
+    // a wrapping bilinear-free lookup of any RGBA map at (u, v)
+    auto texel = [](const TextureData& t, double u, double v) {
+        const double fu = u - std::floor(u), fv = v - std::floor(v);
+        const int x = std::clamp(static_cast<int>(fu * t.width), 0, t.width - 1), y = std::clamp(static_cast<int>(fv * t.height), 0, t.height - 1);
+        const uint8_t* p = &t.pixels[(static_cast<std::size_t>(y) * t.width + x) * static_cast<std::size_t>(std::max(1, t.channels))];
+        return t.channels >= 3 ? Vec3(p[0], p[1], p[2]) / 255.0 : Vec3(p[0], p[0], p[0]) / 255.0;
+    };
+    double zLo = 1e30, zHi = -1e30;   // (the picture's depth range: the depth shade)
+    if (ex && ex->depthShade > 0.0)
+        for (const RenderMesh* m : {&bark, &foliage})
+            for (const Vertex& v : m->vertices) { const double z = top ? v.position.y : v.position.z; zLo = std::min(zLo, z); zHi = std::max(zHi, z); }
     auto sampleFol = [&](double u, double v, float& a, Vec3& c) {
         const int x = std::clamp(static_cast<int>(u * fol.width), 0, fol.width - 1), y = std::clamp(static_cast<int>(v * fol.height), 0, fol.height - 1);
         const uint8_t* p = &fol.pixels[(static_cast<std::size_t>(y) * fol.width + x) * 4];
@@ -789,18 +805,39 @@ void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const Tex
                     const std::size_t i = static_cast<std::size_t>(py) * W + px;
                     if (dz <= depth[i]) continue;
                     Vec3 col = v[0]->color * w0 + v[1]->color * w1 + v[2]->color * w2;
+                    const double u = w0 * v[0]->u + w1 * v[1]->u + w2 * v[2]->u, vv = w0 * v[0]->v + w1 * v[1]->v + w2 * v[2]->v;
                     if (leaves) {
-                        const double u = w0 * v[0]->u + w1 * v[1]->u + w2 * v[2]->u, vv = w0 * v[0]->v + w1 * v[1]->v + w2 * v[2]->v;
                         float a;
                         Vec3 tc;
                         sampleFol(u, vv, a, tc);
                         if (a < 0.5f) continue;
                         col = col * tc;
+                    } else if (ex && ex->barkAlbedo && !ex->barkAlbedo->pixels.empty()) {
+                        col = col * texel(*ex->barkAlbedo, u, vv);
                     }
+                    if (ex && ex->depthShade > 0.0 && zHi > zLo)
+                        col = col * (1.0 - ex->depthShade * (1.0 - (dz - zLo) / (zHi - zLo)));
                     depth[i] = static_cast<float>(dz);
                     cov[i] = 1;
                     if (normalOut) {
-                        const Vec3 cn = toCard(normalize(v[0]->normal * w0 + v[1]->normal * w1 + v[2]->normal * w2));
+                        Vec3 nn = normalize(v[0]->normal * w0 + v[1]->normal * w1 + v[2]->normal * w2);
+                        // (the surface's own relief: the bark's map round and along the limb, the leaf's across and along it)
+                        const TextureData* nm = !ex ? nullptr : leaves ? ex->foliageNormal : ex->barkNormal;
+                        if (nm && !nm->pixels.empty()) {
+                            Vec3 tg = v[0]->tangent * w0 + v[1]->tangent * w1 + v[2]->tangent * w2;
+                            tg = tg - nn * dot(tg, nn);
+                            if (tg.length() > 1e-9) {
+                                tg = normalize(tg);
+                                // (bark: x round the limb, y along it -- the tangent is along it; a leaf: x across, y along --
+                                // the tangent is across)
+                                const Vec3 t2 = cross(nn, tg);
+                                const Vec3 m = texel(*nm, u, vv) * 2.0 - Vec3(1, 1, 1);
+                                const Vec3 X = leaves ? tg : t2, Y = leaves ? t2 * -1.0 : tg;
+                                const Vec3 pn = X * m.x + Y * m.y + nn * m.z;
+                                if (pn.length() > 1e-9) nn = normalize(pn);
+                            }
+                        }
+                        const Vec3 cn = toCard(nn);
                         nrm[i * 3] = static_cast<float>(cn.x); nrm[i * 3 + 1] = static_cast<float>(cn.y); nrm[i * 3 + 2] = static_cast<float>(cn.z);
                     }
                     rgb[i * 3] = static_cast<float>(col.x); rgb[i * 3 + 1] = static_cast<float>(col.y); rgb[i * 3 + 2] = static_cast<float>(col.z);

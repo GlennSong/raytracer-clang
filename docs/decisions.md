@@ -10498,3 +10498,26 @@ and for the trunk "a full on interconnected trunk structure" -- the implicit sur
   at a hard notch); a collar's first rings every 0.7 radius. Every card species has a trunk zone (0.06-0.10 m; the
   pine's budget 2000 to keep its wood under 8000). The zone's field is grid-accelerated (pieces per 25 cm cell):
   polygonizing went 2.0 s -> 0.3-0.5 s, a hero zone ~0.6-0.8 s.
+
+## ADR-0184 — Three foliage tiers: leaves one by one near, twig segment cards mid, impostors far
+
+Glenn, 2026-10-18, of the sprig-picture cards ("Those look like small trees ... It needs to be a branch without leaves
+and with leaves or maybe a Y branch ... smaller segments that can then be planted along") and then of the twig sheets
+("The Y shaped branches aren't connected together ... very flat colored ... some kind of normal map to give them
+dimension ... For up close you'd want to make individual leaves and branches ... the twigs look like they're solid like
+the 3D trunks ... For a mid-range tree I think we can do what your current spritesheet does ... in the distance ...
+many views").
+
+- **Near** (the hero; `wearNearLeaves`): along the fine branching the sprigs stood for (`TreeMesh::twigs`), each twig a
+  three-sided bark tube in the trunk's own mesh and material (it lights and shadows as the trunk does -- a twig sprite
+  in the leaf material would glow with the leaves' transmission), each leafy twig putting out the leaf kit's shoots,
+  and the leaves ONE BY ONE along twigs and shoots (folded blades of the species' normal-mapped leaf, the foliage
+  material's sun-through), about `near_leaves` (6000) over the crown, larger as they are fewer, faced out of the crown
+  and darker inside it; cupped blossoms at twig ends (~800). Twig bark capped at `near_twig_tris` (9000). Fully
+  modelled instead (every twig a tube, every leaf the kit's) measured 40-120k bark and 80-230k leaf triangles.
+- **Mid** (`bakeTwigCards` / `wearTwigCards`): leafy and bare, straight and Y twig segments -- the Y's side twig grows
+  FROM the main twig; the twigs wear the species' bark maps (u mirrored round them), the leaves their normal map, the
+  picture's back shaded down; a few blossoms only (packed, they read flat). `renderCardView` takes `CardViewExtras`
+  for it; sprites seen from their face fold no normal behind them.
+- **Far**: the impostors as they are; many-view impostors next.
+- Numbers: a near hero ~45-50k leaf + ~15k wood triangles; the recipe forest 9.3-11.6 ms GPU (was 8.3-9.5).

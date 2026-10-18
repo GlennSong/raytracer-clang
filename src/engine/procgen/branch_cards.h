@@ -67,6 +67,17 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
 int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec& spec, double fillRadius, double fillSpacing,
                   uint32_t seed);
 
+// THE NEAR FOLIAGE (Glenn, 2026-10-18: "For up close you'd want to make individual leaves and branches because they
+// will have the most scrutiny ... make sure the twigs look like they're solid like the 3D trunks/branches. The leaves
+// should have some kind of subsurface effect"): along the tree's fine branching (TreeMesh::twigs) a THIN TUBE of bark
+// for every twig (three sides; the thinnest left bare of wood past `twigTris` triangles) in tree.branches -- the trunk's
+// own material, lit and shadowed as it is -- and its LEAVES one by one, each a folded blade wearing the species'
+// leaf (normal-mapped; the foliage material lets the sun through), about `leaves` of them over the crown (each
+// larger as they are fewer, the crown's leaf area kept), turned to the light, darker toward the crown's middle; a
+// blossoming species' cupped blossoms at the twig ends. tree.foliage 2 (foliageElementAtlas).
+int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris, double fillRadius, double fillSpacing,
+                   uint32_t seed);
+
 }  // namespace engine
 
 #endif

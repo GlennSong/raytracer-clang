@@ -87,6 +87,8 @@ struct BranchCardSpec {
     int variants = 2;                // of each segment (leafy, leafy Y, bare, bare Y)
     double fillRadius = 0.025;       // leafy segments sprout along the modelled limbs thinner than this (m)...
     double fillSpacing = 0.35;       // ...about this far apart (0: none)
+    int nearLeaves = 6000;           // the hero's leaves one by one (branch_cards.h wearNearLeaves)...
+    int nearTwigTris = 9000;         // ...and its fine twigs' bark at most (triangles)
 };
 
 struct TreeRecipe {

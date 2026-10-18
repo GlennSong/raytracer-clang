@@ -822,7 +822,8 @@ TEST_CASE(a_recipe_trees_levels_get_lighter_and_keep_their_leaves) {
                     tris[1], tris[2], a0, area(L[1].tree.leaves), a2);
         if (r->branchCards.set) {
             CHECK(tris[1] < tris[0]);
-            CHECK(L[0].tree.foliage == 5 && L[1].tree.foliage == 5 && L[2].tree.foliage == 5);
+            // (a species with near leaves: the hero's one by one, twig segment cards past it)
+            CHECK(L[0].tree.foliage == (r->leafKit.set && r->branchCards.twigs ? 2 : 5) && L[1].tree.foliage == 5 && L[2].tree.foliage == 5);
         } else {
             CHECK(tris[1] < tris[0] / 2);
             CHECK(L[1].tree.foliage == 2 && L[2].tree.foliage == 2);   // leaves, not cards
@@ -872,10 +873,18 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
         if (levels.size() < 2) continue;
         const TreeMesh& hero = levels[0].tree;
         const std::size_t bark = hero.branches.indices.size() / 3, cards = hero.leaves.indices.size() / 3;
+        {
+            std::size_t leafy = 0;
+            double len = 0;
+            for (const TreeMesh::Twig& t : hero.twigs) { leafy += t.leafy; len += (t.b - t.a).length(); }
+            std::printf("    [twigs] %-14s %zu twigs (%zu leafy), %.0f m\n", name.c_str(), hero.twigs.size(), leafy, len);
+        }
         std::printf("    [cards] %-14s hero bark %5zu tris (joints %4zu), %3zu sprigs -> %4zu card tris; mid bark %5zu; %zu pictures\n",
                     name.c_str(), bark, (hero.jointIndexEnd - hero.jointIndexStart) / 3, hero.sprigs.size(), cards,
                     levels[1].tree.branches.indices.size() / 3, cache.pictures.size());
-        CHECK(bark <= 8000);
+        // (a near hero: the trunk and limbs in 8000, its fine twigs' bark besides -- branch_cards.h wearNearLeaves)
+        const bool near = r->leafKit.set && r->branchCards.twigs;
+        CHECK(bark <= 8000 + (near ? static_cast<std::size_t>(r->branchCards.nearTwigTris) : 0));
         if (const char* dir = std::getenv("RT_CARD_ATLAS")) {   // the baked pictures, alpha over grey
             const TextureData& a = cache.atlas.albedo;
             Image img(a.width, a.height);
@@ -886,17 +895,36 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
                     img.setPixel(x, y, Vec3(px[0] / 255.0, px[1] / 255.0, px[2] / 255.0) * al + Vec3(0.6, 0.62, 0.66) * (1.0 - al));
                 }
             img.writePng(std::string(dir) + "/atlas_" + name + ".png");
+            // ...and LIT by its normal map from the upper left (what the shader makes of it)
+            const TextureData& nm = cache.atlas.normal;
+            const Vec3 L = normalize(Vec3(-0.5, 0.6, 0.65));
+            Image lit(a.width, a.height);
+            for (int y = 0; y < a.height; ++y)
+                for (int x = 0; x < a.width; ++x) {
+                    const uint8_t* px = &a.pixels[(static_cast<std::size_t>(y) * a.width + x) * 4];
+                    const uint8_t* nx = &nm.pixels[(static_cast<std::size_t>(y) * nm.width + x) * 4];
+                    const Vec3 n = normalize(Vec3(nx[0] / 127.5 - 1.0, nx[1] / 127.5 - 1.0, nx[2] / 127.5 - 1.0));
+                    const double al = px[3] / 255.0, sh = 0.3 + 0.9 * std::max(0.0, static_cast<double>(dot(n, L)));
+                    lit.setPixel(x, y, Vec3(px[0] / 255.0, px[1] / 255.0, px[2] / 255.0) * (sh * al) + Vec3(0.6, 0.62, 0.66) * (1.0 - al));
+                }
+            lit.writePng(std::string(dir) + "/lit_" + name + ".png");
         }
         if (const char* dir = std::getenv("RT_TREE_WIRE"))   // (the hero as the lab and the forest draw it)
             writeWire(hero, hero.zoneIndexEnd > hero.zoneIndexStart ? hero.zoneIndexStart : 0,
                       hero.zoneIndexEnd > hero.zoneIndexStart ? hero.zoneIndexEnd : hero.branches.indices.size(),
                       std::string(dir) + "/hero_" + name + ".png", 2.2);
-        CHECK(hero.foliage == 5);
         CHECK(!hero.sprigs.empty());
-        const bool twigCards = r->leafKit.set && r->branchCards.twigs;
+        const bool twigCards = near;
+        const TreeMesh& carded = near ? levels[1].tree : hero;   // (a near hero's cards are its mid's)
+        CHECK(carded.foliage == 5);
+        if (near) {   // the hero: its leaves one by one, within their budget
+            CHECK(hero.foliage == 2);
+            CHECK(cards >= 4 * 8 * static_cast<std::size_t>(r->branchCards.nearLeaves) / 10);
+            CHECK(cards <= 8 * static_cast<std::size_t>(r->branchCards.nearLeaves) + 30000);
+        }
         if (twigCards) {   // (a twig segment along every fine internode -- two planes each -- and the fill besides)
-            CHECK(!hero.twigs.empty());
-            CHECK(cards >= hero.twigs.size() * 4);
+            CHECK(!carded.twigs.empty());
+            CHECK(carded.leaves.indices.size() / 3 >= carded.twigs.size() * 4);
             for (const BranchCardSet::Picture& pic : cache.pictures) CHECK(pic.kind >= 0 && pic.kind < 4);
         } else {
             CHECK(cards == hero.sprigs.size() * 4 * static_cast<std::size_t>(r->branchCards.views));
@@ -920,10 +948,10 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
         // segments, every card's corners within a segment's reach of the tree's limbs
         int off = 0;
         if (twigCards)
-            for (std::size_t v = 0; v < hero.leaves.vertices.size(); v += 4) {
-                const Vec3 p = hero.leaves.vertices[v].position;
+            for (std::size_t v = 0; v < carded.leaves.vertices.size(); v += 4) {
+                const Vec3 p = carded.leaves.vertices[v].position;
                 Real best = 1e9;
-                for (const TreeMesh::Limb& l : hero.limbs) {
+                for (const TreeMesh::Limb& l : carded.limbs) {
                     const Vec3 ab = l.b - l.a;
                     const Real t = std::clamp(dot(p - l.a, ab) / std::max(Real(1e-12), dot(ab, ab)), Real(0), Real(1));
                     best = std::min(best, (p - (l.a + ab * t)).length());

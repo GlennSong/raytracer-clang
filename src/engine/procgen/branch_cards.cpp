@@ -2,6 +2,7 @@
 
 #include "../mesh_builder.h"
 #include "foliage_kit.h"   // addKitLeaf, addKitBlossom
+#include "material_recipes.h"   // barkTextures
 #include "leaf_card.h"     // foliageElementAtlas
 #include "real_tree.h"     // renderCardView
 
@@ -25,6 +26,20 @@ Frame frameOf(const TreeMesh::Sprig& sg, int k = 0, int views = 1) {
     const double a = PI * k / std::max(1, views);
     const Vec3 right = normalize(right0 * std::cos(a) + sg.normal * std::sin(a));
     return {sg.base, right, sg.axis, normalize(cross(right, sg.axis))};
+}
+
+// A small tube for a picture, its bark mapped: u round it MIRRORED (0 .. 1 .. 0: no seam where it wraps), v along it
+// (four tiles a metre), the tangent along it (as the bark's normal map wants)
+RenderMesh barkTube(const std::vector<Vec3>& pts, const std::vector<double>& radii, int sides, const std::vector<Vec3>& cols) {
+    RenderMesh m = MeshBuilder::tube(pts, radii, sides, cols);
+    std::vector<double> along(pts.size(), 0.0);
+    for (std::size_t i = 1; i < pts.size(); ++i) along[i] = along[i - 1] + (pts[i] - pts[i - 1]).length();
+    for (std::size_t j = 0; j < m.vertices.size(); ++j) {
+        const std::size_t ring = j / static_cast<std::size_t>(sides), k = j % static_cast<std::size_t>(sides);
+        m.vertices[j].u = static_cast<float>(1.0 - std::fabs(2.0 * k / sides - 1.0));
+        m.vertices[j].v = static_cast<float>(along[std::min(ring, along.size() - 1)] * 4.0);
+    }
+    return m;
 }
 
 RenderMesh inFrame(const RenderMesh& m, const Frame& f) {
@@ -197,6 +212,17 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
     const bool flowers = lk.blossomSize > 0.0;
     const LeafCardAtlas leafAtlas = foliageElementAtlas(r.card, flowers, seed ^ 0x7e11u);
     if (leafAtlas.albedo.pixels.empty()) return set;
+    // (the bark's own maps on the twigs, the leaves' normal map on them, and the back of the picture shaded down:
+    // Glenn -- "very flat colored ... some kind of normal map to give them dimension")
+    BarkKind barkKind;
+    BarkTextures barkMaps;
+    if (barkKindFromName(r.bark, barkKind)) barkMaps = barkTextures(barkKind, 1u, 256);
+    CardViewExtras extras;
+    extras.barkAlbedo = &barkMaps.albedo;
+    extras.barkNormal = &barkMaps.normal;
+    extras.foliageNormal = &leafAtlas.normal;
+    extras.depthShade = 0.35;
+    extras.trueNormals = true;
     const double L = std::max(0.08, twigLength);
     set.twigLength = static_cast<float>(L);
     const int nv = std::max(1, variants);
@@ -229,7 +255,7 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
     // a twig (a polyline from `base` along `dir`, bending a little) with leaves along it: alternate or paired,
     // spreading to the sides in the picture's plane, facing the viewer (+z) with a tilt of their own
     auto twig = [&](RenderMesh& wood, RenderMesh& leaves, const Vec3& base, const Vec3& dir0, double len, double r0,
-                    bool leafy) {
+                    bool leafy) -> std::vector<Vec3> {
         std::vector<Vec3> pts;
         std::vector<double> rad;
         std::vector<Vec3> cols;
@@ -243,8 +269,8 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
             d = normalize(d + side * bend);
             p = p + d * (len / 4.0);
         }
-        MeshBuilder::append(wood, MeshBuilder::tube(pts, rad, 5, cols));
-        if (!leafy) return;
+        MeshBuilder::append(wood, barkTube(pts, rad, 6, cols));
+        if (!leafy) return pts;
         const int n = std::max(4, static_cast<int>(std::lround(len / (0.32 * leafLen))));
         for (int j = 0; j < n; ++j) {
             const double t = 0.12 + 0.88 * (j + 0.5) / n;
@@ -265,14 +291,15 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
         // the end leaf, on along the twig
         addKitLeaf(leaves, pts.back(), normalize(pts.back() - pts[3]), Vec3(0, 0, 1), leafLen * 0.9, lk.fold, lk.curl, 2,
                    flowers ? 0 : static_cast<int>(rnd() * 4.0) % 4, leafColour());
-        if (flowers) {   // the blossom clusters along it (a sakura's umbels)
-            const int nc = std::max(2, lk.clusters + 1);
+        if (flowers) {   // the blossom clusters along it (a sakura's umbels) -- a few: a card packed with them reads flat
+            const int nc = std::max(1, lk.clusters);
             for (int c = 0; c < nc; ++c) {
                 const double t = 0.25 + 0.75 * (c + 0.5) / nc;
                 const int k = std::min(3, static_cast<int>(t * 4.0));
                 const Vec3 at = pts[k] + (pts[k + 1] - pts[k]) * (t * 4.0 - k);
-                for (int b = 0; b < std::max(3, lk.perCluster); ++b) {
-                    const double phi = 2.0 * PI * b / std::max(3, lk.perCluster) + rnd();
+                const int per = std::max(2, lk.perCluster - 2);
+                for (int b = 0; b < per; ++b) {
+                    const double phi = 2.0 * PI * b / per + rnd();
                     const Vec3 stalk = normalize(Vec3(std::cos(phi) * 0.8, std::sin(phi) * 0.8, 1.0));
                     const double sz = lk.blossomSize * (0.85 + 0.3 * rnd());
                     addKitBlossom(leaves, at + stalk * (0.9 * sz), stalk, sz, lk.cup, rnd() * 2.0 * PI, 2, 2 + static_cast<int>(rnd() * 2.0) % 2,
@@ -280,6 +307,7 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
                 }
             }
         }
+        return pts;
     };
     int cell = 0;
     for (int kind = 0; kind < 4; ++kind)
@@ -288,11 +316,17 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
             paletteNo = v;
             RenderMesh wood, leaves;
             const double r0 = std::max(0.004, 0.03 * L);
-            twig(wood, leaves, Vec3(0, 0, 0), Vec3((rnd() - 0.5) * 0.1, 1, 0), L, r0, leafy);
-            if (fork) {   // a side twig off it, a little past half way, to one side
-                const double sgn = rnd() < 0.5 ? -1.0 : 1.0, at = 0.35 + 0.2 * rnd();
-                const double a = (28.0 + 14.0 * rnd()) * PI / 180.0;
-                twig(wood, leaves, Vec3(0, L * at, 0), Vec3(sgn * std::sin(a), std::cos(a), 0), L * (0.55 + 0.15 * rnd()), r0 * 0.7, leafy);
+            const std::vector<Vec3> main = twig(wood, leaves, Vec3(0, 0, 0), Vec3((rnd() - 0.5) * 0.1, 1, 0), L, r0, leafy);
+            if (fork) {   // a side twig FROM the main one, a little under half way, off to one side of its own direction
+                const double sgn = rnd() < 0.5 ? -1.0 : 1.0, at = 0.3 + 0.15 * rnd();
+                const double x = at * (main.size() - 1);
+                const int k = std::min(static_cast<int>(main.size()) - 2, static_cast<int>(x));
+                const Vec3 from = main[k] + (main[k + 1] - main[k]) * (x - k);
+                const Vec3 ax = normalize(main[k + 1] - main[k]), side = normalize(cross(Vec3(0, 0, 1), ax));
+                const double a = (30.0 + 15.0 * rnd()) * PI / 180.0;
+                // (it starts inside the main twig, its radius under the main one's there)
+                twig(wood, leaves, from - ax * (0.3 * r0), normalize(ax * std::cos(a) + side * (sgn * std::sin(a))),
+                     L * (0.55 + 0.15 * rnd()), r0 * (1.0 - 0.6 * at) * 0.75, leafy);
             }
             double x0 = 1e9, x1 = -1e9, y1 = -1e9;
             for (const RenderMesh* m : {&wood, &leaves})
@@ -305,7 +339,7 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
             const int c = cell % cols, rr = cell / cols;
             const std::size_t off = (static_cast<std::size_t>(rr) * ch * W + static_cast<std::size_t>(c) * cw) * 4;
             renderCardView(wood, leaves, leafAtlas.albedo, false, -half, half, y0, y1, cw, ch, set.colourScale,
-                           set.atlas.albedo.pixels.data() + off, W * 4, set.atlas.normal.pixels.data() + off);
+                           set.atlas.albedo.pixels.data() + off, W * 4, set.atlas.normal.pixels.data() + off, &extras);
             BranchCardSet::Picture pic;
             BranchCardSet::View vw;
             vw.u0 = static_cast<float>(c) / cols; vw.u1 = static_cast<float>(c + 1) / cols;
@@ -408,6 +442,165 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
                 const double r = l.ra + (l.rb - l.ra) * (s / len);
                 const Vec3 at = l.a + ax * s + out * (0.8 * r);
                 lay(pick(rnd() < 0.4 ? 1 : 0), at, dir, set.twigLength * (0.7 + 0.5 * rnd()), (rnd() - 0.5) * 0.8);
+            }
+        }
+    }
+    return laid;
+}
+
+
+int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris, double fillRadius, double fillSpacing,
+                   uint32_t seed) {
+    const LeafKitSpec& lk = r.leafKit;
+    if (!lk.set || tree.twigs.empty()) return 0;
+    tree.foliage = 2;
+    uint32_t h = seed * 2654435761u + 11u;
+    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    const bool flowers = lk.blossomSize > 0.0;
+    // the crown's middle and reach
+    Vec3 mid(0, 0, 0);
+    for (const TreeMesh::Twig& t : tree.twigs) mid = mid + t.b;
+    mid = mid * (1.0 / tree.twigs.size());
+    double crownR = 0.5;
+    for (const TreeMesh::Twig& t : tree.twigs) crownR = std::max(crownR, (t.b - mid).length());
+    // THE TWIGS: bark tubes, thickest first, to the budget
+    std::vector<std::size_t> order(tree.twigs.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return tree.twigs[a].r > tree.twigs[b].r; });
+    RenderMesh& wood = tree.branches;
+    const bool data = wood.tangentIsData;   // (the bark blends: its tangent slot carries UVs)
+    const Vec3 barkCol = r.barkColor * 0.5 + r.barkColorHi * 0.5;
+    int tris = 0;
+    for (std::size_t i : order) {
+        const TreeMesh::Twig& t = tree.twigs[i];
+        if (tris + 6 > twigTris) break;
+        const double r0 = std::max(0.0025, static_cast<double>(t.r)), r1 = std::max(0.0015, 0.7 * r0);
+        RenderMesh tube = barkTube({t.a, t.b}, {r0, r1}, 3, {barkCol, barkCol});
+        for (Vertex& v : tube.vertices) {
+            v.u *= 0.5f;
+            if (data) v.tangent = Vec3(v.u, v.v, 0.0);
+        }
+        tris += static_cast<int>(tube.indices.size() / 3);
+        MeshBuilder::append(wood, tube);
+    }
+    // THE LEAVES: along each leafy twig (and sprouting along the thin modelled limbs), as many as the budget gives
+    struct Spot { Vec3 a, b; };
+    std::vector<Spot> spots;
+    double total = 0.0;
+    // (each leafy twig puts out its SHOOTS, as the leaf kit has them -- fanned off it, lifted to the light, sagging --
+    // and the leaves ride the twig and the shoots: a crown hung only on the twigs' lines read sparse)
+    std::vector<Spot> shoots;
+    for (const TreeMesh::Twig& t : tree.twigs) {
+        if (!t.leafy) continue;
+        spots.push_back({t.a, t.b});
+        total += (t.b - t.a).length();
+        const Vec3 d = t.b - t.a;
+        const double len = d.length();
+        if (len < 1e-4) continue;
+        const Vec3 ax = d * (1.0 / len);
+        const Vec3 ref = std::fabs(ax.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+        const Vec3 e1 = normalize(cross(ax, ref)), e2 = cross(ax, e1);
+        for (int k = 0; k < lk.shoots; ++k) {
+            const double roll = k * 2.399 + rnd() * 0.8;
+            const Vec3 out = e1 * std::cos(roll) + e2 * std::sin(roll);
+            const double ang = (lk.shootAngle + (rnd() - 0.5) * 30.0) * PI / 180.0;
+            Vec3 sd = normalize(ax * std::cos(ang) + out * std::sin(ang) + Vec3(0, lk.lift, 0));
+            const Vec3 from = t.a + d * (0.3 + 0.7 * rnd());
+            const double sl = lk.shootLength * (0.7 + 0.6 * rnd());
+            Vec3 to = from + sd * sl;
+            to.y -= lk.sag * sl;
+            spots.push_back({from, to});
+            shoots.push_back({from, to});
+            total += sl;
+        }
+    }
+    for (const Spot& sh : shoots) {   // (their wood: the thinnest tubes, while the twig budget lasts)
+        if (tris + 6 > twigTris) break;
+        RenderMesh tube = barkTube({sh.a, sh.b}, {0.0035, 0.0015}, 3, {barkCol, barkCol});
+        for (Vertex& v : tube.vertices) {
+            v.u *= 0.5f;
+            if (data) v.tangent = Vec3(v.u, v.v, 0.0);
+        }
+        tris += static_cast<int>(tube.indices.size() / 3);
+        MeshBuilder::append(wood, tube);
+    }
+    if (fillSpacing > 0.0)
+        for (const TreeMesh::Limb& l : tree.limbs) {
+            if (l.rb > fillRadius || l.rb <= 0.0f) continue;
+            const Vec3 d = l.b - l.a;
+            const double len = d.length();
+            if (len < 1e-3) continue;
+            const Vec3 ax = d * (1.0 / len);
+            const Vec3 ref = std::fabs(ax.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+            const Vec3 e1 = normalize(cross(ax, ref)), e2 = cross(ax, e1);
+            for (double s = fillSpacing * rnd(); s < len; s += fillSpacing) {
+                const double roll = rnd() * 2.0 * PI;
+                const Vec3 out = e1 * std::cos(roll) + e2 * std::sin(roll);
+                const Vec3 dir = normalize(ax * 0.6 + out + Vec3(0, 0.3, 0));
+                const Vec3 a = l.a + ax * s;
+                spots.push_back({a, a + dir * (lk.shootLength * (0.7 + 0.6 * rnd()))});
+                total += lk.shootLength;
+            }
+        }
+    if (spots.empty() || total <= 0.0) return 0;
+    // (as the leaf kit would hang them: per twig length; fewer and larger to the budget, the area kept)
+    const double natural = total / std::max(0.02, 0.45 * lk.size);
+    const double keep = std::min(1.0, leaves / std::max(1.0, natural));
+    const double grow = std::min(2.2, 1.0 / std::sqrt(std::max(keep, 1e-3)));
+    const double spacing = 0.45 * lk.size / keep;
+    // (colour: the palette, in patches over the crown, or the leaf colour range)
+    auto leafColour = [&](const Vec3& at) -> Vec3 {
+        if (!r.leafPalettes.empty()) {
+            const std::vector<Vec3>& pal = r.leafPalettes[static_cast<std::size_t>(seed) % r.leafPalettes.size()];
+            if (!pal.empty()) {
+                const double n = 0.5 + 0.5 * std::sin(at.x * 1.3 + at.z * 0.9 + at.y * 0.7 + seed % 17);
+                return pal[std::min(pal.size() - 1, static_cast<std::size_t>(n * pal.size()))];
+            }
+        }
+        return r.leafColor + (r.leafColorHi - r.leafColor) * rnd();
+    };
+    RenderMesh& m = tree.leaves;
+    int laid = 0;
+    double carry = rnd() * spacing;
+    for (const Spot& sp : spots) {
+        const Vec3 d = sp.b - sp.a;
+        const double len = d.length();
+        if (len < 1e-4) continue;
+        const Vec3 ax = d * (1.0 / len);
+        const Vec3 ref = std::fabs(ax.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+        const Vec3 e1 = normalize(cross(ax, ref)), e2 = cross(ax, e1);
+        int j = 0;
+        for (double s = carry; s < len; s += spacing, ++j) {
+            const Vec3 at = sp.a + ax * s;
+            const double roll = (lk.pairs ? (j / 2) * (PI * 0.5) + (j % 2) * PI : j * 2.399) + (rnd() - 0.5) * 0.6;
+            const Vec3 out = e1 * std::cos(roll) + e2 * std::sin(roll);
+            const double ang = (lk.angle + (rnd() - 0.5) * 30.0) * PI / 180.0;
+            Vec3 ld = normalize(ax * std::cos(ang) + out * std::sin(ang));
+            ld = normalize(ld * (1.0 - lk.droop) + Vec3(0, -1, 0) * lk.droop);
+            // (its face: toward the sky as the species turns them, and out of the crown)
+            Vec3 sky = Vec3(0, 1, 0) - ld * dot(Vec3(0, 1, 0), ld);
+            Vec3 away = (at - mid) - ld * dot(at - mid, ld);
+            sky = sky.length() > 1e-6 ? normalize(sky) : out;
+            away = away.length() > 1e-6 ? normalize(away) : sky;
+            const Vec3 face = normalize(sky * lk.face + away * (1.0 - lk.face) + out * 0.3);
+            const double depth = std::clamp((at - mid).length() / crownR, 0.0, 1.0);
+            const double ao = 0.55 + 0.45 * depth;
+            const int tile = flowers ? static_cast<int>(rnd() * 2.0) : static_cast<int>(rnd() * 4.0) % 4;
+            addKitLeaf(m, at, ld, face, lk.size * grow * (0.8 + 0.4 * rnd()), lk.fold, lk.curl * (0.6 + 0.8 * rnd()), 2, tile,
+                       leafColour(at) * (ao * (0.85 + 0.3 * rnd())));
+            ++laid;
+        }
+        carry = std::fmod(carry + spacing - std::fmod(len, spacing), spacing);
+        // (a cluster of cupped blossoms at a twig's end -- about 800 blossoms on the tree: each cup costs a leaf's
+        // triangles several times over)
+        const double clusterOdds = std::min(0.7, 800.0 / std::max(1.0, static_cast<double>(spots.size()) * std::max(3, lk.perCluster)));
+        if (flowers && rnd() < clusterOdds) {
+            const int per = std::max(3, lk.perCluster);
+            for (int b = 0; b < per; ++b) {
+                const double phi = 2.0 * PI * b / per + rnd();
+                const Vec3 stalk = normalize(ax * 0.6 + (e1 * std::cos(phi) + e2 * std::sin(phi)) * 0.8 + Vec3(0, 0.3, 0));
+                const double sz = lk.blossomSize * std::min(1.6, grow) * (0.85 + 0.3 * rnd());
+                addKitBlossom(m, sp.b + stalk * (0.9 * sz), stalk, sz, lk.cup, rnd() * 2.0 * PI, 2, 2 + (b % 2), leafColour(sp.b));
             }
         }
     }

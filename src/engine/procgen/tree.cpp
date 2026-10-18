@@ -1297,7 +1297,9 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             tw.a = nodes[static_cast<std::size_t>(par)].pos;
             tw.b = nodes[n].pos;
             tw.r = nodes[n].radius;
-            tw.leafy = nodes[n].isTip || (params.leafThickness > 0.0f && nodes[n].radius <= params.leafThickness);
+            // (leafy toward the ends -- a tip, or a twig forking no further; inside, where it forks, bare wood)
+            tw.leafy = nodes[n].isTip || children[n].size() <= 1 ||
+                       (params.leafThickness > 0.0f && nodes[n].radius <= 0.5f * params.leafThickness);
             tw.forks = static_cast<int>(children[n].size());
             out.twigs.push_back(tw);
         }

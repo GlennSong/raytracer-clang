@@ -71,9 +71,20 @@ void renderImpostor(const RealTree& tree, const TextureData& foliage, bool top, 
 // The same picture of any bark and foliage, framed by the caller: the side view (along -z) spans x0..x1 across and
 // y0..y1 up the image; the top view (`top`, down -y) x0..x1 across and z y0..y1 down it. (renderImpostor frames a
 // whole tree; branch_cards.h a sprig in its own frame.)
+// The extras a close-up picture wants (branch_cards.h's twig and leaf sprites; Glenn, 2026-10-18: "these sprites will
+// need some kind of normal map to give them dimension"): the bark's own maps on the bark (its u round the limb, v
+// along it, the vertex tangent along it), the leaves' normal map perturbing theirs (the vertex tangent across the
+// leaf), and the parts deeper in the picture shaded darker by `depthShade` (0 none .. 1 black at the back).
+struct CardViewExtras {
+    const TextureData* barkAlbedo = nullptr;
+    const TextureData* barkNormal = nullptr;
+    const TextureData* foliageNormal = nullptr;
+    double depthShade = 0.0;
+    bool trueNormals = false;   // the normal map in the card's frame as it is, no fold (a sprite seen from its face)
+};
 void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
                     double y0, double y1, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,
-                    uint8_t* normalOut = nullptr);
+                    uint8_t* normalOut = nullptr, const CardViewExtras* extras = nullptr);
 
 }  // namespace engine
 
