@@ -242,4 +242,91 @@ void buildBladePlant(const BladeSpec& sp, uint32_t seed, RenderMesh& leaves, Ren
     for (uint32_t ix : mound.indices) crown.indices.push_back(base + ix);
 }
 
+void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float trunkRadius, uint32_t seed,
+                   RenderMesh& leaves, RenderMesh& wood) {
+    std::mt19937 rng(seed * 374761393u + 7u);
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    const double pi = 3.14159265358979323846;
+    const Vec3 up = normalize(upIn);
+    const Vec3 ref = std::fabs(up.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+    const Vec3 e1 = normalize(cross(up, ref)), e2 = cross(up, e1);
+    auto frond = [&](double pitchDeg, double az, double lengthScale, const Vec3& colour, bool dead) {
+        const Vec3 out = e1 * std::cos(az) + e2 * std::sin(az);
+        const double pitch = pitchDeg * pi / 180.0;
+        Vec3 d = normalize(up * std::cos(pitch) + out * std::sin(pitch));
+        const double L = sp.length * lengthScale * (1.0 + sp.lengthJitter * (u01(rng) * 2.0 - 1.0));
+        const double archL = dead ? 0.3 : sp.arch * (0.7 + 0.6 * u01(rng));
+        // the spine (rachis or petiole): a curve bending down as it goes
+        const int n = 10;
+        std::vector<Vec3> pts{top + out * (trunkRadius * 0.5)}, dirs{d};
+        const double spineL = sp.fan ? L * sp.petiole : L;
+        for (int i = 0; i < n; ++i) {
+            const Vec3 dn = normalize(Vec3(0, -1, 0) - d * dot(Vec3(0, -1, 0), d));
+            d = normalize(d + dn * (archL * 2.0 * (i + 0.5) / (n * n)));
+            pts.push_back(pts.back() + d * (spineL / n));
+            dirs.push_back(d);
+        }
+        std::vector<double> radii;
+        for (int i = 0; i <= n; ++i) radii.push_back(sp.rachisRadius * (1.0 - 0.75 * i / n) * (sp.fan ? 1.3 : 1.0));
+        const RenderMesh tube = MeshBuilder::tube(pts, radii, 5);
+        const uint32_t b0 = static_cast<uint32_t>(wood.vertices.size());
+        for (Vertex v : tube.vertices) { v.color = dead ? sp.skirtColor * 0.8 : sp.rachisColor; wood.vertices.push_back(v); }
+        for (uint32_t ix : tube.indices) wood.indices.push_back(b0 + ix);
+        if (!sp.fan) {   // PINNATE: leaflets down both sides, angled forward, hanging, longest mid-frond
+            for (int k = 0; k < sp.leaflets; ++k) {
+                const double t = 0.08 + 0.9 * (k + 0.5) / sp.leaflets;
+                const double x = t * n;
+                const int i = std::min(n - 1, static_cast<int>(x));
+                const Vec3 at = pts[i] + (pts[i + 1] - pts[i]) * (x - i);
+                const Vec3 fwd = dirs[i + 1];
+                Vec3 side = normalize(cross(fwd, Vec3(0, 1, 0)));
+                if (side.length() < 1e-6) side = e1;
+                const double lenK = sp.leafletLength * (0.35 + 0.65 * std::sin(pi * std::min(1.0, t * 1.15)));
+                for (int sgn = -1; sgn <= 1; sgn += 2) {
+                    const double ang = (sp.leafletAngle + (u01(rng) - 0.5) * 10.0) * pi / 180.0;
+                    Vec3 ld = normalize(fwd * std::cos(ang) + side * (sgn * std::sin(ang)));
+                    ld = normalize(ld + Vec3(0, 0.25, 0));   // (a V: the leaflets rise a little off the rachis)
+                    BladeShape bs;
+                    bs.length = lenK * (0.9 + 0.2 * u01(rng));
+                    bs.width = sp.leafletWidth;
+                    bs.arch = sp.leafletDroop * (dead ? 1.6 : 0.8 + 0.4 * u01(rng));
+                    bs.fold = 25.0;
+                    bs.twist = 0.15;
+                    bs.taper = 0.6;
+                    bs.segments = 3;
+                    addBlade(leaves, at, ld, fwd * -1.0, bs, colour, colour);
+                }
+            }
+        } else {         // FAN: blades radiating from the petiole's tip, their tips hanging
+            const Vec3 hub = pts.back(), fwd = dirs.back();
+            Vec3 side = normalize(cross(fwd, Vec3(0, 1, 0)));
+            if (side.length() < 1e-6) side = e1;
+            const Vec3 fanUp = normalize(cross(side, fwd));
+            const double half = sp.fanSpread * 0.5 * pi / 180.0;
+            for (int k = 0; k < sp.leaflets; ++k) {
+                const double a = -half + 2.0 * half * (k + 0.5) / sp.leaflets;
+                // the fan stands up from the petiole a little (its plane tipped toward the sky), pleated
+                Vec3 ld = normalize(fwd * std::cos(a) + side * std::sin(a) + fanUp * (0.25 + 0.08 * ((k % 2) ? 1 : -1)));
+                BladeShape bs;
+                bs.length = L * (1.0 - sp.petiole) * (0.85 + 0.15 * std::cos(a)) * (0.9 + 0.2 * u01(rng));
+                bs.width = sp.leafletWidth;
+                bs.arch = sp.leafletDroop * (dead ? 1.6 : 0.6 + 0.6 * u01(rng));
+                bs.fold = 35.0;
+                bs.twist = 0.1;
+                bs.taper = 0.55;
+                bs.segments = 4;
+                addBlade(leaves, hub, ld, fwd * -1.0, bs, colour, colour);
+            }
+        }
+    };
+    for (int f = 0; f < sp.count; ++f) {
+        const double age = static_cast<double>(f) / std::max(1, sp.count - 1);   // 0 the newest .. 1 the oldest
+        const double pitch = sp.pitchYoung + (sp.pitchOld - sp.pitchYoung) * age + (u01(rng) - 0.5) * 12.0;
+        const Vec3 colour = sp.color + (sp.colorHi - sp.color) * u01(rng);
+        frond(pitch, f * 2.39996323 + u01(rng) * 0.3, 0.75 + 0.35 * std::sin(pi * (0.2 + 0.7 * age)), colour, false);
+    }
+    for (int f = 0; f < sp.skirt; ++f)   // the dead, hanging down the trunk
+        frond(160.0 + u01(rng) * 15.0, f * 2.39996323 + 0.7, 0.8, sp.skirtColor * (0.8 + 0.4 * u01(rng)), true);
+}
+
 }  // namespace engine

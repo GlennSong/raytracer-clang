@@ -1199,7 +1199,15 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     // Each card is jittered off the node into the surrounding gap, so clusters
     // fill the crown volume rather than sitting only on the skeleton. A hard
     // card budget keeps a single tree's triangle count bounded.
-    if (params.leaves) {
+    // A PALM'S CROWN (foliage = 4; foliage_kit.h FrondSpec): fronds at the top of each stem, no leaves elsewhere
+    if (params.foliage == 4 && params.fronds.set) {
+        out.foliage = 4;
+        for (const SkeletonNode& n : nodes) {
+            if (!n.isTip) continue;
+            const Vec3 up = n.parent >= 0 ? normalize(n.pos - nodes[n.parent].pos) : n.heading;
+            addFrondCrown(params.fronds, n.pos, up, n.radius, seed ^ static_cast<uint32_t>(&n - nodes.data()), out.leaves, out.branches);
+        }
+    } else if (params.leaves) {
         std::uniform_real_distribution<float> tilt(-0.5f, 0.5f);
         std::uniform_real_distribution<float> vary(0.8f, 1.15f);
         std::uniform_real_distribution<float> off(-1.0f, 1.0f);

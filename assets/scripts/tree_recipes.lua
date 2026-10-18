@@ -34,6 +34,10 @@
 --                       twig puts out -- { size (m), shoots, shoot_length, shoot_angle, lift, sag, per_shoot, pairs (1:
 --                       opposite), angle, fold, curl, droop, face, budget, blossom = { size, per_cluster, clusters (per
 --                       shoot), cup, budget } } (blossoms: small cups of the card's flower, in clusters along the shoots)
+--   fronds              A PALM'S CROWN (params.foliage = 4; procgen/foliage_kit.h FrondSpec): { fan (0 pinnate, 1 fan),
+--                       count, length, arch, rachis, leaflets, leaflet_length, leaflet_width, leaflet_angle,
+--                       leaflet_droop, fan_spread, petiole, pitch_young, pitch_old, skirt, color, rachis_color,
+--                       skirt_color }: fronds at the top of the stem, the young upright, the old hanging
 --   kind = "blades"     A BLADE PLANT -- no grammar, no wood: strap leaves from a crown (procgen/foliage_kit.h BladeSpec),
 --                       blades = { count, length, length_jitter, width, rise, spread (deg off upright, inner .. outer),
 --                       fan (0 a round clump .. 1 a flat fan), arch, fold, twist, taper, crown, color, edge_color }
@@ -585,5 +589,55 @@ tree_recipes = {
     blades = { count = 90, length = 0.32, length_jitter = 0.3, width = 0.007, rise = 8, spread = 60, fan = 0,
                arch = 0.7, fold = 50, twist = 0.1, taper = 0.8, crown = 0.08,
                color = { {0.28, 0.36, 0.37}, {0.36, 0.42, 0.42} } },
+  },
+
+  ---------------------------------------------------------------------------------------------------------------
+  -- PALMS (Glenn: "the palm leaves ... don't quite look like palm leaves or trunks")
+
+  -- COCONUT PALM: a slim ringed trunk curving up out of a lean, a round crown of long arching pinnate fronds,
+  -- their leaflets hanging.
+  coconut_palm = {
+    axiom = "T($len,$segs)",
+    iterations = 24,
+    rules = {
+      { "T(l,n):n>0",  "F(l)&($bend)/(7)T(l*0.995,n-1)" },
+      { "T(l,n):n<=0", "F(l*0.5)A(l)" },
+    },
+    vars = { len = {0.45, 0.55}, segs = {13, 17}, bend = {1.0, 2.6} },
+    params = {
+      droop = 0, light = 0.2, meander = 0.04, lean = {6, 16}, angleJitter = 1,
+      flare = 0.45, nodeSwell = 0.03, barkNoise = 0.02, twist = 0, rootCount = 0, collar = 0, joints = 0,
+      tipRadius = 0.13, pipeExponent = 2.0, radiusScale = 1.0, ringSegments = 12, barkVScale = 2.5,
+      foliage = 4,
+    },
+    bark = "ringed",
+    bark_color = { {0.34, 0.30, 0.25}, {0.40, 0.35, 0.29} },
+    fronds = { count = 22, length = 3.8, arch = 1.0, rachis = 0.03, leaflets = 44, leaflet_length = 0.8,
+               leaflet_width = 0.045, leaflet_angle = 58, leaflet_droop = 0.7, pitch_young = 22, pitch_old = 112,
+               color = { {0.17, 0.31, 0.08}, {0.24, 0.38, 0.10} }, rachis_color = {0.48, 0.44, 0.26} },
+  },
+
+  -- FAN PALM (Washingtonia): a tall straight trunk, a crown of round fan leaves on long petioles, and a skirt of
+  -- dead brown fronds hanging under it.
+  fan_palm = {
+    axiom = "T($len,$segs)",
+    iterations = 34,
+    rules = {
+      { "T(l,n):n>0",  "F(l)&($bend)/(11)T(l,n-1)" },
+      { "T(l,n):n<=0", "F(l*0.5)A(l)" },
+    },
+    vars = { len = {0.45, 0.55}, segs = {20, 28}, bend = {0.0, 0.6} },
+    params = {
+      droop = 0, light = 0.1, meander = 0.02, lean = {0, 4}, angleJitter = 0.5,
+      flare = 0.6, nodeSwell = 0.02, barkNoise = 0.03, twist = 0, rootCount = 0, collar = 0, joints = 0,
+      tipRadius = 0.16, pipeExponent = 2.0, radiusScale = 1.0, ringSegments = 12, barkVScale = 2.0,
+      foliage = 4,
+    },
+    bark = "ringed",
+    bark_color = { {0.30, 0.26, 0.22}, {0.36, 0.31, 0.26} },
+    fronds = { fan = 1, count = 26, length = 2.4, arch = 0.35, rachis = 0.025, leaflets = 46, petiole = 0.55,
+               leaflet_width = 0.05, leaflet_droop = 0.9, fan_spread = 210, pitch_young = 20, pitch_old = 100,
+               skirt = 18, color = { {0.18, 0.33, 0.12}, {0.24, 0.38, 0.14} }, rachis_color = {0.40, 0.36, 0.22},
+               skirt_color = {0.36, 0.27, 0.17} },
   },
 }

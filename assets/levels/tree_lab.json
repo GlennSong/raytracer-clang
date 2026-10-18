@@ -1396,6 +1396,90 @@
         "recipe": "fescue",
         "seed": 4
       }
+    },
+    {
+      "id": 92,
+      "name": "coconut_palm_1",
+      "shape": "tree",
+      "position": [
+        -30.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "coconut_palm",
+        "seed": 1
+      }
+    },
+    {
+      "id": 93,
+      "name": "coconut_palm_2",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "coconut_palm",
+        "seed": 2
+      }
+    },
+    {
+      "id": 94,
+      "name": "coconut_palm_3",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "coconut_palm",
+        "seed": 3
+      }
+    },
+    {
+      "id": 95,
+      "name": "fan_palm_1",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "fan_palm",
+        "seed": 1
+      }
+    },
+    {
+      "id": 96,
+      "name": "fan_palm_2",
+      "shape": "tree",
+      "position": [
+        20.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "fan_palm",
+        "seed": 2
+      }
+    },
+    {
+      "id": 97,
+      "name": "fan_palm_3",
+      "shape": "tree",
+      "position": [
+        32.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "fan_palm",
+        "seed": 3
+      }
     }
   ],
   "terrain": {

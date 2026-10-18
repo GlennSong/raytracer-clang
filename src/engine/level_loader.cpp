@@ -894,7 +894,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
             uint32_t h = 2166136261u;
             for (unsigned char ch : r->name) h = (h ^ ch) * 16777619u;
             auto atlasFor = [&](const TreeMesh& tm) {
-                if (tm.foliage == 3) {   // BLADES: the strap leaf's veins (material_recipes.h)
+                if (tm.foliage == 3 || tm.foliage == 4) {   // BLADES, FRONDS: the strap leaf's veins (material_recipes.h)
                     const BarkTextures bt = bladeTextures(h);
                     LeafCardAtlas a;
                     a.albedo = bt.albedo;

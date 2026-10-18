@@ -92,6 +92,7 @@ struct TreeRecipe {
     SpraySpec spray;
     LeafKitSpec leafKit;             // foliage = 2: every leaf a blade, blossoms cups (wearing the card's leaf and flower)
     BladeSpec blades;                // kind = "blades": no wood, a clump of strap leaves (flax, rushes, grass tufts)
+    FrondSpec fronds;                // a palm's crown (params.foliage = 4)
 };
 
 class TreeRecipeBook {

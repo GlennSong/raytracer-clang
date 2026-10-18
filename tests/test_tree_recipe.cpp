@@ -113,7 +113,7 @@ TEST_CASE(a_recipes_seeds_are_different_trees_of_it) {
         const bool clipped = r->shrub && std::any_of(r->params.begin(), r->params.end(), [](const TreeRecipe::Range& g) {
             return g.name == "clipY" && g.hi > 0; });
         CHECK(clipped || heights.size() >= (r->shrub ? 3u : 4u));   // (a clipped hedge is its box's height)
-        CHECK(sizes.size() >= (r->shrub ? 3u : 4u));
+        CHECK(r->fronds.set || sizes.size() >= (r->shrub ? 3u : 4u));   // (a palm: one stem, its seeds its heights)
     }
 }
 
@@ -274,7 +274,7 @@ TEST_CASE(every_part_of_a_tree_hangs_on_it) {
     };
     for (const std::string& name : book.names())
         for (uint32_t seed : {1u, 4u}) {
-            if (book.find(name)->blades.set) continue;
+            if (book.find(name)->blades.set || book.find(name)->fronds.set) continue;   // (palms: their own test)
             const TreeMesh t = growRecipeTree(*book.find(name), seed);
             CHECK(!t.limbs.empty());
             // connected: every limb's start is the foot or another limb's end
@@ -658,5 +658,32 @@ TEST_CASE(blade_plants_are_clumps_of_strap_leaves) {
         CHECK(top > 0.15 && top < r->blades.length * 1.4);
         CHECK(reach < r->blades.length * 1.4 + r->blades.crown);
         if (std::string(name) == "fescue") CHECK(top < 0.5);
+    }
+}
+
+// PALMS (Glenn: "the palm leaves ... don't quite look like palm leaves or trunks"): a ringed stem with a CROWN of fronds
+// at its top -- every blade of the crown above half the trunk (old fronds and the skirt hang below the crown, but
+// not to the ground), the crown wider than tall, the youngest fronds rising above the top, the oldest hanging below it.
+TEST_CASE(a_palm_wears_its_crown_at_the_top) {
+    const TreeRecipeBook book = shipped();
+    for (const char* name : {"coconut_palm", "fan_palm"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r && r->fronds.set);
+        if (!r) continue;
+        const TreeMesh t = growRecipeTree(*r, 2u);
+        CHECK(t.foliage == 4);
+        Real trunkTop = 0;
+        for (const TreeMesh::Limb& l : t.limbs) trunkTop = std::max(trunkTop, l.b.y);
+        Real lo = 1e9, hi = -1e9, reach = 0;
+        for (const Vertex& v : t.leaves.vertices) {
+            lo = std::min(lo, v.position.y);
+            hi = std::max(hi, v.position.y);
+            reach = std::max(reach, std::hypot(v.position.x - t.limbs.back().b.x, v.position.z - t.limbs.back().b.z));
+        }
+        std::printf("    [palm] %-12s trunk %.1f m, crown %.1f .. %.1f m, reach %.1f m, %zu leaf tris\n", name, trunkTop, lo, hi,
+                    reach, t.leaves.indices.size() / 3);
+        CHECK(lo > trunkTop * 0.45);   // (old coconut fronds hang metres down; a skirt to under half way)
+        CHECK(hi > trunkTop + 0.5);
+        CHECK(reach > 1.2 * (hi - trunkTop));
     }
 }

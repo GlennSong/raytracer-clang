@@ -284,6 +284,33 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
         lua_getfield(L, t, "strand");
         if (lua_istable(L, -1) && !readCard(L, r.strand, where + ".strand", err)) { lua_settop(L, base); return false; }
         lua_pop(L, 1);
+        lua_getfield(L, t, "fronds");
+        if (lua_istable(L, -1)) {   // A PALM'S CROWN (foliage_kit.h FrondSpec)
+            const int ft = lua_gettop(L);
+            FrondSpec& f = r.fronds;
+            f.set = true;
+            f.fan = numField(L, ft, "fan", 0.0) != 0.0;
+            f.count = std::max(1, static_cast<int>(numField(L, ft, "count", f.count)));
+            f.length = numField(L, ft, "length", f.length);
+            f.lengthJitter = numField(L, ft, "length_jitter", f.lengthJitter);
+            f.arch = numField(L, ft, "arch", f.arch);
+            f.rachisRadius = numField(L, ft, "rachis", f.rachisRadius);
+            f.leaflets = std::max(1, static_cast<int>(numField(L, ft, "leaflets", f.leaflets)));
+            f.leafletLength = numField(L, ft, "leaflet_length", f.leafletLength);
+            f.leafletWidth = numField(L, ft, "leaflet_width", f.leafletWidth);
+            f.leafletAngle = numField(L, ft, "leaflet_angle", f.leafletAngle);
+            f.leafletDroop = numField(L, ft, "leaflet_droop", f.leafletDroop);
+            f.fanSpread = numField(L, ft, "fan_spread", f.fanSpread);
+            f.petiole = numField(L, ft, "petiole", f.petiole);
+            f.pitchYoung = numField(L, ft, "pitch_young", f.pitchYoung);
+            f.pitchOld = numField(L, ft, "pitch_old", f.pitchOld);
+            f.skirt = std::max(0, static_cast<int>(numField(L, ft, "skirt", f.skirt)));
+            readColour(L, ft, "color", f.color, f.colorHi);
+            Vec3 hi;
+            readColour(L, ft, "rachis_color", f.rachisColor, hi);
+            readColour(L, ft, "skirt_color", f.skirtColor, hi);
+        }
+        lua_pop(L, 1);
         lua_getfield(L, t, "blades");
         if (lua_istable(L, -1)) {   // A BLADE PLANT (foliage_kit.h BladeSpec)
             const int bt = lua_gettop(L);

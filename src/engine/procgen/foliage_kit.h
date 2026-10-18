@@ -115,6 +115,36 @@ struct BladeSpec {
 // The plant: its blades into `leaves`, its crown (a low dark mound the blades rise from) into `crown`.
 void buildBladePlant(const BladeSpec& spec, uint32_t seed, RenderMesh& leaves, RenderMesh& crown);
 
+// A PALM'S CROWN (TreeParams::foliage = 4; Glenn: the palms "don't quite look like palm leaves or trunks"): fronds
+// radiating from the top of the trunk, the youngest upright, the oldest hanging, each one either
+//   PINNATE (a coconut, a date): an arching rachis -- a thin tube -- with leaflet blades down both sides, angled
+//            forward and hanging from it, longest mid-frond
+//   FAN      (a Washingtonia, a Chinese fan palm): a long petiole ending in a fan of blades radiating from its tip,
+//            their tips hanging
+// and, below, a SKIRT of dead fronds hanging down the trunk (fan palms keep theirs).
+struct FrondSpec {
+    bool set = false;
+    bool fan = false;
+    int count = 22;
+    double length = 3.6, lengthJitter = 0.15;   // a frond's rachis (pinnate) or petiole + fan (fan), m
+    double arch = 0.9;                          // the rachis bends down by this (rad) over its length
+    double rachisRadius = 0.025;
+    int leaflets = 40;                          // per side (pinnate) / blades in the fan (fan)
+    double leafletLength = 0.75, leafletWidth = 0.04;
+    double leafletAngle = 55.0;                 // a leaflet's angle forward off the rachis (deg)
+    double leafletDroop = 0.6;                  // ...and its hang (rad)
+    double fanSpread = 200.0;                   // a fan's opening (deg)
+    double petiole = 0.55;                      // a fan frond: the petiole's share of its length
+    double pitchYoung = 25.0, pitchOld = 105.0; // off upright (deg): the newest frond, the oldest
+    int skirt = 0;                              // dead fronds hanging down the trunk
+    Vec3 color{0.18, 0.32, 0.09}, colorHi{0.18, 0.32, 0.09};
+    Vec3 rachisColor{0.45, 0.40, 0.22};
+    Vec3 skirtColor{0.33, 0.25, 0.16};
+};
+// The crown at `top` (the trunk heading `up` there): blades into `leaves`, rachises and petioles into `wood`.
+void addFrondCrown(const FrondSpec& spec, const Vec3& top, const Vec3& up, float trunkRadius, uint32_t seed,
+                   RenderMesh& leaves, RenderMesh& wood);
+
 }  // namespace engine
 
 #endif

@@ -154,6 +154,8 @@ TreeMesh growRecipeTree(const TreeRecipe& r, uint32_t seed, const std::map<std::
     if (r.card.set) p.cardTiles = std::max(1, r.card.variants);   // (the card atlas the recipe draws)
     p.spray = r.spray;
     p.leafKit = r.leafKit;
+    p.fronds = r.fronds;
+    if (p.foliage == 4 && !r.fronds.set) p.foliage = 0;
     if (p.foliage == 1 && (!r.spray.set || !r.strand.set)) p.foliage = 0;   // (no spray kit: cards)
     if (p.foliage == 2 && (!r.leafKit.set || !r.card.set)) p.foliage = 0;   // (no leaf kit: cards)
     if (p.foliage == 1) p.cardTiles = std::max(1, r.strand.variants);      // (the strand atlas)
