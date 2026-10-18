@@ -71,6 +71,7 @@ layout(location = 2) out vec2 outTexcoord;
 layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec3 outWorldTangent;
 layout(location = 5) flat out vec3 outInstanceOrigin;   // per-instance variation (ADR-0098)
+layout(location = 6) out vec3 outUvBlend;   // FLAG_UV_BLEND (bit 23): the tangent slot's data -- a second UV and its weight
 
 void main() {
     const bool grass = (pc.surfaceFlags.y & (1u << 17)) != 0u;   // FLAG_GRASS
@@ -140,6 +141,7 @@ void main() {
     // Tangent in world space for normal mapping (matches Metal's model*tangent).
     outWorldTangent = normalize((M * vec4(tangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
+    outUvBlend = (pc.surfaceFlags.y & (1u << 23)) != 0u ? inTangent.xyz : vec3(0.0);
     outColor = signalLit > 0.5 ? inColor.rgb * 8.0 : signalLit < -0.5 ? inColor.rgb * 0.06 : inColor.rgb;   // (a lit signal lamp: see mesh.frag)
     gl_Position = g.viewProjection * world;
 }

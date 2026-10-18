@@ -48,6 +48,13 @@ struct SdfBounds {
 // features can come later.)
 RenderMesh polygonizeSdf(const Sdf& field, const SdfBounds& bounds, int resolution);
 
+// The same surface over a big box at a fine CUBIC cell (`cell` metres) without sampling all of it: the box is cut
+// into blocks of `block` cells and only the blocks the field says are near the surface are sampled (a block whose
+// centre is farther from the surface than 1.5x its half-diagonal plus two cells is skipped -- the field must be a
+// distance, or near one: a smooth union of capsules with a little displacement is). A tree's trunk (6 x 6 x 8 m at
+// 3 cm) would be 18M samples dense; near its surface it is a few hundred thousand.
+RenderMesh polygonizeSdfSparse(const Sdf& field, const SdfBounds& bounds, double cell, int block = 8);
+
 }  // namespace engine
 
 #endif

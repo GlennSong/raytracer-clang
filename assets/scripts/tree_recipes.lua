@@ -15,7 +15,9 @@
 --     shape    droop light crookChance crookAngle meander wander lean angleJitter
 --     trunk    flare lobes lobeDepth lobeHeight nodeSwell barkNoise twist rootCount rootSpread
 --     joints   joints = 1: every fork of wood (jointMinRadius on) one surface -- each limb cut back and the end rings
---              joined by their hull (ADR-0181); collar (a twig still welds into its parent, flaring by this)
+--              joined by their hull (ADR-0181); collar (a twig still welds into its parent, flaring by this);
+--              trunkZone (m): the wood at least this thick from the foot, and the roots, ONE implicit surface instead
+--              (ADR-0183), remeshed to trunkZoneTris even triangles every trunkZoneCell (m) -- the hull joins then off
 --     girth    tipRadius pipeExponent radiusScale ringSegments
 --     bark     barkMottle (soft dark patches) barkFootDark barkFootHeight (a dark base rising in tongues: a birch)
 --     leaves   leaves leafSize leavesPerTip leafThickness leafClump (how far back along a twig its cards spread)
@@ -75,7 +77,7 @@ tree_recipes = {
     vars = { roll = {70, 110}, pitch = {42, 58}, pitch2 = {30, 46}, side = {0.80, 0.86}, side2 = {0.76, 0.84},
              lead = {0.80, 0.86} },
     params = {
-      joints = 1,
+      joints = 1, trunkZone = 0.10, trunkZoneTris = 2800,   -- (the trunk, its first limbs, its roots: one surface)
       droop = {0.10, 0.20}, light = {0.15, 0.30}, crookChance = {0.15, 0.30}, crookAngle = {15, 30},
       meander = {0.08, 0.15}, lean = {0, 6}, angleJitter = {8, 14},
       flare = {0.5, 0.9}, lobes = {4, 7}, lobeDepth = {0.12, 0.22}, lobeHeight = {1.2, 2.2}, nodeSwell = {0.08, 0.15},

@@ -57,8 +57,18 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
         }
         if (!set.empty()) {
             // each level: its wood's coarseness (sides apart, degrees a ring), joints, and the range it draws over
-            auto level = [&](double edge, double angle, bool joints, bool roots, double woodMin) {
+            // (the trunk zone, a recipe's: whole at the hero, a third of its triangles on a coarser cell at the mid,
+            // none past -- tubes on the same limbs)
+            const TreeParams drawn = drawTreeParams(r, seed);
+            auto level = [&](double edge, double angle, bool joints, bool roots, double woodMin, double zone = 0.0) {
                 std::map<std::string, double> o = overrides;
+                if (drawn.trunkZone > 0.0f && !o.count("trunkZone")) {
+                    if (zone <= 0.0) o["trunkZone"] = 0.0;
+                    else if (zone < 1.0) {
+                        o["trunkZoneTris"] = std::max(600.0, zone * drawn.trunkZoneTris);
+                        o["trunkZoneCell"] = 1.5 * drawn.trunkZoneCell;
+                    }
+                }
                 o["foliage"] = foliage;
                 o["sprigSize"] = bc.sprig;
                 if (!o.count("woodEdge")) o["woodEdge"] = edge;
@@ -81,9 +91,9 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 next.minDistance = std::max(0.0, b0 - 4.0);
                 out.push_back(std::move(next));
             };
-            out.push_back(level(bc.woodEdge, bc.ringAngle, true, true, 0.0));                       // hero
+            out.push_back(level(bc.woodEdge, bc.ringAngle, true, true, 0.0, 1.0));                  // hero
             if (bands.hero1 > bands.hero0) {
-                RecipeTreeLevel M = level(bc.woodEdge * 1.6, bc.ringAngle * 1.5, true, true, 0.0);   // mid
+                RecipeTreeLevel M = level(bc.woodEdge * 1.6, bc.ringAngle * 1.5, true, true, 0.0, 0.3);   // mid
                 fadeInto(M, bands.hero0, bands.hero1);
             }
             if (bands.mid1 > bands.mid0) {

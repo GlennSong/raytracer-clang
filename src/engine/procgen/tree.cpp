@@ -4,11 +4,14 @@
 #include "skeleton.h"
 #include "../../rt_math.h"
 #include "../../curve.h"
+#include "sdf.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <functional>
+#include <unordered_map>
 #include <map>
 #include <random>
 #include <sstream>
@@ -212,6 +215,28 @@ float lerpAt(const std::vector<float>& a, double u) {
     return a[i] * (1.0f - t) + a[i + 1] * t;
 }
 
+// BARK VARIETY: the bark's colour at `p` -- soft darker patches (barkMottle), a dark foot rising in tongues
+// (barkFootDark) -- for every surface of bark (a limb's tube, the trunk zone)
+Vec3 barkTint(const TreeParams& g, const Vec3& p, const Vec3& color, float footY, uint32_t seed) {
+    if (g.barkMottle <= 0.0f && g.barkFootDark <= 0.0f) return color;
+    float m = 1.0f;
+    if (g.barkMottle > 0.0f) {   // patches with soft edges, two sizes
+        const float n2 = 0.6f * gnarlNoise(p * 1.1, seed ^ 0x3b1du) + 0.4f * gnarlNoise(p * 3.7, seed ^ 0x51d7u);
+        const float t = std::clamp((n2 - 0.52f) / 0.10f, 0.0f, 1.0f);
+        m -= g.barkMottle * t * t * (3.0f - 2.0f * t);
+    }
+    Vec3 c = color * m;
+    if (g.barkFootDark > 0.0f) {
+        const float hy = static_cast<float>(p.y) - footY;
+        // the dark base rises unevenly round the trunk, in tongues
+        const float reach = g.barkFootHeight * (0.6f + 0.8f * gnarlNoise(Vec3(p.x * 3.0, 0.0, p.z * 3.0), seed ^ 0x77u));
+        // (whole up to two fifths of its reach, fading out above)
+        const float w = g.barkFootDark * std::clamp((reach - hy) / std::max(0.05f, 0.6f * reach), 0.0f, 1.0f);
+        c = c * (1.0f - w) + g.barkFootColor * w;
+    }
+    return c;
+}
+
 // THE SOCKET a side branch is welded into (Glenn: "the tree trunks and branches were not seamless"): its parent's
 // axis (through `c` along `d`) and radius `r` at the fork, and the collar's flare.
 struct Socket {
@@ -249,7 +274,7 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
         // RINGS BY NEED (TreeParams::ringAngle): from fine samples along the curve, a ring where the limb has turned by
         // ringAngle since the last, gone ringSpacing of its radii, or thinned by a quarter -- a straight run of limb is
         // one long band, a bend as many as it takes. (Near the start of a welded limb, its collar's flare: every
-        // 0.7 radius for three radii.)
+        // radius for two radii.)
         const std::vector<double> fine = spline.uniformArcLengthParams(std::max(2, spline.segments() * 8 + 1));
         const double cosTurn = std::cos(static_cast<double>(g->ringAngle) * PI / 180.0);
         std::vector<double> keep{fine.front()};
@@ -264,7 +289,7 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
             if (i + 1 == fine.size()) { keep.push_back(fine[i]); break; }
             const Vec3 t = normalize(spline.derivative(fine[i]));
             const float r = lerpAt(path.radius, fine[i]);
-            const double gap = sock && s < 3.0 * r0w ? 0.7 * r0w : static_cast<double>(g->ringSpacing) * std::max(r, 0.5f * rLast);
+            const double gap = sock && s < 2.0 * r0w ? r0w : static_cast<double>(g->ringSpacing) * std::max(r, 0.5f * rLast);
             if (dot(t, tLast) < cosTurn || s - sLast >= gap || std::fabs(r - rLast) > 0.25f * rLast) {
                 keep.push_back(fine[i]);
                 tLast = t; sLast = s; rLast = r;
@@ -343,26 +368,7 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
             }
             Vertex vert(centers[k] + dir * r, dir, tan,
                         uRep * static_cast<float>(i) / segs + uOff, v + vOff);
-            vert.color = color;
-            if (g && (g->barkMottle > 0.0f || g->barkFootDark > 0.0f)) {   // BARK VARIETY: patches, a dark foot
-                const Vec3 p = centers[k] + dir * r;
-                float m = 1.0f;
-                if (g->barkMottle > 0.0f) {   // patches with soft edges, two sizes
-                    const float n2 = 0.6f * gnarlNoise(p * 1.1, seed ^ 0x3b1du) + 0.4f * gnarlNoise(p * 3.7, seed ^ 0x51d7u);
-                    const float t = std::clamp((n2 - 0.52f) / 0.10f, 0.0f, 1.0f);
-                    m -= g->barkMottle * t * t * (3.0f - 2.0f * t);
-                }
-                Vec3 c = color * m;
-                if (g->barkFootDark > 0.0f) {
-                    const float hy = static_cast<float>(p.y) - footY;
-                    // the dark base rises unevenly round the trunk, in tongues
-                    const float reach = g->barkFootHeight * (0.6f + 0.8f * gnarlNoise(Vec3(p.x * 3.0, 0.0, p.z * 3.0), seed ^ 0x77u));
-                    // (whole up to two fifths of its reach, fading out above)
-                    const float w = g->barkFootDark * std::clamp((reach - hy) / std::max(0.05f, 0.6f * reach), 0.0f, 1.0f);
-                    c = c * (1.0f - w) + g->barkFootColor * w;
-                }
-                vert.color = c;
-            }
+            vert.color = g ? barkTint(*g, centers[k] + dir * r, color, footY, seed) : color;
             mesh.vertices.push_back(vert);
         }
     }
@@ -485,6 +491,449 @@ void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
     addLeafQuad(mesh, at, forward, normal, side, w, len, color, tiles, tile);   // crossed 90°
 }
 
+// THE TRUNK ZONE (TreeParams::trunkZone; ADR-0183): the zone's limbs and the buttress roots as ONE implicit surface.
+//   the FIELD: each limb (zone node to zone node, and its buttress roots) a tapered capsule -- the trunk's flaring and
+//     fluted toward the foot (flare, lobes, spiralling with twist) -- smooth-unioned thickest first, each blended in by a
+//     fillet 0.3 of its radius; a limb LEAVING the zone ends in its node's round cap at 0.92 of its radius, so the tube
+//     that carries it on (built from the node) comes out of it; the bark's knots (barkNoise) displace the union at the
+//     scale of the nearest limb
+//   the MESH: Surface Nets at trunkZoneCell (sparse: near the surface only), simplified to trunkZoneTris, every vertex
+//     settled back onto the field and its normal the field's
+//   the BARK: each vertex mapped by its NEAREST limb -- round it (a frame carried from the foot limb to limb, so a limb's
+//     bark carries on round into the next), along it (the distance from the foot, as the tubes' v) -- each triangle in
+//     one limb's mapping (a vertex shared across two is duplicated: the bark meets along the crotch, as a tree's own
+//     branch-bark ridge does); darker in a CROTCH (two limbs at a real angle both near)
+void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const std::vector<std::vector<int>>& children,
+                    const std::vector<char>& inZone, const TreeParams& params, uint32_t seed, float footY,
+                    const std::function<BranchPath(int, std::mt19937&, Vec3&)>& rootPath) {
+    struct Piece {
+        Vec3 a, b;
+        float ra = 0, rb = 0;
+        bool trunk = false;          // (the foot's limbs: flare and lobes)
+        float tallA = 1, tallB = 1;  // a buttress root's height over its width at each end (it stands up off the trunk as a fin)
+        int chain = 0;               // the limb it is a stretch of: a limb's stretches meet hard (no fillet bulging each node)
+        float distA = 0, distB = 0;  // distance from the foot at each end (the bark's v)
+        Vec3 right, up, axis;        // its frame (right x up = axis)
+        Vec3 rightA, rightB;         // the frame carried to each end node: round the limb, the bark's angle is measured from
+                                     // between them, so two stretches of a limb agree where they meet
+        float uRep = 1;              // the bark tile round it
+        Vec3 color;
+        Vec3 lo, hi;                 // its box, padded by its widest
+    };
+    std::vector<Piece> pieces;
+    const Vec3 foot = nodes[0].pos;
+    const float footR = nodes[0].radius;
+    const float vScale = params.barkVScale;
+    // frames carried from the foot: each node's, along the limb into it
+    std::vector<Vec3> nodeRight(nodes.size(), Vec3(1, 0, 0)), nodeAxis(nodes.size(), Vec3(0, 1, 0));
+    std::mt19937 shadeRng(seed ^ 0x2b07e5u);
+    std::uniform_real_distribution<float> shade(0.85f, 1.0f);
+    auto carry = [](const Vec3& right, const Vec3& from, const Vec3& to) {   // minimal rotation of `right` from -> to
+        Vec3 r = right - to * dot(right, to);
+        if (r.length() < 1e-6) r = cross(to, std::fabs(to.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0));
+        (void)from;
+        return normalize(r);
+    };
+    const float trunkMul = 1.0f + std::max(0.0f, params.flare) + std::max(0.0f, params.lobeDepth);
+    auto finish = [&](Piece& pc) {
+        pc.axis = normalize(pc.b - pc.a);
+        pc.up = normalize(cross(pc.axis, pc.right));   // (right x up = axis)
+        pc.right = normalize(cross(pc.up, pc.axis));
+        pc.uRep = std::max(1.0f, std::round(2.0f * static_cast<float>(PI) * pc.ra * vScale));
+        const float pad = std::max(pc.ra, pc.rb) * (pc.trunk ? trunkMul : 1.0f) * std::max(pc.tallA, pc.tallB) * (1.0f + params.barkNoise) + 0.05f;
+        pc.lo = Vec3(std::min(pc.a.x, pc.b.x) - pad, std::min(pc.a.y, pc.b.y) - pad, std::min(pc.a.z, pc.b.z) - pad);
+        pc.hi = Vec3(std::max(pc.a.x, pc.b.x) + pad, std::max(pc.a.y, pc.b.y) + pad, std::max(pc.a.z, pc.b.z) + pad);
+    };
+    std::map<int, Vec3> chainShade;
+    // the limbs: a node carries on its parent's limb if it is the parent's child most in line with the limb (thick ones)
+    std::vector<int> chainOf(nodes.size(), -1);
+    int chains = 0;
+    std::vector<int> lineChild(nodes.size(), -1);
+    for (size_t n = 0; n < nodes.size(); ++n) {
+        if (!inZone[n]) continue;
+        const Vec3 in = nodes[n].parent >= 0 ? normalize(nodes[n].pos - nodes[nodes[n].parent].pos) : Vec3(0, 1, 0);
+        double best = -2.0;
+        for (int c : children[n]) {
+            if (!inZone[c]) continue;
+            const Vec3 d = nodes[c].pos - nodes[n].pos;
+            if (d.length() < 1e-9) continue;
+            const double al = dot(normalize(d), in) + 0.5 * nodes[c].radius / std::max(1e-6f, nodes[n].radius);
+            if (al > best) { best = al; lineChild[n] = c; }
+        }
+    }
+    for (size_t n = 1; n < nodes.size(); ++n) {
+        const int par = nodes[n].parent;
+        if (par < 0 || !inZone[par]) continue;
+        chainOf[n] = lineChild[par] == static_cast<int>(n) && chainOf[par] >= 0 ? chainOf[par] : chains++;
+        if (par == 0 && lineChild[0] == static_cast<int>(n)) chainOf[n] = chainOf[0] = chainOf[0] >= 0 ? chainOf[0] : chainOf[n];
+        const Vec3 d = nodes[n].pos - nodes[par].pos;
+        if (d.length() < 1e-6) continue;
+        const Vec3 ax = normalize(d);
+        nodeAxis[n] = ax;
+        nodeRight[n] = carry(par == 0 ? Vec3(1, 0, 0) : nodeRight[par], par == 0 ? Vec3(0, 1, 0) : nodeAxis[par], ax);
+        if (!inZone[n]) continue;   // (a limb leaving: its tube, from the node's cap)
+        Piece pc;
+        pc.a = nodes[par].pos; pc.b = nodes[n].pos;
+        pc.ra = nodes[par].radius; pc.rb = nodes[n].radius;
+        // (a node the zone ends at -- every limb on from it a tube -- caps a little inside the tube that leaves it)
+        bool ends = true;
+        for (int c : children[n]) if (inZone[c]) ends = false;
+        if (ends && !children[n].empty()) pc.rb *= 0.92f;
+        pc.trunk = par == 0 || nodes[par].pos.y - footY < 2.0f * params.lobeHeight;
+        pc.distA = nodes[par].distFromRoot; pc.distB = nodes[n].distFromRoot;
+        pc.right = nodeRight[n];
+        pc.rightA = par == 0 ? carry(Vec3(1, 0, 0), Vec3(0, 1, 0), ax) : nodeRight[par];
+        pc.rightB = nodeRight[n];
+        pc.chain = chainOf[n];
+        // (one shade a limb, as a tube has: per stretch, the bark stepped in brightness at every node)
+        auto cs = chainShade.find(pc.chain);
+        if (cs == chainShade.end()) cs = chainShade.emplace(pc.chain, params.barkColor * shade(shadeRng)).first;
+        pc.color = cs->second;
+        finish(pc);
+        pieces.push_back(pc);
+    }
+    out.zoneLimbs = static_cast<int>(pieces.size());
+    // THE ROOTS (Glenn, 2026-10-18: "the roots look very tepid. There should be bigger roots so we can sink the tree
+    // into the ground"): each a FLARE off the trunk -- as thick as the trunk's flared foot where it leaves it, a broad
+    // hump (wider than high) -- that runs out at least six trunk radii (rootSpread) along the ground, thinning and
+    // sinking, and DIVES under it at its end, with a smaller one between each two: the trunk stands IN the ground, held
+    // by them. Its azimuth and reach the
+    // tube roots' own draws (a tree grown both ways roots the same way).
+    std::mt19937 rootRng(seed ^ 0x700757u);
+    const Vec3 up(0, 1, 0);
+    const int mainRoots = params.rootCount;
+    for (int k = 0; k < 2 * mainRoots; ++k) {
+        // (the main roots, then a smaller one between each two: 0.55 of the size, half way round)
+        const bool minor = k >= mainRoots;
+        Vec3 color;
+        const BranchPath tube = rootPath(minor ? k - mainRoots : k, rootRng, color);
+        Vec3 dir = tube.points.back() - foot;
+        if (minor) {   // half way to the next main root's bearing
+            const double a = std::atan2(dir.z, dir.x) + PI / std::max(1, mainRoots);
+            dir = Vec3(std::cos(a), 0.0, std::sin(a)) * dir.length();
+        }
+        const double size = minor ? 0.55 : 1.0;
+        dir.y = 0.0;
+        dir = dir.length() > 1e-6 ? normalize(dir) : Vec3(1, 0, 0);
+        const Vec3 side = normalize(cross(up, dir));
+        const double reach = size * std::max(6.0 * footR, static_cast<double>((tube.points.back() - foot).length()) * 1.4);
+        std::uniform_real_distribution<double> wob(-0.15, 0.15);
+        // (along it: out, up off the ground, radius over the trunk's, height over width)
+        // (sized from the trunk's flared foot, not its bare radius: beside the flare a root of the bare one is a spike)
+        const double foot2 = footR * (1.0 + 0.5 * std::max(0.0f, params.flare));
+        const double prof[6][4] = {{0.10, 0.85, 1.00, 1.15}, {0.26, 0.40, 0.80, 1.0}, {0.44, 0.14, 0.58, 0.85},
+                                   {0.63, 0.02, 0.40, 0.8}, {0.82, -0.10, 0.26, 0.8}, {1.00, -0.40, 0.15, 0.8}};
+        BranchPath rp;
+        std::vector<float> tall;
+        double lateral = 0.0;
+        for (int q = 0; q < 6; ++q) {
+            const double out = prof[q][0] * reach;
+            if (q >= 2) lateral += wob(rootRng) * reach * 0.2;   // (a root wanders a little)
+            const Vec3 p = foot + dir * std::max(out, static_cast<double>(footR) * (q == 0 ? 0.2 : 1.0)) + side * lateral +
+                           up * (prof[q][1] * foot2 * (q < 2 ? 1.0 : size));
+            rp.points.push_back(p);
+            rp.radius.push_back(static_cast<float>(prof[q][2] * foot2 * (q == 0 ? 1.0 : size)));
+            rp.dist.push_back(static_cast<float>((p - foot).length()));
+            tall.push_back(static_cast<float>(prof[q][3]));
+        }
+        out.limbs.push_back({foot, rp.points.front(), footR, rp.radius.front()});
+        for (std::size_t q = 0; q + 1 < rp.points.size(); ++q) {
+            out.limbs.push_back({rp.points[q], rp.points[q + 1], rp.radius[q], rp.radius[q + 1]});
+            Piece pc;
+            pc.a = rp.points[q]; pc.b = rp.points[q + 1];
+            const float minR = 1.0f * params.trunkZoneCell;
+            pc.ra = std::max(minR, rp.radius[q]); pc.rb = std::max(minR, rp.radius[q + 1]);
+            pc.tallA = tall[q]; pc.tallB = tall[q + 1];
+            pc.chain = chains + k;
+            pc.distA = rp.dist[q]; pc.distB = rp.dist[q + 1];
+            pc.right = up;
+            pc.rightA = pc.rightB = up;
+            pc.color = color;
+            finish(pc);
+            pieces.push_back(pc);
+        }
+    }
+    if (pieces.empty()) return;
+    // (one bark tile count round a limb, from its thickest: per stretch, the bark jumped where the limb tapered)
+    {
+        std::map<int, float> rep;
+        for (const Piece& pc : pieces) rep[pc.chain] = std::max(rep[pc.chain], pc.uRep);
+        for (Piece& pc : pieces) pc.uRep = rep[pc.chain];
+    }
+    // the limbs thickest first, each blended into those before it by a fillet 0.3 of its radius
+    const int chainCount = chains + 2 * params.rootCount;
+    std::vector<double> chainR(static_cast<std::size_t>(chainCount), 0.0), chainK(static_cast<std::size_t>(chainCount), 0.01);
+    for (const Piece& pc : pieces) chainR[static_cast<std::size_t>(pc.chain)] = std::max(chainR[static_cast<std::size_t>(pc.chain)], static_cast<double>(std::max(pc.ra, pc.rb)));
+    std::vector<int> chainOrder;
+    for (int c = 0; c < chainCount; ++c)
+        if (chainR[static_cast<std::size_t>(c)] > 0.0) { chainOrder.push_back(c); chainK[static_cast<std::size_t>(c)] = 0.3 * chainR[static_cast<std::size_t>(c)]; }
+    std::stable_sort(chainOrder.begin(), chainOrder.end(), [&](int x, int y) { return chainR[static_cast<std::size_t>(x)] > chainR[static_cast<std::size_t>(y)]; });
+    thread_local std::vector<double> chainScratch;
+    chainScratch.assign(static_cast<std::size_t>(chainCount), 1e30);
+    const float twistRad = params.twist * static_cast<float>(PI) / 180.0f;
+    // a piece's own distance at p (and the t along it)
+    auto pieceDist = [&](const Piece& pc, const Vec3& p, double& t) {
+        const Vec3 ab = pc.b - pc.a;
+        t = std::clamp(dot(p - pc.a, ab) / std::max(1e-12, dot(ab, ab)), 0.0, 1.0);
+        const Vec3 c = pc.a + ab * t;
+        double r = pc.ra + (pc.rb - pc.ra) * t;
+        const double tall = pc.tallA + (pc.tallB - pc.tallA) * t;
+        if (tall != 1.0) {   // (a root's section: `tall` times as high as wide -- scaled back so it never says more than the
+                             // true distance, which the sparse mesher's skipping relies on)
+            const Vec3 q = p - c;
+            return (std::sqrt(q.x * q.x + q.z * q.z + (q.y / tall) * (q.y / tall)) - r) * std::min(1.0, tall);
+        }
+        if (pc.trunk) {
+            const double hy = std::max(0.0, p.y - footY);
+            r *= 1.0 + params.flare * std::exp(-hy / std::max(0.3, 2.5 * footR));
+            if (params.lobes > 0 && params.lobeDepth > 0.0f) {
+                const double phi = std::atan2(p.z - foot.z, p.x - foot.x) + twistRad * hy;
+                const double lobeA = params.lobeDepth * std::exp(-hy / std::max(0.2f, params.lobeHeight));
+                r *= 1.0 + lobeA * (0.5 + 0.5 * std::cos(params.lobes * phi + static_cast<double>(seed % 97)));
+            }
+        }
+        return (p - c).length() - r;
+    };
+    // the field (and the nearest limb, and how near the next limb at an angle to it is: the crotch)
+    struct Near { int i = -1, j = -1; double d1 = 1e30, d2 = 1e30; };
+    auto field = [&](const Vec3& p, Near* nr) {
+        Near best;
+        // each limb's distance (its stretches' least: they meet hard), then the limbs smooth-unioned, thickest first
+        std::vector<double>& per = chainScratch;
+        std::fill(per.begin(), per.end(), 1e30);
+        for (std::size_t i = 0; i < pieces.size(); ++i) {
+            const Piece& pc = pieces[i];
+            // (a piece whose box is farther than the limb's distance so far changes nothing)
+            const double bx = std::max({pc.lo.x - p.x, 0.0, p.x - pc.hi.x}), by = std::max({pc.lo.y - p.y, 0.0, p.y - pc.hi.y}),
+                         bz = std::max({pc.lo.z - p.z, 0.0, p.z - pc.hi.z});
+            if (!nr && std::sqrt(bx * bx + by * by + bz * bz) > per[static_cast<std::size_t>(pc.chain)] + chainK[static_cast<std::size_t>(pc.chain)] &&
+                std::sqrt(bx * bx + by * by + bz * bz) > 0.5) continue;
+            double t;
+            const double d = pieceDist(pc, p, t);
+            per[static_cast<std::size_t>(pc.chain)] = std::min(per[static_cast<std::size_t>(pc.chain)], d);
+            if (nr) {
+                if (d < best.d1) {
+                    if (best.i >= 0 && std::fabs(dot(pieces[best.i].axis, pc.axis)) < 0.9) { best.j = best.i; best.d2 = best.d1; }
+                    best.i = static_cast<int>(i); best.d1 = d;
+                } else if (d < best.d2 && std::fabs(dot(pieces[best.i].axis, pc.axis)) < 0.9) {
+                    best.j = static_cast<int>(i); best.d2 = d;
+                }
+            }
+        }
+        double acc = 1e30;
+        for (int c : chainOrder) {
+            const double d = per[static_cast<std::size_t>(c)];
+            if (d >= 1e29) continue;
+            if (acc >= 1e29) { acc = d; continue; }
+            const double k = chainK[static_cast<std::size_t>(c)];
+            const double h = std::clamp(0.5 + 0.5 * (d - acc) / k, 0.0, 1.0);   // (polynomial smooth min)
+            acc = d + (acc - d) * h - k * h * (1.0 - h);
+        }
+        if (params.barkNoise > 0.0f) {   // the knots, at the scale of the limb they are on
+            double rN = footR;
+            if (nr && best.i >= 0) {
+                rN = std::max(pieces[best.i].ra, pieces[best.i].rb);
+            } else {
+                double dmin = 1e30;
+                for (const Piece& pc : pieces) {
+                    double t;
+                    const double d = pieceDist(pc, p, t);
+                    if (d < dmin) { dmin = d; rN = pc.ra + (pc.rb - pc.ra) * t; }
+                    if (dmin < 0.0) break;
+                }
+            }
+            const double kz = 1.4 / std::max(0.05, rN * 4.0);
+            acc -= params.barkNoise * rN * (2.0 * gnarlNoise(p * kz + Vec3(static_cast<double>(seed % 251), 0, 0), seed) - 1.0);
+        }
+        // (cut a little under the ground -- no round foot below it -- softly: a root grazing a hard cut leaves a sheet
+        // thinner than a cell)
+        {
+            const double cut = static_cast<double>(footY) - 0.03 - p.y, k = 0.04;
+            const double h = std::clamp(0.5 - 0.5 * (cut - acc) / k, 0.0, 1.0);   // (polynomial smooth max)
+            acc = cut + (acc - cut) * h + k * h * (1.0 - h);
+        }
+        if (nr) *nr = best;
+        return acc;
+    };
+    const Sdf sdf = [&](const Vec3& p) { return field(p, nullptr); };
+    SdfBounds bounds{Vec3(1e30, 1e30, 1e30), Vec3(-1e30, -1e30, -1e30)};
+    for (const Piece& pc : pieces) {
+        bounds.min = Vec3(std::min(bounds.min.x, pc.lo.x), std::min(bounds.min.y, pc.lo.y), std::min(bounds.min.z, pc.lo.z));
+        bounds.max = Vec3(std::max(bounds.max.x, pc.hi.x), std::max(bounds.max.y, pc.hi.y), std::max(bounds.max.z, pc.hi.z));
+    }
+    const double cell = std::max(0.005, static_cast<double>(params.trunkZoneCell));
+    RenderMesh raw = polygonizeSdfSparse(sdf, bounds, cell);
+    out.zoneRawTris = static_cast<int>(raw.indices.size() / 3);
+    // onto the field: a few Newton steps
+    const double eps = 0.25 * cell;
+    auto grad = [&](const Vec3& p) {
+        return Vec3(sdf(p + Vec3(eps, 0, 0)) - sdf(p - Vec3(eps, 0, 0)), sdf(p + Vec3(0, eps, 0)) - sdf(p - Vec3(0, eps, 0)),
+                    sdf(p + Vec3(0, 0, eps)) - sdf(p - Vec3(0, 0, eps))) * (0.5 / eps);
+    };
+    auto project = [&](Vec3 p) {
+        for (int it = 0; it < 4; ++it) {
+            const double f = sdf(p);
+            const Vec3 g = grad(p);
+            const double g2 = dot(g, g);
+            if (g2 < 1e-12 || std::fabs(f) < 1e-4 * cell) break;
+            Vec3 step = g * (f / g2);
+            if (step.length() > cell) step = normalize(step) * cell;
+            p = p - step;
+        }
+        return p;
+    };
+    // EVEN TRIANGLES (Glenn, 2026-10-18, of the simplified trunk: "those triangles look really stretched"): the pinches
+    // split, then remeshed isotropically (MeshBuilder::remesh), each edge about k times the radius of the limb it is on
+    // -- finer up a thin limb, coarser round the trunk -- k from the budget (the raw surface's area over each part's
+    // triangle size), no finer than a cell
+    MeshBuilder::splitNonManifold(raw);
+    MeshBuilder::fillHoles(raw, 24, project);   // (splitting where two sheets crossed at an edge can open a few)
+    // (the limb's radius near p, looked up once a 6 cm cell: the remesher asks for it at every edge)
+    std::unordered_map<uint64_t, double> radiusCache;
+    auto radiusAt = [&](const Vec3& p) {
+        const double c = 0.06;
+        const uint64_t key = (static_cast<uint64_t>(static_cast<int64_t>(std::floor(p.x / c)) & 0x1fffff) << 42) |
+                             (static_cast<uint64_t>(static_cast<int64_t>(std::floor(p.y / c)) & 0x1fffff) << 21) |
+                             (static_cast<uint64_t>(static_cast<int64_t>(std::floor(p.z / c)) & 0x1fffff));
+        auto it = radiusCache.find(key);
+        if (it != radiusCache.end()) return it->second;
+        Near nr;
+        field(p, &nr);
+        const double r = nr.i >= 0 ? static_cast<double>(std::max(pieces[nr.i].ra, pieces[nr.i].rb)) : static_cast<double>(footR);
+        radiusCache.emplace(key, r);
+        return r;
+    };
+    double want = 0.0;   // the triangles at k = 1: each face's area over an equilateral's of side its limb's radius
+    for (std::size_t k = 0; k + 2 < raw.indices.size(); k += 9) {
+        const Vec3 &a = raw.vertices[raw.indices[k]].position, &b = raw.vertices[raw.indices[k + 1]].position,
+                   &c = raw.vertices[raw.indices[k + 2]].position;
+        const double r = radiusAt((a + b + c) * (1.0 / 3.0));
+        want += 3.0 * 0.5 * cross(b - a, c - a).length() / (0.433 * r * r);
+    }
+    // (x 1.18: the remesher's edges run 4/5 to 4/3 of the target, its triangles fewer than equilateral ones of it --
+    // measured on the oak, 4174 for 3000 asked)
+    const double kEdge = 1.18 * std::sqrt(want / std::max(64, params.trunkZoneTris));
+    // (most of the way there by quadric simplification -- fast, but long thin triangles -- then evened out)
+    MeshBuilder::simplify(raw, static_cast<std::size_t>(2 * std::max(64, params.trunkZoneTris)));
+    MeshBuilder::remesh(raw, [&](const Vec3& p) { return std::clamp(kEdge * radiusAt(p), cell, 0.6); }, project, 5);
+    // (and once more at the size the count says, if it came out over: the budget is the budget)
+    const std::size_t got = raw.indices.size() / 3, budget = static_cast<std::size_t>(std::max(64, params.trunkZoneTris));
+    if (got > budget + budget / 10) {
+        const double k2 = kEdge * std::sqrt(static_cast<double>(got) / budget);
+        MeshBuilder::remesh(raw, [&](const Vec3& p) { return std::clamp(k2 * radiusAt(p), cell, 0.6); }, project, 3);
+    }
+    for (Vertex& v : raw.vertices) {
+        const Vec3 g = grad(v.position);
+        v.normal = g.length() > 1e-9 ? normalize(g) : Vec3(0, 1, 0);
+    }
+    // each vertex's nearest limb and crotch
+    std::vector<Near> near(raw.vertices.size());
+    for (std::size_t i = 0; i < raw.vertices.size(); ++i) field(raw.vertices[i].position, &near[i]);
+    // the bark's angle round a piece at q (from its a end): measured from the frame between its ends' frames at q's t
+    auto angleOf = [&](const Piece& pc, const Vec3& q, double t) {
+        Vec3 r = pc.rightA * (1.0 - t) + pc.rightB * t;
+        r = r - pc.axis * dot(r, pc.axis);
+        r = r.length() > 1e-9 ? normalize(r) : pc.right;
+        const Vec3 u = cross(pc.axis, r);
+        double phi = std::atan2(dot(q, u), dot(q, r));
+        if (phi < 0) phi += 2.0 * PI;
+        return phi;
+    };
+    // THE BARK, BLENDED (Glenn, 2026-10-18: "we need to blend those textures better"): each triangle in the mapping of
+    // its nearest limb A (by its middle) AND of the nearest limb of another chain B; each of its vertices a weight for
+    // B by how much nearer A's surface is (half at the crease where they are as near, nothing a blend width out) --
+    // the second UV and the weight ride the tangent slot (RenderMaterial::FLAG_UV_BLEND), so the shader crossfades the
+    // two barks over the crotch instead of cutting from one to the other. A vertex shared by triangles of other pairs
+    // or wraps is duplicated.
+    RenderMesh& m = out.branches;
+    out.zoneIndexStart = m.indices.size();
+    out.zoneVertexStart = m.vertices.size();
+    std::unordered_map<uint64_t, uint32_t> made;
+    auto uvOf = [&](const Piece& pc, const Vec3& p, bool wrap, float& u, float& v) {
+        const Vec3 q = p - pc.a;
+        const double t = std::clamp(dot(q, pc.b - pc.a) / std::max(1e-12, (pc.b - pc.a).lengthSquared()), 0.0, 1.0);
+        u = pc.uRep * static_cast<float>(angleOf(pc, q, t) / (2.0 * PI));
+        if (wrap && u < 0.5f * pc.uRep) u += pc.uRep;
+        v = (pc.distA + (pc.distB - pc.distA) * static_cast<float>(t)) * vScale;
+    };
+    auto mapped = [&](uint32_t vi, int A, int Bp, bool wrapA, bool wrapB) -> uint32_t {
+        const uint64_t key = (static_cast<uint64_t>(vi) << 28) ^ (static_cast<uint64_t>(A) << 14) ^ (static_cast<uint64_t>(Bp + 1) << 2) ^
+                             (wrapA ? 1u : 0u) ^ (wrapB ? 2u : 0u);
+        auto it = made.find(key);
+        if (it != made.end()) return it->second;
+        const Piece& pa = pieces[static_cast<std::size_t>(A)];
+        const Vertex& src = raw.vertices[vi];
+        float u, v, u2 = 0, v2 = 0, w = 0;
+        uvOf(pa, src.position, wrapA, u, v);
+        if (Bp >= 0) {
+            const Piece& pb = pieces[static_cast<std::size_t>(Bp)];
+            uvOf(pb, src.position, wrapB, u2, v2);
+            double t;
+            const double dA = pieceDist(pa, src.position, t), dB = pieceDist(pb, src.position, t);
+            // (logistic in how much nearer A is: half at the crease, falling away exponentially over a fifth of the
+            // thinner limb's radius -- a straight band either cut as a line (narrow) or let a far limb's mapping in
+            // where neighbouring triangles chose another second limb (wide), a saw-tooth along their edges)
+            const double sigma = std::max(0.015, 0.2 * std::min(std::max(pa.ra, pa.rb), std::max(pb.ra, pb.rb)));
+            w = static_cast<float>(1.0 / (1.0 + std::exp(std::clamp((dB - dA) / sigma, -30.0, 30.0))));
+        }
+        Vertex outV(src.position, src.normal, Vec3(u2, v2, w), u, v);
+        // the crotch: a second limb, at an angle, nearly as near
+        const Near& nr = near[vi];
+        double crotch = 0.0;
+        if (nr.j >= 0) {
+            const double rr = std::max(0.02f, std::max(pieces[nr.i].ra, pieces[nr.i].rb));
+            crotch = std::clamp(1.0 - (nr.d2 - nr.d1) / (0.5 * rr), 0.0, 1.0);
+        }
+        const Vec3 colA = barkTint(params, src.position, pa.color, footY, seed);
+        const Vec3 colB = Bp >= 0 ? barkTint(params, src.position, pieces[static_cast<std::size_t>(Bp)].color, footY, seed) : colA;
+        outV.color = (colA * (1.0 - w) + colB * w) * (1.0 - 0.35 * crotch);
+        m.vertices.push_back(outV);
+        const uint32_t id = static_cast<uint32_t>(m.vertices.size() - 1);
+        made[key] = id;
+        return id;
+    };
+    for (std::size_t k = 0; k + 2 < raw.indices.size(); k += 3) {
+        const uint32_t vs[3] = {raw.indices[k], raw.indices[k + 1], raw.indices[k + 2]};
+        const Vec3 mid = (raw.vertices[vs[0]].position + raw.vertices[vs[1]].position + raw.vertices[vs[2]].position) * (1.0 / 3.0);
+        // its limbs: the nearest, and the nearest of another chain
+        int A = -1, Bp = -1;
+        double dA = 1e30, dB = 1e30;
+        for (std::size_t i = 0; i < pieces.size(); ++i) {
+            double t;
+            const double d = pieceDist(pieces[i], mid, t);
+            if (d < dA) {
+                if (A >= 0 && pieces[static_cast<std::size_t>(A)].chain != pieces[i].chain) { Bp = A; dB = dA; }
+                A = static_cast<int>(i); dA = d;
+            } else if (d < dB && pieces[i].chain != pieces[static_cast<std::size_t>(A)].chain) {
+                Bp = static_cast<int>(i); dB = d;
+            }
+        }
+        if (A < 0) continue;
+        if (Bp >= 0 && pieces[static_cast<std::size_t>(Bp)].chain == pieces[static_cast<std::size_t>(A)].chain) Bp = -1;
+        // (round each limb's back, the tile's seam: the low side taken past it)
+        auto wraps = [&](int P, bool w3[3]) {
+            float us[3];
+            for (int e = 0; e < 3; ++e) {
+                float u, v;
+                uvOf(pieces[static_cast<std::size_t>(P)], raw.vertices[vs[e]].position, false, u, v);
+                us[e] = u / pieces[static_cast<std::size_t>(P)].uRep;
+            }
+            const bool wrap = std::max({us[0], us[1], us[2]}) - std::min({us[0], us[1], us[2]}) > 0.5f;
+            for (int e = 0; e < 3; ++e) w3[e] = wrap && us[e] < 0.5f;
+        };
+        bool wa[3] = {false, false, false}, wb[3] = {false, false, false};
+        wraps(A, wa);
+        if (Bp >= 0) wraps(Bp, wb);
+        const uint32_t ia = mapped(vs[0], A, Bp, wa[0], wb[0]), ib = mapped(vs[1], A, Bp, wa[1], wb[1]),
+                       ic = mapped(vs[2], A, Bp, wa[2], wb[2]);
+        const Vec3 nOut = raw.vertices[vs[0]].normal + raw.vertices[vs[1]].normal + raw.vertices[vs[2]].normal;
+        MeshBuilder::triFacing(m, ia, ib, ic, nOut);
+    }
+    out.zoneVertexEnd = m.vertices.size();
+    out.barkBlend = true;
+    out.zoneIndexEnd = m.indices.size();
+}
+
 }  // namespace
 
 TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed) {
@@ -535,7 +984,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     // and its hull tangles. Real limbs leave a stem a little apart: the leader and the thickest side keep the node, and
     // each further side limb moves up the leader onto a new node of its own, three times its and the stem's radii together
     // apart -- every fork then two limbs out. (Where the leader's internode has no room for that, the fork stays.)
-    if (params.joints == 1 && nodes.size() > 2) {
+    if ((params.joints == 1 || params.trunkZone > 0.0f) && nodes.size() > 2) {
         std::vector<std::vector<int>> kids(nodes.size());
         for (size_t i = 0; i < nodes.size(); ++i)
             if (nodes[i].parent >= 0) kids[static_cast<std::size_t>(nodes[i].parent)].push_back(static_cast<int>(i));
@@ -743,7 +1192,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     std::vector<char> isJoint(nodes.size(), 0), cutStart(nodes.size(), 0);
     std::vector<double> cutIn(nodes.size(), 0.0), cutOut(nodes.size(), 0.0);
     std::vector<std::vector<Arm>> jointArms(nodes.size());
-    if (params.joints == 1) {
+    // (with the trunk zone the joints are its; outside it limbs weld -- Glenn, 2026-10-18: no hull joins, blend seams)
+    if (params.joints == 1 && params.trunkZone <= 0.0f) {
         auto candidate = [&](int n) { return children[n].size() >= 2 && nodes[n].radius >= params.jointMinRadius; };
         if (std::getenv("RT_JOINT_DEBUG")) {
             int cands = 0, multi = 0;
@@ -836,8 +1286,51 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         for (int c : children[node])
             if (c != cont[node] || equalFork[node] || isJoint[node]) work.push_back({node, c});
     };
-    if (cont[0] != -1 && !isJoint[0]) work.push_back({0, cont[0]});
-    pushStarts(0);
+    // a buttress root (k of rootCount): its path from the foot and its bark colour (the draws: azimuth, length, colour)
+    auto buttressRoot = [&](int k, std::mt19937& r, Vec3& color) {
+        const float baseR = std::max(nodes[0].radius, params.tipRadius * params.radiusScale);
+        const Vec3 baseP = nodes[0].pos;
+        const float rootLen = baseR * params.rootSpread, tipR = params.tipRadius * params.radiusScale;
+        std::uniform_real_distribution<float> jit(-0.3f, 0.3f), lenv(0.7f, 1.2f), shade(0.85f, 1.0f);
+        const float ang = (params.phyllotaxis * k) * static_cast<float>(PI) / 180.0f + jit(r);
+        const Vec3 dir(std::cos(ang), 0.0f, std::sin(ang));
+        const float L = rootLen * lenv(r);
+        BranchPath rp;
+        auto add = [&](const Vec3& p, float rad) {
+            rp.points.push_back(p);
+            rp.radius.push_back(rad);
+            rp.dist.push_back(static_cast<float>((p - baseP).length()));
+        };
+        add(baseP + dir * (baseR * 0.3f) + Vec3(0, baseR * 0.7f, 0), baseR * 0.55f);
+        add(baseP + dir * (baseR * 1.5f) + Vec3(0, baseR * 0.15f, 0), baseR * 0.4f);
+        add(baseP + dir * (L * 0.6f), tipR * 2.0f);
+        add(baseP + dir * L + Vec3(0, -0.02f, 0), tipR);
+        color = params.barkColor * shade(r);
+        return rp;
+    };
+
+    // THE TRUNK ZONE (TreeParams::trunkZone): which wood it is -- from the foot, every node as thick, not a sprig
+    std::vector<char> inZone(nodes.size(), 0);
+    if (params.trunkZone > 0.0f && !nodes.empty() && nodes[0].radius >= params.trunkZone) {
+        inZone[0] = 1;
+        for (size_t n = 1; n < nodes.size(); ++n) {
+            const int par = nodes[n].parent;
+            inZone[n] = par >= 0 && inZone[par] && sprigOf[n] < 0 && nodes[n].radius >= params.trunkZone;
+        }
+    }
+    const bool zoneOn = trunkTop > 0 && inZone[static_cast<std::size_t>(trunkTop)];
+    if (zoneOn) {
+        buildTrunkZone(out, nodes, children, inZone, params, seed, static_cast<float>(nodes[0].pos.y), [&](int k, std::mt19937& r, Vec3& c) { return buttressRoot(k, r, c); });
+        own(-1);
+        // the limbs leaving it: tubes from its nodes (a side one welded on its collar), the rest as before
+        for (size_t z = 0; z < nodes.size(); ++z)
+            if (inZone[z])
+                for (int c : children[z])
+                    if (!inZone[c]) work.push_back({static_cast<int>(z), c});
+    } else {
+        if (cont[0] != -1 && !isJoint[0]) work.push_back({0, cont[0]});
+        pushStarts(0);
+    }
     // each joint's end rings, as the limbs leave them: which limb's tube, and which end of it
     struct Tube { uint32_t vBase = 0, rings = 0; std::size_t iBase = 0, iEnd = 0; int startBack = 0, endBack = 0, segs = 0; };
     struct EndRing { int tube = -1; bool start = true; };
@@ -924,7 +1417,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         Vec3 color = params.barkColor * vary(rng);
         Socket sock;
         const Socket* sp = nullptr;
-        if (!trunk && !cut && params.collar > 0.0f) {   // a side branch: welded into its parent at the fork
+        // (a limb out of the trunk zone starts buried in it: the zone is no cylinder for a collar to fit)
+        if (!trunk && !cut && params.collar > 0.0f && !inZone[static_cast<std::size_t>(anchor)]) {   // a side branch: welded into its parent at the fork
             const int par = nodes[anchor].parent;
             const Vec3 dIn = par >= 0 ? normalize(nodes[anchor].pos - nodes[par].pos) : nodes[anchor].heading;
             const Vec3 dOut = cont[anchor] >= 0 ? normalize(nodes[cont[anchor]].pos - nodes[anchor].pos) : dIn;
@@ -1369,30 +1863,13 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     out.jointsPlain = jointsPlain;
 
     // Buttress roots: from the base, swept out and down, flattening to run along
-    // the ground (local y~0). Widens the flare and grounds the tree.
-    if (params.rootCount > 0 && !nodes.empty()) {
-        float baseR = std::max(nodes[0].radius, params.tipRadius * params.radiusScale);
-        Vec3 baseP = nodes[0].pos;
-        float rootLen = baseR * params.rootSpread;
-        float tipR = params.tipRadius * params.radiusScale;
-        std::uniform_real_distribution<float> jit(-0.3f, 0.3f);
-        std::uniform_real_distribution<float> lenv(0.7f, 1.2f);
-        std::uniform_real_distribution<float> vary(0.85f, 1.0f);
+    // the ground (local y~0). Widens the flare and grounds the tree. (With the trunk zone they are part of it.)
+    if (params.rootCount > 0 && !nodes.empty() && !zoneOn) {
+        const float baseR = std::max(nodes[0].radius, params.tipRadius * params.radiusScale);
+        const Vec3 baseP = nodes[0].pos;
         for (int k = 0; k < params.rootCount; k++) {
-            float ang = (params.phyllotaxis * k) * static_cast<float>(PI) / 180.0f + jit(rng);
-            Vec3 dir(std::cos(ang), 0.0f, std::sin(ang));
-            float L = rootLen * lenv(rng);
-            BranchPath rp;
-            auto add = [&](const Vec3& p, float r) {
-                rp.points.push_back(p);
-                rp.radius.push_back(r);
-                rp.dist.push_back(static_cast<float>((p - baseP).length()));
-            };
-            add(baseP + dir * (baseR * 0.3f) + Vec3(0, baseR * 0.7f, 0), baseR * 0.55f);
-            add(baseP + dir * (baseR * 1.5f) + Vec3(0, baseR * 0.15f, 0), baseR * 0.4f);
-            add(baseP + dir * (L * 0.6f), tipR * 2.0f);
-            add(baseP + dir * L + Vec3(0, -0.02f, 0), tipR);
-            Vec3 color = params.barkColor * vary(rng);
+            Vec3 color;
+            const BranchPath rp = buttressRoot(k, rng, color);
             // (the bark's variety only -- the dark foot and patches -- not the gnarl, which is for limbs)
             TreeParams rootLook;
             rootLook.barkMottle = params.barkMottle;
@@ -1654,6 +2131,16 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     for (const SkeletonNode& n : nodes)
         if (n.parent >= 0) out.limbs.push_back({nodes[n.parent].pos, n.pos, nodes[n.parent].radius, n.radius});
 
+    // (the bark blends where the trunk zone meets itself: every vertex's tangent slot then its second UV and weight --
+    // a tube's its own UV, weight 0 -- and the mesh says so: RenderMaterial::FLAG_UV_BLEND)
+    if (out.barkBlend) {
+        for (std::size_t v = 0; v < out.branches.vertices.size(); ++v) {
+            if (v >= out.zoneVertexStart && v < out.zoneVertexEnd) continue;   // (the zone's: its own pair)
+            Vertex& vx = out.branches.vertices[v];
+            vx.tangent = Vec3(vx.u, vx.v, 0.0);
+        }
+        out.branches.tangentIsData = true;
+    }
     // Collision = the bark geometry (positions + indices), branches only.
     out.collisionVertices.reserve(out.branches.vertices.size());
     for (const Vertex& v : out.branches.vertices)

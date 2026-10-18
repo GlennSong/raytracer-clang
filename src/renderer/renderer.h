@@ -144,6 +144,12 @@ struct RenderMaterial {
     // (FLAG_LOD_BAND) always were. For a crown with no band: the tree lab's recipe trees (Glenn, 2026-10-17: the
     // sakura came out a dusky mauve, half its cards their dark backs). Vulkan.
     static constexpr uint32_t FLAG_FOLIAGE = 1u << 22;
+    // FLAG_UV_BLEND (bit 23; ADR-0183, Glenn, 2026-10-18: "we need to blend those textures better"): the mesh's tangent
+    // slot is DATA (RenderMesh::tangentIsData) -- a second UV and a weight (u2, v2, w) -- and the albedo and normal maps
+    // are sampled at both UVs and mixed by w: where a tree's trunk meets a limb or a root, each in its own bark mapping,
+    // the bark crossfades instead of cutting. The tangent frames come from the screen-space derivatives of each UV.
+    // Vulkan (Metal and WebGPU draw the first UV and a tangent that is not one).
+    static constexpr uint32_t FLAG_UV_BLEND = 1u << 23;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the

@@ -10450,3 +10450,43 @@ real_tree.h trees are 3-8k: a modelled trunk and limbs and ~900 painted spray ca
   RT_TIDY_DUMP the skeletons), the levels test per kind.
 - **Owed**: the spruce's leader-top card is pale and stretched; spruce cards read stiff from above; the bark tile
   shows a chevron across coarse joints; crossings of wood (oak 90) are untouched.
+
+## ADR-0183 — The trunk zone: trunk, first limbs and roots as one implicit surface, even triangles, blended bark
+
+Glenn, 2026-10-18, after the hull joins kept webbing narrow forks ("there are a lot of bad joins ... probably the way
+I suggested is not right"): research says production game trees do NOT weld branches (SpeedTree overlaps them and
+hides the seam with a blend ring and bent normals; hero trunks are sculpted). His call: no hull joins, blend seams;
+and for the trunk "a full on interconnected trunk structure" -- the implicit surface (Bloomenthal's) where it matters.
+
+- **The zone** (`TreeParams::trunkZone`, m): the wood at least that thick joined to the foot through wood as thick,
+  plus the roots. Hull joins are off with it (ADR-0181 stays for trees without one); thinner limbs are tubes, those
+  leaving the zone start buried in it (no collar: the zone is no cylinder). Crowded forks stagger as before.
+- **The field**: each limb a CHAIN of tapered capsules that meet HARD (a fillet between a limb's own stretches bulged a
+  ring at every node), the chains smooth-unioned thickest first with a fillet 0.3 of each one's radius; the trunk's
+  flare, lobes and twist and the bark's knots displace it; the ground cut softly 3 cm under the foot.
+- **The roots** (Glenn: "very tepid ... bigger roots so we can sink the tree into the ground"): rootCount flares sized
+  from the FLARED foot (beside the flare a root of the bare radius is a spike), broad humps (wider than high) running
+  out six trunk radii, thinning, sinking and diving under, and a smaller root between each two. Their distances are
+  scaled so the field never says more than the true distance (the sparse mesher's skipping relies on it).
+- **The mesh**: `polygonizeSdfSparse` (sdf.h, new: blocks of cells near the surface only, every block beside one too,
+  a cell made as a quad asks for it -- a dense grid of the trunk is ~18M samples), `MeshBuilder::splitNonManifold` and
+  `fillHoles` (Surface Nets pinches where two limbs touch inside a cell), a quadric `simplify` to twice the budget,
+  then ISOTROPIC `remesh` (Botsch & Kobbelt: split / collapse / flip to valence 6 / tangential relax, every vertex put
+  back on the field) at an edge length k times the local limb radius, k from the budget (Glenn: "those triangles look
+  really stretched" -- the quadric simplification alone left long slivers on the straight trunk). New mesh words.
+- **The bark**: each vertex mapped round and along its nearest limb, the frame carried node to node and interpolated
+  along a stretch (per-stretch frames jumped at every node), one tile count and one shade a limb. BLENDED (Glenn: "we
+  need to blend those textures better"): each triangle also carries the mapping of the nearest limb of ANOTHER chain
+  and each vertex a logistic weight for it (half at the crease, gone a fifth of the thinner radius out -- a linear
+  band either cut as a line or saw-toothed where neighbours chose another second limb). It rides the tangent slot:
+  `RenderMaterial::FLAG_UV_BLEND` (bit 23), `RenderMesh::tangentIsData`; mesh.frag samples albedo and normal at both
+  UVs, the tangent frames from screen-space derivatives. A tube's slot is its own UV, weight 0. Vulkan only.
+- **Levels**: the hero's whole zone, the mid's a third of the triangles on a 1.5x cell, none past (tubes).
+- **Numbers**: oak zone 2.2-3.1k triangles (budget 2800), 0% slivers, closed; hero wood 5.1-7.4k with the card-tree
+  tubes. ~1-2.5 s a zone (17-limb oak) -- the lab's load went to ~100 s: OWED, profile it.
+- **Owed**: a few blocky bark patches low on the trunk where triangles' second limbs differ near three-way meetings;
+  roots on slopes (Glenn: "the roots probably have to undulate") -- the ground as a function (a hero on its real
+  terrain; slope variants or a terrain-conform pass for instanced trees); seam blending for tube welds (the same
+  FLAG_UV_BLEND); Metal and WebGPU.
+- **Tests**: `a_trees_trunk_zone_is_one_closed_surface` (closed by position, outward, no slivers, budget, wood <= 8000;
+  RT_TREE_WIRE renders the zone, RT_JOINT_TREES picks name:seed); the card test renders each hero's zone.

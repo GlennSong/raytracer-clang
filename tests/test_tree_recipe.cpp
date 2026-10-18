@@ -10,6 +10,7 @@
 #include "../src/engine/procgen/material_recipes.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -69,6 +70,85 @@ Real trunkOutOfRound(const TreeMesh& t, Real y) {
     return lo > 1e-6 ? hi / lo : 0;
 }
 
+
+// The bark round the lowest of the triangles [hiStart, hiEnd) (index positions), shaded and wired, those tinted and their
+// slivers red, `half` metres either side of the middle: a PNG at `path` (RT_TREE_WIRE in the tests)
+void writeWire(const TreeMesh& t, std::size_t hiStart, std::size_t hiEnd, const std::string& path, double half,
+               double yaw = 0.5, double tilt = -0.25) {
+    const RenderMesh& m = t.branches;
+    Vec3 lo(1e9, 1e9, 1e9);
+    for (std::size_t k = hiStart; k < hiEnd; ++k) {
+        const Vec3& p = m.vertices[m.indices[k]].position;
+        if (p.y < lo.y) lo = p;
+    }
+    const Vec3 ctr(lo.x, lo.y + half * 0.7, lo.z);
+    const int W = 900, H = 900;
+    auto view = [&](const Vec3& p) {   // turned about y, tipped about x; x right, y up, z depth
+        const Vec3 q = p - ctr;
+        const double x1 = q.x * std::cos(yaw) - q.z * std::sin(yaw), z1 = q.x * std::sin(yaw) + q.z * std::cos(yaw);
+        const double y2 = q.y * std::cos(tilt) - z1 * std::sin(tilt), z2 = q.y * std::sin(tilt) + z1 * std::cos(tilt);
+        return Vec3((x1 / half * 0.5 + 0.5) * W, (0.5 - y2 / half * 0.5) * H, z2);
+    };
+    std::vector<double> zb(static_cast<std::size_t>(W) * H, 1e9);
+    Image img(W, H);
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) img.setPixel(x, y, Vec3(0.85, 0.87, 0.9));
+    const Vec3 light = normalize(Vec3(-0.4, 0.7, -0.6));
+    auto drawTris = [&](bool wire) {
+        for (std::size_t k = 0; k + 2 < m.indices.size(); k += 3) {
+            const Vec3 a = view(m.vertices[m.indices[k]].position), b = view(m.vertices[m.indices[k + 1]].position),
+                       c = view(m.vertices[m.indices[k + 2]].position);
+            const bool joint = k >= hiStart && k < hiEnd;
+            if (!wire) {
+                const Vec3 wn = normalize(cross(m.vertices[m.indices[k + 1]].position - m.vertices[m.indices[k]].position,
+                                                m.vertices[m.indices[k + 2]].position - m.vertices[m.indices[k]].position));
+                const double sh = 0.35 + 0.65 * std::max(0.0, std::fabs(dot(wn, light)));
+                bool sliver = false;
+                if (joint) {
+                    const Vec3 &A = m.vertices[m.indices[k]].position, &B = m.vertices[m.indices[k + 1]].position, &Cc = m.vertices[m.indices[k + 2]].position;
+                    auto ang = [](const Vec3& p, const Vec3& q, const Vec3& r) {
+                        const Vec3 u = q - p, w = r - p;
+                        return std::acos(std::clamp(dot(u, w) / std::max(Real(1e-18), u.length() * w.length()), Real(-1), Real(1)));
+                    };
+                    sliver = std::min({ang(A, B, Cc), ang(B, Cc, A), ang(Cc, A, B)}) < 8.0 * 3.14159265 / 180.0;
+                }
+                const Vec3 col = (sliver ? Vec3(0.9, 0.1, 0.1) : joint ? Vec3(0.85, 0.55, 0.30) : Vec3(0.55, 0.45, 0.38)) * sh;
+                const int x0 = std::max(0, static_cast<int>(std::min({a.x, b.x, c.x}))), x1 = std::min(W - 1, static_cast<int>(std::max({a.x, b.x, c.x})) + 1);
+                const int y0 = std::max(0, static_cast<int>(std::min({a.y, b.y, c.y}))), y1 = std::min(H - 1, static_cast<int>(std::max({a.y, b.y, c.y})) + 1);
+                const double area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                if (std::fabs(area) < 1e-9) continue;
+                for (int y = y0; y <= y1; ++y)
+                    for (int x = x0; x <= x1; ++x) {
+                        const double px = x + 0.5, py = y + 0.5;
+                        const double w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) / area;
+                        const double w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) / area;
+                        const double w2 = 1.0 - w0 - w1;
+                        if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+                        const double z = w0 * a.z + w1 * b.z + w2 * c.z;
+                        const std::size_t o = static_cast<std::size_t>(y) * W + x;
+                        if (z < zb[o]) { zb[o] = z; img.setPixel(x, y, col); }
+                    }
+            } else {
+                const Vec3 pts[3] = {a, b, c};
+                for (int e = 0; e < 3; ++e) {
+                    const Vec3 p = pts[e], q = pts[(e + 1) % 3];
+                    const int n = static_cast<int>(std::max(std::fabs(q.x - p.x), std::fabs(q.y - p.y))) + 1;
+                    for (int i = 0; i <= n; ++i) {
+                        const double u = static_cast<double>(i) / n;
+                        const int x = static_cast<int>(p.x + (q.x - p.x) * u), y = static_cast<int>(p.y + (q.y - p.y) * u);
+                        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+                        const double z = p.z + (q.z - p.z) * u;
+                        if (z <= zb[static_cast<std::size_t>(y) * W + x] + 0.01)
+                            img.setPixel(x, y, joint ? Vec3(0.45, 0.15, 0.02) : Vec3(0.12, 0.1, 0.1));
+                    }
+                }
+            }
+        }
+    };
+    drawTris(false);
+    drawTris(true);
+    img.writePng(path);
+
+}
 
 // RT_TIDY_SET="sprigSize=0.8,woodEdge=0.05": knobs to grow the measured trees with (exploring; empty in the suite)
 std::map<std::string, double> knobsFromEnv() {
@@ -198,9 +278,11 @@ TEST_CASE(a_gnarled_trunk_is_not_a_tube) {
     const TreeRecipe* oak = book.find("oak");
     CHECK(oak != nullptr);
     if (!oak) return;
+    // (the tube's own cross-section: the trunk zone off -- its surface is not cut in rings)
     const std::map<std::string, double> plain = {{"lobes", 0}, {"lobeDepth", 0}, {"barkNoise", 0}, {"nodeSwell", 0},
-                                                 {"flare", 0}, {"crookChance", 0}, {"meander", 0}, {"lean", 0}};
-    const TreeMesh g = growRecipeTree(*oak, 2), p = growRecipeTree(*oak, 2, plain);
+                                                 {"flare", 0}, {"crookChance", 0}, {"meander", 0}, {"lean", 0},
+                                                 {"trunkZone", 0}};
+    const TreeMesh g = growRecipeTree(*oak, 2, {{"trunkZone", 0}}), p = growRecipeTree(*oak, 2, plain);
     if (std::getenv("RT_GNARL_PROBE"))
         for (Real y : {0.6, 0.8, 1.0, 1.4, 1.8, 2.4, 3.0}) {
             std::size_t n = 0;
@@ -504,13 +586,27 @@ TEST_CASE(spruce_sprays_are_built_from_strands_and_hang_on_the_tree) {
 // what is left are the twigs welded on as before).
 TEST_CASE(limbs_meet_in_one_surface_at_their_joints) {
     const TreeRecipeBook book = shipped();
-    for (const char* name : {"oak", "birch", "sakura", "maple", "pine", "spruce"}) {
+    // (RT_JOINT_TREES="multistem:2,oak:5": other trees to look at, by name and seed)
+    std::vector<std::pair<std::string, uint32_t>> trees;
+    for (const char* name : {"oak", "birch", "sakura", "maple", "pine", "spruce"}) trees.push_back({name, 2u});
+    if (const char* env = std::getenv("RT_JOINT_TREES")) {
+        trees.clear();
+        std::stringstream ss(env);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            const auto colon = item.find(':');
+            trees.push_back({item.substr(0, colon), colon == std::string::npos ? 2u : static_cast<uint32_t>(std::stoul(item.substr(colon + 1)))});
+        }
+    }
+    for (const auto& [nameStr, seed] : trees) {
+        const char* name = nameStr.c_str();
         const TreeRecipe* r = book.find(name);
         CHECK(r != nullptr);
         if (!r) continue;
         std::map<std::string, double> set = knobsFromEnv();
         set["joints"] = 1.0;
-        const TreeMesh t = growRecipeTree(*r, 2u, set);
+        if (!set.count("trunkZone")) set["trunkZone"] = 0.0;   // (the hull joins: a trunk zone stands in for them)
+        const TreeMesh t = growRecipeTree(*r, seed, set);
         const RenderMesh& m = t.branches;
         // union-find over vertices: by triangle, and by position (the u seam's duplicates)
         std::vector<uint32_t> up(m.vertices.size());
@@ -565,81 +661,9 @@ TEST_CASE(limbs_meet_in_one_surface_at_their_joints) {
         CHECK(t.joints >= 3);
         CHECK(t.jointsPlain * 2 <= t.joints + 1);   // (a plain joint is shaped the same; its rings' caps just cut)
         // RT_TREE_WIRE=<dir>: the bark round the lowest forks, shaded and wired, the joints' triangles tinted
-        if (const char* dir = std::getenv("RT_TREE_WIRE")) {
-            Vec3 lo(1e9, 1e9, 1e9);
-            for (std::size_t k = t.jointIndexStart; k < t.jointIndexEnd; ++k) {
-                const Vec3& p = m.vertices[m.indices[k]].position;
-                if (p.y < lo.y) lo = p;
-            }
-            const double half = std::string(name) == "spruce" ? 0.8 : 1.4;
-            const Vec3 ctr(lo.x, lo.y + half * 0.7, lo.z);
-            const int W = 900, H = 900;
-            const double yaw = 0.5, tilt = -0.25;
-            auto view = [&](const Vec3& p) {   // turned about y, tipped about x; x right, y up, z depth
-                const Vec3 q = p - ctr;
-                const double x1 = q.x * std::cos(yaw) - q.z * std::sin(yaw), z1 = q.x * std::sin(yaw) + q.z * std::cos(yaw);
-                const double y2 = q.y * std::cos(tilt) - z1 * std::sin(tilt), z2 = q.y * std::sin(tilt) + z1 * std::cos(tilt);
-                return Vec3((x1 / half * 0.5 + 0.5) * W, (0.5 - y2 / half * 0.5) * H, z2);
-            };
-            std::vector<double> zb(static_cast<std::size_t>(W) * H, 1e9);
-            Image img(W, H);
-            for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) img.setPixel(x, y, Vec3(0.85, 0.87, 0.9));
-            const Vec3 light = normalize(Vec3(-0.4, 0.7, -0.6));
-            auto drawTris = [&](bool wire) {
-                for (std::size_t k = 0; k + 2 < m.indices.size(); k += 3) {
-                    const Vec3 a = view(m.vertices[m.indices[k]].position), b = view(m.vertices[m.indices[k + 1]].position),
-                               c = view(m.vertices[m.indices[k + 2]].position);
-                    const bool joint = k >= t.jointIndexStart && k < t.jointIndexEnd;
-                    if (!wire) {
-                        const Vec3 wn = normalize(cross(m.vertices[m.indices[k + 1]].position - m.vertices[m.indices[k]].position,
-                                                        m.vertices[m.indices[k + 2]].position - m.vertices[m.indices[k]].position));
-                        const double sh = 0.35 + 0.65 * std::max(0.0, std::fabs(dot(wn, light)));
-                        bool sliver = false;
-                        if (joint) {
-                            const Vec3 &A = m.vertices[m.indices[k]].position, &B = m.vertices[m.indices[k + 1]].position, &Cc = m.vertices[m.indices[k + 2]].position;
-                            auto ang = [](const Vec3& p, const Vec3& q, const Vec3& r) {
-                                const Vec3 u = q - p, w = r - p;
-                                return std::acos(std::clamp(dot(u, w) / std::max(Real(1e-18), u.length() * w.length()), Real(-1), Real(1)));
-                            };
-                            sliver = std::min({ang(A, B, Cc), ang(B, Cc, A), ang(Cc, A, B)}) < 8.0 * 3.14159265 / 180.0;
-                        }
-                        const Vec3 col = (sliver ? Vec3(0.9, 0.1, 0.1) : joint ? Vec3(0.85, 0.55, 0.30) : Vec3(0.55, 0.45, 0.38)) * sh;
-                        const int x0 = std::max(0, static_cast<int>(std::min({a.x, b.x, c.x}))), x1 = std::min(W - 1, static_cast<int>(std::max({a.x, b.x, c.x})) + 1);
-                        const int y0 = std::max(0, static_cast<int>(std::min({a.y, b.y, c.y}))), y1 = std::min(H - 1, static_cast<int>(std::max({a.y, b.y, c.y})) + 1);
-                        const double area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-                        if (std::fabs(area) < 1e-9) continue;
-                        for (int y = y0; y <= y1; ++y)
-                            for (int x = x0; x <= x1; ++x) {
-                                const double px = x + 0.5, py = y + 0.5;
-                                const double w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) / area;
-                                const double w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) / area;
-                                const double w2 = 1.0 - w0 - w1;
-                                if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-                                const double z = w0 * a.z + w1 * b.z + w2 * c.z;
-                                const std::size_t o = static_cast<std::size_t>(y) * W + x;
-                                if (z < zb[o]) { zb[o] = z; img.setPixel(x, y, col); }
-                            }
-                    } else {
-                        const Vec3 pts[3] = {a, b, c};
-                        for (int e = 0; e < 3; ++e) {
-                            const Vec3 p = pts[e], q = pts[(e + 1) % 3];
-                            const int n = static_cast<int>(std::max(std::fabs(q.x - p.x), std::fabs(q.y - p.y))) + 1;
-                            for (int i = 0; i <= n; ++i) {
-                                const double u = static_cast<double>(i) / n;
-                                const int x = static_cast<int>(p.x + (q.x - p.x) * u), y = static_cast<int>(p.y + (q.y - p.y) * u);
-                                if (x < 0 || y < 0 || x >= W || y >= H) continue;
-                                const double z = p.z + (q.z - p.z) * u;
-                                if (z <= zb[static_cast<std::size_t>(y) * W + x] + 0.01)
-                                    img.setPixel(x, y, joint ? Vec3(0.45, 0.15, 0.02) : Vec3(0.12, 0.1, 0.1));
-                            }
-                        }
-                    }
-                }
-            };
-            drawTris(false);
-            drawTris(true);
-            img.writePng(std::string(dir) + "/wire_" + name + ".png");
-        }
+        if (const char* dir = std::getenv("RT_TREE_WIRE"))
+            writeWire(t, t.jointIndexStart, t.jointIndexEnd, std::string(dir) + "/wire_" + name + ".png",
+                      std::string(name) == "spruce" ? 0.8 : 1.4);
     }
 }
 
@@ -847,6 +871,10 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
                     name.c_str(), bark, (hero.jointIndexEnd - hero.jointIndexStart) / 3, hero.sprigs.size(), cards,
                     levels[1].tree.branches.indices.size() / 3, cache.pictures.size());
         CHECK(bark <= 8000);
+        if (const char* dir = std::getenv("RT_TREE_WIRE"))   // (the hero as the lab and the forest draw it)
+            writeWire(hero, hero.zoneIndexEnd > hero.zoneIndexStart ? hero.zoneIndexStart : 0,
+                      hero.zoneIndexEnd > hero.zoneIndexStart ? hero.zoneIndexEnd : hero.branches.indices.size(),
+                      std::string(dir) + "/hero_" + name + ".png", 2.2);
         CHECK(hero.foliage == 5);
         CHECK(!hero.sprigs.empty());
         CHECK(cards == hero.sprigs.size() * 4 * static_cast<std::size_t>(r->branchCards.views));
@@ -881,4 +909,81 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
         CHECK(off == 0);
     }
     CHECK(trees >= 6);
+}
+
+// THE TRUNK ZONE (tree.h TreeParams::trunkZone, ADR-0183; Glenn, 2026-10-18: "a full on interconnected trunk
+// structure"): the trunk, its thick limbs and its roots are one implicit surface -- CLOSED (every edge, by position,
+// on at least two of its triangles: no hole; a few edges in a thousand on four, where two limbs touch inside a cell and
+// the mesh is split there by index), FACING OUT (each triangle wound to the side its normals point), EVEN (no sliver:
+// Glenn, "those triangles look really stretched"), near its triangle budget, and the whole wood with it under the
+// hero's 8000. RT_TREE_WIRE renders its foot; RT_JOINT_TREES picks the trees (name:seed).
+TEST_CASE(a_trees_trunk_zone_is_one_closed_surface) {
+    const TreeRecipeBook book = shipped();
+    std::vector<std::pair<std::string, uint32_t>> trees{{"oak", 2u}, {"oak", 3u}, {"oak", 5u}};
+    if (const char* env = std::getenv("RT_JOINT_TREES")) {
+        trees.clear();
+        std::stringstream ss(env);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            const auto colon = item.find(':');
+            trees.push_back({item.substr(0, colon), colon == std::string::npos ? 2u : static_cast<uint32_t>(std::stoul(item.substr(colon + 1)))});
+        }
+    }
+    for (const auto& [name, seed] : trees) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r != nullptr);
+        if (!r) continue;
+        std::map<std::string, double> set{{"foliage", 2.0}, {"sprigSize", 0.8}, {"woodEdge", 0.05}, {"ringAngle", 12.0},
+                                          {"trunkZone", 0.10}, {"trunkZoneTris", 2800.0}};
+        for (const auto& [k, v] : knobsFromEnv()) set[k] = v;
+        const auto t0 = std::chrono::steady_clock::now();
+        const TreeMesh t = growRecipeTree(*r, seed, set);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const RenderMesh& m = t.branches;
+        const std::size_t zoneTris = (t.zoneIndexEnd - t.zoneIndexStart) / 3;
+        // closed: edges by position
+        auto key = [](const Vec3& p) { return std::make_tuple(std::lround(p.x * 1e5), std::lround(p.y * 1e5), std::lround(p.z * 1e5)); };
+        std::map<std::pair<std::tuple<long, long, long>, std::tuple<long, long, long>>, int> edges;
+        int outward = 0;
+        for (std::size_t k = t.zoneIndexStart; k + 2 < t.zoneIndexEnd; k += 3) {
+            const Vertex* v[3] = {&m.vertices[m.indices[k]], &m.vertices[m.indices[k + 1]], &m.vertices[m.indices[k + 2]]};
+            for (int e = 0; e < 3; ++e) {
+                auto a = key(v[e]->position), b = key(v[(e + 1) % 3]->position);
+                if (b < a) std::swap(a, b);
+                ++edges[{a, b}];
+            }
+            // (the engine's front is clockwise from the normal's side: cross(c - a, b - a) points out)
+            const Vec3 fn = cross(v[2]->position - v[0]->position, v[1]->position - v[0]->position);
+            outward += dot(fn, v[0]->normal + v[1]->normal + v[2]->normal) > 0.0;
+        }
+        std::size_t slivers = 0;
+        for (std::size_t k = t.zoneIndexStart; k + 2 < t.zoneIndexEnd; k += 3) {
+            const Vec3 &A = m.vertices[m.indices[k]].position, &B = m.vertices[m.indices[k + 1]].position, &C = m.vertices[m.indices[k + 2]].position;
+            auto ang = [](const Vec3& p, const Vec3& q, const Vec3& r) {
+                const Vec3 u = q - p, w = r - p;
+                return std::acos(std::clamp(dot(u, w) / std::max(Real(1e-18), u.length() * w.length()), Real(-1), Real(1)));
+            };
+            slivers += std::min({ang(A, B, C), ang(B, C, A), ang(C, A, B)}) < 8.0 * 3.14159265 / 180.0;
+        }
+        int open = 0, over = 0;
+        for (const auto& [e, n] : edges) {
+            open += n == 1; over += n > 2;
+            if (n != 2 && open + over <= 40)
+                std::printf("    [zone] bad edge (%d faces) at (%.3f %.3f %.3f)\n", n, std::get<0>(e.first) * 1e-5, std::get<1>(e.first) * 1e-5, std::get<2>(e.first) * 1e-5);
+        }
+        std::printf("    [zone] %-6s seed %u: %d limbs, %d raw -> %zu tris (%zu verts); %d open edges, %d shared by 3+, %.1f%% outward, %.1f%% slivers; "
+                    "bark %zu tris in all; %.0f ms\n",
+                    name.c_str(), seed, t.zoneLimbs, t.zoneRawTris, zoneTris, m.vertices.size(), open, over,
+                    zoneTris ? 100.0 * outward / zoneTris : 0.0, zoneTris ? 100.0 * slivers / zoneTris : 0.0, m.indices.size() / 3, ms);
+        CHECK(t.zoneLimbs >= 3);
+        CHECK(zoneTris > 0 && zoneTris <= 2800 + 2800 / 10);
+        CHECK(open == 0 && over * 500 <= static_cast<int>(edges.size()));   // (touching sheets: a few in a thousand at most)
+        CHECK(slivers * 100 <= zoneTris);
+        CHECK(outward * 100 >= static_cast<int>(zoneTris) * 99);
+        CHECK(m.indices.size() / 3 <= 8000);
+        if (const char* dir = std::getenv("RT_TREE_WIRE")) {
+            writeWire(t, t.zoneIndexStart, t.zoneIndexEnd, std::string(dir) + "/zone_" + name + "_" + std::to_string(seed) + ".png", 2.2);
+            writeWire(t, t.zoneIndexStart, t.zoneIndexEnd, std::string(dir) + "/zone_" + name + "_" + std::to_string(seed) + "_far.png", 4.5, 1.6, -0.1);
+        }
+    }
 }

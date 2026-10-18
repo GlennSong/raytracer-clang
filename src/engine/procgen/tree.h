@@ -90,6 +90,15 @@ struct TreeParams {
     float woodEdge = 0.0f;
     float ringAngle = 0.0f;
     float ringSpacing = 4.0f;
+    // THE TRUNK ZONE (Glenn, 2026-10-18: "a full on interconnected trunk structure"; ADR-0183): the wood at least
+    // trunkZone metres in radius that is joined to the foot through wood as thick -- the trunk, its first forks, its
+    // buttress roots -- is ONE implicit surface: each limb a tapered capsule, smooth-unioned with a fillet a share of
+    // its radius, the trunk's flare and lobes and the bark's knots displacing it; sampled every trunkZoneCell metres
+    // (sdf.h polygonizeSdfSparse), simplified to trunkZoneTris (MeshBuilder::simplify) and settled back onto the
+    // field. Thinner limbs are tubes welded into it as before. 0 = off (every limb a tube).
+    float trunkZone = 0.0f;
+    float trunkZoneCell = 0.04f;
+    int   trunkZoneTris = 3500;
 
     // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
     int   rootCount     = 5;        // number of surface roots (0 = none)
@@ -157,6 +166,12 @@ struct TreeMesh {
     int joints = 0, jointsPlain = 0;      // forks joined as one surface (ADR-0181), and those closed by a plain hull
     std::vector<uint32_t> jointRingStarts;   // ...the first vertex of every limb end ring a joint joined
     std::size_t jointIndexStart = 0, jointIndexEnd = 0;   // ...and the joints' own triangles in branches.indices
+    std::size_t zoneIndexStart = 0, zoneIndexEnd = 0;     // the trunk zone's triangles in branches.indices (TreeParams::trunkZone)
+    int zoneLimbs = 0, zoneRawTris = 0;                   // ...the limbs it joined, and its triangles before simplifying
+    std::size_t zoneVertexStart = 0, zoneVertexEnd = 0;   // ...and its vertices in branches.vertices
+    // THE BARK BLENDS (the trunk zone's: where two limbs' bark mappings meet): branches.tangentIsData, each vertex's
+    // tangent slot a second UV and its weight (a tube's own UV, weight 0) -- drawn with RenderMaterial::FLAG_UV_BLEND
+    bool barkBlend = false;
     // THE SPRIGS (TreeParams::sprigSize): each one's frame -- from `base` (where it leaves its limb) out along `axis`,
     // spread across `side`, `normal` = axis x side (turned skyward) -- and its reach in that frame: its nodes out to
     // `length` along the axis, `halfWidth` either side, `depth` either face. A donor tree (sprigDonor) builds each

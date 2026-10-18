@@ -87,6 +87,7 @@ layout(location = 2) in vec2 inTexcoord;
 layout(location = 3) in vec3 inColor;
 layout(location = 4) in vec3 inWorldTangent;
 layout(location = 5) flat in vec3 inInstanceOrigin;   // per-instance variation (ADR-0098)
+layout(location = 6) in vec3 inUvBlend;   // FLAG_UV_BLEND (bit 23): a second UV and its weight
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
@@ -765,6 +766,19 @@ vec3 ceilingPanels(vec3 P, vec3 R) {
     return vec3(2.2, 2.1, 1.9) * on;   // the panel's own emission (furniture_draw.cpp)
 }
 
+// FLAG_UV_BLEND: a normal map's tangent frame from the screen-space derivatives of position and `uv` (the cotangent
+// frame: the mesh's tangent slot carries the second UV, not a tangent) -- T along u, B = N x T as the tangent path's
+vec3 derivedNormal(vec3 N, vec2 uv, vec3 tsN) {
+    vec3 dp1 = dFdx(inWorldPos), dp2 = dFdy(inWorldPos);
+    vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+    vec3 T = cross(dp2, N) * duv1.x + cross(N, dp1) * duv2.x;
+    T = T - N * dot(N, T);
+    if (dot(T, T) < 1e-20) return N;
+    T = normalize(T);
+    vec3 B = cross(N, T);
+    return normalize(T * tsN.x + B * tsN.y + N * tsN.z);
+}
+
 void main() {
     // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a
     // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)
@@ -963,6 +977,8 @@ void main() {
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
+        if ((pc.surfaceFlags.y & (1u << 23)) != 0u)   // FLAG_UV_BLEND: the second mapping's, mixed in by its weight
+            albedoTex = mix(albedoTex, texture(albedoMap, inUvBlend.xy), clamp(inUvBlend.z, 0.0, 1.0));
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
         float cut = albedoTex.a;
         // grass cards: keep the cut-out's coverage down the mips (Golus) -- a thin blade's alpha
@@ -1056,7 +1072,12 @@ void main() {
     if ((pc.surfaceFlags.y & 128u) != 0u && dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) discard;
     // Normal map (bit 2): perturb N in tangent space. Gram-Schmidt the tangent
     // against N, then T,B,N form the TBN basis (ported from lighting.metal).
-    if ((texFlags & 4u) != 0u) {
+    if ((texFlags & 4u) != 0u && (pc.surfaceFlags.y & (1u << 23)) != 0u) {
+        // FLAG_UV_BLEND: each mapping's relief in its own derived frame, mixed by the second's weight
+        vec3 n1 = derivedNormal(N, inTexcoord, texture(normalMap, inTexcoord).xyz * 2.0 - 1.0);
+        vec3 n2 = derivedNormal(N, inUvBlend.xy, texture(normalMap, inUvBlend.xy).xyz * 2.0 - 1.0);
+        N = normalize(mix(n1, n2, clamp(inUvBlend.z, 0.0, 1.0)));
+    } else if ((texFlags & 4u) != 0u) {
         vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;

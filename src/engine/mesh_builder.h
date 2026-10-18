@@ -133,6 +133,31 @@ struct MeshBuilder {
     // FLAT SHADING: every triangle its own three vertices, their normal the triangle's own facing (cross(c-a, b-a)),
     // its winding kept; no-area triangles dropped. Low-poly rocks, faceted gems.
     static void flatShade(RenderMesh& mesh);
+    // SIMPLIFY (quadric error edge collapse, Garland & Heckbert 1997): collapse the edge that moves the surface least
+    // -- each vertex carries the sum of its faces' plane quadrics (and its open edges', weighted heavy, so a border
+    // keeps its line), an edge collapses to the point that minimises their sum -- until `targetTris` triangles are left
+    // or the next collapse would move the surface more than `maxError` (squared distance, m^2). A collapse that would
+    // turn a face over or make the surface non-manifold (the edge's ends sharing more neighbours than faces) is skipped.
+    // Winding is kept. POSITIONS ONLY: a kept vertex keeps its other attributes as they were, so the caller re-derives
+    // normals, UVs and colours (an implicit surface's from its field). Returns the triangles left.
+    static std::size_t simplify(RenderMesh& mesh, std::size_t targetTris, double maxError = 1e30);
+    // MANIFOLD BY SPLITTING: where two sheets of a mesh touch at a vertex (an isosurface's pinch where a feature is
+    // thinner than its cell -- an edge then sits on four faces), the vertex is split, one copy for each fan of faces
+    // round it that are joined through edges of exactly two faces. Positions are kept (the sheets still touch); the
+    // mesh is then manifold by index. Returns the vertices added.
+    static std::size_t splitNonManifold(RenderMesh& mesh);
+    // FILL SMALL HOLES: every loop of open edges (an edge on one face, followed head to tail) of at most `maxEdges`
+    // edges is closed by a fan round a new vertex at its middle (put on the surface by `project`), wound with the
+    // faces round it. (splitNonManifold can open a few where two sheets crossed at an edge.) Returns the holes filled.
+    static std::size_t fillHoles(RenderMesh& mesh, std::size_t maxEdges, const std::function<Vec3(const Vec3&)>& project);
+    // ISOTROPIC REMESHING (Botsch & Kobbelt 2004): even, near-equilateral triangles of about `edgeAt(p)` metres --
+    // `iterations` rounds of: split every edge over 4/3 of its target, collapse every edge under 4/5 (where no edge
+    // it makes would be over 4/3, no face turns over and the surface stays manifold), flip edges toward valence six,
+    // and move each vertex toward its neighbours' middle within its tangent plane -- every new or moved vertex put
+    // back on the surface by `project` (an implicit surface's Newton step; identity for a mesh with none). The mesh
+    // must be manifold (splitNonManifold first). Positions only, as simplify: the caller re-derives the rest.
+    static void remesh(RenderMesh& mesh, const std::function<double(const Vec3&)>& edgeAt,
+                       const std::function<Vec3(const Vec3&)>& project, int iterations = 6);
 
     // Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid (cell key = floor(x / cell),
     // floor(z / cell)), in first-seen order; vertices are duplicated per chunk (a vertex is shared by few

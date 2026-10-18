@@ -968,6 +968,7 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
             r.material.roughness = 1.0f;
             r.material.albedoMap = barkAlbedo;
             r.material.normalMap = barkNormal;
+            if (tm.barkBlend) r.material.flags |= RenderMaterial::FLAG_UV_BLEND;   // (a trunk zone's bark crossfades)
             if (ent.contains("material")) applyMaterial(ent["material"], r.material);
             banded(r.material, r, L);
             world.add<Renderable>(e, r);
@@ -2089,6 +2090,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                     const double drawM = last ? reach + 10.0 : L.maxDistance;
                     Part bark;
                     bark.mat = wood;
+                    if (L.tree.barkBlend) bark.mat.flags |= RenderMaterial::FLAG_UV_BLEND;   // (a trunk zone's bark crossfades)
                     band(bark.mat);
                     bark.mesh = assets.acquireMesh(L.tree.branches, key + ":" + std::to_string(li) + ":bark");
                     bark.drawM = drawM;
