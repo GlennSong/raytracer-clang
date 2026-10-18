@@ -365,6 +365,10 @@ tree_recipes = {
     bark_color = {0.30, 0.25, 0.20},
     leaf_color = { {0.92, 0.92, 0.92}, {1.0, 1.0, 1.0} },
     leaf_palette = { {0.62, 0.72, 0.55}, {0.75, 0.85, 0.62}, {1.0, 0.95, 0.60}, {1.0, 0.55, 0.45} },
+    -- near (a forest's understory, 2026-10-17): glossy leaves a few centimetres long in rosettes, berry umbels
+    leaves = { size = 0.055, shoots = 3, shoot_length = 0.10, per_shoot = 6, angle = 55, fold = 10, curl = 0.15,
+               droop = 0.15, face = 0.6, budget = 9000,
+               blossom = { size = 0.012, per_cluster = 6, clusters = 1, cup = 0.6, budget = 3000 } },
     card = {
       axiom = "X($row)", iterations = 2, variants = 2,
       rules = {
@@ -480,6 +484,10 @@ tree_recipes = {
     bark_color = {0.32, 0.30, 0.22},
     leaf_color = { {0.92, 0.92, 0.92}, {1.0, 1.0, 1.0} },
     leaf_palette = { {0.80, 0.90, 0.70}, {1.0, 1.0, 1.0} },
+    -- near: fine grey-green leaflets up the shoots, a daisy over each
+    leaves = { size = 0.05, shoots = 3, shoot_length = 0.12, per_shoot = 8, angle = 40, fold = 20, curl = 0.1,
+               droop = 0.05, face = 0.3, budget = 9000,
+               blossom = { size = 0.035, per_cluster = 1, clusters = 1, cup = 0.12, budget = 2500 } },
     card = {
       axiom = "X($row)", iterations = 2, variants = 2,
       rules = {

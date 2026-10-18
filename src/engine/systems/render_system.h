@@ -22,7 +22,7 @@ void frustumCullInstances(const std::vector<Mat4>& transforms,
                           const Frustum& frustum,
                           const Vec3& meshCenter, Real meshRadius,
                           const Vec3& cameraPos, Real maxDistance,
-                          std::vector<Mat4>& out);
+                          std::vector<Mat4>& out, Real minDistance = 0);
 
 // Draws the world each frame using the RenderView's camera and lights, with
 // per-entity interpolation for smooth motion. Also ramps exposure from input.

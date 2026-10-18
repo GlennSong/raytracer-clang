@@ -26,7 +26,8 @@
 #include "procgen/earthwork.h"
 #include "procgen/grass.h"
 #include "procgen/stylized_tree.h"
-#include "procgen/forest.h"         // "forest": real trees + impostors at island scale (ADR-0129)
+#include "procgen/forest.h"
+#include "procgen/tree_lods.h"      // a recipe tree's hero / mid / light levels         // "forest": real trees + impostors at island scale (ADR-0129)
 #include "procgen/terrain_maps.h"
 #include "procgen/terrain_weather.h"
 #include "procgen/trails.h"
@@ -891,44 +892,14 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
                 for (auto it = ent["tree"]["set"].begin(); it != ent["tree"]["set"].end(); ++it)
                     if (it.value().is_number()) overrides[it.key()] = it.value().get<double>();
             if (barkStyle.empty()) barkStyle = r->bark;
-            uint32_t h = 2166136261u;
-            for (unsigned char ch : r->name) h = (h ^ ch) * 16777619u;
-            auto atlasFor = [&](const TreeMesh& tm) {
-                if (tm.foliage == 3 || tm.foliage == 4) {   // BLADES, FRONDS: the strap leaf's veins (material_recipes.h)
-                    const BarkTextures bt = bladeTextures(h);
-                    LeafCardAtlas a;
-                    a.albedo = bt.albedo;
-                    a.normal = bt.normal;
-                    return a;
-                }
-                if (tm.foliage == 2)   // NEAR LEAVES: each leaf / blossom one whole picture of the species' (foliage_kit.h)
-                    return foliageElementAtlas(r->card, r->leafKit.blossomSize > 0.0, h);
-                if (tm.foliage == 1)   // NEAR FOLIAGE: sprays wearing the species' strands (foliage_kit.h), tiles its shape
-                    return leafCardAtlas(r->strand, h, std::max(32, static_cast<int>(std::lround(436.0 * r->spray.aspect))), 436);
-                if (r->card.set)       // the species' own leaf cards, drawn by its card grammar (leaf_card.h)
-                    return leafCardAtlas(r->card, h);
-                return LeafCardAtlas{};
-            };
-            const bool nearKit = r->leafKit.set || (r->spray.set && r->strand.set);
-            const bool lod = nearKit && !overrides.count("foliage") && ent["tree"].value("lod", true);
-            if (lod) {
-                std::map<std::string, double> hero = overrides, mid = overrides;
-                hero["foliage"] = r->leafKit.set ? 2.0 : 1.0;
-                mid["foliage"] = 0.0;
-                if (!mid.count("jointMinRadius")) mid["jointMinRadius"] = 0.10;   // (the trunk and main limbs)
-                Level H, M;
-                H.tm = growRecipeTree(*r, seed, hero);
-                H.out0 = kLodBand0; H.out1 = kLodBand1; H.maxD = kLodBand1 + 8.0;
-                M.tm = growRecipeTree(*r, seed, mid);
-                M.in0 = kLodBand0; M.in1 = kLodBand1; M.minD = kLodBand0 - 8.0;
-                H.atlas = atlasFor(H.tm);
-                M.atlas = atlasFor(M.tm);
-                levels.push_back(std::move(H));
-                levels.push_back(std::move(M));
-            } else {
+            RecipeLodBands bands;
+            bands.hero0 = kLodBand0; bands.hero1 = kLodBand1;
+            for (RecipeTreeLevel& rl : growRecipeLevels(*r, seed, overrides, bands, ent["tree"].value("lod", true))) {
                 Level L;
-                L.tm = growRecipeTree(*r, seed, overrides);
-                L.atlas = atlasFor(L.tm);
+                L.tm = std::move(rl.tree);
+                L.atlas = std::move(rl.atlas);
+                L.in0 = rl.in0; L.in1 = rl.in1; L.out0 = rl.out0; L.out1 = rl.out1;
+                L.minD = rl.minDistance; L.maxD = rl.maxDistance;
                 levels.push_back(std::move(L));
             }
             fromRecipe = true;
@@ -2043,20 +2014,144 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     int vps = 1;
     for (const ForestSpecies& s : fp.species) vps = std::max(vps, s.variants);
     const int nVar = static_cast<int>(fp.species.size()) * vps;
-    struct Var { MeshHandle bark, leaves; int species = -1; ImpostorSlot slot; RealTree tree; };
+    // a variant's near parts: its bark and leaves, or a recipe tree's levels' (tree_lods.h), each an instanced draw
+    struct Part { MeshHandle mesh; RenderMaterial mat; double drawM = 0, minM = 0; };
+    // `shade`: the impostor's colour scale -- a recipe tree's crown is darkened inside by real shadows, which the
+    // impostor's picture (rasterised unlit, then lit as one card) never had
+    struct Var { std::vector<Part> parts; int species = -1; ImpostorSlot slot; RealTree tree; double shade = 1.0; };
     std::vector<Var> vars(nVar);
     std::vector<TextureHandle> folTex(fp.species.size());
     std::vector<TextureData> folData(fp.species.size());
+    // THE NEAR MATERIALS: fading out over the band into the impostors
+    RenderMaterial barkMat;
+    barkMat.albedo = Vec3(1, 1, 1);
+    barkMat.roughness = 0.92f; barkMat.metallic = 0.0f; barkMat.opacity = 1.0f;
+    barkMat.flags = RenderMaterial::FLAG_LOD_BAND;
+    barkMat.lodOut0 = static_cast<float>(fp.nearM - fp.nearFadeM);
+    barkMat.lodOut1 = static_cast<float>(fp.nearM);
+    auto uploadTex = [&](const TextureData& td) -> TextureHandle {
+        if (td.pixels.empty()) return TextureHandle{};
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
     for (std::size_t s = 0; s < fp.species.size(); ++s) {
-        folData[s] = realFoliageTexture(fp.species[s].species, 512, fp.seed + static_cast<uint32_t>(s) * 101u);
+        const ForestSpecies& fs = fp.species[s];
+        if (!fs.recipe.empty()) {
+#ifdef RT_ENABLE_SCRIPTING
+            // A RECIPE SPECIES: every variant grown at its levels, the last (the light tree) the impostor's picture
+            std::string path;
+            const TreeRecipeBook& book = shippedTreeRecipes(&path);
+            if (!path.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), path) == g_loadedScriptFiles.end())
+                g_loadedScriptFiles.push_back(path);
+            const TreeRecipe* r = book.find(fs.recipe);
+            if (!r) {
+                LOG_WARN << "[forest] no recipe '" << fs.recipe << "' in tree_recipes.lua";
+                continue;
+            }
+            // its levels' distances: a tree's the forest's; a bush's within its own shorter reach
+            const double reach = fs.understory && fp.understoryM > 0 ? fp.understoryM : fp.nearM;
+            const double reachFade = fs.understory && fp.understoryM > 0 ? 10.0 : fp.nearFadeM;
+            RecipeLodBands bands;
+            bands.hero0 = fp.heroM - fp.heroFadeM; bands.hero1 = fp.heroM;
+            bands.mid0 = fp.midM - fp.midFadeM; bands.mid1 = fp.midM;
+            if (fp.lightM > 0) { bands.light0 = fp.lightM - fp.lightFadeM; bands.light1 = fp.lightM; }
+            if (fs.understory) {
+                bands.light0 = bands.light1 = 0;   // (a bush's leaves are small: each level nearer)
+                bands.hero0 = 0.15 * reach; bands.hero1 = 0.22 * reach;
+                bands.mid0 = 0.40 * reach; bands.mid1 = 0.50 * reach;
+            }
+            RenderMaterial wood = barkMat;
+            wood.roughness = 1.0f;
+            BarkKind kind;
+            if (barkKindFromName(r->bark, kind)) {
+                const BarkTextures bt = barkTextures(kind, 1u);
+                wood.albedoMap = uploadTex(bt.albedo);
+                wood.normalMap = uploadTex(bt.normal);
+            }
+            std::map<int, std::pair<TextureHandle, TextureHandle>> leafTex;   // by foliage mode: one atlas a species
+            for (int v = 0; v < fs.variants; ++v) {
+                Var& var = vars[s * vps + v];
+                var.species = static_cast<int>(s);
+                var.shade = 0.6;
+                const uint32_t seed = fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17);
+                std::vector<RecipeTreeLevel> levels = growRecipeLevels(*r, seed, {}, bands);
+                const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
+                for (std::size_t li = 0; li < levels.size(); ++li) {
+                    RecipeTreeLevel& L = levels[li];
+                    const bool last = li + 1 == levels.size();
+                    auto band = [&](RenderMaterial& m) {
+                        m.flags |= RenderMaterial::FLAG_LOD_BAND;
+                        m.lodIn0 = L.in0; m.lodIn1 = L.in1;
+                        m.lodOut0 = last ? static_cast<float>(reach - reachFade) : L.out0;
+                        m.lodOut1 = last ? static_cast<float>(reach) : L.out1;
+                    };
+                    const double drawM = last ? reach + 10.0 : L.maxDistance;
+                    Part bark;
+                    bark.mat = wood;
+                    band(bark.mat);
+                    bark.mesh = assets.acquireMesh(L.tree.branches, key + ":" + std::to_string(li) + ":bark");
+                    bark.drawM = drawM;
+                    bark.minM = L.minDistance;
+                    var.parts.push_back(bark);
+                    if (!L.tree.leaves.vertices.empty()) {
+                        auto it = leafTex.find(L.tree.foliage);
+                        if (it == leafTex.end())
+                            it = leafTex.emplace(L.tree.foliage, std::make_pair(uploadTex(L.atlas.albedo), uploadTex(L.atlas.normal))).first;
+                        Part leaf;
+                        leaf.mat = barkMat;
+                        leaf.mat.roughness = 0.7f;
+                        leaf.mat.albedoMap = it->second.first;
+                        leaf.mat.normalMap = it->second.second;
+                        leaf.mat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
+                        if (L.tree.foliage >= 1) leaf.mat.flags |= RenderMaterial::FLAG_TWO_SIDED;
+                        band(leaf.mat);
+                        leaf.mesh = assets.acquireMesh(L.tree.leaves, key + ":" + std::to_string(li) + ":leaves");
+                        leaf.drawM = drawM;
+                        leaf.minM = L.minDistance;
+                        var.parts.push_back(leaf);
+                    }
+                }
+                // the impostor's tree: the light level, measured as real_tree.h measures its own
+                const TreeMesh& lt = levels.back().tree;
+                RealTree& rt = var.tree;
+                rt.bark = lt.branches;
+                rt.foliage = lt.leaves;
+                double top = 0, base = 1e9, reach = 0;
+                for (const Vertex& vx : lt.branches.vertices) top = std::max(top, static_cast<double>(vx.position.y));
+                for (const Vertex& vx : lt.leaves.vertices) {
+                    top = std::max(top, static_cast<double>(vx.position.y));
+                    base = std::min(base, static_cast<double>(vx.position.y));
+                    reach = std::max(reach, std::hypot(static_cast<double>(vx.position.x), static_cast<double>(vx.position.z)));
+                }
+                double trunkR = 0.1;
+                for (const TreeMesh::Limb& lm : lt.limbs) {   // the trunk's radius a metre up
+                    const double y0 = std::min(lm.a.y, lm.b.y), y1 = std::max(lm.a.y, lm.b.y);
+                    if (y0 <= 1.0 && y1 >= 1.0 && y1 > y0) {
+                        const double t = (1.0 - lm.a.y) / (lm.b.y - lm.a.y);
+                        trunkR = std::max(trunkR, lm.ra + (lm.rb - lm.ra) * std::clamp(t, 0.0, 1.0));
+                    }
+                }
+                rt.height = top;
+                rt.crownBase = base < 1e8 ? std::max(0.0, base) : 0.5 * top;
+                rt.crownRadius = std::max(0.5, reach);
+                rt.trunkRadius = trunkR * 1.45;
+                if (folData[s].pixels.empty()) folData[s] = levels.back().atlas.albedo;
+            }
+#endif
+            continue;
+        }
+        folData[s] = realFoliageTexture(fs.species, 512, fp.seed + static_cast<uint32_t>(s) * 101u);
         folTex[s] = renderer.uploadTexture(folData[s].width, folData[s].height, folData[s].channels, folData[s].pixels.data());
-        for (int v = 0; v < fp.species[s].variants; ++v) {
+        RenderMaterial leafMat = barkMat;
+        leafMat.roughness = 0.85f;
+        leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_WIND;
+        leafMat.albedoMap = folTex[s];
+        for (int v = 0; v < fs.variants; ++v) {
             Var& var = vars[s * vps + v];
             var.species = static_cast<int>(s);
-            var.tree = realTree(fp.species[s].species, fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17), 0.0);
-            const std::string key = std::string("forest:") + realSpeciesName(fp.species[s].species) + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
-            var.bark = assets.acquireMesh(var.tree.bark, key + ":bark");
-            var.leaves = assets.acquireMesh(var.tree.foliage, key + ":leaves");
+            var.tree = realTree(fs.species, fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17), 0.0);
+            const std::string key = std::string("forest:") + realSpeciesName(fs.species) + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
+            var.parts.push_back({assets.acquireMesh(var.tree.bark, key + ":bark"), barkMat, fp.nearM + 10.0});
+            var.parts.push_back({assets.acquireMesh(var.tree.foliage, key + ":leaves"), leafMat, fp.nearM + 10.0});
         }
     }
     // THE IMPOSTOR ATLAS: a column per variant, two side pictures (the second the tree turned a quarter, for the
@@ -2172,12 +2267,6 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     }
 
     // NEAR: instanced models per (near cell, variant, part), fading out over the band
-    RenderMaterial barkMat;
-    barkMat.albedo = Vec3(1, 1, 1);
-    barkMat.roughness = 0.92f; barkMat.metallic = 0.0f; barkMat.opacity = 1.0f;
-    barkMat.flags = RenderMaterial::FLAG_LOD_BAND;
-    barkMat.lodOut0 = static_cast<float>(fp.nearM - fp.nearFadeM);
-    barkMat.lodOut1 = static_cast<float>(fp.nearM);
     const double nearCell = std::max(fp.cellM, 512.0);
     std::map<std::pair<int, int>, std::vector<std::vector<Mat4>>> nearCells;
     for (const ForestTree& t : trees) {
@@ -2201,18 +2290,15 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             cen = cen / static_cast<Real>(per[v].size());
             Real spread = 0;
             for (const Mat4& m : per[v]) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
-            RenderMaterial leafMat = barkMat;
-            leafMat.roughness = 0.85f;
-            leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_WIND;
-            leafMat.albedoMap = folTex[vars[v].species];
-            for (int part = 0; part < 2; ++part) {
+            for (const Part& part : vars[v].parts) {
                 InstanceGroup g;
-                g.mesh = part == 0 ? vars[v].bark : vars[v].leaves;
-                g.material = part == 0 ? barkMat : leafMat;
+                g.mesh = part.mesh;
+                g.material = part.mat;
                 g.transforms = per[v];
                 g.boundsCenter = cen;
                 g.boundsRadius = spread + vars[v].tree.height * 1.3;
-                g.drawDistance = fp.nearM + 10.0;
+                g.drawDistance = part.drawM;
+                g.minDistance = part.minM;
                 g.drawClass = engine::DrawClass::Scenery;
                 g.renderLayer = engine::LayerFoliage;
                 world.add<InstanceGroup>(world.create(), g);
@@ -2237,7 +2323,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         if (vars[t.variant].species < 0) continue;
         if (fp.species[static_cast<std::size_t>(vars[t.variant].species)].understory) continue;   // bushes: near only
         RenderMesh& m = farCells[{static_cast<int>(std::floor(t.pos.x / fp.cellM)), static_cast<int>(std::floor(t.pos.z / fp.cellM))}];
-        appendImpostor(m, t, vars[t.variant].slot, 1.0 / colourScale);
+        appendImpostor(m, t, vars[t.variant].slot, vars[t.variant].shade / colourScale);
     }
     std::size_t farVerts = 0;
     for (auto& [key, mesh] : farCells) {

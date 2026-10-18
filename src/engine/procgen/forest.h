@@ -36,6 +36,10 @@ struct ForestSpecies {
     double weight = 1.0;
     double wet = 0.0;                  // affinity for wet ground (the maps' drainage): 1 = willow, alder
     bool understory = false;           // a bush under and around the canopy, in its own pass
+    // A RECIPE species (tree_recipes.lua, tree_lods.h; Glenn, 2026-10-17: "can we try a forest?"): grown from the
+    // recipe -- hero, mid and light levels near, impostors of the light level far -- instead of real_tree.h's `kind`
+    std::string recipe;
+    double scale = 1.0;                // its trees' size on top of the placement's spread
 };
 
 // ROCKS (ADR-0131, Glenn: "scattered rocks"): layers placed by the same fast grid, each by what the
@@ -63,9 +67,19 @@ struct ForestParams {
     double cellM = 256.0;          // cull cells (near groups, far merged meshes)
     double nearM = 150.0;          // full models to here, crossfading over the last nearFadeM
     double nearFadeM = 40.0;
+    // the recipe species' own levels near (tree_lods.h): the hero to heroM, the mid to midM, each crossfading into
+    // the next over its last fade metres; the light level from there to nearM
+    double heroM = 22.0, heroFadeM = 6.0;
+    double midM = 70.0, midFadeM = 12.0;
+    double lightM = 0.0, lightFadeM = 20.0;   // ...and the light to lightM, the far level from there (0: none)
     double farM = 7000.0;          // impostors to here
+    double litter = 0.78;          // the forest floor: the ground cover's share of litter under a full canopy (the
+                                   // rest stays grass: 0.78 the island's dark floor, less for a grassy wood)
     double understorySpacing = 5.0;  // the understory pass's grid
     double understoryDensity = 0.35; // its share where the canopy is, doubled along the edges
+    double understoryM = 0.0;        // a RECIPE understory's draw distance, fading out over its last 10 m (a bush is
+                                     // small: it has no impostor, and 150 m of 30k-triangle bushes was half the
+                                     // recipe forest's frame); 0 = nearM
     uint32_t seed = 1;
     std::vector<RockLayer> rocks;
 };

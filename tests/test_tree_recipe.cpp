@@ -2,6 +2,7 @@
 
 #include "test_framework.h"
 #include "../src/engine/procgen/tree_recipe.h"
+#include "../src/engine/procgen/tree_lods.h"
 #include "../src/engine/scripting/tree_recipes_lua.h"
 #include "../src/engine/procgen/leaf_card.h"
 #include "../src/image.h"
@@ -685,5 +686,39 @@ TEST_CASE(a_palm_wears_its_crown_at_the_top) {
         CHECK(lo > trunkTop * 0.45);   // (old coconut fronds hang metres down; a skirt to under half way)
         CHECK(hi > trunkTop + 0.5);
         CHECK(reach > 1.2 * (hi - trunkTop));
+    }
+}
+
+// A RECIPE TREE'S LEVELS (tree_lods.h; Glenn, 2026-10-17, of a forest of card trees: "you can tell they're cards"):
+// hero, mid and light each lighter than the last, the mid and light wearing the same leaves coarser -- leaves, not
+// crossed cards -- with the crown's leaf area about kept.
+TEST_CASE(a_recipe_trees_levels_get_lighter_and_keep_their_leaves) {
+    const TreeRecipeBook book = shipped();
+    RecipeLodBands bands;
+    bands.mid0 = 58; bands.mid1 = 70;
+    auto area = [](const RenderMesh& m) {
+        double a = 0;
+        for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+            a += 0.5 * cross(m.vertices[m.indices[i + 1]].position - m.vertices[m.indices[i]].position,
+                             m.vertices[m.indices[i + 2]].position - m.vertices[m.indices[i]].position).length();
+        return a;
+    };
+    for (const char* name : {"oak", "birch", "maple", "sakura", "river_birch", "magnolia"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r != nullptr);
+        if (!r) continue;
+        const std::vector<RecipeTreeLevel> L = growRecipeLevels(*r, 3, {}, bands);
+        CHECK(L.size() == 3);
+        if (L.size() != 3) continue;
+        std::size_t tris[3];
+        for (int i = 0; i < 3; ++i) tris[i] = (L[i].tree.branches.indices.size() + L[i].tree.leaves.indices.size()) / 3;
+        const double a0 = area(L[0].tree.leaves), a2 = area(L[2].tree.leaves);
+        std::printf("    [levels] %-11s hero %zu, mid %zu, light %zu tris (leaf area %.0f / %.0f / %.0f m2)\n", name, tris[0],
+                    tris[1], tris[2], a0, area(L[1].tree.leaves), a2);
+        CHECK(tris[1] < tris[0] / 2);
+        CHECK(tris[2] < tris[1]);
+        CHECK(L[1].tree.foliage == 2 && L[2].tree.foliage == 2);   // leaves, not cards
+        CHECK(a2 > 0.4 * a0 && a2 < 2.5 * a0);
+        CHECK(L[0].out1 > L[0].out0 && L[1].in0 == L[0].out0 && L[1].out1 == 70.0f && L[2].in1 == 70.0f);
     }
 }

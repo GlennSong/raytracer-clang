@@ -660,6 +660,10 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         auto [anchor, first] = work.back();
         work.pop_back();
         const bool trunk = anchor == 0 && first == trunkFirst;
+        if (!trunk && params.woodMinRadius > 0.0f && nodes[first].radius < params.woodMinRadius && !isJoint[anchor]) {
+            for (int cur = first; cur != -1; cur = cont[cur]) pushStarts(cur);   // (its own side limbs: thinner still)
+            continue;
+        }
         BranchPath path;
         auto append = [&](int idx) {
             path.points.push_back(nodes[idx].pos);
@@ -1243,7 +1247,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         std::size_t wanted = 0, wantedBlossoms = 0;
         for (const SkeletonNode& n : nodes)
             if (leafyNode(n)) {
-                wanted += static_cast<std::size_t>(std::max(0, kit ? params.leafKit.shoots * params.leafKit.perTwig : perNode));
+                wanted += static_cast<std::size_t>(std::max(0, kit ? params.leafKit.shoots * params.leafKit.perTwig / std::max(1, static_cast<int>(params.leafLod * params.leafLod)) : perNode));
                 if (kit) wantedBlossoms += static_cast<std::size_t>(std::max(0, params.leafKit.shoots * params.leafKit.clusters * params.leafKit.perCluster));
             }
         const double blossomKeep = kit && wantedBlossoms > static_cast<std::size_t>(params.leafKit.blossomBudget)
@@ -1253,7 +1257,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                                 ? static_cast<double>(budget) / static_cast<double>(wanted) : 1.0;
         std::uniform_real_distribution<double> odds(0.0, 1.0);
         // (the leaf kit's shoots, thinned to whichever budget -- leaves or blossoms -- binds first)
-        const double shootKeep = std::min(keep, blossomKeep);
+        const double coarse = std::max(1.0, static_cast<double>(params.leafLod));
+        const double shootKeep = std::min(keep, blossomKeep) / coarse;
         for (const SkeletonNode& n : nodes) {
             if (!leafyNode(n)) continue;
             // the twig the cards hang on: this node's internode (parent to node), or for the root its heading
@@ -1271,7 +1276,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 const LeafKitSpec& lk = params.leafKit;
                 for (int sh = 0; sh < lk.shoots; ++sh) {
                     if (cards >= budget) break;
-                    if (shootKeep < 1.0 && odds(rng) >= shootKeep) continue;
+                    if (shootKeep < 1.0 && odds(rng) >= shootKeep) continue;   // (and 1 / leafLod of them: coarse)
                     const double sroll = (params.phyllotaxis * sh) * PI / 180.0 + off(rng) * 0.6;
                     const Vec3 so = s1 * std::cos(sroll) + s2 * std::sin(sroll);
                     const double sang = (lk.shootAngle + tilt(rng) * 30.0) * PI / 180.0;
@@ -1291,7 +1296,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                         td = normalize(td + Vec3(0, -1.5 * lk.sag, 0));
                         tp = tp + td * (slen / 2.0);
                     }
-                    addCurvedBranch(out.branches, tw, params.barkColor * vary(rng), 3, vScale, 1);
+                    if (coarse < 1.5) addCurvedBranch(out.branches, tw, params.barkColor * vary(rng), 3, vScale, 1);
                     auto shootAt = [&](double t, Vec3& p, Vec3& d) {   // a point and heading along the shoot
                         const double x = std::clamp(t, 0.0, 1.0) * 2.0;
                         const int i = std::min(1, static_cast<int>(x));
@@ -1301,7 +1306,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                     const Vec3 refs = std::abs(sd.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
                     const Vec3 t1 = normalize(cross(sd, refs)), t2 = normalize(cross(sd, t1));
                     // its leaves
-                    const int nl = std::max(1, lk.perTwig);
+                    const int nl = std::max(1, static_cast<int>(std::lround(lk.perTwig / coarse)));
                     for (int j = 0; j < nl; ++j) {
                         const double tpos = lk.pairs ? 0.25 + 0.75 * ((j / 2) * 2.0 + 1.0) / nl : 0.2 + 0.8 * (j + 1.0) / nl;
                         const double kroll = lk.pairs ? (j / 2) * (PI * 0.5) + (j % 2) * PI + off(rng) * 0.25
@@ -1317,15 +1322,16 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                         skyward = skyward.length() > 1e-6 ? normalize(skyward) : hang;
                         const Vec3 face = normalize(hang * (1.0 - lk.face) + skyward * lk.face);
                         std::uniform_int_distribution<int> leafTile(0, lk.blossomSize > 0.0 ? 1 : 3);
-                        addKitLeaf(out.leaves, at, ld, face, lk.size * vary(rng), lk.fold, lk.curl * (0.7 + 0.6 * odds(rng)),
+                        addKitLeaf(out.leaves, at, ld, face, lk.size * coarse * vary(rng), lk.fold, lk.curl * (0.7 + 0.6 * odds(rng)),
                                    2, leafTile(rng), leafColourAt(at) * vary(rng));
                         ++cards;
                     }
                     // its blossom clusters (a sakura): umbels on spurs along it, the cups opening outward and up
-                    for (int c = 0; c < lk.clusters && lk.blossomSize > 0.0; ++c) {
+                    const int nc = std::max(1, static_cast<int>(std::lround(lk.clusters / coarse)));
+                    for (int c = 0; c < nc && lk.blossomSize > 0.0; ++c) {
                         if (blossoms >= lk.blossomBudget) break;
                         Vec3 sp, hd;
-                        shootAt(0.15 + 0.85 * (c + 0.5) / lk.clusters, sp, hd);
+                        shootAt(0.15 + 0.85 * (c + 0.5) / nc, sp, hd);
                         const double croll = (params.phyllotaxis * (c + 2)) * PI / 180.0 + off(rng) * 0.5;
                         const Vec3 oc = normalize(t1 * std::cos(croll) + t2 * std::sin(croll));
                         const Vec3 clusterAxis = normalize(oc + hd * 0.5 + Vec3(0, 0.5, 0));
@@ -1335,7 +1341,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                             const double phi = 2.0 * PI * bl / lk.perCluster + off(rng) * 0.4;
                             const double spread = 0.5 + 0.35 * odds(rng);
                             const Vec3 stalk = normalize(clusterAxis * std::cos(spread) + (c1 * std::cos(phi) + c2 * std::sin(phi)) * std::sin(spread));
-                            const double sz = lk.blossomSize * (0.85 + 0.3 * odds(rng));
+                            const double sz = lk.blossomSize * coarse * (0.85 + 0.3 * odds(rng));
                             const Vec3 centre = sp + stalk * (0.8 * sz);
                             std::uniform_int_distribution<int> flowerTile(2, 3);
                             addKitBlossom(out.leaves, centre, normalize(stalk + Vec3(0, 0.3, 0)), sz, lk.cup, odds(rng) * 2.0 * PI,

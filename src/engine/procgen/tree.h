@@ -68,6 +68,14 @@ struct TreeParams {
     // end rings are joined by ONE surface (their hull) -- the trunk and limbs one mesh. 0 = the welds above.
     int   joints        = 0;
     float jointMinRadius = 0.03f;
+    // THE FAR WOOD (a forest's light level of detail): limbs thinner than this at their start are not skinned -- their
+    // leaves still hang where they grew, and past ~60 m the cards hide where the twigs were. 0 = all of it.
+    float woodMinRadius = 0.0f;
+    // THE COARSE LEAVES (a distant level of the leaf kit; Glenn, 2026-10-17, of a forest's card trees: "you can tell
+    // they're cards"): leaves leafLod times as long, 1/leafLod of the shoots carrying 1/leafLod as many each -- the
+    // crown's leaf area kept on a leafLod^2 share of the leaves, each still turned its own way (no sheet to see edge
+    // on). Past 1.5 the shoots' own twigs go too. 1 = the leaves as authored.
+    float leafLod = 1.0f;
 
     // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
     int   rootCount     = 5;        // number of surface roots (0 = none)

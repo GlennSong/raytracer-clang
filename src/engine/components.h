@@ -172,6 +172,9 @@ struct InstanceGroup {
     // L-system trees/rocks dominate the triangle budget, so a finite radius is
     // the cheapest large fps win in a big world.
     Real drawDistance = 0;
+    // ...and nearer than this they are not drawn either: a far level of detail, a nearer one drawing them there
+    // (the recipe forest's mid and light trees, tree_lods.h; 0 = none)
+    Real minDistance = 0;
     uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
     DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
 };

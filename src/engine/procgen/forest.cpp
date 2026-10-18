@@ -36,7 +36,15 @@ ForestParams forestFromJson(const nlohmann::json& j) {
     p.nearM = j.value("near", p.nearM);
     p.nearFadeM = j.value("nearFade", p.nearFadeM);
     p.farM = j.value("far", p.farM);
+    p.heroM = j.value("hero", p.heroM);
+    p.heroFadeM = j.value("heroFade", p.heroFadeM);
+    p.midM = j.value("mid", p.midM);
+    p.midFadeM = j.value("midFade", p.midFadeM);
+    p.lightM = j.value("light", p.lightM);
+    p.lightFadeM = j.value("lightFade", p.lightFadeM);
     p.seed = j.value("seed", p.seed);
+    p.litter = j.value("litter", p.litter);
+    p.understoryM = j.value("understoryDraw", p.understoryM);
     p.understorySpacing = j.value("understorySpacing", p.understorySpacing);
     p.understoryDensity = j.value("understoryDensity", p.understoryDensity);
     if (j.contains("rocks") && j["rocks"].is_array())
@@ -57,7 +65,9 @@ ForestParams forestFromJson(const nlohmann::json& j) {
     if (j.contains("species") && j["species"].is_array())
         for (const auto& s : j["species"]) {
             ForestSpecies fs;
-            if (!realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) continue;
+            fs.recipe = s.value("recipe", std::string());
+            if (fs.recipe.empty() && !realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) continue;
+            fs.scale = s.value("scale", fs.scale);
             fs.variants = std::clamp(s.value("variants", fs.variants), 1, 16);
             fs.altLo = s.value("altLo", fs.altLo);
             fs.altHi = s.value("altHi", fs.altHi);
@@ -172,7 +182,7 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                         // stunted toward the treeline and at a stand's thin edge
                         const double tl = p.treelineM;
                         const double stunt = 1.0 - 0.5 * smooth(tl - 220.0, tl, alt);
-                        tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d));
+                        tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d) * fs.scale);
                         tr.variant = static_cast<uint16_t>(best * vps + static_cast<int>(unit(h ^ 0x3131u) * fs.variants) % fs.variants);
                         parts[t].push_back(tr);
                     }
@@ -219,7 +229,7 @@ std::vector<PlacedRock> placeRocks(const ForestParams& p, double half, double se
                         if (!ok) continue;
                         const double y = ground(x, z);
                         const double alt = y - (sea > -1e29 ? sea : 0.0);
-                        if (alt < 0.3) continue;
+                        if (sea > -1e29 && alt < 0.3) continue;   // (above the sea, when there is one)
                         const double e = 1.5;
                         const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
                         const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 57.2957795;

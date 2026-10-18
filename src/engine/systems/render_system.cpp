@@ -21,9 +21,10 @@ void frustumCullInstances(const std::vector<Mat4>& transforms,
                           const Frustum& frustum,
                           const Vec3& meshCenter, Real meshRadius,
                           const Vec3& cameraPos, Real maxDistance,
-                          std::vector<Mat4>& out) {
+                          std::vector<Mat4>& out, Real minDistance) {
     out.clear();
     Real maxDistSq = maxDistance * maxDistance;
+    const Real minDistSq = minDistance * minDistance;
     for (const Mat4& m : transforms) {
         // AFFINE, no perspective divide: an instance matrix's bottom row can carry DATA -- the grass
         // clump's thinning rank (GrassSystem) -- and transformPoint divided the world position by
@@ -33,7 +34,10 @@ void frustumCullInstances(const std::vector<Mat4>& transforms,
         const Vec3 center(m.m[0][0] * meshCenter.x + m.m[0][1] * meshCenter.y + m.m[0][2] * meshCenter.z + m.m[0][3],
                           m.m[1][0] * meshCenter.x + m.m[1][1] * meshCenter.y + m.m[1][2] * meshCenter.z + m.m[1][3],
                           m.m[2][0] * meshCenter.x + m.m[2][1] * meshCenter.y + m.m[2][2] * meshCenter.z + m.m[2][3]);
-        if (maxDistance > 0 && (center - cameraPos).lengthSquared() > maxDistSq)
+        const Real d2 = (center - cameraPos).lengthSquared();
+        if (maxDistance > 0 && d2 > maxDistSq)
+            continue;
+        if (minDistance > 0 && d2 < minDistSq)   // (a nearer level of detail draws it there)
             continue;
         Vec3 cx(m.m[0][0], m.m[1][0], m.m[2][0]);
         Vec3 cy(m.m[0][1], m.m[1][1], m.m[2][1]);
@@ -401,7 +405,7 @@ void RenderSystem::render(FrameContext& ctx) {
             ++encGrpIn;
             encInst += static_cast<long>(g.transforms.size());
             frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
-                                 cam.position, drawDist, instanceScratch_);
+                                 cam.position, drawDist, instanceScratch_, g.minDistance);
             encInstDrawn += static_cast<long>(instanceScratch_.size());
             if (instanceScratch_.empty()) return;
             if (hidden) {   // hidden from the camera, but its shadow may fall where the camera sees
