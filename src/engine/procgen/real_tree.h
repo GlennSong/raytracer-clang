@@ -68,6 +68,13 @@ TextureData realFoliageTexture(RealSpecies species, int size, uint32_t seed);
 void renderImpostor(const RealTree& tree, const TextureData& foliage, bool top, int w, int h,
                     double colourScale, uint8_t* rgbaOut, int strideBytes, uint8_t* normalOut = nullptr);
 
+// The same picture of any bark and foliage, framed by the caller: the side view (along -z) spans x0..x1 across and
+// y0..y1 up the image; the top view (`top`, down -y) x0..x1 across and z y0..y1 down it. (renderImpostor frames a
+// whole tree; branch_cards.h a sprig in its own frame.)
+void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
+                    double y0, double y1, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,
+                    uint8_t* normalOut = nullptr);
+
 }  // namespace engine
 
 #endif

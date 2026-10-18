@@ -76,6 +76,20 @@ struct TreeParams {
     // crown's leaf area kept on a leafLod^2 share of the leaves, each still turned its own way (no sheet to see edge
     // on). Past 1.5 the shoots' own twigs go too. 1 = the leaves as authored.
     float leafLod = 1.0f;
+    // THE BRANCH CARDS (Glenn, 2026-10-18: "When we get to small enough branches ... use some kind of card to stand in
+    // for those branches and clusters of leaves"; the wood held to ~8000 triangles a hero): a side shoot whose whole
+    // spread -- every node of it from where it leaves its limb -- is within sprigSize metres is a SPRIG. Its wood and
+    // leaves are not built; it is recorded (TreeMesh::sprigs) for a card baked from sprigs like it (branch_cards.h).
+    // sprigDonor = 1 builds the sprigs after all, each into its own meshes (the pictures the cards are baked from).
+    // 0 = everything modelled.
+    float sprigSize = 0.0f;
+    int   sprigDonor = 0;
+    // THE WOOD'S RESOLUTION by need, not one number for every limb: round a limb, sides about woodEdge metres
+    // apart (at least 4, at most ringSegments; 0 = ringSegments everywhere); along it, a ring where it has turned by
+    // ringAngle degrees or gone ringSpacing of its radii since the last (0 = three rings to every internode)
+    float woodEdge = 0.0f;
+    float ringAngle = 0.0f;
+    float ringSpacing = 4.0f;
 
     // --- Roots (buttress roots flaring from the base, splayed along the ground) ---
     int   rootCount     = 5;        // number of surface roots (0 = none)
@@ -143,6 +157,17 @@ struct TreeMesh {
     int joints = 0, jointsPlain = 0;      // forks joined as one surface (ADR-0181), and those closed by a plain hull
     std::vector<uint32_t> jointRingStarts;   // ...the first vertex of every limb end ring a joint joined
     std::size_t jointIndexStart = 0, jointIndexEnd = 0;   // ...and the joints' own triangles in branches.indices
+    // THE SPRIGS (TreeParams::sprigSize): each one's frame -- from `base` (where it leaves its limb) out along `axis`,
+    // spread across `side`, `normal` = axis x side (turned skyward) -- and its reach in that frame: its nodes out to
+    // `length` along the axis, `halfWidth` either side, `depth` either face. A donor tree (sprigDonor) builds each
+    // into its own `bark` and `leaves`, in the tree's space.
+    struct Sprig {
+        Vec3 base, axis, side, normal;
+        float length = 0, halfWidth = 0, depth = 0, radius = 0;
+        int nodes = 0;
+        RenderMesh bark, leaves;
+    };
+    std::vector<Sprig> sprigs;
     int foliage = 0;                      // what `leaves` is: 0 crossed cards (both windings), 1 sprays, 2 leaves, 3
                                           //   blades or 4 fronds (one winding: draw it two-sided) -- TreeParams::foliage
     std::vector<Vec3>     collisionVertices;

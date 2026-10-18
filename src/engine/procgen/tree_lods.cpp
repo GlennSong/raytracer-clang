@@ -1,5 +1,6 @@
 #include "tree_lods.h"
 
+#include "branch_cards.h"
 #include "foliage_kit.h"
 #include "material_recipes.h"
 
@@ -35,9 +36,67 @@ LeafCardAtlas recipeLeafAtlas(const TreeRecipe& r, const TreeMesh& tm) {
 }
 
 std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed, const std::map<std::string, double>& overrides,
-                                              const RecipeLodBands& bands, bool lod) {
+                                              const RecipeLodBands& bands, bool lod, BranchCardSet* cardCache) {
     std::vector<RecipeTreeLevel> out;
     const bool nearKit = r.leafKit.set || (r.spray.set && r.strand.set);
+    // THE BRANCH CARDS (branch_cards.h): every level the wood to sprigs and a card a sprig, the cards baked once
+    // (or taken from the caller's cache: a forest's variants of a species wear one atlas) from a donor grown whole
+    const BranchCardSpec& bc = r.branchCards;
+    if (bc.set && lod && !overrides.count("foliage") && !overrides.count("sprigSize")) {
+        // (the pictures of the nearest foliage the species has: leaves one by one, sprays, else its own cards)
+        const double foliage = r.leafKit.set ? 2.0 : nearKit ? 1.0 : 0.0;
+        BranchCardSet local;
+        BranchCardSet& set = cardCache ? *cardCache : local;
+        if (set.empty()) {
+            std::map<std::string, double> o = overrides;
+            o["foliage"] = foliage;
+            o["sprigSize"] = bc.sprig;
+            o["sprigDonor"] = 1.0;
+            const TreeMesh donor = growRecipeTree(r, seed, o);
+            set = bakeBranchCards(donor, recipeLeafAtlas(r, donor), bc);
+        }
+        if (!set.empty()) {
+            // each level: its wood's coarseness (sides apart, degrees a ring), joints, and the range it draws over
+            auto level = [&](double edge, double angle, bool joints, bool roots, double woodMin) {
+                std::map<std::string, double> o = overrides;
+                o["foliage"] = foliage;
+                o["sprigSize"] = bc.sprig;
+                if (!o.count("woodEdge")) o["woodEdge"] = edge;
+                if (!o.count("ringAngle")) o["ringAngle"] = angle;
+                if (!joints) o["joints"] = 0.0;
+                else if (!o.count("jointMinRadius") && edge > bc.woodEdge) o["jointMinRadius"] = 0.10;   // (the trunk and main limbs)
+                if (!roots && !o.count("rootCount")) o["rootCount"] = 0.0;
+                if (woodMin > 0.0 && !o.count("woodMinRadius")) o["woodMinRadius"] = woodMin;
+                RecipeTreeLevel L;
+                L.tree = growRecipeTree(r, seed, o);
+                wearBranchCards(L.tree, set, bc, seed ^ 0x9e3779b9u);
+                L.atlas = set.atlas;
+                return L;
+            };
+            auto fadeInto = [&](RecipeTreeLevel& next, double b0, double b1) {
+                RecipeTreeLevel& prev = out.back();
+                prev.out0 = static_cast<float>(b0); prev.out1 = static_cast<float>(b1);
+                prev.maxDistance = b1 + 4.0;
+                next.in0 = static_cast<float>(b0); next.in1 = static_cast<float>(b1);
+                next.minDistance = std::max(0.0, b0 - 4.0);
+                out.push_back(std::move(next));
+            };
+            out.push_back(level(bc.woodEdge, bc.ringAngle, true, true, 0.0));                       // hero
+            if (bands.hero1 > bands.hero0) {
+                RecipeTreeLevel M = level(bc.woodEdge * 1.6, bc.ringAngle * 1.5, true, true, 0.0);   // mid
+                fadeInto(M, bands.hero0, bands.hero1);
+            }
+            if (bands.mid1 > bands.mid0) {
+                RecipeTreeLevel Lt = level(bc.woodEdge * 2.5, bc.ringAngle * 2.0, false, false, 0.0);   // light
+                fadeInto(Lt, bands.mid0, bands.mid1);
+                if (bands.light1 > bands.light0) {
+                    RecipeTreeLevel F = level(0.25, 30.0, false, false, 0.06);                       // far
+                    fadeInto(F, bands.light0, bands.light1);
+                }
+            }
+            return out;
+        }
+    }
     const bool heroMid = lod && nearKit && !overrides.count("foliage") && bands.hero1 > bands.hero0;
     const bool light = bands.mid1 > bands.mid0 && !r.blades.set;
     auto grow = [&](std::map<std::string, double> o) {

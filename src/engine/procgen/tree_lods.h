@@ -11,6 +11,8 @@
 //   light  no joints, no twigs (woodMinRadius), fewer sides, leafLod 3.5: a forest's       mid0 .. (the caller's)
 // A species with sprays and no leaf kit (the spruce) wears its crossed cards at the mid and light levels.
 //   far    the light tree coarser again (leafLod 6, limbs from 7 cm, four sides)          light0 .. (the caller's)
+// A species with BRANCH CARDS (branch_cards.h, ADR-0182) wears them at every level instead: the wood to sprigs, coarser
+// each level (the mid's joints on the trunk and main limbs, the light's none), a card for every sprig.
 // The lab's single trees stop at the mid; a forest (forest.h) adds the light and far levels and impostors past them.
 // Shared by the lab's tree entities and the forest so the two draw the same trees.
 
@@ -38,9 +40,13 @@ struct RecipeLodBands {
 
 // The levels, nearest first. A recipe with no near kit (no leaf kit, no sprays), `overrides` pinning `foliage`, or
 // `lod` false grows one tree for the hero's place (still followed by the light level if the bands ask for one).
+// A recipe with `branch_cards` wears them at every level (branch_cards.h), baked once into `cardCache` when given
+// (empty: baked and kept there; filled: worn as it is) -- a forest's variants of one species share an atlas.
+struct BranchCardSet;
 std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed,
                                               const std::map<std::string, double>& overrides = {},
-                                              const RecipeLodBands& bands = {}, bool lod = true);
+                                              const RecipeLodBands& bands = {}, bool lod = true,
+                                              BranchCardSet* cardCache = nullptr);
 
 // The picture a recipe tree's leaves wear, by what it grew (TreeMesh::foliage): blades and fronds the strap leaf's
 // veins, leaves one by one the element atlas, sprays the strand, cards the species' card (empty: none drawn).

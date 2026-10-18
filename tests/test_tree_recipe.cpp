@@ -3,6 +3,7 @@
 #include "test_framework.h"
 #include "../src/engine/procgen/tree_recipe.h"
 #include "../src/engine/procgen/tree_lods.h"
+#include "../src/engine/procgen/branch_cards.h"
 #include "../src/engine/scripting/tree_recipes_lua.h"
 #include "../src/engine/procgen/leaf_card.h"
 #include "../src/image.h"
@@ -66,6 +67,78 @@ Real trunkOutOfRound(const TreeMesh& t, Real y) {
         hi = std::max(hi, d);
     }
     return lo > 1e-6 ? hi / lo : 0;
+}
+
+
+// RT_TIDY_SET="sprigSize=0.8,woodEdge=0.05": knobs to grow the measured trees with (exploring; empty in the suite)
+std::map<std::string, double> knobsFromEnv() {
+    std::map<std::string, double> set;
+    if (const char* env = std::getenv("RT_TIDY_SET")) {
+        std::stringstream ss(env);
+        std::string kv;
+        while (std::getline(ss, kv, ','))
+            if (const auto eq = kv.find('='); eq != std::string::npos) set[kv.substr(0, eq)] = std::stod(kv.substr(eq + 1));
+    }
+    return set;
+}
+
+// THE SKELETON'S MESS (Glenn, 2026-10-18: "some trees look like branching messes"), from the limbs a tree was skinned
+// on: CROWDED forks (four or more limbs of wood meeting at one point -- the joint planner's arms: the limb in and
+// every limb out at least 0.4 jointMinRadius and 0.3 the fork's radius), forks TOO CLOSE (two such forks joined by an
+// internode shorter than their radii together, so their joints overlap), and CROSSINGS (two limbs that share no end
+// running through each other).
+struct SkeletonMess { int crowded = 0, close = 0, crossings = 0, thickCrossings = 0, forks = 0, stubby = 0; };
+SkeletonMess skeletonMess(const TreeMesh& t, Real jointMinRadius, FILE* dump = nullptr) {
+    SkeletonMess m;
+    if (dump)
+        for (const TreeMesh::Limb& l : t.limbs)
+            std::fprintf(dump, "L %f %f %f %f %f %f %f %f\n", l.a.x, l.a.y, l.a.z, l.b.x, l.b.y, l.b.z, l.ra, l.rb);
+    auto key = [](const Vec3& p) { return std::make_tuple(std::lround(p.x * 1e4), std::lround(p.y * 1e4), std::lround(p.z * 1e4)); };
+    std::map<std::tuple<long, long, long>, std::vector<std::size_t>> outOf;
+    for (std::size_t i = 0; i < t.limbs.size(); ++i) outOf[key(t.limbs[i].a)].push_back(i);
+    auto thickOuts = [&](const Vec3& at, Real r) {
+        int n = 0;
+        auto it = outOf.find(key(at));
+        if (it != outOf.end())
+            for (std::size_t i : it->second) n += t.limbs[i].rb >= 0.4 * jointMinRadius && t.limbs[i].rb >= 0.3 * r;
+        return n;
+    };
+    for (const TreeMesh::Limb& l : t.limbs) {
+        m.stubby += (l.b - l.a).length() < l.ra + l.rb;   // (an internode shorter than it is thick)
+        if (l.rb < jointMinRadius) continue;
+        const int outs = thickOuts(l.b, l.rb);
+        if (outs < 2) continue;
+        ++m.forks;
+        if (outs + 1 >= 4) ++m.crowded;
+        if (l.ra >= jointMinRadius && thickOuts(l.a, l.ra) >= 2 && (l.b - l.a).length() < l.ra + l.rb) ++m.close;
+    }
+    auto segDist = [](const Vec3& p1, const Vec3& q1, const Vec3& p2, const Vec3& q2) {
+        const Vec3 d1 = q1 - p1, d2 = q2 - p2, r = p1 - p2;
+        const Real a = dot(d1, d1), e = dot(d2, d2), f = dot(d2, r);
+        Real s = 0, u = 0;
+        const Real c = dot(d1, r), b = dot(d1, d2), den = a * e - b * b;
+        if (a < 1e-12 || e < 1e-12) return (p1 - p2).length();
+        s = den > 1e-12 ? std::clamp((b * f - c * e) / den, Real(0), Real(1)) : 0;
+        u = (b * s + f) / e;
+        if (u < 0) { u = 0; s = std::clamp(-c / a, Real(0), Real(1)); }
+        else if (u > 1) { u = 1; s = std::clamp((b - c) / a, Real(0), Real(1)); }
+        return ((p1 + d1 * s) - (p2 + d2 * u)).length();
+    };
+    for (std::size_t i = 0; i < t.limbs.size(); ++i)
+        for (std::size_t j = i + 1; j < t.limbs.size(); ++j) {
+            const TreeMesh::Limb &A = t.limbs[i], &B = t.limbs[j];
+            if (key(A.a) == key(B.a) || key(A.a) == key(B.b) || key(A.b) == key(B.a) || key(A.b) == key(B.b)) continue;
+            const Real reach = 0.5 * (A.ra + A.rb) + 0.5 * (B.ra + B.rb);
+            // (cheap reject on the boxes)
+            const Real lo = std::max({std::min(A.a.y, A.b.y), std::min(B.a.y, B.b.y)}), hi = std::min({std::max(A.a.y, A.b.y), std::max(B.a.y, B.b.y)});
+            if (lo - hi > reach) continue;
+            if (segDist(A.a, A.b, B.a, B.b) < 0.8 * reach) {
+                ++m.crossings;
+                if (dump) std::fprintf(dump, "X %zu %zu\n", i, j);
+                m.thickCrossings += std::min(A.ra, B.ra) >= jointMinRadius;   // (wood the joints are for)
+            }
+        }
+    return m;
 }
 
 }  // namespace
@@ -435,7 +508,9 @@ TEST_CASE(limbs_meet_in_one_surface_at_their_joints) {
         const TreeRecipe* r = book.find(name);
         CHECK(r != nullptr);
         if (!r) continue;
-        const TreeMesh t = growRecipeTree(*r, 2u, {{"joints", 1.0}});
+        std::map<std::string, double> set = knobsFromEnv();
+        set["joints"] = 1.0;
+        const TreeMesh t = growRecipeTree(*r, 2u, set);
         const RenderMesh& m = t.branches;
         // union-find over vertices: by triangle, and by position (the u seam's duplicates)
         std::vector<uint32_t> up(m.vertices.size());
@@ -690,8 +765,9 @@ TEST_CASE(a_palm_wears_its_crown_at_the_top) {
 }
 
 // A RECIPE TREE'S LEVELS (tree_lods.h; Glenn, 2026-10-17, of a forest of card trees: "you can tell they're cards"):
-// hero, mid and light each lighter than the last, the mid and light wearing the same leaves coarser -- leaves, not
-// crossed cards -- with the crown's leaf area about kept.
+// hero, mid and light each lighter than the last, with the crown's leaf area about kept. A species without branch
+// cards wears the same leaves coarser at the mid and light -- leaves, not crossed cards; one with them
+// (branch_cards.h) wears its branch cards at every level, its wood coarser each time.
 TEST_CASE(a_recipe_trees_levels_get_lighter_and_keep_their_leaves) {
     const TreeRecipeBook book = shipped();
     RecipeLodBands bands;
@@ -715,10 +791,94 @@ TEST_CASE(a_recipe_trees_levels_get_lighter_and_keep_their_leaves) {
         const double a0 = area(L[0].tree.leaves), a2 = area(L[2].tree.leaves);
         std::printf("    [levels] %-11s hero %zu, mid %zu, light %zu tris (leaf area %.0f / %.0f / %.0f m2)\n", name, tris[0],
                     tris[1], tris[2], a0, area(L[1].tree.leaves), a2);
-        CHECK(tris[1] < tris[0] / 2);
+        if (r->branchCards.set) {
+            CHECK(tris[1] < tris[0]);
+            CHECK(L[0].tree.foliage == 5 && L[1].tree.foliage == 5 && L[2].tree.foliage == 5);
+        } else {
+            CHECK(tris[1] < tris[0] / 2);
+            CHECK(L[1].tree.foliage == 2 && L[2].tree.foliage == 2);   // leaves, not cards
+        }
         CHECK(tris[2] < tris[1]);
-        CHECK(L[1].tree.foliage == 2 && L[2].tree.foliage == 2);   // leaves, not cards
         CHECK(a2 > 0.4 * a0 && a2 < 2.5 * a0);
         CHECK(L[0].out1 > L[0].out0 && L[1].in0 == L[0].out0 && L[1].out1 == 70.0f && L[2].in1 == 70.0f);
     }
+}
+
+// THE SKELETON IS TIDY (Glenn, 2026-10-18: "some trees look like branching messes"): see skeletonMess.
+TEST_CASE(a_trees_skeleton_is_tidy) {
+    const TreeRecipeBook book = shipped();
+    for (const char* name : {"oak", "birch", "sakura", "maple", "pine", "spruce", "river_birch", "magnolia"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r != nullptr);
+        if (!r) continue;
+        const std::map<std::string, double> set = knobsFromEnv();
+        TreeParams tp = drawTreeParams(*r, 2u);
+        for (const auto& [k, v] : set) setTreeParam(tp, k, v);
+        const TreeMesh t = growRecipeTree(*r, 2u, set);
+        FILE* dump = nullptr;
+        if (const char* dir = std::getenv("RT_TIDY_DUMP")) dump = std::fopen((std::string(dir) + "/" + name + ".txt").c_str(), "w");
+        const SkeletonMess m = skeletonMess(t, tp.jointMinRadius, dump);
+        if (dump) std::fclose(dump);
+        std::printf("    [tidy] %-11s %4d forks: %3d crowded, %3d too close; %4d crossings (%3d of wood); %zu limbs (%d stubby); bark %zu tris (joints %zu), %zu sprigs, leaves %zu\n",
+                    name, m.forks, m.crowded, m.close, m.crossings, m.thickCrossings, t.limbs.size(), m.stubby, t.branches.indices.size() / 3,
+                    (t.jointIndexEnd - t.jointIndexStart) / 3, t.sprigs.size(), t.leaves.indices.size() / 3);
+    }
+}
+
+// THE BRANCH CARDS (branch_cards.h; Glenn, 2026-10-18: "for a hero tree ... the upper budget to be about 8000 triangles
+// and no more"): a recipe with branch_cards grows its hero with the wood to sprigs, built by need, inside 8000
+// triangles, and every sprig wearing a card of the atlas baked from its own sprigs -- each picture drawn (covering a
+// fair share of its cell), each card hanging where its sprig grew (its base on a limb of the tree). The mid's wood is
+// lighter than the hero's, and wears the same atlas.
+TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
+    const TreeRecipeBook book = shipped();
+    int trees = 0;
+    for (const std::string& name : book.names()) {
+        const TreeRecipe* r = book.find(name);
+        if (!r || !r->branchCards.set) continue;
+        ++trees;
+        BranchCardSet cache;
+        const std::vector<RecipeTreeLevel> levels = growRecipeLevels(*r, 2u, {}, RecipeLodBands{}, true, &cache);
+        CHECK(levels.size() == 2);
+        if (levels.size() < 2) continue;
+        const TreeMesh& hero = levels[0].tree;
+        const std::size_t bark = hero.branches.indices.size() / 3, cards = hero.leaves.indices.size() / 3;
+        std::printf("    [cards] %-14s hero bark %5zu tris (joints %4zu), %3zu sprigs -> %4zu card tris; mid bark %5zu; %zu pictures\n",
+                    name.c_str(), bark, (hero.jointIndexEnd - hero.jointIndexStart) / 3, hero.sprigs.size(), cards,
+                    levels[1].tree.branches.indices.size() / 3, cache.pictures.size());
+        CHECK(bark <= 8000);
+        CHECK(hero.foliage == 5);
+        CHECK(!hero.sprigs.empty());
+        CHECK(cards == hero.sprigs.size() * 4 * static_cast<std::size_t>(r->branchCards.views));
+        CHECK(levels[1].tree.branches.indices.size() < hero.branches.indices.size());
+        CHECK(levels[1].atlas.albedo.width == cache.atlas.albedo.width);
+        // every picture drawn
+        for (const BranchCardSet::Picture& pic : cache.pictures)
+          for (const BranchCardSet::View& p : pic.views) {
+            const TextureData& a = cache.atlas.albedo;
+            const int x0 = static_cast<int>(p.u0 * a.width), x1 = static_cast<int>(p.u1 * a.width);
+            const int y0 = static_cast<int>(p.v0 * a.height), y1 = static_cast<int>(p.v1 * a.height);
+            std::size_t on = 0, all = 0;
+            for (int y = y0; y < y1; ++y)
+                for (int x = x0; x < x1; ++x, ++all) on += a.pixels[(static_cast<std::size_t>(y) * a.width + x) * 4 + 3] > 127;
+            CHECK(on * 20 >= all);
+            if (on * 20 < all) std::printf("    [cards] %s: a picture %.1f%% drawn\n", name.c_str(), 100.0 * on / all);
+          }
+        // every card hangs on the tree: its base (the first vertex: x0 at the sprig's base) beside a limb
+        int off = 0;
+        for (std::size_t c = 0; c < hero.sprigs.size(); ++c) {
+            const Vec3 b = hero.sprigs[c].base;
+            Real best = 1e9;
+            for (const TreeMesh::Limb& l : hero.limbs) {
+                const Vec3 ab = l.b - l.a;
+                const Real s = std::clamp(dot(b - l.a, ab) / std::max(Real(1e-12), dot(ab, ab)), Real(0), Real(1));
+                best = std::min(best, (b - (l.a + ab * s)).length());
+            }
+            off += best > 0.05;
+            const Vec3 v = hero.leaves.vertices[c * 6 * static_cast<std::size_t>(r->branchCards.views)].position;   // (its first corner)
+            off += (v - b).length() > 2.0 * (hero.sprigs[c].length + hero.sprigs[c].halfWidth);
+        }
+        CHECK(off == 0);
+    }
+    CHECK(trees >= 6);
 }

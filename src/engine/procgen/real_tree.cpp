@@ -736,6 +736,14 @@ TextureData realFoliageTexture(RealSpecies species, int size, uint32_t seed) {
 
 void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int w, int h, double colourScale,
                     uint8_t* out, int stride, uint8_t* normalOut) {
+    const double halfW = tree.crownRadius * 1.18 + 0.5;
+    const double Ht = tree.height * 1.03;
+    renderCardView(tree.bark, tree.foliage, fol, top, -halfW, halfW, top ? -halfW : 0.0, top ? halfW : Ht, w, h, colourScale,
+                   out, stride, normalOut);
+}
+
+void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
+                    double y0, double y1, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut) {
     const int S = 2, W = w * S, H = h * S;   // supersampled
     std::vector<float> depth(static_cast<std::size_t>(W) * H, -1e30f);
     std::vector<float> rgb(static_cast<std::size_t>(W) * H * 3, 0.0f);
@@ -749,12 +757,11 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
         // at full strength and read as glitter, not volume
         return Vec3(tx, ty, 0.85 + 0.5 * std::fabs(along));
     };
-    const double halfW = tree.crownRadius * 1.18 + 0.5;
-    const double Ht = tree.height * 1.03;
     // world -> image (x right, y down), and depth (larger = nearer the viewer)
     auto proj = [&](const Vec3& p, double& ix, double& iy, double& dz) {
-        if (!top) { ix = (p.x + halfW) / (2 * halfW) * W; iy = (1.0 - p.y / Ht) * H; dz = p.z; }
-        else { ix = (p.x + halfW) / (2 * halfW) * W; iy = (p.z + halfW) / (2 * halfW) * H; dz = p.y; }
+        ix = (p.x - x0) / (x1 - x0) * W;
+        if (!top) { iy = (1.0 - (p.y - y0) / (y1 - y0)) * H; dz = p.z; }
+        else { iy = (p.z - y0) / (y1 - y0) * H; dz = p.y; }
     };
     auto sampleFol = [&](double u, double v, float& a, Vec3& c) {
         const int x = std::clamp(static_cast<int>(u * fol.width), 0, fol.width - 1), y = std::clamp(static_cast<int>(v * fol.height), 0, fol.height - 1);
@@ -800,8 +807,8 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
                 }
         }
     };
-    raster(tree.bark, false);
-    raster(tree.foliage, true);
+    raster(bark, false);
+    raster(foliage, true);
     std::vector<uint8_t> img(static_cast<std::size_t>(w) * h * 4, 0);
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {

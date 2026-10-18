@@ -245,6 +245,34 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
     int rings = std::max(2, spline.segments() * std::max(1, ringsPerSegment) + 1);
 
     std::vector<double> us = spline.uniformArcLengthParams(rings);
+    if (g && g->ringAngle > 0.0f) {
+        // RINGS BY NEED (TreeParams::ringAngle): from fine samples along the curve, a ring where the limb has turned by
+        // ringAngle since the last, gone ringSpacing of its radii, or thinned by a quarter -- a straight run of limb is
+        // one long band, a bend as many as it takes. (Near the start of a welded limb, its collar's flare: every
+        // 0.7 radius for three radii.)
+        const std::vector<double> fine = spline.uniformArcLengthParams(std::max(2, spline.segments() * 8 + 1));
+        const double cosTurn = std::cos(static_cast<double>(g->ringAngle) * PI / 180.0);
+        std::vector<double> keep{fine.front()};
+        Vec3 tLast = normalize(spline.derivative(fine.front())), pPrev = spline.eval(fine.front());
+        double sLast = 0.0, s = 0.0;
+        float rLast = lerpAt(path.radius, fine.front());
+        const float r0w = rLast;
+        for (std::size_t i = 1; i < fine.size(); ++i) {
+            const Vec3 p = spline.eval(fine[i]);
+            s += (p - pPrev).length();
+            pPrev = p;
+            if (i + 1 == fine.size()) { keep.push_back(fine[i]); break; }
+            const Vec3 t = normalize(spline.derivative(fine[i]));
+            const float r = lerpAt(path.radius, fine[i]);
+            const double gap = sock && s < 3.0 * r0w ? 0.7 * r0w : static_cast<double>(g->ringSpacing) * std::max(r, 0.5f * rLast);
+            if (dot(t, tLast) < cosTurn || s - sLast >= gap || std::fabs(r - rLast) > 0.25f * rLast) {
+                keep.push_back(fine[i]);
+                tLast = t; sLast = s; rLast = r;
+            }
+        }
+        us = keep;
+        rings = static_cast<int>(us.size());
+    }
     std::vector<Vec3> centers(rings), tangents(rings);
     for (int k = 0; k < rings; k++) {
         centers[k] = spline.eval(us[k]);
@@ -502,6 +530,91 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         nodes.swap(kept);
     }
 
+    // CROWDED FORKS STAGGERED (Glenn, 2026-10-18: "some trees look like branching messes"): where more than two limbs
+    // of wood leave one node (a maple's opposite pair beside its leader, a pine's whorl), one joint must join them all
+    // and its hull tangles. Real limbs leave a stem a little apart: the leader and the thickest side keep the node, and
+    // each further side limb moves up the leader onto a new node of its own, three times its and the stem's radii together
+    // apart -- every fork then two limbs out. (Where the leader's internode has no room for that, the fork stays.)
+    if (params.joints == 1 && nodes.size() > 2) {
+        std::vector<std::vector<int>> kids(nodes.size());
+        for (size_t i = 0; i < nodes.size(); ++i)
+            if (nodes[i].parent >= 0) kids[static_cast<std::size_t>(nodes[i].parent)].push_back(static_cast<int>(i));
+        const std::size_t before = nodes.size();
+        for (size_t n = 0; n < before; ++n) {
+            const float rN = nodes[n].radius;
+            if (rN < params.jointMinRadius || kids[n].size() < 3) continue;
+            std::vector<int> wood;   // (the joint planner's arms)
+            for (int c : kids[n])
+                if (nodes[c].radius >= 0.4f * params.jointMinRadius && nodes[c].radius >= 0.3f * rN) wood.push_back(c);
+            if (wood.size() < 3) continue;
+            // the leader: the child best in line with the stem
+            const Vec3 inDir = nodes[n].parent >= 0 ? normalize(nodes[n].pos - nodes[nodes[n].parent].pos) : nodes[n].heading;
+            int lead = -1;
+            double best = -2.0;
+            for (int c : wood) {
+                const Vec3 d = nodes[c].pos - nodes[n].pos;
+                if (d.length() < 1e-9) continue;
+                const double al = dot(normalize(d), inDir) + 0.5 * nodes[c].radius / rN;
+                if (al > best) { best = al; lead = c; }
+            }
+            if (lead < 0) continue;
+            std::vector<int> sides;
+            for (int c : wood) if (c != lead) sides.push_back(c);
+            std::sort(sides.begin(), sides.end(), [&](int a, int b) { return nodes[a].radius > nodes[b].radius; });
+            const Vec3 a = nodes[n].pos, b = nodes[lead].pos;
+            const double L = (b - a).length();
+            if (L < 1e-6) continue;
+            constexpr double kStagger = 3.0;   // (closer, their joints' cut-backs overlap and fall back to the plain hull)
+            double need = 0.0;
+            for (std::size_t k = 1; k < sides.size(); ++k) need += kStagger * (rN + nodes[sides[k]].radius);
+            if (need > 0.8 * L) continue;   // (no room up the leader: crowded forks there are better than overlapping ones)
+            double t = 0.0;
+            int prev = static_cast<int>(n);
+            for (std::size_t k = 1; k < sides.size(); ++k) {
+                t += kStagger * (rN + nodes[sides[k]].radius);
+                const double u = t / L;
+                SkeletonNode m = nodes[n];
+                m.pos = a + (b - a) * u;
+                m.radius = nodes[n].radius + (nodes[lead].radius - nodes[n].radius) * static_cast<float>(u);
+                m.distFromRoot = nodes[n].distFromRoot + static_cast<float>(u * L);
+                m.parent = prev;
+                m.isTip = false;
+                nodes.push_back(m);
+                const int mi = static_cast<int>(nodes.size()) - 1;
+                kids.emplace_back();
+                nodes[static_cast<std::size_t>(sides[k])].parent = mi;
+                prev = mi;
+            }
+            if (prev != static_cast<int>(n)) nodes[static_cast<std::size_t>(lead)].parent = prev;
+        }
+        if (nodes.size() > before) {   // parent before child again (depth first from the root), the counts redone
+            std::vector<std::vector<int>> ch(nodes.size());
+            int root = -1;
+            for (size_t i = 0; i < nodes.size(); ++i) {
+                if (nodes[i].parent >= 0) ch[static_cast<std::size_t>(nodes[i].parent)].push_back(static_cast<int>(i));
+                else if (root < 0) root = static_cast<int>(i);
+            }
+            std::vector<int> order, stack{root};
+            while (!stack.empty()) {
+                const int x = stack.back();
+                stack.pop_back();
+                order.push_back(x);
+                for (auto it = ch[static_cast<std::size_t>(x)].rbegin(); it != ch[static_cast<std::size_t>(x)].rend(); ++it) stack.push_back(*it);
+            }
+            std::vector<int> remap(nodes.size(), -1);
+            for (std::size_t i = 0; i < order.size(); ++i) remap[static_cast<std::size_t>(order[i])] = static_cast<int>(i);
+            std::vector<SkeletonNode> sorted;
+            sorted.reserve(order.size());
+            for (int x : order) {
+                SkeletonNode c = nodes[static_cast<std::size_t>(x)];
+                c.parent = c.parent >= 0 ? remap[static_cast<std::size_t>(c.parent)] : -1;
+                c.childCount = static_cast<int>(ch[static_cast<std::size_t>(x)].size());
+                sorted.push_back(c);
+            }
+            nodes.swap(sorted);
+        }
+    }
+
     TreeMesh out;
 
     // Decompose the skeleton into branch chains: from each node, the child whose
@@ -537,6 +650,85 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         }
     }
 
+    // THE SPRIGS (TreeParams::sprigSize; branch_cards.h): every node's REACH -- the farthest node of its subtree from
+    // where it leaves its parent -- and, parent before child, a node within reach of sprigSize whose parent is not
+    // starts a sprig, its whole subtree with it. (A tree whose trunk is within reach is all one: no sprigs.)
+    std::vector<int> sprigOf(nodes.size(), -1);
+    const int trunkTop = cont.empty() ? -1 : cont[0];
+    if (params.sprigSize > 0.0f && trunkTop > 0) {
+        std::vector<float> reach(nodes.size(), 0.0f);
+        for (size_t d = 1; d < nodes.size(); ++d)
+            for (int a = static_cast<int>(d); a > 0 && nodes[a].parent >= 0; a = nodes[a].parent)
+                reach[a] = std::max(reach[a], static_cast<float>((nodes[d].pos - nodes[nodes[a].parent].pos).length()));
+        if (reach[trunkTop] > params.sprigSize) {
+            for (size_t n = 1; n < nodes.size(); ++n) {
+                const int par = nodes[n].parent;
+                if (par < 0) continue;
+                if (sprigOf[par] >= 0) sprigOf[n] = sprigOf[par];
+                else if (reach[n] <= params.sprigSize) {
+                    sprigOf[n] = static_cast<int>(out.sprigs.size());
+                    TreeMesh::Sprig sg;
+                    sg.base = nodes[par].pos;
+                    sg.radius = nodes[n].radius;
+                    out.sprigs.push_back(sg);
+                }
+            }
+            // each sprig's frame: out toward its nodes' middle, across their widest spread, the face skyward
+            std::vector<std::vector<int>> members(out.sprigs.size());
+            for (size_t n = 0; n < nodes.size(); ++n)
+                if (sprigOf[n] >= 0) members[static_cast<std::size_t>(sprigOf[n])].push_back(static_cast<int>(n));
+            // (its leaves reach past its nodes: a shoot and a leaf, a spray, a card)
+            const double leafReach = params.foliage == 2 && params.leafKit.set ? params.leafKit.shootLength * 1.3 + params.leafKit.size
+                                     : params.foliage == 1 ? params.leafSize : params.leafSize * 1.7;
+            for (std::size_t q = 0; q < out.sprigs.size(); ++q) {
+                TreeMesh::Sprig& sg = out.sprigs[q];
+                Vec3 mid(0, 0, 0);
+                for (int n : members[q]) mid = mid + nodes[n].pos;
+                mid = mid * (1.0 / members[q].size());
+                Vec3 ax = mid - sg.base;
+                if (ax.length() < 1e-6) ax = nodes[members[q].front()].heading;
+                ax = normalize(ax);
+                const Vec3 ref = std::fabs(ax.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+                const Vec3 e1 = normalize(cross(ax, ref)), e2 = cross(ax, e1);
+                double cxx = 0, cxy = 0, cyy = 0;
+                for (int n : members[q]) {
+                    const Vec3 d = nodes[n].pos - sg.base;
+                    const double x = dot(d, e1), y = dot(d, e2);
+                    cxx += x * x; cxy += x * y; cyy += y * y;
+                }
+                const double th = 0.5 * std::atan2(2.0 * cxy, cxx - cyy);   // (the 2 x 2 covariance's major axis)
+                Vec3 side = normalize(e1 * std::cos(th) + e2 * std::sin(th));
+                Vec3 nrm = normalize(cross(ax, side));
+                if (nrm.y < 0.0) { side = side * -1.0; nrm = nrm * -1.0; }
+                sg.axis = ax; sg.side = side; sg.normal = nrm;
+                sg.nodes = static_cast<int>(members[q].size());
+                for (int n : members[q]) {
+                    const Vec3 d = nodes[n].pos - sg.base;
+                    sg.length = std::max(sg.length, static_cast<float>(dot(d, ax)));
+                    sg.halfWidth = std::max(sg.halfWidth, static_cast<float>(std::fabs(dot(d, side))));
+                    sg.depth = std::max(sg.depth, static_cast<float>(std::fabs(dot(d, nrm))));
+                }
+                sg.length += static_cast<float>(leafReach);
+                sg.halfWidth += static_cast<float>(leafReach);
+                sg.depth += static_cast<float>(0.5 * leafReach);
+            }
+        }
+    }
+    const bool donor = params.sprigDonor != 0 && !out.sprigs.empty();
+    // (a donor's every vertex is owned: -1 the tree's wood and leaves, else its sprig's)
+    std::vector<int> barkOwner, leafOwner;
+    auto own = [&](int sprig) {
+        if (!donor) return;
+        barkOwner.resize(out.branches.vertices.size(), sprig);
+        leafOwner.resize(out.leaves.vertices.size(), sprig);
+    };
+    // THE SIDES a limb is built on (TreeParams::woodEdge): by its girth
+    auto sidesFor = [&](float r) {
+        if (params.woodEdge <= 0.0f) return params.ringSegments;
+        const int n = static_cast<int>(std::ceil(2.0 * PI * r / params.woodEdge));
+        return std::clamp(n, std::min(4, params.ringSegments), params.ringSegments);
+    };
+
     // Walk chains from a worklist of (anchor, first) starts; the anchor is the
     // fork point, included so the curve passes through the joint.
     // A FORK INTO NEAR-EQUAL HALVES (the weld's crotch): a side child as thick as the continuing one -- neither is the
@@ -571,6 +763,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 arms.push_back({-1, seg * (-1.0 / L), rJ, 0.0, L * (candidate(par) ? 0.45 : 0.7)});
             }
             for (int c : children[n]) {
+                if (sprigOf[c] >= 0) continue;   // (a sprig: its card hangs there)
                 // a twig, or a limb far thinner than the fork (a spruce's whorl off its trunk): welded with a collar --
                 // a joint's triangles cannot resolve a collar that small without thousands of them
                 if (nodes[c].radius < 0.4f * params.jointMinRadius || nodes[c].radius < 0.3f * rJ) continue;
@@ -646,11 +839,10 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     if (cont[0] != -1 && !isJoint[0]) work.push_back({0, cont[0]});
     pushStarts(0);
     // each joint's end rings, as the limbs leave them: which limb's tube, and which end of it
-    struct Tube { uint32_t vBase = 0, rings = 0; std::size_t iBase = 0, iEnd = 0; int startBack = 0, endBack = 0; };
+    struct Tube { uint32_t vBase = 0, rings = 0; std::size_t iBase = 0, iEnd = 0; int startBack = 0, endBack = 0, segs = 0; };
     struct EndRing { int tube = -1; bool start = true; };
     std::vector<Tube> tubes;
     std::vector<std::vector<EndRing>> jointRings(nodes.size());
-    const uint32_t ringStride = static_cast<uint32_t>(params.ringSegments + 1);
 
     float vScale = params.barkVScale;
     std::uniform_real_distribution<float> vary(0.85f, 1.0f);
@@ -659,6 +851,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     while (!work.empty()) {
         auto [anchor, first] = work.back();
         work.pop_back();
+        const int sprig = sprigOf[first];
+        if (sprig >= 0 && !donor) continue;   // a sprig (all of it): its card stands in
         const bool trunk = anchor == 0 && first == trunkFirst;
         if (!trunk && params.woodMinRadius > 0.0f && nodes[first].radius < params.woodMinRadius && !isJoint[anchor]) {
             for (int cur = first; cur != -1; cur = cont[cur]) pushStarts(cur);   // (its own side limbs: thinner still)
@@ -672,6 +866,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         };
         const bool cut = isJoint[anchor] && cutStart[first];
         int endsAt = -1, lastNode = -1;
+        bool intoSprig = false;
         if (cut) {   // out from the joint by its cut-back
             const Vec3 u = normalize(nodes[first].pos - nodes[anchor].pos);
             path.points.push_back(nodes[anchor].pos + u * cutOut[first]);
@@ -681,6 +876,11 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             append(anchor);
         }
         for (int cur = first; cur != -1; cur = cont[cur]) {
+            if (sprig < 0 && sprigOf[cur] >= 0) {   // the limb runs on into a sprig: the wood ends here, in a point
+                if (donor) work.push_back({lastNode >= 0 ? lastNode : anchor, cur});
+                intoSprig = true;
+                break;
+            }
             if (isJoint[cur]) {   // ending short of the joint by its cut-back
                 const int par = nodes[cur].parent;
                 const Vec3 u = normalize(nodes[cur].pos - nodes[par].pos);
@@ -719,7 +919,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             }
         }
         // A TIP ends in a point, not a sawn-off end (near foliage only -- a card hides it)
-        const bool pointTip = params.foliage != 0 && endsAt < 0 && lastNode >= 0 && children[lastNode].empty();
+        const bool pointTip = (params.foliage != 0 && endsAt < 0 && lastNode >= 0 && children[lastNode].empty()) ||
+                              (intoSprig && path.points.size() >= 2);
         Vec3 color = params.barkColor * vary(rng);
         Socket sock;
         const Socket* sp = nullptr;
@@ -740,8 +941,13 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         Tube tb;
         tb.vBase = static_cast<uint32_t>(out.branches.vertices.size());
         tb.iBase = out.branches.indices.size();
-        addCurvedBranch(out.branches, path, color, params.ringSegments, vScale, 3, &params, trunk, footY, seed, sp, pointTip);
-        tb.rings = (static_cast<uint32_t>(out.branches.vertices.size()) - tb.vBase) / ringStride;
+        tb.segs = sidesFor(trunk ? nodes[0].radius : nodes[first].radius);
+        own(-1);
+        if (path.points.size() >= 2)
+            addCurvedBranch(out.branches, path, color, tb.segs, vScale, 3, &params, trunk, footY, seed, sp, pointTip);
+        own(sprig);
+        // (a point tip's apex is one vertex past its rings)
+        tb.rings = (static_cast<uint32_t>(out.branches.vertices.size()) - tb.vBase) / static_cast<uint32_t>(tb.segs + 1);
         tb.iEnd = out.branches.indices.size();
         if (tb.rings >= 2 && (cut || endsAt >= 0)) {
             tubes.push_back(tb);
@@ -760,12 +966,12 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     // closed by the plain hull of its rings (covered, if not as tidy). Wound outward; a ring vertex at the u seam takes
     // its duplicate where its face reaches round from the far side, so the bark does not smear back across the tile.
     int jointsBuilt = 0, jointsPlain = 0;
-    const int segs = params.ringSegments;
+    own(-1);
     const std::size_t jointIdxStart = out.branches.indices.size();
     auto ringStart = [&](const EndRing& e) {
         const Tube& t = tubes[static_cast<std::size_t>(e.tube)];
         const uint32_t k = e.start ? static_cast<uint32_t>(t.startBack) : t.rings - 1 - static_cast<uint32_t>(t.endBack);
-        return t.vBase + k * ringStride;
+        return t.vBase + k * static_cast<uint32_t>(t.segs + 1);
     };
     if (std::getenv("RT_JOINT_DEBUG")) {
         int short_ = 0;
@@ -784,6 +990,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         std::vector<int> ringOf, idxOf;   // per hull point: its ring (-1 an apex) and its index round the ring
         std::vector<std::array<uint32_t, 3>> keep;
         std::vector<uint32_t> rings(ends.size());
+        std::vector<int> segsOf(ends.size());   // (each ring its own limb's sides)
+        for (std::size_t a = 0; a < ends.size(); ++a) segsOf[a] = tubes[static_cast<std::size_t>(ends[a].tube)].segs;
         bool whole = false;
         for (int attempt = 0; attempt < 8 && !whole; ++attempt) {
             pts.clear(); ringOf.clear(); idxOf.clear(); keep.clear();
@@ -791,6 +999,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             std::vector<double> rhoOf(ends.size(), 0.0);
             for (std::size_t a = 0; a < ends.size(); ++a) {
                 rings[a] = ringStart(ends[a]);
+                const int segs = segsOf[a];
                 Vec3 centroid(0, 0, 0);
                 for (int i = 0; i < segs; ++i) centroid = centroid + out.branches.vertices[rings[a] + i].position;
                 centroid = centroid * (1.0 / segs);
@@ -827,7 +1036,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 if (ringOf[f[0]] >= 0 && ringOf[f[1]] >= 0 && ringOf[f[2]] >= 0) keep.push_back(f);
             whole = !faces.empty();
             for (std::size_t a = 0; a < ends.size() && whole; ++a)
-                for (int i = 0; i < segs && whole; ++i) {
+                for (int i = 0, segs = segsOf[a]; i < segs && whole; ++i) {
                     int found = 0;
                     for (const auto& f : keep)
                         for (int e = 0; e < 3; ++e) {
@@ -858,7 +1067,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 bool crossed = false;
                 for (std::size_t b2 = 0; b2 < ends.size() && !crossed; ++b2) {
                     if (b2 == a) continue;
-                    for (int i = 0; i < segs && !crossed; ++i)
+                    for (int i = 0; i < segsOf[b2] && !crossed; ++i)
                         crossed = dot(out.branches.vertices[rings[b2] + i].position - cen[a], nrmOf[a]) > -0.06 * rhoOf[a];
                 }
                 if (!crossed) continue;
@@ -875,6 +1084,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             std::fprintf(stderr, "[joint] node %zu PLAIN: %zu rings\n", j, ends.size());
         auto vertexOf = [&](uint32_t q, const std::array<uint32_t, 3>& f) -> uint32_t {
             const int a = ringOf[q], i = idxOf[q];
+            const int segs = segsOf[static_cast<std::size_t>(a)];
             int idx = i;
             if (i == 0)   // the seam: the duplicate (u = 1) when this face reaches round from the far side
                 for (uint32_t o : f)
@@ -887,10 +1097,11 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             // split until it is about a ring segment long) and its new vertices PROJECTED onto the limbs' smooth
             // union -- each limb a capsule from the fork to its ring, blended in by a fillet a fifth of its radius --
             // it becomes the crotch's saddle and a twig's collar.
-            struct Cap { Vec3 a, b; double r, k; };
+            struct Cap { Vec3 a, b; double r, k; int segs; };
             std::vector<Cap> caps;
             double rhoMin = 1e9;
             for (std::size_t a = 0; a < ends.size(); ++a) {
+                const int segs = segsOf[a];
                 Vec3 cen(0, 0, 0);
                 for (int i = 0; i < segs; ++i) cen = cen + out.branches.vertices[rings[a] + i].position;
                 cen = cen * (1.0 / segs);
@@ -899,7 +1110,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 rho /= segs;
                 rhoMin = std::min(rhoMin, rho);
                 const Vec3 ax = normalize(cen - C);
-                caps.push_back({C, cen + ax * (0.5 * rho), rho, 0.2 * rho});
+                caps.push_back({C, cen + ax * (0.5 * rho), rho, 0.2 * rho, segs});
             }
             // the thickest first, the rest blended into it
             std::sort(caps.begin(), caps.end(), [](const Cap& x, const Cap& y) { return x.r > y.r; });
@@ -932,7 +1143,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 std::vector<uint32_t> realIdx;
                 std::vector<int> realRing;
                 for (std::size_t a = 0; a < rings.size(); ++a)
-                    for (int i = 0; i < segs; ++i) {
+                    for (int i = 0; i < segsOf[a]; ++i) {
                         real.push_back(out.branches.vertices[rings[a] + i].position);
                         realIdx.push_back(rings[a] + i);
                         realRing.push_back(static_cast<int>(a));
@@ -942,7 +1153,9 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                         tris.push_back({realIdx[f[0]], realIdx[f[1]], realIdx[f[2]]});
             }
             auto ringEdge = [&](uint32_t x, uint32_t y) {   // two neighbours round one ring: never split
-                for (uint32_t r : rings) {
+                for (std::size_t a = 0; a < rings.size(); ++a) {
+                    const uint32_t r = rings[a];
+                    const int segs = segsOf[a];
                     const bool inX = x >= r && x <= r + static_cast<uint32_t>(segs), inY = y >= r && y <= r + static_cast<uint32_t>(segs);
                     if (inX && inY) {
                         const int dx = static_cast<int>(x - r), dy = static_cast<int>(y - r);
@@ -955,18 +1168,35 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             // (an edge is split to the ring spacing of the limb it lies on: coarse round the trunk, fine at a twig)
             // (near a thin limb, its fine spacing, easing back to the coarse with the distance from it)
             constexpr double kGrow = 1.8, kFloor = 0.35;
+            constexpr int kLevels = 4;
+            // (the wood built by need, woodEdge: the joint's triangles as coarse as the tubes beside them -- twice the
+            // spacing, the same smooth union; Glenn, 2026-10-18: "it makes a lot of triangles")
+            const double kSpan = params.woodEdge > 0.0f ? 3.5 : 1.7;
             auto targetAt = [&](const Vec3& p) {
                 double best = 1e9;
                 for (const Cap& c : caps) {
                     const Vec3 ab = c.b - c.a;
                     const double t = std::clamp(dot(p - c.a, ab) / std::max(1e-12, dot(ab, ab)), 0.0, 1.0);
                     const double d = std::max(0.0, (p - (c.a + ab * t)).length() - c.r);
-                    best = std::min(best, 2.0 * PI * c.r / segs * 1.7 + kGrow * d);
+                    best = std::min(best, 2.0 * PI * c.r / c.segs * kSpan + kGrow * d);
                 }
-                return std::max(best, kFloor * 2.0 * PI * caps.front().r / segs * 1.7);   // (no finer than this share of the joint's own)
+                return std::max(best, kFloor * 2.0 * PI * caps.front().r / caps.front().segs * kSpan);   // (no finer than this share of the joint's own)
+            };
+            // (onto the limbs' union: a few Newton steps)
+            auto project = [&](Vec3 p) {
+                for (int it = 0; it < 6; ++it) {
+                    const double fv = field(p);
+                    const Vec3 g = grad(p);
+                    const double g2 = dot(g, g);
+                    if (g2 < 1e-12 || std::fabs(fv) < 1e-5 * rhoMin) break;
+                    Vec3 step = g * (fv / g2);
+                    if (step.length() > 0.5 * rhoMin) step = normalize(step) * (0.5 * rhoMin);
+                    p = p - step;
+                }
+                return p;
             };
             const std::size_t firstNew = out.branches.vertices.size();
-            for (int level = 0; level < 4; ++level) {
+            for (int level = 0; level < kLevels; ++level) {
                 std::map<std::pair<uint32_t, uint32_t>, uint32_t> mids;
                 bool any = false;
                 auto midOf = [&](uint32_t x, uint32_t y) -> int64_t {
@@ -1013,19 +1243,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 }
                 tris.swap(next);
                 // the new vertices onto the limbs' union (a few Newton steps), as they come
-                for (std::size_t v = firstNew; v < out.branches.vertices.size(); ++v) {
-                    Vec3 p = out.branches.vertices[v].position;
-                    for (int it = 0; it < 6; ++it) {
-                        const double fv = field(p);
-                        const Vec3 g = grad(p);
-                        const double g2 = dot(g, g);
-                        if (g2 < 1e-12 || std::fabs(fv) < 1e-5 * rhoMin) break;
-                        Vec3 step = g * (fv / g2);
-                        if (step.length() > 0.5 * rhoMin) step = normalize(step) * (0.5 * rhoMin);
-                        p = p - step;
-                    }
-                    out.branches.vertices[v].position = p;
-                }
+                for (std::size_t v = firstNew; v < out.branches.vertices.size(); ++v)
+                    out.branches.vertices[v].position = project(out.branches.vertices[v].position);
                 if (!any) break;
             }
             // NO SLIVERS (Glenn: "some of those joins look like they have a lot of degenerate triangles"): the hull and
@@ -1041,18 +1260,6 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                     return std::acos(std::clamp(dot(u, w) / (lu * lw), -1.0, 1.0));
                 };
                 return std::min({ang(A, B, Cc), ang(B, Cc, A), ang(Cc, A, B)});
-            };
-            auto project = [&](Vec3 p) {
-                for (int it = 0; it < 6; ++it) {
-                    const double fv = field(p);
-                    const Vec3 g = grad(p);
-                    const double g2 = dot(g, g);
-                    if (g2 < 1e-12 || std::fabs(fv) < 1e-5 * rhoMin) break;
-                    Vec3 step = g * (fv / g2);
-                    if (step.length() > 0.5 * rhoMin) step = normalize(step) * (0.5 * rhoMin);
-                    p = p - step;
-                }
-                return p;
             };
             for (int pass = 0; pass < 3; ++pass) {
                 for (int sweep = 0; sweep < 4; ++sweep) {   // flips
@@ -1137,7 +1344,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             for (std::size_t k = t.iBase; k + 2 < t.iEnd; k += 3) {
                 uint32_t lo = ~0u, hi = 0;
                 for (int e = 0; e < 3; ++e) {
-                    const uint32_t ring = (out.branches.indices[k + e] - t.vBase) / ringStride;
+                    const uint32_t ring = (out.branches.indices[k + e] - t.vBase) / static_cast<uint32_t>(t.segs + 1);
                     lo = std::min(lo, ring);
                     hi = std::max(hi, ring);
                 }
@@ -1192,13 +1399,16 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             rootLook.barkFootDark = params.barkFootDark;
             rootLook.barkFootHeight = params.barkFootHeight;
             rootLook.barkFootColor = params.barkFootColor;
-            addCurvedBranch(out.branches, rp, color, params.ringSegments, vScale, 3, &rootLook, false, footY, seed);
+            rootLook.ringAngle = params.ringAngle;
+            rootLook.ringSpacing = params.ringSpacing;
+            addCurvedBranch(out.branches, rp, color, sidesFor(rp.radius.front()), vScale, 3, &rootLook, false, footY, seed);
             out.limbs.push_back({baseP, rp.points.front(), baseR, rp.radius.front()});   // (the root's own skeleton)
             for (std::size_t q = 0; q + 1 < rp.points.size(); ++q)
                 out.limbs.push_back({rp.points[q], rp.points[q + 1], rp.radius[q], rp.radius[q + 1]});
         }
     }
 
+    own(-1);
     // Leaves on twig tips and (to fill out the ends) any thin enough branch.
     // Each card is jittered off the node into the surrounding gap, so clusters
     // fill the crown volume rather than sitting only on the skeleton. A hard
@@ -1259,8 +1469,16 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         // (the leaf kit's shoots, thinned to whichever budget -- leaves or blossoms -- binds first)
         const double coarse = std::max(1.0, static_cast<double>(params.leafLod));
         const double shootKeep = std::min(keep, blossomKeep) / coarse;
+        int pendingOwner = -1;
         for (const SkeletonNode& n : nodes) {
             if (!leafyNode(n)) continue;
+            const int nSprig = sprigOf[static_cast<std::size_t>(&n - nodes.data())];
+            // (a sprig's leaves are in its card; with cards, the wood's own are left off too -- a limb longer than a
+            // card is bare inside, its foliage where its sprigs are, as a pine's limb is)
+            if (!donor && (nSprig >= 0 || !out.sprigs.empty())) continue;
+            // (what a node adds -- its leaves, its shoots' twigs -- is its sprig's: owned as the next node starts)
+            own(pendingOwner);
+            pendingOwner = nSprig;
             // the twig the cards hang on: this node's internode (parent to node), or for the root its heading
             const Vec3 a = n.parent >= 0 ? nodes[n.parent].pos : n.pos - n.heading * 0.1;
             Vec3 h = n.pos - a;
@@ -1407,6 +1625,30 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             }
             if (cards >= budget) break;
         }
+        own(pendingOwner);
+    }
+    own(-1);
+
+    // A DONOR's sprigs, each into its own meshes (every triangle goes with its first vertex's owner)
+    if (donor) {
+        auto split = [&](const RenderMesh& src, const std::vector<int>& owner, bool bark) {
+            std::vector<uint32_t> remap(src.vertices.size(), ~0u);
+            for (std::size_t k = 0; k + 2 < src.indices.size(); k += 3) {
+                const int o = owner[src.indices[k]];
+                if (o < 0) continue;
+                RenderMesh& dst = bark ? out.sprigs[static_cast<std::size_t>(o)].bark : out.sprigs[static_cast<std::size_t>(o)].leaves;
+                for (int e = 0; e < 3; ++e) {
+                    const uint32_t v = src.indices[k + e];
+                    if (remap[v] == ~0u) {
+                        remap[v] = static_cast<uint32_t>(dst.vertices.size());
+                        dst.vertices.push_back(src.vertices[v]);
+                    }
+                    dst.indices.push_back(remap[v]);
+                }
+            }
+        };
+        split(out.branches, barkOwner, true);
+        split(out.leaves, leafOwner, false);
     }
 
     for (const SkeletonNode& n : nodes)

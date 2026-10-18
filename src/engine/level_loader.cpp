@@ -28,6 +28,7 @@
 #include "procgen/stylized_tree.h"
 #include "procgen/forest.h"
 #include "procgen/tree_lods.h"      // a recipe tree's hero / mid / light levels         // "forest": real trees + impostors at island scale (ADR-0129)
+#include "procgen/branch_cards.h"   // the recipe trees' branch cards (one atlas a forest species)
 #include "procgen/terrain_maps.h"
 #include "procgen/terrain_weather.h"
 #include "procgen/trails.h"
@@ -2068,12 +2069,13 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 wood.normalMap = uploadTex(bt.normal);
             }
             std::map<int, std::pair<TextureHandle, TextureHandle>> leafTex;   // by foliage mode: one atlas a species
+            BranchCardSet branchCards;   // (and one branch-card atlas: baked from the first variant, worn by all)
             for (int v = 0; v < fs.variants; ++v) {
                 Var& var = vars[s * vps + v];
                 var.species = static_cast<int>(s);
                 var.shade = 0.6;
                 const uint32_t seed = fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17);
-                std::vector<RecipeTreeLevel> levels = growRecipeLevels(*r, seed, {}, bands);
+                std::vector<RecipeTreeLevel> levels = growRecipeLevels(*r, seed, {}, bands, true, &branchCards);
                 const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
                 for (std::size_t li = 0; li < levels.size(); ++li) {
                     RecipeTreeLevel& L = levels[li];

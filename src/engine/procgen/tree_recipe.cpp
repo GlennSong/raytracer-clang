@@ -41,6 +41,8 @@ const std::vector<Field>& fields() {
         {"foliage", nullptr, &TreeParams::foliage},
         {"joints", nullptr, &TreeParams::joints}, {"jointMinRadius", &TreeParams::jointMinRadius},
         {"woodMinRadius", &TreeParams::woodMinRadius}, {"leafLod", &TreeParams::leafLod},
+        {"sprigSize", &TreeParams::sprigSize}, {"sprigDonor", nullptr, &TreeParams::sprigDonor},
+        {"woodEdge", &TreeParams::woodEdge}, {"ringAngle", &TreeParams::ringAngle}, {"ringSpacing", &TreeParams::ringSpacing},
         {"barkMottle", &TreeParams::barkMottle}, {"barkFootDark", &TreeParams::barkFootDark},
         {"barkFootHeight", &TreeParams::barkFootHeight},
         {"clipX", &TreeParams::clipX}, {"clipY", &TreeParams::clipY}, {"clipZ", &TreeParams::clipZ},

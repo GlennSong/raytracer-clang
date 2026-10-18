@@ -383,6 +383,21 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             readColour(L, st, "color", sp.color, sp.colorHi);
         }
         lua_pop(L, 1);
+        lua_getfield(L, t, "branch_cards");
+        if (lua_istable(L, -1)) {   // THE BRANCH CARDS (procgen/branch_cards.h)
+            const int ct = lua_gettop(L);
+            BranchCardSpec& bc = r.branchCards;
+            bc.set = true;
+            bc.sprig = numField(L, ct, "sprig", bc.sprig);
+            bc.woodEdge = numField(L, ct, "wood_edge", bc.woodEdge);
+            bc.ringAngle = numField(L, ct, "ring_angle", bc.ringAngle);
+            bc.pictures = std::clamp(static_cast<int>(numField(L, ct, "pictures", bc.pictures)), 1, 16);
+            bc.views = std::clamp(static_cast<int>(numField(L, ct, "views", bc.views)), 1, 4);
+            bc.cell = std::clamp(static_cast<int>(numField(L, ct, "cell", bc.cell)), 64, 512);
+            bc.fold = numField(L, ct, "fold", bc.fold);
+            bc.bend = std::clamp(numField(L, ct, "bend", bc.bend), 0.0, 1.0);
+        }
+        lua_pop(L, 1);
         got.push_back(std::move(r));
         lua_pop(L, 1);
     }

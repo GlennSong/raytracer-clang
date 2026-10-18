@@ -68,6 +68,22 @@ struct LeafCardSpec {
     } flower;
 };
 
+// THE BRANCH CARDS (branch_cards.h; Glenn, 2026-10-18: "When we get to small enough branches that we instead just use
+// some kind of card to stand in for those branches and clusters of leaves"): the recipe's `branch_cards` block. Its
+// trees model the wood down to sprigs of `sprig` metres (TreeParams::sprigSize), built by need (woodEdge, ringAngle),
+// and wear a card for every sprig, baked from `pictures` of its own sprigs grown whole.
+struct BranchCardSpec {
+    bool set = false;
+    double sprig = 0.8;              // a sprig's reach (m): smaller is modelled wood, card-sized and under a card
+    double woodEdge = 0.05;          // the wood's sides about this far apart (m)
+    double ringAngle = 12.0;         // ...and a ring every this many degrees of bend
+    int pictures = 8;                // sprigs baked
+    int views = 3;                   // ...each seen from this many sides round its axis: a card each (the atlas's cells)
+    int cell = 256;                  // a cell's side (px)
+    double fold = 25.0;              // each half of a card lifts this many degrees off flat about its spine
+    double bend = 0.55;              // its normals bent this far toward out of the crown (the crown shades as a volume)
+};
+
 struct TreeRecipe {
     std::string name;
     bool shrub = false;              // kind = "shrub" (or "blades"): a shrub or a perennial (knee to head height), not a tree
@@ -93,6 +109,7 @@ struct TreeRecipe {
     LeafKitSpec leafKit;             // foliage = 2: every leaf a blade, blossoms cups (wearing the card's leaf and flower)
     BladeSpec blades;                // kind = "blades": no wood, a clump of strap leaves (flax, rushes, grass tufts)
     FrondSpec fronds;                // a palm's crown (params.foliage = 4)
+    BranchCardSpec branchCards;      // branch_cards = {...}: the far side of the near kit (branch_cards.h)
 };
 
 class TreeRecipeBook {

@@ -10405,3 +10405,48 @@ cut back and filled).
   hero-LOD feature (Glenn: "hero trees have everything welded ... mid level doesn't have to weld them all").
 - **Tests**: `limbs_meet_in_one_surface_at_their_joints` (joints whole, end rings in one piece, slivers; RT_TREE_WIRE
   renders the bark round the lowest forks, joints tinted, slivers red); RT_JOINT_DEBUG / RT_JOINT_DUMP trace them.
+
+## ADR-0182 — Branch cards: the wood to sprigs, a card baked from the tree's own sprigs
+
+Glenn, 2026-10-18: "It's a first good stab but it makes a lot of triangles and some trees look like branching
+messes"; then "for a hero tree ... the upper budget to be about 8000 triangles and no more ... When we get to small
+enough branches that we instead just use some kind of card to stand in for those branches and clusters of leaves".
+Measured first: the oak's joints were half its bark (54k of 106k, a joint at every fork down to 2 cm twigs), every
+tube had the same 8-10 sides and three rings an internode, and the "mess" was crowded forks (140 of the maple's 187
+forks had four or more limbs of wood) and limbs crossing (the new `a_trees_skeleton_is_tidy` counts both). The island's
+real_tree.h trees are 3-8k: a modelled trunk and limbs and ~900 painted spray cards -- how production trees are built.
+
+- **Sprigs** (`TreeParams::sprigSize`): a node whose whole subtree is within reach of sprigSize of where it leaves its
+  parent, and whose parent is not, starts a SPRIG. Cut by spread, not thickness: at one radius the oak's sprigs were
+  0.4 m and the sakura's 1.3 m. A sprig's wood and leaves are not built; it is recorded (`TreeMesh::sprigs`: a frame
+  out along its nodes' middle, across their widest spread, the face skyward, and its reach). The wood into a sprig
+  ends in a point; with cards, the wood's own leaves go too (a limb longer than a card is bare inside).
+- **The donor** (`sprigDonor`): the same tree builds every sprig whole, each triangle owned by its first vertex's
+  sprig and split into the sprig's own meshes.
+- **The pictures** (`branch_cards.h bakeBranchCards`): `pictures` sprigs across the sizes, each seen from `views`
+  sides round its axis (3: one picture a crown reads flat and thin), drawn by `renderCardView` (renderImpostor
+  generalised to any framing: colour x colourScale and the card-frame normal map).
+- **The cards** (`wearBranchCards`, foliage 5): each sprig wears the nearest picture in size (of the two nearest, one
+  at random), a card per view turned about a spine along the sprig, its halves folded up `fold`, normals bent `bend`
+  out of the crown, darker toward the crown's middle. Four triangles a card.
+- **The wood by need** (`woodEdge`, `ringAngle`, `ringSpacing`): sides by girth (about woodEdge apart, 4 to
+  ringSegments); a ring where the limb has turned ringAngle, gone ringSpacing radii or thinned a quarter (a collar's
+  first three radii still every 0.7). Joint refinement spans 3.5 ring arcs instead of 1.7 when the wood is by need:
+  the joint as coarse as the tubes beside it (oak joints 11k to 3.6k, slivers down). Tried and dropped: splitting
+  only where the projected midpoint bows past the ring's chord error -- the hull starts far off the surface
+  everywhere, so it split more (15% slivers).
+- **Crowded forks staggered** (joints = 1): past two limbs of wood out of a node, the leader and thickest side keep it
+  and each further side moves up the leader three times their radii apart -- unless the internode has no room (then
+  crowded beats overlapping: the first try at 1.2 radii doubled the maple's plain-hull joints). Maple crowded forks
+  140 to 28, pine 34 to 0.
+- **Levels** (`tree_lods.h`): a recipe with `branch_cards` wears them at every level (hero; mid coarser wood, joints
+  only on the trunk and main limbs; light no joints or roots; far four sides), the atlas baked once and shared by a
+  forest species' variants (`cardCache`).
+- **Numbers**: every card tree's hero wood under 8000 (oak 6.8k, spruce 0.7k, sakura 7.1k; 0.4-3k card triangles)
+  against 106-197k before; the recipe forest 8.3-9.5 ms GPU at eye level and from 40 m, against 15.6-17.4 ms for
+  this morning's recipe forest and 10.1-11.8 ms for the island's own trees in the same level.
+- **Tests**: `a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs` (wood <= 8000, a card per sprig and view,
+  every picture drawn, every card on a limb), `a_trees_skeleton_is_tidy` (prints the mess; RT_TIDY_SET tries knobs,
+  RT_TIDY_DUMP the skeletons), the levels test per kind.
+- **Owed**: the spruce's leader-top card is pale and stretched; spruce cards read stiff from above; the bark tile
+  shows a chevron across coarse joints; crossings of wood (oak 90) are untouched.

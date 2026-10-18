@@ -41,6 +41,11 @@
 --   kind = "blades"     A BLADE PLANT -- no grammar, no wood: strap leaves from a crown (procgen/foliage_kit.h BladeSpec),
 --                       blades = { count, length, length_jitter, width, rise, spread (deg off upright, inner .. outer),
 --                       fan (0 a round clump .. 1 a flat fan), arch, fold, twist, taper, crown, color, edge_color }
+--   branch_cards        THE BRANCH CARDS (procgen/branch_cards.h): { sprig (m), wood_edge (m), ring_angle (deg), pictures,
+--                       cell (px), fold (deg), bend } -- the wood modelled down to sprigs of `sprig` reach, its sides about
+--                       wood_edge apart and a ring every ring_angle of bend; each sprig a card wearing a picture baked from
+--                       the tree's own sprigs grown whole (`pictures` of them), its halves folded `fold` up off flat about
+--                       its spine, its normals bent `bend` toward out of the crown. The hero's wood is held to ~8000 tris.
 --   card                THE LEAF CARD the tree's foliage wears (procgen/leaf_card.h): a small 2D twig grammar drawn by a
 --                       2D turtle -- F(len) a stem, +(a) -(a) turns, [ ] a side shoot, L(scale) a leaf -- and the leaf:
 --     axiom, iterations, rules, vars   as the tree's (vars drawn per card variant)
@@ -94,6 +99,7 @@ tree_recipes = {
       leaf = { shape = "lobed", length = 0.32, width = 0.13, lobes = 3 },
       stem_width = 0.014, cup = 0.5,
     },
+    branch_cards = { sprig = 0.8 },
   },
 
   -- BIRCH: one slim leader whorling light branches up its length, their twigs drooping; white bark, hardly fluted.
@@ -133,6 +139,7 @@ tree_recipes = {
       leaf = { shape = "serrate", length = 0.15, width = 0.10, teeth = 8 },
       stem_width = 0.008, cup = 0.4,
     },
+    branch_cards = { sprig = 0.8 },
   },
 
   -- SPRUCE: a straight whorled leader; each whorl's branches longest at the bottom (n counts down the tree), sagging
@@ -198,6 +205,7 @@ tree_recipes = {
       aspect = 0.38, droop = 0.25, variants = 8, per_node = 2, budget = 3200,
       color = { {0.82, 0.82, 0.82}, {1.0, 1.0, 1.0} },
     },
+    branch_cards = { sprig = 3.6 },
   },
 
   -- SAKURA (Somei-yoshino): a short trunk splits into three scaffold limbs that climb and then spread, an umbrella
@@ -246,6 +254,7 @@ tree_recipes = {
                  color = {1.0, 0.56, 0.70}, eye_color = {0.80, 0.16, 0.36} },
       stem_color = {0.62, 0.40, 0.42}, stem_width = 0.006, cup = 0.4,
     },
+    branch_cards = { sprig = 1.0 },
   },
 
   -- JAPANESE MAPLE (Acer palmatum): stems from low down, branches in OPPOSITE pairs (each pair turned 90 deg from
@@ -293,6 +302,7 @@ tree_recipes = {
       leaf = { shape = "palmate", length = 0.17, lobes = 7, teeth = 3 },
       stem_color = {0.55, 0.30, 0.25}, stem_width = 0.008, cup = 0.35, shade_jitter = 0.22,
     },
+    branch_cards = { sprig = 1.0 },
   },
 
   -- JAPANESE BLACK PINE (Pinus thunbergii): a crooked, leaning trunk, bare below; a few long limbs fanning out
@@ -336,6 +346,7 @@ tree_recipes = {
       leaf = { shape = "needle", length = 0.13, width = 0.007 },
       stem_color = {0.45, 0.35, 0.28}, stem_width = 0.009, cup = 0.3, shade_jitter = 0.25, tip_bright = 0.25,
     },
+    branch_cards = { sprig = 1.0 },
   },
 
   ---------------------------------------------------------------------------------------------------------------
@@ -690,6 +701,7 @@ tree_recipes = {
       leaf = { shape = "leaflet", length = 0.20, width = 0.03 },
       stem_width = 0.007, cup = 0.4,
     },
+    branch_cards = { sprig = 1.3 },
   },
 
   -- RIVER BIRCH (the street row's tree): one trunk, a dense oval crown with drooping edges, small toothed leaves
@@ -731,6 +743,7 @@ tree_recipes = {
       leaf = { shape = "serrate", length = 0.16, width = 0.12, teeth = 9 },
       stem_width = 0.008, cup = 0.45,
     },
+    branch_cards = { sprig = 0.8 },
   },
 
   -- MAGNOLIA (the park's lakeside tree): a short trunk branching low into a dense oval crown of big glossy dark
@@ -769,6 +782,7 @@ tree_recipes = {
       leaf = { shape = "oval", length = 0.24, width = 0.09 },
       stem_width = 0.010, cup = 0.55,
     },
+    branch_cards = { sprig = 1.3 },
   },
 
   -- WEEPING WILLOW (by the water): a stout trunk, limbs arching up and out, and from them long curtains of thin
@@ -808,5 +822,6 @@ tree_recipes = {
       leaf = { shape = "leaflet", length = 0.14, width = 0.02 },
       stem_width = 0.006, cup = 0.3,
     },
+    branch_cards = { sprig = 2.2 },
   },
 }
