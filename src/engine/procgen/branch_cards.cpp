@@ -660,14 +660,29 @@ BranchCardSet bakeNeedleCards(const TreeRecipe& r, int variants, uint32_t seed) 
         const Vec3 mid = p + d * (0.5 * len) + radial * (0.04 * len), tip = p + d * len + radial * (0.02 * len);
         const Vec3 nrm = normalize(radial * 0.8 + Z * 0.4);
         const uint32_t b = static_cast<uint32_t>(m.vertices.size());
-        const Vec3 pts[5] = {p - wv * (0.5 * w), p + wv * (0.5 * w), mid - wv * (0.45 * w), mid + wv * (0.45 * w), tip};
-        for (const Vec3& q : pts) {
-            Vertex v(q, nrm, wv, 0.5f, 0.5f);
+        // (a needle is RIDGED down its middle -- a spruce's four-sided: its two halves' normals tilt apart, so in the
+        // normal map each needle has a lit side and a shaded side, not one flat tone; Glenn: "Are the needles using a
+        // normal map as well?")
+        const Vec3 nL = normalize(nrm - wv * 0.7), nR = normalize(nrm + wv * 0.7);
+        const Vec3 pts[6] = {p - wv * (0.5 * w), p + wv * (0.5 * w), mid - wv * (0.45 * w), mid + wv * (0.45 * w), tip, mid};
+        const Vec3 nrms[6] = {nL, nR, nL, nR, nrm, nrm};
+        for (int k = 0; k < 6; ++k) {
+            Vertex v(pts[k], nrms[k], wv, 0.5f, 0.5f);
             v.color = col;
             m.vertices.push_back(v);
         }
-        MeshBuilder::quadFacing(m, b, b + 1, b + 3, b + 2, nrm);
-        MeshBuilder::triFacing(m, b + 2, b + 3, b + 4, nrm);
+        // (its midrib the vertex `b + 5`: each half its own triangles, the ridge between them)
+        const uint32_t ridge0 = static_cast<uint32_t>(m.vertices.size());
+        Vertex r0 = m.vertices[b];
+        r0.position = p;
+        r0.normal = nrm;
+        m.vertices.push_back(r0);
+        MeshBuilder::triFacing(m, b, ridge0, b + 5, nrm);
+        MeshBuilder::triFacing(m, b, b + 5, b + 2, nrm);
+        MeshBuilder::triFacing(m, ridge0, b + 1, b + 3, nrm);
+        MeshBuilder::triFacing(m, ridge0, b + 3, b + 5, nrm);
+        MeshBuilder::triFacing(m, b + 2, b + 5, b + 4, nrm);
+        MeshBuilder::triFacing(m, b + 5, b + 3, b + 4, nrm);
     };
     auto needleColour = [&](double t) {   // (lighter toward the shoot's end: this year's growth)
         const Vec3 c = nd.color + (nd.colorHi - nd.color) * rnd();
