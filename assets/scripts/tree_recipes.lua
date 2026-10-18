@@ -118,6 +118,7 @@ tree_recipes = {
     },
     vars = { pitch = {35, 50}, side = {0.55, 0.65}, lead = {0.88, 0.92} },
     params = {
+      trunkZone = 0.06, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.25, 0.40}, light = {0.05, 0.15}, crookChance = {0.05, 0.12}, crookAngle = {8, 18},
       meander = {0.05, 0.10}, lean = {0, 8}, angleJitter = {8, 12},
@@ -157,6 +158,7 @@ tree_recipes = {
     },
     vars = { pitch = {58, 68}, reach = {1.6, 2.0}, len = {0.36, 0.48}, whorls = {26, 36} },
     params = {
+      trunkZone = 0.08, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.06, 0.12}, light = {0.10, 0.18}, crookChance = 0.0, crookAngle = 10,
       meander = 0.012, lean = {0, 2}, angleJitter = {6, 10},
@@ -225,6 +227,7 @@ tree_recipes = {
     },
     vars = { p0 = {32, 44}, roll = {80, 110}, pitch = {35, 50}, side = {0.76, 0.84}, lead = {0.80, 0.86}, up = {4, 10} },
     params = {
+      trunkZone = 0.07, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.18, 0.28}, light = {0.15, 0.25}, crookChance = {0.10, 0.20}, crookAngle = {12, 22},
       meander = {0.08, 0.12}, lean = {0, 5}, angleJitter = {8, 12},
@@ -274,6 +277,7 @@ tree_recipes = {
     },
     vars = { s0 = {25, 38}, pitch = {50, 66}, side = {0.70, 0.76}, lead = {0.78, 0.84} },
     params = {
+      trunkZone = 0.07, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.12, 0.20}, light = {0.25, 0.35}, crookChance = {0.10, 0.20}, crookAngle = {10, 20},
       meander = {0.06, 0.10}, lean = {0, 6}, angleJitter = {8, 12},
@@ -323,6 +327,7 @@ tree_recipes = {
     vars = { bare = {1.6, 2.6}, len = {0.45, 0.6}, whorls = {7, 10}, pitch = {62, 80}, reach = {2.2, 2.8},
              roll = {70, 110}, fan = {30, 45} },
     params = {
+      trunkZone = 0.08, trunkZoneTris = 2000,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.04, 0.08}, light = {0.25, 0.35}, crookChance = {0.25, 0.40}, crookAngle = {14, 24},
       meander = {0.10, 0.16}, lean = {4, 14}, angleJitter = {10, 16},
@@ -680,6 +685,7 @@ tree_recipes = {
     },
     vars = { s0 = {18, 30}, s1 = {28, 40}, roll = {80, 120}, pitch = {28, 40}, side = {0.64, 0.72}, lead = {0.80, 0.86} },
     params = {
+      trunkZone = 0.06, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.10, 0.18}, light = {0.25, 0.35}, crookChance = {0.20, 0.35}, crookAngle = {14, 26},
       meander = {0.14, 0.22}, lean = {2, 10}, angleJitter = {10, 16},
@@ -721,6 +727,7 @@ tree_recipes = {
     },
     vars = { pitch = {40, 55}, side = {0.66, 0.74}, lead = {0.86, 0.90} },
     params = {
+      trunkZone = 0.06, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.28, 0.40}, light = {0.08, 0.15}, crookChance = {0.05, 0.12}, crookAngle = {8, 16},
       meander = {0.05, 0.10}, lean = {0, 5}, angleJitter = {8, 12},
@@ -762,6 +769,7 @@ tree_recipes = {
     },
     vars = { s0 = {22, 34}, roll = {80, 110}, pitch = {30, 42}, side = {0.76, 0.82}, lead = {0.82, 0.88} },
     params = {
+      trunkZone = 0.07, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.08, 0.14}, light = {0.25, 0.35}, crookChance = {0.08, 0.15}, crookAngle = {10, 18},
       meander = {0.06, 0.10}, lean = {0, 5}, angleJitter = {8, 12},
@@ -800,6 +808,7 @@ tree_recipes = {
     },
     vars = { s0 = {30, 40}, roll = {80, 110}, pitch = {32, 44}, side = {0.76, 0.82}, lead = {0.84, 0.88} },
     params = {
+      trunkZone = 0.08, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
       droop = {0.30, 0.45}, light = {0.05, 0.10}, crookChance = {0.10, 0.20}, crookAngle = {10, 20},
       meander = {0.06, 0.10}, lean = {0, 8}, angleJitter = {8, 12},

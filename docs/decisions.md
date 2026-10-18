@@ -10490,3 +10490,11 @@ and for the trunk "a full on interconnected trunk structure" -- the implicit sur
   FLAG_UV_BLEND); Metal and WebGPU.
 - **Tests**: `a_trees_trunk_zone_is_one_closed_surface` (closed by position, outward, no slivers, budget, wood <= 8000;
   RT_TREE_WIRE renders the zone, RT_JOINT_TREES picks name:seed); the card test renders each hero's zone.
+- **Addendum (2026-10-18, "let's get up to the thin limbs")**: every limb welded into a tube or the trunk zone takes
+  its PARENT's bark where it meets it -- each tube keeps its mapping (`BarkMap`: ring centres, frames, radii, v), the
+  zone its stretches'; a welded limb's vertices carry the parent's UV in the second slot, weight 1 on the parent's
+  surface falling away exponentially over the limb's radius, and their normals and colour ease to the parent's (the
+  SpeedTree seam ring, on FLAG_UV_BLEND). Limbs out of the zone now flare into it on a collar too (buried, they met it
+  at a hard notch); a collar's first rings every 0.7 radius. Every card species has a trunk zone (0.06-0.10 m; the
+  pine's budget 2000 to keep its wood under 8000). The zone's field is grid-accelerated (pieces per 25 cm cell):
+  polygonizing went 2.0 s -> 0.3-0.5 s, a hero zone ~0.6-0.8 s.
