@@ -81,7 +81,12 @@ void writeWire(const TreeMesh& t, std::size_t hiStart, std::size_t hiEnd, const 
         const Vec3& p = m.vertices[m.indices[k]].position;
         if (p.y < lo.y) lo = p;
     }
-    const Vec3 ctr(lo.x, lo.y + half * 0.7, lo.z);
+    if (hiStart >= hiEnd) lo = Vec3(0, 0, 0);   // (nothing to tint: about the foot)
+    Vec3 ctr(lo.x, lo.y + half * 0.7, lo.z);
+    if (const char* at = std::getenv("RT_WIRE_AT")) {   // "x y z half yaw tilt": look there instead
+        double x, y, z, h, yw, tl;
+        if (std::sscanf(at, "%lf %lf %lf %lf %lf %lf", &x, &y, &z, &h, &yw, &tl) == 6) { ctr = Vec3(x, y, z); half = h; yaw = yw; tilt = tl; }
+    }
     const int W = 900, H = 900;
     auto view = [&](const Vec3& p) {   // turned about y, tipped about x; x right, y up, z depth
         const Vec3 q = p - ctr;
@@ -871,6 +876,17 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
                     name.c_str(), bark, (hero.jointIndexEnd - hero.jointIndexStart) / 3, hero.sprigs.size(), cards,
                     levels[1].tree.branches.indices.size() / 3, cache.pictures.size());
         CHECK(bark <= 8000);
+        if (const char* dir = std::getenv("RT_CARD_ATLAS")) {   // the baked pictures, alpha over grey
+            const TextureData& a = cache.atlas.albedo;
+            Image img(a.width, a.height);
+            for (int y = 0; y < a.height; ++y)
+                for (int x = 0; x < a.width; ++x) {
+                    const uint8_t* px = &a.pixels[(static_cast<std::size_t>(y) * a.width + x) * 4];
+                    const double al = px[3] / 255.0;
+                    img.setPixel(x, y, Vec3(px[0] / 255.0, px[1] / 255.0, px[2] / 255.0) * al + Vec3(0.6, 0.62, 0.66) * (1.0 - al));
+                }
+            img.writePng(std::string(dir) + "/atlas_" + name + ".png");
+        }
         if (const char* dir = std::getenv("RT_TREE_WIRE"))   // (the hero as the lab and the forest draw it)
             writeWire(hero, hero.zoneIndexEnd > hero.zoneIndexStart ? hero.zoneIndexStart : 0,
                       hero.zoneIndexEnd > hero.zoneIndexStart ? hero.zoneIndexEnd : hero.branches.indices.size(),

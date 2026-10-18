@@ -442,7 +442,10 @@ void addCurvedBranch(RenderMesh& mesh, const BranchPath& path, const Vec3& color
         // the contact ring: ring k0 carried back along the branch onto the parent (a hair inside it, so the parent's
         // knots and lobes do not open a gap); the rings before it (inside the parent) dropped
         const Vec3 T = normalize(tangents[k0]);
-        const float R = sock->r * 0.94f;
+        // (a hair inside the parent -- by as much as its knots and node pinches can dent it, or the contact ring stands
+        // proud of it and the tube's open start shows: a slit of sky under a birch's limb)
+        const float dent = g ? 1.3f * g->barkNoise + 0.4f * g->nodeSwell : 0.0f;
+        const float R = sock->r * std::max(0.6f, 0.94f - dent);
         for (int i = 0; i <= segs; i++) {
             const Vec3 P = mesh.vertices[base + static_cast<uint32_t>(k0 * stride + i)].position;
             const Vec3 q = P - sock->c, a = cross(T, sock->d), b = cross(q, sock->d);
@@ -570,7 +573,8 @@ void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
 //     branch-bark ridge does); darker in a CROTCH (two limbs at a real angle both near)
 void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const std::vector<std::vector<int>>& children,
                     const std::vector<char>& inZone, const TreeParams& params, uint32_t seed, float footY,
-                    const std::function<BranchPath(int, std::mt19937&, Vec3&)>& rootPath, std::vector<BarkMap>* maps) {
+                    const std::function<BranchPath(int, std::mt19937&, Vec3&)>& rootPath, std::vector<BarkMap>* maps,
+                    const std::function<bool(int)>& stubbed) {
     struct Piece {
         Vec3 a, b;
         float ra = 0, rb = 0;
@@ -640,10 +644,6 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
         Piece pc;
         pc.a = nodes[par].pos; pc.b = nodes[n].pos;
         pc.ra = nodes[par].radius; pc.rb = nodes[n].radius;
-        // (a node the zone ends at -- every limb on from it a tube -- caps a little inside the tube that leaves it)
-        bool ends = true;
-        for (int c : children[n]) if (inZone[c]) ends = false;
-        if (ends && !children[n].empty()) pc.rb *= 0.92f;
         pc.trunk = par == 0 || nodes[par].pos.y - footY < 2.0f * params.lobeHeight;
         pc.distA = nodes[par].distFromRoot; pc.distB = nodes[n].distFromRoot;
         pc.right = nodeRight[n];
@@ -656,6 +656,34 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
         pc.color = cs->second;
         finish(pc);
         pieces.push_back(pc);
+    }
+    // THE STUBS: every limb leaving the zone (a tube from here on) starts as a short cone in it, from the node out a
+    // little past the parent's surface, a shade wider than the limb and tapering under it -- the zone fillets it like
+    // any limb, and the tube comes out of the cone at a shallow angle (Glenn, 2026-10-18: "a hole where the limb
+    // attaches to the main trunk" -- a collar's contact ring, projected onto a straight cylinder the zone is not,
+    // stood off it as a strip with sky behind)
+    for (size_t z = 0; z < nodes.size(); ++z) {
+        if (!inZone[z]) continue;
+        for (int c : children[z]) {
+            if (inZone[c] || !stubbed(c)) continue;
+            const Vec3 d = nodes[c].pos - nodes[z].pos;
+            const double L = d.length();
+            if (L < 1e-6) continue;
+            const Vec3 ax = d * (1.0 / L);
+            const float rc = nodes[c].radius;
+            Piece pc;
+            pc.a = nodes[z].pos;
+            pc.b = nodes[z].pos + ax * std::min(0.8 * L, static_cast<double>(nodes[z].radius) + 1.2 * rc);
+            pc.ra = 1.08f * rc; pc.rb = 0.88f * rc;
+            pc.distA = nodes[z].distFromRoot; pc.distB = nodes[z].distFromRoot + static_cast<float>((pc.b - pc.a).length());
+            pc.right = carry(nodeRight[z], nodeAxis[z], ax);
+            pc.rightA = pc.rightB = pc.right;
+            pc.chain = chains++;
+            auto cs = chainShade.find(chainOf[z]);
+            pc.color = cs != chainShade.end() ? cs->second : params.barkColor;
+            finish(pc);
+            pieces.push_back(pc);
+        }
     }
     out.zoneLimbs = static_cast<int>(pieces.size());
     // THE ROOTS (Glenn, 2026-10-18: "the roots look very tepid. There should be bigger roots so we can sink the tree
@@ -1419,7 +1447,9 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     const bool zoneOn = trunkTop > 0 && inZone[static_cast<std::size_t>(trunkTop)];
     if (zoneOn) {
         buildTrunkZone(out, nodes, children, inZone, params, seed, static_cast<float>(nodes[0].pos.y),
-                       [&](int k, std::mt19937& r, Vec3& c) { return buttressRoot(k, r, c); }, &zoneMaps);
+                       [&](int k, std::mt19937& r, Vec3& c) { return buttressRoot(k, r, c); }, &zoneMaps,
+                       [&](int c) { return sprigOf[static_cast<std::size_t>(c)] < 0 &&
+                                           (params.woodMinRadius <= 0.0f || nodes[static_cast<std::size_t>(c)].radius >= params.woodMinRadius); });
         own(-1);
         // the limbs leaving it: tubes from its nodes (a side one welded on its collar), the rest as before
         for (size_t z = 0; z < nodes.size(); ++z)
@@ -1474,6 +1504,10 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             path.dist.push_back(nodes[anchor].distFromRoot + static_cast<float>(cutOut[first]));
         } else {
             append(anchor);
+            // (out of the trunk zone: its first ring narrower than the zone's limb there, so its open start is buried in
+            // the zone -- a ring as wide stood on the zone's surface, and the tube's open end showed as a slit of sky)
+            if (inZone[static_cast<std::size_t>(anchor)])
+                path.radius.back() = std::min(0.8f * path.radius.back(), 0.85f * nodes[first].radius);
         }
         for (int cur = first; cur != -1; cur = cont[cur]) {
             if (sprig < 0 && sprigOf[cur] >= 0) {   // the limb runs on into a sprig: the wood ends here, in a point
@@ -1524,9 +1558,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         Vec3 color = params.barkColor * vary(rng);
         Socket sock;
         const Socket* sp = nullptr;
-        // (a limb out of the trunk zone flares into it as into a tube: its contact ring a hair inside the zone's limb,
-        // which near the node is round enough -- without it the limb met the zone at a hard notch)
-        if (!trunk && !cut && params.collar > 0.0f) {   // a side branch: welded into its parent at the fork
+        // (out of the trunk zone, a limb comes out of its STUB in the zone instead -- buildTrunkZone)
+        if (!trunk && !cut && params.collar > 0.0f && !inZone[static_cast<std::size_t>(anchor)]) {   // a side branch: welded into its parent at the fork
             const int par = nodes[anchor].parent;
             const Vec3 dIn = par >= 0 ? normalize(nodes[anchor].pos - nodes[par].pos) : nodes[anchor].heading;
             const Vec3 dOut = cont[anchor] >= 0 ? normalize(nodes[cont[anchor]].pos - nodes[anchor].pos) : dIn;
@@ -1534,7 +1567,14 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             sock.d = equalFork[anchor] ? dIn : normalize(dIn + dOut);   // (a crotch: the stub runs on along the limb)
             sock.r = nodes[anchor].radius;
             sock.collar = params.collar;
-            sp = &sock;
+            // (only a limb that LEAVES its parent at an angle: one running near along the parent's axis stays "inside" it
+            // for metres, and its rings up to there were dropped -- a stem of a fan floating above its fork. It starts
+            // buried instead, as a fork's halves do)
+            const Vec3 dC = normalize(nodes[first].pos - nodes[anchor].pos);
+            const double sn = std::sqrt(std::max(0.0, 1.0 - dot(dC, sock.d) * dot(dC, sock.d)));
+            // (a near-equal fork's halves weld into its stub -- but in the trunk zone there is no stub: the zone is the
+            // fork, and a half run along the limb's axis is the same floating stem)
+            if ((equalFork[anchor] && !inZone[static_cast<std::size_t>(anchor)]) || sn > 0.35) sp = &sock;
         }
         if (std::getenv("RT_JOINT_DEBUG") && endsAt >= 0 && !cut && !trunk)
             std::fprintf(stderr, "[joint] limb into joint %d starts welded at node %d (joint %d, %zu children, r %.3f, first %d r %.3f, stub %d)\n",
