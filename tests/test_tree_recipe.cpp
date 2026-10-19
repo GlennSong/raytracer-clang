@@ -879,9 +879,9 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
             for (const TreeMesh::Twig& t : hero.twigs) { leafy += t.leafy; len += (t.b - t.a).length(); }
             std::printf("    [twigs] %-14s %zu twigs (%zu leafy), %.0f m\n", name.c_str(), hero.twigs.size(), leafy, len);
         }
-        std::printf("    [cards] %-14s hero bark %5zu tris (joints %4zu), %3zu sprigs -> %4zu card tris; mid bark %5zu; %zu pictures\n",
+        std::printf("    [cards] %-14s hero bark %5zu tris (joints %4zu), %3zu sprigs -> %4zu card tris; mid bark %5zu, cards %5zu; %zu pictures\n",
                     name.c_str(), bark, (hero.jointIndexEnd - hero.jointIndexStart) / 3, hero.sprigs.size(), cards,
-                    levels[1].tree.branches.indices.size() / 3, cache.pictures.size());
+                    levels[1].tree.branches.indices.size() / 3, levels[1].tree.leaves.indices.size() / 3, cache.pictures.size());
         // (a near hero: the trunk and limbs in 8000, its fine twigs' bark besides -- branch_cards.h wearNearLeaves)
         const bool near = r->leafKit.set && r->branchCards.twigs;
         const bool needles = r->needles.set;   // (a conifer: needle shoot cards at every level, twig bark besides)

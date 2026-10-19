@@ -10618,3 +10618,18 @@ are longer with wider attachment points and cover more space?"
   skipped. The twig segments stay as the inner layer.
 - The lobes now read as rounded masses of leaves instead of the twigs' scatter; the limbs show under the crown, not
   through it. A crown without lobes is unchanged.
+
+## ADR-0190 — Tree cards: edge-on fade and domed sprays
+
+Glenn, 2026-10-18: "when I get close to the tree branches disappear, Is there some middle ground where we can build
+volume and thickness?"; of a third crossed plane per card: "I don't know if I want to add 50% more foliage triangles".
+
+- Measured first: the hero has no fewer cards than the mid (spruce 64k vs 58k foliage tris). Close up, the flat cards
+  seen edge-on read as blades across the crown or as nothing.
+- **Edge-on fade** (mesh.frag): a tree card (FLAG_LOD_BAND or FLAG_FOLIAGE, not the impostors' top card, which has its
+  own) thins away as the view grazes its TRUE face -- the triangle's normal from the screen derivatives, since the
+  vertex normals are bent out of the crown -- gone under ~5 degrees, whole from ~17; its V partner carries the clump.
+  Free; the shadow pass keeps every card.
+- **Domed sprays** (wearTwigCards): each spray plane's middle lifted a fifth of its size out of the lobe, four
+  triangles about it, the rim's normals leaning off it. Old oak foliage 72k -> 82k tris, ancient 137k -> 149k.
+- Not done: a third plane per card (+50% foliage triangles).

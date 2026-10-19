@@ -975,6 +975,9 @@ void main() {
     // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
+    // (the triangle's own face, from the screen derivatives -- taken here, in uniform control flow: a tree card's
+    // normals are bent out of the crown and cannot say when the card itself is edge-on)
+    const vec3 faceN = cross(dFdx(inWorldPos), dFdy(inWorldPos));
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
         vec4 albedoTex = texture(albedoMap, inTexcoord);
         if ((pc.surfaceFlags.y & (1u << 23)) != 0u)   // FLAG_UV_BLEND: the second mapping's, mixed in by its weight
@@ -992,6 +995,14 @@ void main() {
         if ((pc.surfaceFlags.y & (1u << 19)) != 0u && (texFlags & 4u) != 0u && abs(inWorldNormal.y) > 0.9) {
             const float s = abs(normalize(g.cameraPosition.xyz - inWorldPos).y);
             cut *= smoothstep(0.12, 0.42, s);
+        }
+        // A TREE CARD EDGE-ON (Glenn, 2026-10-18: "when I get close to the tree branches disappear"): a card seen
+        // edge-on is a sliver -- a blade across the crown, or nothing -- so it thins away as the view grazes it (gone
+        // under ~5 deg, whole from ~17 deg), and its partner in the V, turned off it, carries the clump there.
+        // (Not the impostors' top card, above, nor grass; the shadow pass keeps every card.)
+        else if ((pc.surfaceFlags.y & ((1u << 19) | (1u << 22))) != 0u && dot(faceN, faceN) > 1e-20) {
+            const float s = abs(dot(normalize(faceN), normalize(g.cameraPosition.xyz - inWorldPos)));
+            cut *= smoothstep(0.08, 0.3, s);
         }
         if ((pc.surfaceFlags.y & 2u) != 0u && cut < 0.5) discard;
         if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;

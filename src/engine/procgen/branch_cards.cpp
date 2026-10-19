@@ -536,26 +536,36 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
             const double s = size / std::max(0.05f, pic.length);
             const Vec3 side0 = normalize(cross(axis, faceOut));
             const Vec3 out0 = normalize(cross(side0, axis));
+            // (each plane DOMED -- Glenn, of the cards seen close: "Is there some middle ground where we can build volume
+            // and thickness?" -- its middle lifted out of the lobe a fifth of its size over its rim, four triangles
+            // about it: from the side a spray has a curve and a thickness, not a line; its normals round off with it)
+            const double bulge = 0.2 * size;
             for (int pl = 0; pl < 2; ++pl) {   // (two planes in a V about the stem, opening out of the lobe)
                 const double rr = (pl == 0 ? -1.0 : 1.0) * (0.5 * fold + 0.3);
                 const Vec3 right = normalize(side0 * std::cos(rr) + out0 * std::sin(rr));
                 Vec3 face = normalize(cross(right, axis));
                 if (dot(face, faceOut) < 0.0) face = face * -1.0;
                 const uint32_t b = static_cast<uint32_t>(m.vertices.size());
-                const double xs[2] = {p.x0, p.x1}, ys[2] = {p.y0, p.y1};
-                for (int yi = 0; yi < 2; ++yi)
-                    for (int xi = 0; xi < 2; ++xi) {
-                        const Vec3 pos = foot + axis * (ys[yi] * s) + right * (xs[xi] * s);
-                        Vec3 out = normalize(pos - lobeC) * 0.6 + normalize(pos - mid) * 0.4;
-                        out = out.length() > 1e-6 ? normalize(out) : Vec3(0, 1, 0);
-                        const Vec3 nrm = normalize(face * (1.0 - spec.bend) + out * spec.bend);
-                        const Vec3 tg = normalize(right - nrm * dot(right, nrm));
-                        Vertex vx(pos, nrm, tg, xi ? p.u1 : p.u0, yi ? p.v0 : p.v1);
-                        const double ao = 0.5 + 0.5 * std::clamp((pos - mid).length() / crownR, 0.0, 1.0);
-                        vx.color = Vec3(ao * inv, ao * inv, ao * inv);
-                        m.vertices.push_back(vx);
-                    }
-                MeshBuilder::quadFacing(m, b + 0, b + 1, b + 3, b + 2, face);
+                const double xs[3] = {p.x0, 0.5 * (p.x0 + p.x1), p.x1}, ys[3] = {p.y0, 0.5 * (p.y0 + p.y1), p.y1};
+                const float us[3] = {p.u0, 0.5f * (p.u0 + p.u1), p.u1}, vs[3] = {p.v1, 0.5f * (p.v0 + p.v1), p.v0};
+                const Vec3 centre = foot + axis * (ys[1] * s) + right * (xs[1] * s);
+                auto vert = [&](int xi, int yi) {   // (xi, yi 0..2; the middle one lifted)
+                    const bool middle = xi == 1 && yi == 1;
+                    const Vec3 flat = foot + axis * (ys[yi] * s) + right * (xs[xi] * s);
+                    const Vec3 pos = middle ? flat + face * bulge : flat;
+                    Vec3 out = normalize(pos - lobeC) * 0.6 + normalize(pos - mid) * 0.4;
+                    out = out.length() > 1e-6 ? normalize(out) : Vec3(0, 1, 0);
+                    // (the rim's normals lean off the dome's middle, as its curve does)
+                    const Vec3 dome = middle ? face : normalize(face + normalize(flat - centre) * 0.55);
+                    const Vec3 nrm = normalize(dome * (1.0 - spec.bend) + out * spec.bend);
+                    const Vec3 tg = normalize(right - nrm * dot(right, nrm));
+                    Vertex vx(pos, nrm, tg, us[xi], vs[yi]);
+                    const double ao = 0.5 + 0.5 * std::clamp((pos - mid).length() / crownR, 0.0, 1.0);
+                    vx.color = Vec3(ao * inv, ao * inv, ao * inv);
+                    m.vertices.push_back(vx);
+                };
+                vert(0, 0); vert(2, 0); vert(2, 2); vert(0, 2); vert(1, 1);   // (the rim's corners round, then the middle)
+                for (uint32_t k = 0; k < 4; ++k) MeshBuilder::triFacing(m, b + 4, b + k, b + (k + 1) % 4, face);
             }
             ++laid;
         };
