@@ -2153,6 +2153,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     std::vector<Var> vars(nVar);
     std::vector<TextureHandle> folTex(fp.species.size());
     std::vector<TextureData> folData(fp.species.size());
+    std::vector<TextureData> barkData(fp.species.size());   // (a recipe's bark map, for its impostors' trunks)
     // THE NEAR MATERIALS: fading out over the band into the impostors
     RenderMaterial barkMat;
     barkMat.albedo = Vec3(1, 1, 1);
@@ -2228,6 +2229,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 const BarkTextures bt = barkTextures(kind, 1u);
                 wood.albedoMap = uploadTex(bt.albedo);
                 wood.normalMap = uploadTex(bt.normal);
+                barkData[s] = bt.albedo;
             }
             std::map<int, std::pair<TextureHandle, TextureHandle>> leafTex;   // by foliage mode: one atlas a species
             BranchCardSet branchCards;   // (and one branch-card atlas: baked from the first variant, worn by all)
@@ -2372,7 +2374,8 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 for (int a = 0; a < kImpostorAzimuths; ++a) {
                     const std::size_t off = (static_cast<std::size_t>(by + e * vch) * vw + bx + a * vcw) * 4;
                     renderImpostorView(var.tree, folData[var.species], a * 2.0 * PI / kImpostorAzimuths, e * kImpostorElevationStep,
-                                       sl.centreY, sl.Rb, sl.Hh, vcw, vch, colourScale, vcol.data() + off, vw * 4, vnrm.data() + off);
+                                       sl.centreY, sl.Rb, sl.Hh, vcw, vch, colourScale, vcol.data() + off, vw * 4, vnrm.data() + off,
+                                       &barkData[static_cast<std::size_t>(var.species)]);
                 }
             sl.vu0 = static_cast<double>(bx) / vw; sl.vv0 = static_cast<double>(by) / vh;
             sl.cellU = static_cast<double>(vcw) / vw; sl.cellV = static_cast<double>(vch) / vh;

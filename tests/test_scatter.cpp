@@ -535,24 +535,72 @@ TEST_CASE(impostor_views_frame_the_tree_from_every_side) {
         }
     CHECK(outside == 0);
     const int w = 64, h = 128;
-    auto view = [&](double az) {
+    std::vector<uint8_t> nrm[2];
+    auto view = [&](double az, std::vector<uint8_t>& n) {
         std::vector<uint8_t> col(static_cast<std::size_t>(w) * h * 4);
-        renderImpostorView(tree, fol, az, 0.0, cy, rb, hh, w, h, 3.0, col.data(), w * 4);
+        n.assign(col.size(), 0);
+        renderImpostorView(tree, fol, az, 0.0, cy, rb, hh, w, h, 3.0, col.data(), w * 4, n.data());
         return col;
     };
-    const std::vector<uint8_t> front = view(0.0), back = view(3.14159265358979);
+    auto view2 = [&](double az, double el, std::vector<uint8_t>& n) {
+        std::vector<uint8_t> col(static_cast<std::size_t>(w) * h * 4);
+        n.assign(col.size(), 0);
+        renderImpostorView(tree, fol, az, el, cy, rb, hh, w, h, 3.0, col.data(), w * 4, n.data());
+        return col;
+    };
+    const std::vector<uint8_t> front = view(0.0, nrm[0]), back = view(3.14159265358979, nrm[1]);
     int cover = 0, both = 0;
+    double thick = 0.0;   // (the normal map's alpha is the nearest part's depth: front and back, the crown between)
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {
-            const bool f = front[(static_cast<std::size_t>(y) * w + x) * 4 + 3] >= 128;
-            const bool b = back[(static_cast<std::size_t>(y) * w + (w - 1 - x)) * 4 + 3] >= 128;
+            const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4 + 3, j = (static_cast<std::size_t>(y) * w + (w - 1 - x)) * 4 + 3;
+            const bool f = front[i] >= 128;
+            const bool b = back[j] >= 128;
             cover += f;
             both += f && b;
+            if (f && b) thick += ((nrm[0][i] + nrm[1][j]) * 2.0 / 255.0 - 2.0) * (rb + hh);
         }
-    std::printf("    [impostor views] window %.1f x %.1f m; front covers %d px, %d of them in the back view mirrored\n",
-                2 * rb, 2 * hh, cover, both);
+    thick /= std::max(1, both);
+    // ...and the views as the crown's shadow map (mesh.frag impostorSelfShadow): the tree's nearest part under each
+    // pixel seen from the front, looked up in the view toward the sun -- against a sun 35 deg up only the crown's top
+    // catches it (about a third of what the viewer sees), with the sun behind the viewer nearly all of it
+    auto selfLit = [&](double sunAz, double sunEl) {
+        const double el = sunEl;
+        const Vec3 d(std::sin(sunAz) * std::cos(el), std::sin(el), std::cos(sunAz) * std::cos(el)), r(std::cos(sunAz), 0, -std::sin(sunAz));
+        const Vec3 u = cross(d, r);
+        std::vector<uint8_t> sn;
+        const std::vector<uint8_t> sc = view2(sunAz, sunEl, sn);
+        const double D = rb + hh, fall = 0.15 * rb + 0.5, bias = 0.25 + 0.05 * rb;
+        double lit = 0.0;
+        int n = 0;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4 + 3;
+                if (front[i] < 128) continue;
+                const Vec3 p(((x + 0.5) / w * 2 - 1) * rb, (1 - (y + 0.5) / h * 2) * hh, (nrm[0][i] * 2.0 / 255.0 - 1.0) * D);
+                const double sx = dot(p, r) / rb, sy = dot(p, u) / hh;
+                double l = 1.0;
+                if (std::fabs(sx) < 1 && std::fabs(sy) < 1) {
+                    const int px = std::clamp(static_cast<int>((sx * 0.5 + 0.5) * w), 0, w - 1), py = std::clamp(static_cast<int>((0.5 - sy * 0.5) * h), 0, h - 1);
+                    const std::size_t j = (static_cast<std::size_t>(py) * w + px) * 4 + 3;
+                    const double under = (sn[j] * 2.0 / 255.0 - 1.0) * D - dot(p, d);
+                    if (sc[j] >= 128) l = std::exp(-std::max(under - bias, 0.0) / fall);
+                }
+                lit += l;
+                ++n;
+            }
+        return lit / std::max(1, n);
+    };
+    const double against = selfLit(3.14159265358979, kImpostorElevationStep), behind = selfLit(0.0, kImpostorElevationStep);
+    std::printf("    [impostor views] window %.1f x %.1f m; front covers %d px, %d of them in the back view mirrored, "
+                "%.2f m thick there; %.0f%% of it sunlit against the sun, %.0f%% with it behind\n",
+                2 * rb, 2 * hh, cover, both, thick, 100 * against, 100 * behind);
     CHECK(cover > 300);
     CHECK(both > cover * 8 / 10);
+    CHECK(thick > 0.3 * rb);
+    CHECK(against < 0.65);
+    CHECK(behind > 0.8);
+    CHECK(behind - against > 0.25);
     // the far card: one quad whose corners give back the tree's centre; its shadow, two quads inside its block
     ImpostorSlot sl;
     sl.vu0 = 0.25; sl.vv0 = 0.5; sl.cellU = 0.01; sl.cellV = 0.02; sl.Rb = rb; sl.Hh = hh; sl.centreY = cy;

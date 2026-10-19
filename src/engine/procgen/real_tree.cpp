@@ -743,7 +743,8 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
 }
 
 void renderImpostorView(const RealTree& tree, const TextureData& fol, double azimuth, double elevation, double centreY,
-                        double Rb, double Hh, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut) {
+                        double Rb, double Hh, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut,
+                        const TextureData* barkAlbedo) {
     // the tree turned so the view looks down -z: (r, u, d) -> (x, y, z), about its centre
     const Vec3 d(std::sin(azimuth) * std::cos(elevation), std::sin(elevation), std::cos(azimuth) * std::cos(elevation));
     const Vec3 r(std::cos(azimuth), 0.0, -std::sin(azimuth));
@@ -757,7 +758,10 @@ void renderImpostorView(const RealTree& tree, const TextureData& fol, double azi
             v.normal = Vec3(dot(v.normal, r), dot(v.normal, u), dot(v.normal, d));
             v.tangent = Vec3(dot(v.tangent, r), dot(v.tangent, u), dot(v.tangent, d));
         }
-    renderCardView(bark, foliage, fol, false, -Rb, Rb, -Hh, Hh, w, h, colourScale, out, stride, normalOut);
+    CardViewExtras ex;
+    ex.depthToAlpha = Rb + Hh;   // (the sun's view of the crown, for its self-shadow)
+    ex.barkAlbedo = barkAlbedo;
+    renderCardView(bark, foliage, fol, false, -Rb, Rb, -Hh, Hh, w, h, colourScale, out, stride, normalOut, &ex);
 }
 
 double impostorViewHalfHeight(const RealTree& tree, double centreY, double maxElevation) {
@@ -919,14 +923,17 @@ void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const Tex
     for (int y = 0; y < h; ++y) std::memcpy(out + static_cast<std::size_t>(y) * stride, &img[static_cast<std::size_t>(y) * w * 4], static_cast<std::size_t>(w) * 4);
     if (normalOut) {
         std::vector<uint8_t> nimg(static_cast<std::size_t>(w) * h * 4, 0);
+        std::vector<uint8_t> zimg(ex && ex->depthToAlpha > 0.0 ? static_cast<std::size_t>(w) * h : 0, 128);
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x) {
                 Vec3 acc(0, 0, 0);
+                double z = 0.0;
                 int c = 0;
                 for (int k = 0; k < S * S; ++k) {
                     const std::size_t i = static_cast<std::size_t>(y * S + k / S) * W + x * S + k % S;
                     if (!cov[i]) continue;
                     acc = acc + Vec3(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]);
+                    z += depth[i];
                     ++c;
                 }
                 const Vec3 n = c ? normalize(acc) : Vec3(0, 0, 1);
@@ -935,9 +942,21 @@ void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const Tex
                 d[1] = static_cast<uint8_t>(std::clamp((n.y * 0.5 + 0.5) * 255.0, 0.0, 255.0));
                 d[2] = static_cast<uint8_t>(std::clamp((n.z * 0.5 + 0.5) * 255.0, 0.0, 255.0));
                 d[3] = c ? 255 : 0;
+                if (ex && ex->depthToAlpha > 0.0)   // (kept aside: the dilation reads alpha as coverage)
+                    zimg[static_cast<std::size_t>(y) * w + x] =
+                        c ? static_cast<uint8_t>(std::clamp((0.5 + 0.5 * z / c / ex->depthToAlpha) * 255.0, 0.0, 255.0)) : 128;
             }
         dilateRGB(nimg, w, h, w * 4, 6);   // under the cut, so the mips at the silhouette keep crown normals
-        for (std::size_t i = 3; i < nimg.size(); i += 4) nimg[i] = 255;
+        if (ex && ex->depthToAlpha > 0.0) {   // ...and the depth (a far mip at the rim must not average toward the centre)
+            std::vector<uint8_t> zq(static_cast<std::size_t>(w) * h * 4, 0);
+            for (std::size_t i = 0, n = static_cast<std::size_t>(w) * h; i < n; ++i) {
+                zq[i * 4] = zimg[i];
+                zq[i * 4 + 3] = nimg[i * 4 + 3] >= 128 ? 255 : 0;   // (covered: not the normals' own dilation)
+            }
+            dilateRGB(zq, w, h, w * 4, 8);
+            for (std::size_t i = 0, n = static_cast<std::size_t>(w) * h; i < n; ++i) zimg[i] = zq[i * 4 + 3] ? zq[i * 4] : 128;
+        }
+        for (std::size_t i = 3; i < nimg.size(); i += 4) nimg[i] = ex && ex->depthToAlpha > 0.0 ? zimg[i / 4] : 255;
         for (int y = 0; y < h; ++y) std::memcpy(normalOut + static_cast<std::size_t>(y) * stride, &nimg[static_cast<std::size_t>(y) * w * 4], static_cast<std::size_t>(w) * 4);
     }
 }

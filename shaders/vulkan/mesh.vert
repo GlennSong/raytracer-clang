@@ -72,16 +72,17 @@ layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec3 outWorldTangent;
 layout(location = 5) flat out vec3 outInstanceOrigin;   // per-instance variation (ADR-0098)
 layout(location = 6) out vec3 outUvBlend;   // FLAG_UV_BLEND (bit 23): the tangent slot's data -- a second UV and its weight
-layout(location = 7) flat out vec4 outImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw
+layout(location = 7) flat out vec4 outImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw; FLAG_GRASS: its ground's normal xz
 layout(location = 8) flat out vec4 outImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 void main() {
     const bool grass = (pc.surfaceFlags.y & (1u << 17)) != 0u;   // FLAG_GRASS
-    // Grass clumps carry their random rank in the transform's bottom row (GrassSystem); every
-    // other mesh's is (0, 0, 0, 1).
+    // Grass clumps carry their random rank in the transform's bottom row (GrassSystem), and their ground's normal
+    // (its x and z); every other mesh's is (0, 0, 0, 1).
     mat4 M = inModel;
     float rank = 0.0;
-    if (grass) { rank = M[0][3]; M[0][3] = 0.0; }
+    vec2 groundXZ = vec2(0.0);
+    if (grass) { rank = M[0][3]; groundXZ = vec2(M[1][3], M[2][3]); M[0][3] = 0.0; M[1][3] = 0.0; M[2][3] = 0.0; }
     // FLAG_SIGNAL_STATE (bit 20): a traffic signal whose STATE rides the bottom row (0 none, 1 green, 2 amber,
     // 3 red): the lamp of that colour glows (outColor pushed past 1: mesh.frag reads it as emission). One static
     // model per signal -- nothing about it is rebuilt but that number.
@@ -138,7 +139,7 @@ void main() {
     // FLAG_IMPOSTOR_VIEWS (bit 24, forest.h appendImpostorViews): ONE card a tree, turned to the camera about the
     // tree's centre -- upright while the camera is near the horizon, tipping back as it climbs (its up stays in the
     // plane of the world's up and the view); mesh.frag works out which baked views it shows
-    outImpA = vec4(0.0);
+    outImpA = vec4(groundXZ, 0.0, 0.0);   // (grass: its ground's normal, x and z -- mesh.frag bends the blades to it)
     outImpB = vec4(0.0);
     if ((pc.surfaceFlags.y & (1u << 24)) != 0u) {
         const vec2 corner = inTexcoord;

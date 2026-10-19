@@ -46,7 +46,8 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyStars;
     vec4  skyCity;
     vec4  terrainHorizon;     // xy world origin, z 1/extent, w enabled
-    vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo
+    vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo, z 1: no impostor self-shadow (RT_IMPOSTOR_SELF_SHADOW=0),
+                              // w 1: grass bent to the sky, not its ground (RT_GRASS_GROUND=0)
     vec4  viewerBoxA;         // the viewer's enclosure (SceneLighting::viewerBox*): xyz centre, w half along u (0: none)
     vec4  viewerBoxB;         // xy its axis u (x, z), z half across it, w half up
     vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none),
@@ -88,7 +89,7 @@ layout(location = 3) in vec3 inColor;
 layout(location = 4) in vec3 inWorldTangent;
 layout(location = 5) flat in vec3 inInstanceOrigin;   // per-instance variation (ADR-0098)
 layout(location = 6) in vec3 inUvBlend;   // FLAG_UV_BLEND (bit 23): a second UV and its weight
-layout(location = 7) flat in vec4 inImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw
+layout(location = 7) flat in vec4 inImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw; FLAG_GRASS: its ground's normal xz
 layout(location = 8) flat in vec4 inImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 layout(location = 0) out vec4 outColor;
@@ -785,10 +786,13 @@ vec3 derivedNormal(vec3 N, vec2 uv, vec3 tsN) {
 // in the tree's own frame picks the baked views about it -- 8 azimuths x 3 elevations 35 deg apart -- and the four
 // nearest are blended (bilinearly in azimuth and elevation, weighted by their coverage). Each is read where THIS
 // fragment's point falls in that view's window (its offset from the centre on the view's r and u axes), so the
-// silhouettes line up as the views change. Returns colour and coverage; `nWorld` the blended normal.
+// silhouettes line up as the views change. Returns colour and coverage; `nWorld` the blended normal, `front` the
+// tree's nearest part under this fragment (in the tree's frame, from its centre: the normal map's alpha is each view's
+// depth, real_tree.h renderImpostorView).
 const int kImpAz = 8, kImpEl = 3;
 const float kImpElStep = 0.6108652;   // 35 deg
-vec4 impostorSample(out vec3 nWorld, out float lod) {
+const float kImpDepthLod = 2.0;
+vec4 impostorSample(out vec3 nWorld, out float lod, out vec3 front) {
     const vec3 c = inImpA.xyz;
     const float yaw = inImpA.w, rb = inImpB.x, hh = inImpB.y;
     const vec2 base = inImpB.zw, cell = inUvBlend.xy;
@@ -807,6 +811,7 @@ vec4 impostorSample(out vec3 nWorld, out float lod) {
     vec3 rgb = vec3(0.0), n = vec3(0.0);
     float cover = 0.0;
     lod = 0.0;
+    front = vec3(0.0);
     for (int k = 0; k < 4; ++k) {
         const int ai = (k & 1) == 0 ? a0 : a1, ei = (k & 2) == 0 ? e0 : e1;
         const float w = ((k & 1) == 0 ? 1.0 - wa : wa) * ((k & 2) == 0 ? 1.0 - we : we);
@@ -820,16 +825,62 @@ vec4 impostorSample(out vec3 nWorld, out float lod) {
         if (k == 0) lod = textureQueryLod(albedoMap, uv).x;
         // (a view's window is its cell: outside it, nothing -- not the next cell's tree)
         const vec4 t = inside ? textureGrad(albedoMap, uv, dFdx(uv), dFdy(uv)) : vec4(0.0);
-        const vec3 tn = textureGrad(normalMap, uv, dFdx(uv), dFdy(uv)).xyz * 2.0 - 1.0;
+        const vec4 tm = textureGrad(normalMap, uv, dFdx(uv), dFdy(uv));
+        const vec3 tn = tm.xyz * 2.0 - 1.0;
         const float wc = w * t.a;
         rgb += t.rgb * wc;
         cover += wc;
         n += (r * tn.x + u * tn.y + d * tn.z) * wc;
+        // (the depth from a mip no coarser than 20 x 40 a view: further down a cell blurs into its neighbours and the
+        // crown's depth averages away -- every far tree read as lit through)
+        const float z = textureLod(normalMap, uv, min(textureQueryLod(normalMap, uv).x, kImpDepthLod)).a;
+        front += (r * dot(p, r) + u * dot(p, u) + d * ((z * 2.0 - 1.0) * (rb + hh))) * wc;
     }
     rgb /= max(cover, 1e-4);
+    front /= max(cover, 1e-4);
     n = dot(n, n) > 1e-8 ? normalize(n) : v;
     nWorld = vec3(n.x * cy - n.z * sy, n.y, n.x * sy + n.z * cy);   // the tree's frame -> world
     return vec4(rgb, cover);
+}
+
+// ...and the crown's shadow on itself (Glenn, 2026-10-19: far trees against the sun "look entirely bright and it makes
+// them flat"): a near crown is shaded by its own leaves in the shadow map -- seen against the sun, only its rim glows --
+// but a billboard is one plane and the map sees nothing of that. So the views nearest the SUN are its shadow map:
+// `front` (impostorSample's, the tree's frame) is projected into them, and the deeper it lies under the leaves the
+// sun sees first, the less sun (soft: light runs a metre or two into a crown). 1 lit .. 0 under the whole crown.
+float impostorSelfShadow(vec3 front, vec3 Lw, float lod) {
+    const float yaw = inImpA.w, rb = inImpB.x, hh = inImpB.y;
+    const vec2 base = inImpB.zw, cell = inUvBlend.xy;
+    const float cy = cos(yaw), sy = sin(yaw);
+    const vec3 L = vec3(Lw.x * cy + Lw.z * sy, Lw.y, -Lw.x * sy + Lw.z * cy);
+    float fa = atan(L.x, L.z) / 6.2831853 * float(kImpAz);
+    fa = fa < 0.0 ? fa + float(kImpAz) : fa;
+    const int a0 = int(floor(fa)) % kImpAz, a1 = (a0 + 1) % kImpAz;
+    const float wa = fract(fa);
+    const float fe = clamp(asin(clamp(L.y, -1.0, 1.0)) / kImpElStep, 0.0, float(kImpEl - 1));
+    const int e0 = min(int(floor(fe)), kImpEl - 1), e1 = min(e0 + 1, kImpEl - 1);
+    const float we = fe - float(e0);
+    const float fall = 0.15 * rb + 0.5, bias = 0.25 + 0.05 * rb;
+    float lit = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        const int ai = (k & 1) == 0 ? a0 : a1, ei = (k & 2) == 0 ? e0 : e1;
+        const float w = ((k & 1) == 0 ? 1.0 - wa : wa) * ((k & 2) == 0 ? 1.0 - we : we);
+        const float az = float(ai) * 6.2831853 / float(kImpAz), el = float(ei) * kImpElStep;
+        const vec3 d = vec3(sin(az) * cos(el), sin(el), cos(az) * cos(el));
+        const vec3 r = vec3(cos(az), 0.0, -sin(az));
+        const vec3 u = cross(d, r);
+        const vec2 xy = vec2(dot(front, r) / rb, dot(front, u) / hh);
+        float l = 1.0;
+        if (all(lessThan(abs(xy), vec2(1.0)))) {
+            const vec2 uv = base + (vec2(float(ai), float(ei)) + vec2(xy.x * 0.5 + 0.5, 0.5 - xy.y * 0.5)) * cell;
+            const float sl = min(lod + 1.0, kImpDepthLod);   // (a mip softer than the picture, but not past the crown's depth)
+            const float a = textureLod(albedoMap, uv, sl).a;
+            const float under = (textureLod(normalMap, uv, sl).a * 2.0 - 1.0) * (rb + hh) - dot(front, d);
+            l = mix(1.0, exp(-max(under - bias, 0.0) / fall), clamp(a * 2.0, 0.0, 1.0));
+        }
+        lit += l * w;
+    }
+    return lit;
 }
 
 void main() {
@@ -1029,13 +1080,13 @@ void main() {
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
     const bool impViews = (pc.surfaceFlags.y & (1u << 24)) != 0u;   // FLAG_IMPOSTOR_VIEWS: its own sampling
-    vec3 impN = vec3(0.0, 1.0, 0.0);
+    vec3 impN = vec3(0.0, 1.0, 0.0), impFront = vec3(0.0);
     float impLod = 0.0;
     // (the triangle's own face, from the screen derivatives -- taken here, in uniform control flow: a tree card's
     // normals are bent out of the crown and cannot say when the card itself is edge-on)
     const vec3 faceN = cross(dFdx(inWorldPos), dFdy(inWorldPos));
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
-        vec4 albedoTex = impViews ? impostorSample(impN, impLod) : texture(albedoMap, inTexcoord);
+        vec4 albedoTex = impViews ? impostorSample(impN, impLod, impFront) : texture(albedoMap, inTexcoord);
         if ((pc.surfaceFlags.y & (1u << 23)) != 0u)   // FLAG_UV_BLEND: the second mapping's, mixed in by its weight
             albedoTex = mix(albedoTex, texture(albedoMap, inUvBlend.xy), clamp(inUvBlend.z, 0.0, 1.0));
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
@@ -1092,7 +1143,11 @@ void main() {
             cardBack = dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0;
         } else if (grassCard || leafCard) {
             if (dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) N = -N;
-            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), grassCard ? 0.7 : 0.45));
+            // (grass to its GROUND's normal, GrassSystem's: on a slope turned from the sun the field shades with the
+            // ground under it -- Glenn, 2026-10-19: the far grass "appear bright and don't blend with the landscape"
+            // when it bent to the sky, lit as a flat field while the hillside darkened)
+            const vec3 up = grassCard && g.terrainHorizon2.w < 0.5 ? vec3(inImpA.x, sqrt(max(1.0 - dot(inImpA.xy, inImpA.xy), 0.0)), inImpA.y) : vec3(0.0, 1.0, 0.0);
+            N = normalize(mix(N, up, grassCard ? 0.7 : 0.45));
         }
     }
     // CRAGS (ADR-0120): the mesh's triangles are the only relief a distant mountain had ("the mountains
@@ -1213,6 +1268,8 @@ void main() {
     // day, the moon by night; the horizon map was marched toward it).
     if (g.counts.x > 0)
         sunVis *= terrainShadow(inWorldPos, normalize(g.lights[0].directionInner.xyz));
+    if (impViews && g.counts.x > 0 && g.terrainHorizon2.z < 0.5)   // (a far tree's own crown: its sun-side views, above)
+        sunVis *= impostorSelfShadow(impFront, normalize(g.lights[0].directionInner.xyz), impLod);
     float strength = g.shadowParams.w;
     float sunShadow = mix(1.0, sunVis, strength);   // scalar form for the shadow debug view (5)
     // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward

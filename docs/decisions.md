@@ -10813,3 +10813,29 @@ beech's) leafy shoots now sprout along limbs to 7 cm through (fill_radius 0.07, 
 3.7k -> 6.6k tris), and the young age's twig ends shorter (tip 0.17) with a larger hero leaf budget (near_leaves
 10000, near_twig_tris 12000; hero foliage 47k -> 79k tris). Fuller, but the young oak's few big forks remain its
 character -- its branching inside the crown is a recipe change owed in the lab with Glenn.
+
+## ADR-0202 — Far trees shade themselves; grass shades with its slope
+
+Glenn (2026-10-19, island_8_nature at 07:50, looking toward the sun): "far away tree cards don't seem to render well
+against the sunlight. They look entirely bright and it makes them flat"; and "the same issue with distant grass cards.
+They appear bright and don't blend with the landscape."
+
+- **Cause, trees.** A near crown is shaded by its own leaves in the shadow map: against the sun only its rim takes the
+  sun and the leaf transmission (ADR-0129). A many-view impostor (ADR-0193) is one billboard; the shadow map sees
+  nothing of the crown behind it, so all of it took the sun and the glow -- trunk included.
+- **The impostor's own views as its shadow map.** Each baked view now stores the depth of the tree's nearest part in
+  its normal map's alpha (0.5 + 0.5 z / (Rb + Hh), dilated under the cut like the normals). mesh.frag rebuilds the
+  fragment's front point from the camera's views, projects it into the views nearest the sun, and takes the sun by
+  how deep it lies under the leaves the sun sees first (soft: exp over 0.15 Rb + 0.5 m). The depth reads stop at mip
+  2 (20 x 40 a view): further down a view's cell blurs into its neighbours and every far tree read as lit -- which is
+  why the first island try changed nothing at 500-900 m though the lab, nearer, looked right.
+- **Measured** (test_scatter impostor_views): an oak's front with a 35 deg sun behind it is 56% sunlit (its top), 86%
+  with the sun behind the viewer. On the island the far crowns now shade on their camera side with lit tops.
+- **The far trunks wear the recipe's bark map** (renderImpostorView's barkAlbedo), not the vertex tint alone.
+- **Cause, grass.** Grass normals bent 70% to the SKY: on a slope turned from the sun the field lit as flat ground
+  while the hillside under it darkened -- pale flecks over every shaded slope. GrassSystem now puts each clump's
+  ground normal (x, z) in the instance's bottom row beside its rank, and mesh.frag bends the blades to it. Every
+  path that reads instance matrices clears all three data slots (both shadow shaders, WebGPU, the non-instanced
+  fallback).
+- **A/B:** RT_IMPOSTOR_SELF_SHADOW=0 and RT_GRASS_GROUND=0 (renderer globals terrainHorizon2.z / .w).
+- Owed: the Metal and WebGPU impostor shaders (with the views themselves, ADR-0193).

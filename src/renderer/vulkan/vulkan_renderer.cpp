@@ -6695,6 +6695,12 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     // facade glass reflectance scale (mesh.frag): 3 by default, RT_GLASS_REFLECT=1 for the old glass
     static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 3.0f; return v > 0.0f ? v : 3.0f; }();
     impl->cpuGlobals.ambient[3] = glassReflect;
+    // the far trees' self-shadow (mesh.frag impostorSelfShadow): RT_IMPOSTOR_SELF_SHADOW=0 for the A/B (z = 1: off)
+    static const bool impSelfOff = [] { const char* e = std::getenv("RT_IMPOSTOR_SELF_SHADOW"); return e && std::string(e) == "0"; }();
+    impl->cpuGlobals.terrainHorizon2[2] = impSelfOff ? 1.0f : 0.0f;
+    // the grass shaded to its ground's slope (mesh.frag): RT_GRASS_GROUND=0 for the old bend to the sky (w = 1: off)
+    static const bool grassGroundOff = [] { const char* e = std::getenv("RT_GRASS_GROUND"); return e && std::string(e) == "0"; }();
+    impl->cpuGlobals.terrainHorizon2[3] = grassGroundOff ? 1.0f : 0.0f;
     {
         // RT_GLASS=old: the old glass; RT_GLASS=none: panes drawn as nothing (the reference a pane is measured against)
         static const float glassMode = [] {

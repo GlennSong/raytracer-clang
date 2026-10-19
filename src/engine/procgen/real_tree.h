@@ -73,10 +73,12 @@ void renderImpostor(const RealTree& tree, const TextureData& foliage, bool top, 
 // an orthographic picture framed on its centre (`centreY` up its axis): x -Rb..Rb across (Rb: its reach from the axis),
 // y -Hh..Hh up the view (Hh: impostorViewHalfHeight, the same for every view, so one window fits them all). The
 // view's frame (the normal map's): T = r = (cos az, 0, -sin az), N = d = toward the viewer, B = u = d x r.
-// Colour, alpha and normals as renderImpostor's.
+// Colour, alpha and normals as renderImpostor's; the normal map's alpha is the depth of the tree's nearest part at
+// each texel, 0.5 + 0.5 z / (Rb + Hh) (z along d, toward the viewer; uncovered 0.5): the far trees' self-shadow (mesh.frag).
+// `barkAlbedo`: the map the near bark wears (a recipe's), so the far trunk is its colour, not the vertex tint alone.
 void renderImpostorView(const RealTree& tree, const TextureData& foliage, double azimuth, double elevation, double centreY,
                         double Rb, double Hh, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,
-                        uint8_t* normalOut = nullptr);
+                        uint8_t* normalOut = nullptr, const TextureData* barkAlbedo = nullptr);
 // ...the window's half height for views up to `maxElevation` (radians): every part of the tree inside it from any of them
 double impostorViewHalfHeight(const RealTree& tree, double centreY, double maxElevation);
 
@@ -94,6 +96,8 @@ struct CardViewExtras {
     double depthShade = 0.0;
     bool trueNormals = false;   // the normal map in the card's frame as it is, no fold (a sprite seen from its face)
     int alphaGrow = 0;          // the cut-out widened this many pixels (thin needles: they thin away further down the mips)
+    double depthToAlpha = 0.0;  // > 0: the normal map's alpha is each texel's front depth, 0.5 + 0.5 z / depthToAlpha
+                                //       (z toward the viewer; uncovered 0.5), not 255
 };
 void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
                     double y0, double y1, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,
