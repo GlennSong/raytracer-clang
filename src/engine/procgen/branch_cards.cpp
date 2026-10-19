@@ -780,9 +780,11 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
             ++laid;
         }
         carry = std::fmod(carry + spacing - std::fmod(len, spacing), spacing);
-        // (a cluster of cupped blossoms at a twig's end -- about 800 blossoms on the tree: each cup costs a leaf's
-        // triangles several times over)
-        const double clusterOdds = std::min(0.7, 800.0 / std::max(1.0, static_cast<double>(spots.size()) * std::max(3, lk.perCluster)));
+        // (a cluster of cupped blossoms at a twig's end -- about 800 blossoms on the tree at the default 6000 leaves, as
+        // many more as its leaves are (an old sakura's broad crown wore a young one's 800 and read bare): each cup
+        // costs a leaf's triangles several times over)
+        const double blossoms = 800.0 * std::max(1.0, leaves / 6000.0);
+        const double clusterOdds = std::min(0.7, blossoms / std::max(1.0, static_cast<double>(spots.size()) * std::max(3, lk.perCluster)));
         if (flowers && rnd() < clusterOdds) {
             const int per = std::max(3, lk.perCluster);
             for (int b = 0; b < per; ++b) {

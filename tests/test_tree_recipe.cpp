@@ -1062,7 +1062,7 @@ TEST_CASE(a_trees_trunk_zone_is_one_closed_surface) {
 // the height, crown width, trunk radius a metre up, limbs, dead limbs, bark and foliage triangles of the hero.
 TEST_CASE(a_trees_ages_grow_older) {
     const TreeRecipeBook book = shipped();
-    for (const char* name : {"oak", "spruce"}) {
+    for (const char* name : {"oak", "spruce", "sakura"}) {
         const TreeRecipe* r = book.find(name);
         CHECK(r != nullptr);
         if (!r) continue;
@@ -1091,6 +1091,7 @@ TEST_CASE(a_trees_ages_grow_older) {
                         name, age, h, 2.0 * w, tr, t.limbs.size(), deadLimbs, t.branches.indices.size() / 3, t.leaves.indices.size() / 3);
             CHECK(h >= 0.95 * lastH && 2.0 * w >= 0.95 * lastW && tr >= 0.95 * lastR);
             if (std::string(age) == "old" || std::string(age) == "ancient") CHECK(deadLimbs > 0);
+            CHECK(!t.leaves.indices.empty());   // (every age in leaf: a bigger crown's twigs can eat the budget the leaves need)
             lastH = h; lastW = 2.0 * w; lastR = tr;
         }
     }

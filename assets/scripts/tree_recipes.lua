@@ -268,16 +268,19 @@ tree_recipes = {
   -- wider than it is tall; dark bark banded with lenticels; in bloom the twigs are clusters of pale pink blossoms
   -- (each a deeper pink at its eye) with a few bronze young leaves.
   sakura = {
-    axiom = "T(0.6,2)",
+    -- (each seed its own size -- $trunk and $reach -- and AGES below: Glenn, 2026-10-18, "sakura trees should have
+    -- different sizes right?")
+    axiom = "T($trunk,2)",
     iterations = 13,
     rules = {
       { "T(l,n):n>0",   "F(l)/(97)T(l*0.95,n-1)" },
-      { "T(l,n):n<=0",  "[&($p0)B(l*1.6)]/(120)[&($p0)B(l*1.55)]/(120)[&($p0)B(l*1.5)]" },
-      { "B(l):l>0.2",   "F(l)/($roll)[&($pitch)B(l*$side)]^($up)B(l*$lead)", 3 },
-      { "B(l):l>0.2",   "F(l)/($roll)[&($pitch)B(l*$side)]/(180)[&($pitch)B(l*$side)]", 1 },
-      { "B(l):l<=0.2",  "F(l)/(137.5)[&(50)A(l)]/(137.5)[&(45)A(l)]A(l)" },
+      { "T(l,n):n<=0",  "[&($p0)B(l*$reach)]/(120)[&($p0)B(l*$reach*0.97)]/(120)[&($p0)B(l*$reach*0.94)]" },
+      { "B(l):l>$tip",  "F(l)/($roll)[&($pitch)B(l*$side)]^($up)B(l*$lead)", 3 },
+      { "B(l):l>$tip",  "F(l)/($roll)[&($pitch)B(l*$side)]/(180)[&($pitch)B(l*$side)]", 1 },
+      { "B(l):l<=$tip", "F(l)/(137.5)[&(50)A(l)]/(137.5)[&(45)A(l)]A(l)" },
     },
-    vars = { p0 = {32, 44}, roll = {80, 110}, pitch = {35, 50}, side = {0.76, 0.84}, lead = {0.80, 0.86}, up = {4, 10} },
+    vars = { trunk = {0.50, 0.72}, reach = {1.4, 1.8}, tip = 0.2,
+             p0 = {32, 44}, roll = {80, 110}, pitch = {35, 50}, side = {0.76, 0.84}, lead = {0.80, 0.86}, up = {4, 10} },
     params = {
       trunkZone = 0.07, trunkZoneTris = 1600,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
@@ -287,6 +290,24 @@ tree_recipes = {
       tipRadius = 0.008, pipeExponent = 2.4, radiusScale = 1.15, ringSegments = 10,
       leafSize = {0.46, 0.54}, leavesPerTip = 4, leafThickness = 0.06, leafClump = 1.0, leafPitch = 50,
       maxLeafCards = 9000, paletteScale = 2.0,
+    },
+    -- AGES: a young sakura a slim sapling, its few limbs climbing; an old one a broad low umbrella on a girthy, crooked
+    -- trunk, the limbs sagging toward the ground; an ancient one (Miharu's Takizakura, a thousand years) a massive
+    -- fluted bole under a dome far wider than it is tall, its limbs sweeping down, some dead. The twig ($tip) grows
+    -- with the tree, so a bigger one is a few more orders of branching, not thousands more twigs
+    ages = {
+      young   = { vars = { trunk = {0.38, 0.46}, reach = {1.1, 1.3}, p0 = {22, 32}, tip = 0.16 },
+                  params = { radiusScale = 0.8, droop = {0.10, 0.16}, deadChance = 0 } },
+      mature  = { params = { deadChance = 0.02 } },
+      old     = { vars = { trunk = {0.80, 0.90}, reach = {2.1, 2.4}, p0 = {46, 58}, tip = 0.28 }, sprig = 2.2,
+                  near_leaves = 12000, near_twig_tris = 14000,
+                  params = { radiusScale = 2.0, droop = {0.20, 0.28}, crookChance = {0.2, 0.3}, flare = 0.65,
+                             rootSpread = 3.0, deadChance = 0.05, trunkZoneTris = 2400 } },
+      ancient = { vars = { trunk = {1.00, 1.10}, reach = {2.7, 3.0}, p0 = {52, 64}, tip = 0.32 }, sprig = 3.0,
+                  near_leaves = 18000, near_twig_tris = 18000,
+                  params = { radiusScale = 3.2, droop = {0.22, 0.30}, crookChance = {0.25, 0.35}, flare = 0.85,
+                             lobes = {5, 8}, lobeDepth = 0.16, barkNoise = 0.06, rootSpread = 3.2, rootCount = 6,
+                             deadChance = 0.08, trunkZoneTris = 3200 } },
     },
     bark = "ringed",
     bark_color = { {0.20, 0.13, 0.12}, {0.26, 0.17, 0.15} },
@@ -311,7 +332,7 @@ tree_recipes = {
                  color = {1.0, 0.56, 0.70}, eye_color = {0.80, 0.16, 0.36} },
       stem_color = {0.62, 0.40, 0.42}, stem_width = 0.006, cup = 0.4,
     },
-    branch_cards = { sprig = 1.0, wood_edge = 0.065 },
+    branch_cards = { sprig = 1.6, wood_edge = 0.065 },
   },
 
   -- JAPANESE MAPLE (Acer palmatum): stems from low down, branches in OPPOSITE pairs (each pair turned 90 deg from

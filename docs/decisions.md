@@ -10683,3 +10683,16 @@ Glenn, 2026-10-18: "So can we make multi angle imposter cards".
 - Seen: spruces stay cones from the ground and from the air (the old top card made starfish); the oak impostors are
   as thin as the oak's light level, which they are baked from -- that level's foliage is owed, not the impostor.
 - Test `impostor_views_frame_the_tree_from_every_side`.
+
+## ADR-0194 — Sakura sizes: a size a seed, and ages
+
+Glenn, 2026-10-18: "sakura trees should have different sizes right?"
+
+- Each seed its own size: the trunk ($trunk 0.50-0.72) and the scaffold's reach ($reach 1.4-1.8) are rolled per seed;
+  the branching stops at $tip, so ages can lengthen the twig with the tree (sprig 1.6 holds the hero's wood).
+- Ages: young 2.8 m (a slim sapling), mature 5 x 8 m, old 9 x 16 m (a broad umbrella on a crooked trunk, its limbs
+  sagging), ancient 12.5 x 26 m (a massive fluted bole; some dead limbs). Lab row sakura_age_* at z -195.
+- Blossoms scale with the hero's leaf budget (800 at 6000 leaves): the old crown wore the young one's 800 and read
+  bare. Old/ancient raise near_leaves (12k/18k): foliage 107k/161k tris, as the ancient oak's.
+- The ages test checks every age wears leaves (the maple's 0-leaf hero, ADR-0192, as a check).
+- Owed: the ancient reads lopsided and sparse for its 26 m -- an authored crown (colonize 3, as the old oak) is next.
