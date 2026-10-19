@@ -10897,3 +10897,20 @@ Glenn (2026-10-19): the grassland "looks faceted"; and more rocky detail on the 
   (bit 25, set by drawTerrain) -- world-space, so no tile edge shows.
 - **Seen:** the far mountains gain their gullies and ribs (island_8_weathered from Glenn's Weyby spot, 120 m up).
 - A/B: RT_TERRAIN_NORMAL_MAP=0. Owed: Metal and WebGPU (no binding there yet).
+
+## ADR-0206 — The island's ground at 8192, drained by stochastic routing
+
+Glenn (2026-10-19): "let's do the order you suggest so we can do an 8k bake of the terrain and get some more detail."
+
+- **Measured first** (cold bakes of island_8_weathered): 4096 -> 8192 is a fourth refine level (2.44 m cells, 12.9 m of
+  detail at 19.5 m) -- ribbed gullies and sharp crests on the steep ground, 3-4 m rms on a 51 deg mountainside, the
+  plains nearly untouched (no detail there, the drain at 8%). Cost: the weather grid 67 -> 268 MB, the ground maps
+  17 -> 67 MB, the tiles 302 -> 309 MB, a cold bake 4 -> 16 min at 5.1 GB peak; a warm load as before.
+- **The steepest-neighbour drain cut parallel diagonal gullies** at 8192: on an even slope between two of the grid's
+  eight directions every cell's steepest neighbour is the same one. Stream power's STOCHASTIC ROUTING draws the
+  receiver among the downhill neighbours in proportion to slope (seeded per cell and iteration: the same ground every
+  bake). Test: flow lines on a slope falling 15 deg off the grid run 0.0 deg steepest, 17.7 deg drawn.
+- **Only on the new level** (weather.refine.stochasticFrom 8192): the grown range and the coarser refine levels --
+  the ground the island's cities were planned on -- are bit for bit what they were.
+- island_8_weathered and (Glenn's local) island_8_nature both carry it; their weather caches are one bake (the key
+  leaves out the cities, trails and forest).

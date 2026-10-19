@@ -181,7 +181,7 @@
   "snowLine": 1300,
   "warp": 0.35,
   "weather": {
-   "res": 4096,
+   "res": 8192,
    "grow": {
     "res": 1024,
     "iterations": 250,
@@ -208,7 +208,8 @@
     "wavelength": 8,
     "slopeDamp": 0.3,
     "incise": 0.012,
-    "iterations": 20
+    "iterations": 20,
+    "stochasticFrom": 8192
    }
   },
   "forest": {
