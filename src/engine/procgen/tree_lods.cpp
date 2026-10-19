@@ -84,6 +84,7 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 if (woodMin > 0.0 && !o.count("woodMinRadius")) o["woodMinRadius"] = woodMin;
                 RecipeTreeLevel L;
                 L.tree = growRecipeTree(r, seed, o);
+                if (!r.leafPalettes.empty()) L.tree.palette = static_cast<int>(seed % r.leafPalettes.size());
                 if (needles) {   // (the hero all its side shoots; further, fewer)
                     const bool mid = !near && edge <= bc.woodEdge * 1.7, light = !near && !mid && edge < 0.2;
                     // (the cards are cheap: further out nearly as full -- at 0.6 the mid read as a fishbone again)

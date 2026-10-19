@@ -218,6 +218,7 @@ struct TreeMesh {
     std::vector<Sprig> sprigs;
     struct Lobe { Vec3 centre; float radius = 0; };   // (colonize = 2: the crown's lobes, TreeParams::lobeSize)
     std::vector<Lobe> lobes;
+    int palette = -1;                     // the leaf palette it wears (TreeRecipe::leafPalettes; -1: any) -- one a tree, at every level
     // THE FINE BRANCHING the sprigs stand for (Glenn, 2026-10-18, of baked mini-tree cards: "it needs to be a branch
     // without leaves and with leaves or maybe a Y branch ... smaller segments planted along"): every internode inside a
     // sprig, parent end to node, its radius and whether it carries leaves (a tip or thin enough: leafThickness) --

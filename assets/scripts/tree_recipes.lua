@@ -318,23 +318,27 @@ tree_recipes = {
   -- the last), reaching out level in layered tiers with the tips turned up; seven-lobed palmate leaves. Each tree
   -- picks a palette -- crimson, orange, turning, or still green -- blended limb by limb across its crown.
   maple = {
-    axiom = "T(0.5,1)",
-    iterations = 10,
+    -- (Glenn, 2026-10-18: "What about the maple tree? It looks pretty bad" -- it forked at half a metre and its
+    -- limbs sagged to the ground: a heap of leaves. A Japanese maple: a clear trunk to head height, a few limbs
+    -- rising into a broad vase wider than it is tall, the sprays held out in layers, the branching seen under them)
+    axiom = "T(0.75,2)",
+    iterations = 12,
     rules = {
-      { "T(l,n):n>0",   "F(l)T(l,n-1)" },
-      { "T(l,n):n<=0",  "[&($s0)B(0.85)]/(120)[&($s0)B(0.8)]/(120)[&($s0)B(0.82)]" },
-      { "B(l):l>0.18",  "F(l)/(90)[+($pitch)B(l*$side)][-($pitch)B(l*$side)]B(l*$lead)", 3 },
-      { "B(l):l>0.18",  "F(l)/(90)[+($pitch)B(l*$side)]B(l*$lead)", 1 },
-      { "B(l):l<=0.18", "F(l)/(90)[+(45)A(l)][-(45)A(l)]A(l)" },
+      { "T(l,n):n>0",   "F(l)/(97)T(l*0.95,n-1)" },
+      -- (each limb a bare stretch before it branches: the crown lifted off the ground, the limbs seen under it)
+      { "T(l,n):n<=0",  "[&($s0)F($bare)B(1.1)]/(95)[&($s0)F($bare)B(1.0)]/(115)[&($s0)F($bare)B(1.05)]/(90)[&($s1)F($bare*0.6)B(1.0)]" },
+      { "B(l):l>0.3",  "F(l)/(90)[+($pitch)B(l*$side)][-($pitch)B(l*$side)]^(4)B(l*$lead)", 3 },
+      { "B(l):l>0.3",  "F(l)/(90)[+($pitch)B(l*$side)]^(4)B(l*$lead)", 1 },
+      { "B(l):l<=0.3", "F(l)/(90)[+(45)A(l)][-(45)A(l)]A(l)" },
     },
-    vars = { s0 = {25, 38}, pitch = {50, 66}, side = {0.70, 0.76}, lead = {0.78, 0.84} },
+    vars = { s0 = {44, 56}, s1 = {10, 18}, bare = {0.6, 0.9}, pitch = {42, 56}, side = {0.70, 0.76}, lead = {0.80, 0.85} },
     params = {
       trunkZone = 0.07, trunkZoneTris = 2400,   -- (the trunk, its first limbs, its roots: one surface)
       joints = 1,
-      droop = {0.12, 0.20}, light = {0.25, 0.35}, crookChance = {0.10, 0.20}, crookAngle = {10, 20},
+      droop = {0.04, 0.08}, light = {0.22, 0.30}, crookChance = {0.10, 0.20}, crookAngle = {10, 20},
       meander = {0.06, 0.10}, lean = {0, 6}, angleJitter = {8, 12},
       flare = 0.35, nodeSwell = 0.06, barkNoise = 0.03, twist = 0, rootCount = 3, rootSpread = 2.0, collar = 0.5,
-      tipRadius = 0.008, pipeExponent = 2.4, radiusScale = 1.3, ringSegments = 8,
+      tipRadius = 0.008, pipeExponent = 2.6, radiusScale = 0.95, ringSegments = 8,
       leafSize = {0.34, 0.40}, leavesPerTip = 3, leafThickness = 0.025, leafClump = 1.0, leafPitch = 50,
       maxLeafCards = 9000, paletteScale = 1.8,
     },
@@ -360,7 +364,7 @@ tree_recipes = {
       leaf = { shape = "palmate", length = 0.17, lobes = 7, teeth = 3 },
       stem_color = {0.55, 0.30, 0.25}, stem_width = 0.008, cup = 0.35, shade_jitter = 0.22,
     },
-    branch_cards = { sprig = 1.0, near_twig_tris = 18000 },   -- (a maple's fine branching is dense: 3600 twigs),
+    branch_cards = { sprig = 2.2, near_twig_tris = 18000 },   -- (a maple's fine branching is dense: 3600 twigs),
   },
 
   -- JAPANESE BLACK PINE (Pinus thunbergii): a crooked, leaning trunk, bare below; a few long limbs fanning out

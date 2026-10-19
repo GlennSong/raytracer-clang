@@ -226,7 +226,9 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
     extras.trueNormals = true;
     const double L = std::max(0.08, twigLength);
     set.twigLength = static_cast<float>(L);
-    const int nv = std::max(1, variants);
+    // (as many variants as the species has leaf palettes: the hero's leaves wear them all, and a mid whose cards
+    // carried only the first two turned the crown one colour as one walked away from it)
+    const int nv = std::max({1, variants, static_cast<int>(r.leafPalettes.size())});
     const int count = 4 * nv;
     const int cols = 4, twigRows = (count + cols - 1) / cols;
     // (the SPRAYS below them: cells two columns wide, two to a row)
@@ -354,6 +356,7 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
             pic.length = static_cast<float>(L);
             pic.halfWidth = static_cast<float>(half);
             pic.kind = kind;
+            pic.palette = r.leafPalettes.empty() ? -1 : v % static_cast<int>(r.leafPalettes.size());
             set.pictures.push_back(pic);
         }
     // SPRAYS (kind 4; Glenn, 2026-10-18, of an old oak's clumps: "those clumps need to be made puffier ... Can we make a
@@ -412,6 +415,7 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
         pic.length = static_cast<float>(y1);
         pic.halfWidth = static_cast<float>(half);
         pic.kind = 4;
+        pic.palette = r.leafPalettes.empty() ? -1 : v % static_cast<int>(r.leafPalettes.size());
         set.pictures.push_back(pic);
     }
     return set;
@@ -422,8 +426,15 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
     if (set.empty() || set.twigLength <= 0.0f) return 0;
     tree.foliage = 5;
     std::vector<int> byKind[5];
-    for (std::size_t i = 0; i < set.pictures.size(); ++i)
-        if (set.pictures[i].kind >= 0 && set.pictures[i].kind < 5) byKind[set.pictures[i].kind].push_back(static_cast<int>(i));
+    // (only the pictures in the tree's own palette, when it has one and they carry it: a crown one colour, as its
+    // hero's leaves are, not patches of every palette)
+    bool ownPalette = false;
+    for (const BranchCardSet::Picture& pic : set.pictures) ownPalette |= tree.palette >= 0 && pic.palette == tree.palette;
+    for (std::size_t i = 0; i < set.pictures.size(); ++i) {
+        const BranchCardSet::Picture& pic = set.pictures[i];
+        if (ownPalette && pic.palette >= 0 && pic.palette != tree.palette) continue;
+        if (pic.kind >= 0 && pic.kind < 5) byKind[pic.kind].push_back(static_cast<int>(i));
+    }
     if (byKind[0].empty() || byKind[2].empty()) return 0;
     // the crown's middle and reach (the normals' bend and the shade inside, as the sprig cards)
     Vec3 mid(0, 0, 0);
@@ -728,7 +739,8 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
     // (colour: the palette, in patches over the crown, or the leaf colour range)
     auto leafColour = [&](const Vec3& at) -> Vec3 {
         if (!r.leafPalettes.empty()) {
-            const std::vector<Vec3>& pal = r.leafPalettes[static_cast<std::size_t>(seed) % r.leafPalettes.size()];
+            const std::size_t pi = tree.palette >= 0 ? static_cast<std::size_t>(tree.palette) : static_cast<std::size_t>(seed);
+            const std::vector<Vec3>& pal = r.leafPalettes[pi % r.leafPalettes.size()];
             if (!pal.empty()) {
                 const double n = 0.5 + 0.5 * std::sin(at.x * 1.3 + at.z * 0.9 + at.y * 0.7 + seed % 17);
                 return pal[std::min(pal.size() - 1, static_cast<std::size_t>(n * pal.size()))];

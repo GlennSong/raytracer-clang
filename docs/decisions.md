@@ -10648,3 +10648,17 @@ through them and that doesn't seem right."
   plane or (0.6 x hang of them) hanging: the curtain. Two planes in a shallow V.
 - At most a third of the level's card planes; the shoots wear the rest, so a tree at its budget keeps its triangle
   count (spruce hero 64k foliage tris, 1144 fronds). The umbrella pine had headroom: 24k -> 30k.
+
+## ADR-0192 — The maple as a tree; one leaf palette a tree at every level
+
+Glenn, 2026-10-18: "What about the maple tree? It looks pretty bad".
+
+- The maple forked at half a metre and its limbs sagged (droop 0.12-0.20): a heap of leaves to the ground. Now a clear
+  trunk (T(0.75,2)), four limbs each with a bare first stretch, rising into a vase (s0 44-56, a central one 10-18),
+  droop 0.04-0.08, a slimmer trunk (radiusScale 0.95, pipeExponent 2.6).
+- Its first bigger crown grew 15k twigs; the twig budget went on the branching and the hero wore NO leaves (the card
+  test caught it). The branching stops at 0.3 m (2.9k twigs) and sprig 2.2 holds the hero wood to budget.
+- **A tree's palette** (TreeMesh::palette, seed % palettes, set by growRecipeLevels): the hero's leaves wore one palette
+  a tree, but the twig cards were baked in only `variants` palettes and picked at random -- the mid turned a tree to
+  patches of crimson and orange as one walked away. bakeTwigCards now bakes a variant per palette
+  (Picture::palette) and wearTwigCards wears only the tree's own.
