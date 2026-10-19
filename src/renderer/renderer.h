@@ -150,6 +150,11 @@ struct RenderMaterial {
     // the bark crossfades instead of cutting. The tangent frames come from the screen-space derivatives of each UV.
     // Vulkan (Metal and WebGPU draw the first UV and a tangent that is not one).
     static constexpr uint32_t FLAG_UV_BLEND = 1u << 23;
+    // FLAG_IMPOSTOR_VIEWS (bit 24; Glenn, 2026-10-18: "So can we make multi angle imposter cards"): a forest's far
+    // trees as MANY-VIEW impostors (forest.h appendImpostorViews): mesh.vert turns each tree's one card to the
+    // camera, mesh.frag picks and blends the baked views nearest the camera's direction round the tree and lights
+    // them by their normals. Casts no shadow (FLAG_SHADOW_ONLY crossed cards do). Vulkan.
+    static constexpr uint32_t FLAG_IMPOSTOR_VIEWS = 1u << 24;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the

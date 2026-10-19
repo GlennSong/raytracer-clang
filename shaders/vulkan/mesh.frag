@@ -88,6 +88,8 @@ layout(location = 3) in vec3 inColor;
 layout(location = 4) in vec3 inWorldTangent;
 layout(location = 5) flat in vec3 inInstanceOrigin;   // per-instance variation (ADR-0098)
 layout(location = 6) in vec3 inUvBlend;   // FLAG_UV_BLEND (bit 23): a second UV and its weight
+layout(location = 7) flat in vec4 inImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw
+layout(location = 8) flat in vec4 inImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
@@ -779,6 +781,57 @@ vec3 derivedNormal(vec3 N, vec2 uv, vec3 tsN) {
     return normalize(T * tsN.x + B * tsN.y + N * tsN.z);
 }
 
+// MANY-VIEW IMPOSTOR (FLAG_IMPOSTOR_VIEWS, bit 24; forest.h, real_tree.h renderImpostorView): the camera's direction
+// in the tree's own frame picks the baked views about it -- 8 azimuths x 3 elevations 35 deg apart -- and the four
+// nearest are blended (bilinearly in azimuth and elevation, weighted by their coverage). Each is read where THIS
+// fragment's point falls in that view's window (its offset from the centre on the view's r and u axes), so the
+// silhouettes line up as the views change. Returns colour and coverage; `nWorld` the blended normal.
+const int kImpAz = 8, kImpEl = 3;
+const float kImpElStep = 0.6108652;   // 35 deg
+vec4 impostorSample(out vec3 nWorld, out float lod) {
+    const vec3 c = inImpA.xyz;
+    const float yaw = inImpA.w, rb = inImpB.x, hh = inImpB.y;
+    const vec2 base = inImpB.zw, cell = inUvBlend.xy;
+    // world -> the tree's frame (forest.h: local x -> (cos, 0, sin), local z -> (-sin, 0, cos))
+    const float cy = cos(yaw), sy = sin(yaw);
+    const vec3 wv = g.cameraPosition.xyz - c, wp = inWorldPos - c;
+    const vec3 v = normalize(vec3(wv.x * cy + wv.z * sy, wv.y, -wv.x * sy + wv.z * cy));
+    const vec3 p = vec3(wp.x * cy + wp.z * sy, wp.y, -wp.x * sy + wp.z * cy);
+    float fa = atan(v.x, v.z) / 6.2831853 * float(kImpAz);
+    fa = fa < 0.0 ? fa + float(kImpAz) : fa;
+    const int a0 = int(floor(fa)) % kImpAz, a1 = (a0 + 1) % kImpAz;
+    const float wa = fract(fa);
+    const float fe = clamp(asin(clamp(v.y, -1.0, 1.0)) / kImpElStep, 0.0, float(kImpEl - 1));
+    const int e0 = min(int(floor(fe)), kImpEl - 1), e1 = min(e0 + 1, kImpEl - 1);
+    const float we = fe - float(e0);
+    vec3 rgb = vec3(0.0), n = vec3(0.0);
+    float cover = 0.0;
+    lod = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        const int ai = (k & 1) == 0 ? a0 : a1, ei = (k & 2) == 0 ? e0 : e1;
+        const float w = ((k & 1) == 0 ? 1.0 - wa : wa) * ((k & 2) == 0 ? 1.0 - we : we);
+        const float az = float(ai) * 6.2831853 / float(kImpAz), el = float(ei) * kImpElStep;
+        const vec3 d = vec3(sin(az) * cos(el), sin(el), cos(az) * cos(el));
+        const vec3 r = vec3(cos(az), 0.0, -sin(az));
+        const vec3 u = cross(d, r);
+        const vec2 xy = vec2(dot(p, r) / rb, dot(p, u) / hh);
+        const vec2 uv = base + (vec2(float(ai), float(ei)) + vec2(xy.x * 0.5 + 0.5, 0.5 - xy.y * 0.5)) * cell;
+        const bool inside = all(lessThan(abs(xy), vec2(1.0)));
+        if (k == 0) lod = textureQueryLod(albedoMap, uv).x;
+        // (a view's window is its cell: outside it, nothing -- not the next cell's tree)
+        const vec4 t = inside ? textureGrad(albedoMap, uv, dFdx(uv), dFdy(uv)) : vec4(0.0);
+        const vec3 tn = textureGrad(normalMap, uv, dFdx(uv), dFdy(uv)).xyz * 2.0 - 1.0;
+        const float wc = w * t.a;
+        rgb += t.rgb * wc;
+        cover += wc;
+        n += (r * tn.x + u * tn.y + d * tn.z) * wc;
+    }
+    rgb /= max(cover, 1e-4);
+    n = dot(n, n) > 1e-8 ? normalize(n) : v;
+    nWorld = vec3(n.x * cy - n.z * sy, n.y, n.x * sy + n.z * cy);   // the tree's frame -> world
+    return vec4(rgb, cover);
+}
+
 void main() {
     // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a
     // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)
@@ -975,11 +1028,14 @@ void main() {
     // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
+    const bool impViews = (pc.surfaceFlags.y & (1u << 24)) != 0u;   // FLAG_IMPOSTOR_VIEWS: its own sampling
+    vec3 impN = vec3(0.0, 1.0, 0.0);
+    float impLod = 0.0;
     // (the triangle's own face, from the screen derivatives -- taken here, in uniform control flow: a tree card's
     // normals are bent out of the crown and cannot say when the card itself is edge-on)
     const vec3 faceN = cross(dFdx(inWorldPos), dFdy(inWorldPos));
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
-        vec4 albedoTex = texture(albedoMap, inTexcoord);
+        vec4 albedoTex = impViews ? impostorSample(impN, impLod) : texture(albedoMap, inTexcoord);
         if ((pc.surfaceFlags.y & (1u << 23)) != 0u)   // FLAG_UV_BLEND: the second mapping's, mixed in by its weight
             albedoTex = mix(albedoTex, texture(albedoMap, inUvBlend.xy), clamp(inUvBlend.z, 0.0, 1.0));
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
@@ -988,11 +1044,12 @@ void main() {
         // averages toward nothing, and a far card would vanish
         // (and tree cards, FLAG_LOD_BAND: a far crown's needles average away the same way)
         if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19) | (1u << 22))) != 0u)
-            cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
+            cut *= 1.0 + max(impViews ? impLod : textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
         // an impostor's TOP card seen edge-on is a bright dash through the crown (Glenn: "the tree cards in the
         // distance are still pretty visibly tree cards" -- a far forest striped with them): it thins away as
         // the view grazes it, gone under ~7 deg, whole from ~25 deg up; the side cards carry the crown there
-        if ((pc.surfaceFlags.y & (1u << 19)) != 0u && (texFlags & 4u) != 0u && abs(inWorldNormal.y) > 0.9) {
+        if (impViews) {
+        } else if ((pc.surfaceFlags.y & (1u << 19)) != 0u && (texFlags & 4u) != 0u && abs(inWorldNormal.y) > 0.9) {
             const float s = abs(normalize(g.cameraPosition.xyz - inWorldPos).y);
             cut *= smoothstep(0.12, 0.42, s);
         }
@@ -1088,6 +1145,8 @@ void main() {
         vec3 n1 = derivedNormal(N, inTexcoord, texture(normalMap, inTexcoord).xyz * 2.0 - 1.0);
         vec3 n2 = derivedNormal(N, inUvBlend.xy, texture(normalMap, inUvBlend.xy).xyz * 2.0 - 1.0);
         N = normalize(mix(n1, n2, clamp(inUvBlend.z, 0.0, 1.0)));
+    } else if (impViews) {
+        N = normalize(mix(impN, vec3(0.0, 1.0, 0.0), 0.2));   // (the views' own normals; a little sky, as the crowns get)
     } else if ((texFlags & 4u) != 0u) {
         vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
         vec3 B = cross(N, T);

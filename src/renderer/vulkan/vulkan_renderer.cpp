@@ -5155,8 +5155,10 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
                                   planes[pi][2] * item.worldCenter[2] + planes[pi][3] < -item.worldRadius;
                     if (out) continue;
                 }
-                // Debug-gizmo overlays (FLAG_OVERLAY) and ground cover (FLAG_GRASS) cast no shadows.
-                if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) continue;
+                // Debug-gizmo overlays (FLAG_OVERLAY), ground cover (FLAG_GRASS) and the camera-turned impostor cards
+                // (FLAG_IMPOSTOR_VIEWS: their shadow-only crossed cards cast theirs) cast no shadows.
+                if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS |
+                                                 RenderMaterial::FLAG_IMPOSTOR_VIEWS)) continue;
                 // alpha-cut surfaces (leaf cards) cut their shadow too, when their albedo map is bound
                 const bool cut = (item.push.surfaceFlags[1] & RenderMaterial::FLAG_ALPHA_TEST) && item.textures[0].valid() &&
                                  shadowAlphaPipeline && shadowAlphaPipelinePacked;

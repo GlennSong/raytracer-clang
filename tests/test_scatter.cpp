@@ -508,3 +508,66 @@ TEST_CASE(impostor_normals_carry_the_crown_shape) {
     renderImpostor(tree, fol, false, w, h, 3.0, col2.data(), w * 4);
     CHECK(col2 == col);
 }
+
+// MANY-VIEW IMPOSTORS (Glenn, 2026-10-18: "So can we make multi angle imposter cards"): every view's window holds
+// the whole tree; the view from behind is the view from the front mirrored (the frames agree with mesh.frag's);
+// a far tree is one card carrying its centre, window and yaw, and its shadow two crossed cards on its views.
+TEST_CASE(impostor_views_frame_the_tree_from_every_side) {
+    const RealTree tree = realTree(RealSpecies::Oak, 7, 12.0);
+    const TextureData fol = realFoliageTexture(RealSpecies::Oak, 128, 7);
+    const double cy = 0.5 * tree.height, maxEl = (kImpostorElevations - 1) * kImpostorElevationStep;
+    double rb = 0.1;
+    for (const RenderMesh* m : {&tree.bark, &tree.foliage})
+        for (const Vertex& v : m->vertices) rb = std::max(rb, std::hypot(v.position.x, v.position.z));
+    const double hh = impostorViewHalfHeight(tree, cy, maxEl);
+    CHECK(hh >= 0.5 * tree.height - 1e-6);
+    int outside = 0;
+    for (int e = 0; e < kImpostorElevations; ++e)
+        for (int a = 0; a < kImpostorAzimuths; ++a) {
+            const double az = a * 2.0 * 3.14159265358979 / kImpostorAzimuths, el = e * kImpostorElevationStep;
+            const Vec3 d(std::sin(az) * std::cos(el), std::sin(el), std::cos(az) * std::cos(el)), r(std::cos(az), 0, -std::sin(az));
+            const Vec3 u = cross(d, r);
+            for (const RenderMesh* m : {&tree.bark, &tree.foliage})
+                for (const Vertex& v : m->vertices) {
+                    const Vec3 p = v.position - Vec3(0, cy, 0);
+                    outside += std::fabs(dot(p, r)) > rb + 1e-6 || std::fabs(dot(p, u)) > hh + 1e-6;
+                }
+        }
+    CHECK(outside == 0);
+    const int w = 64, h = 128;
+    auto view = [&](double az) {
+        std::vector<uint8_t> col(static_cast<std::size_t>(w) * h * 4);
+        renderImpostorView(tree, fol, az, 0.0, cy, rb, hh, w, h, 3.0, col.data(), w * 4);
+        return col;
+    };
+    const std::vector<uint8_t> front = view(0.0), back = view(3.14159265358979);
+    int cover = 0, both = 0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const bool f = front[(static_cast<std::size_t>(y) * w + x) * 4 + 3] >= 128;
+            const bool b = back[(static_cast<std::size_t>(y) * w + (w - 1 - x)) * 4 + 3] >= 128;
+            cover += f;
+            both += f && b;
+        }
+    std::printf("    [impostor views] window %.1f x %.1f m; front covers %d px, %d of them in the back view mirrored\n",
+                2 * rb, 2 * hh, cover, both);
+    CHECK(cover > 300);
+    CHECK(both > cover * 8 / 10);
+    // the far card: one quad whose corners give back the tree's centre; its shadow, two quads inside its block
+    ImpostorSlot sl;
+    sl.vu0 = 0.25; sl.vv0 = 0.5; sl.cellU = 0.01; sl.cellV = 0.02; sl.Rb = rb; sl.Hh = hh; sl.centreY = cy;
+    ForestTree t;
+    t.pos = Vec3(10, 2, -5); t.yaw = 0.7f; t.scale = 1.3f;
+    RenderMesh card, shadow;
+    appendImpostorViews(card, t, sl, 0.2);
+    appendImpostorShadow(shadow, t, sl);
+    CHECK(card.tangentIsData && card.vertices.size() == 4 && card.indices.size() == 6);
+    for (const Vertex& v : card.vertices) {
+        const Vec3 c = v.position - Vec3(v.u * v.tangent.x, v.v * v.tangent.y, v.u * v.tangent.x);
+        CHECK((c - (t.pos + Vec3(0, (cy - 0.15) * t.scale, 0))).length() < 1e-4);
+        CHECK(std::fabs(v.tangent.z - t.yaw) < 1e-6 && std::fabs(v.normal.x - 0.25) < 1e-9);
+    }
+    CHECK(shadow.vertices.size() == 8 && shadow.indices.size() == 12);
+    for (const Vertex& v : shadow.vertices)
+        CHECK(v.u >= 0.25 - 1e-6 && v.u <= 0.25 + kImpostorAzimuths * 0.01 + 1e-6 && v.v >= 0.5 - 1e-6 && v.v <= 0.52 + 1e-6);
+}

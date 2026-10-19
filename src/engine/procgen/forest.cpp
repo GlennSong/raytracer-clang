@@ -322,4 +322,47 @@ void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s
     quad(p, n, ax, uv);
 }
 
+void appendImpostorViews(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s, double colour) {
+    mesh.tangentIsData = true;
+    const double sc = t.scale;
+    const Vec3 c = t.pos + Vec3(0, (s.centreY - 0.15) * sc, 0);
+    const double rb = s.Rb * sc, hh = s.Hh * sc;
+    const uint32_t b = static_cast<uint32_t>(mesh.vertices.size());
+    const double corner[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+    for (int k = 0; k < 4; ++k) {
+        const double cx = corner[k][0], cy = corner[k][1];
+        // (the centre plus a reach in x, z and y: mesh.vert takes it back off -- the bounds hold the crowns)
+        Vertex v(c + Vec3(cx * rb, cy * hh, cx * rb), Vec3(s.vu0, s.vv0, s.cellU), Vec3(rb, hh, t.yaw),
+                 static_cast<float>(cx), static_cast<float>(cy));
+        v.color = Vec3(colour, s.cellV, 0.0);
+        mesh.vertices.push_back(v);
+    }
+    MeshBuilder::quadFacing(mesh, b, b + 1, b + 2, b + 3, Vec3(-1, 0, 1));   // (the corners' plane; drawn two-sided)
+}
+
+void appendImpostorShadow(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& s) {
+    // the views from +z (azimuth 0) and from +x (a quarter round) at the horizon, as two crossed cards through the
+    // centre, turned by the yaw: the sun sees a crown's shape from either
+    const double sc = t.scale, cy = std::cos(t.yaw), sy = std::sin(t.yaw);
+    const Vec3 c = t.pos + Vec3(0, (s.centreY - 0.15) * sc, 0);
+    const double rb = s.Rb * sc, hh = s.Hh * sc;
+    for (int k = 0; k < 2; ++k) {
+        const double az = k * 2.0 * 3.14159265358979323846 / kImpostorAzimuths * (kImpostorAzimuths / 4);
+        const Vec3 rl(std::cos(az), 0.0, -std::sin(az));               // the view's r, the tree's own frame
+        const Vec3 r(rl.x * cy - rl.z * sy, 0.0, rl.x * sy + rl.z * cy);   // ...turned by the yaw
+        const Vec3 n = normalize(cross(r, Vec3(0, 1, 0)));
+        const int col = k * (kImpostorAzimuths / 4);
+        const double u0 = s.vu0 + col * s.cellU, u1 = u0 + s.cellU, v0 = s.vv0, v1 = s.vv0 + s.cellV;
+        const uint32_t b = static_cast<uint32_t>(mesh.vertices.size());
+        const Vec3 p[4] = {c - r * rb - Vec3(0, hh, 0), c + r * rb - Vec3(0, hh, 0), c + r * rb + Vec3(0, hh, 0), c - r * rb + Vec3(0, hh, 0)};
+        const double uv[4][2] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};   // (row 0 the view's top)
+        for (int q = 0; q < 4; ++q) {
+            Vertex v(p[q], n, r, static_cast<float>(uv[q][0]), static_cast<float>(uv[q][1]));
+            v.color = Vec3(1, 1, 1);
+            mesh.vertices.push_back(v);
+        }
+        MeshBuilder::quadFacing(mesh, b, b + 1, b + 2, b + 3, n);
+    }
+}
+
 }  // namespace engine

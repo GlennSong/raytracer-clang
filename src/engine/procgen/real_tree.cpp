@@ -742,6 +742,37 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
                    out, stride, normalOut);
 }
 
+void renderImpostorView(const RealTree& tree, const TextureData& fol, double azimuth, double elevation, double centreY,
+                        double Rb, double Hh, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut) {
+    // the tree turned so the view looks down -z: (r, u, d) -> (x, y, z), about its centre
+    const Vec3 d(std::sin(azimuth) * std::cos(elevation), std::sin(elevation), std::cos(azimuth) * std::cos(elevation));
+    const Vec3 r(std::cos(azimuth), 0.0, -std::sin(azimuth));
+    const Vec3 u = cross(d, r);
+    const Vec3 c(0.0, centreY, 0.0);
+    RenderMesh bark = tree.bark, foliage = tree.foliage;
+    for (RenderMesh* m : {&bark, &foliage})
+        for (Vertex& v : m->vertices) {
+            const Vec3 p = v.position - c;
+            v.position = Vec3(dot(p, r), dot(p, u), dot(p, d));
+            v.normal = Vec3(dot(v.normal, r), dot(v.normal, u), dot(v.normal, d));
+            v.tangent = Vec3(dot(v.tangent, r), dot(v.tangent, u), dot(v.tangent, d));
+        }
+    renderCardView(bark, foliage, fol, false, -Rb, Rb, -Hh, Hh, w, h, colourScale, out, stride, normalOut);
+}
+
+double impostorViewHalfHeight(const RealTree& tree, double centreY, double maxElevation) {
+    double hh = 0.1;
+    for (const RenderMesh* m : {&tree.bark, &tree.foliage})
+        for (const Vertex& v : m->vertices) {
+            const double dy = std::fabs(v.position.y - centreY), rr = std::hypot(v.position.x, v.position.z);
+            // (|dy| cos e + r sin e, its greatest over 0..maxElevation: at the ends or where tan e = r / |dy|)
+            const double eStar = std::atan2(rr, std::max(1e-9, dy));
+            const double e = std::clamp(eStar, 0.0, maxElevation);
+            hh = std::max({hh, dy, dy * std::cos(maxElevation) + rr * std::sin(maxElevation), dy * std::cos(e) + rr * std::sin(e)});
+        }
+    return hh;
+}
+
 void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
                     double y0, double y1, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut,
                     const CardViewExtras* ex) {

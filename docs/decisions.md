@@ -10662,3 +10662,24 @@ Glenn, 2026-10-18: "What about the maple tree? It looks pretty bad".
   a tree, but the twig cards were baked in only `variants` palettes and picked at random -- the mid turned a tree to
   patches of crimson and orange as one walked away. bakeTwigCards now bakes a variant per palette
   (Picture::palette) and wearTwigCards wears only the tree's own.
+
+## ADR-0193 — Many-view impostors for the forests' far trees
+
+Glenn, 2026-10-18: "So can we make multi angle imposter cards".
+
+- **The bake** (real_tree.h renderImpostorView): each variant seen from kImpostorAzimuths (8) round it at
+  kImpostorElevations (3: 0, 35, 70 degrees), orthographic, colour + normals (the view's frame: r, u, d), all framed
+  in ONE window about the tree's centre (half extents Rb, Hh; impostorViewHalfHeight bounds every view). 64 x 128
+  cells, a block a variant, the blocks in a grid (loadForest; RT_IMPOSTOR_DUMP writes it).
+- **The card** (forest.h appendImpostorViews, FLAG_IMPOSTOR_VIEWS bit 24): one quad a tree; each corner carries the
+  centre plus its reach (the mesh's bounds hold the crowns), the window and yaw in the tangent slot (tangentIsData),
+  the block in the normal, the cell size in the colour. mesh.vert turns it to the camera about the centre; mesh.frag
+  takes the camera's direction in the tree's frame, blends the four nearest views (bilinear in azimuth and elevation,
+  weighted by coverage), reading each where the fragment's point falls in that view's window, so the silhouettes
+  stay registered; the blended view normals light it; the mip coverage boost as the other cards.
+- **Shadows**: a card turned to the camera cannot cast one; the shadow pass skips FLAG_IMPOSTOR_VIEWS and two
+  FLAG_SHADOW_ONLY crossed cards (the 0 and 90 degree horizon views) cast it.
+- RT_IMPOSTOR_VIEWS=0: the crossed cards (the A/B). Vulkan only, as FLAG_LOD_BAND.
+- Seen: spruces stay cones from the ground and from the air (the old top card made starfish); the oak impostors are
+  as thin as the oak's light level, which they are baked from -- that level's foliage is owed, not the impostor.
+- Test `impostor_views_frame_the_tree_from_every_side`.

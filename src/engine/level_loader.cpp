@@ -2221,8 +2221,52 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         sl.tu0 = sl.u0; sl.tu1 = sl.u1;
         sl.tv0 = (2 * sh + eps) / ah; sl.tv1 = (2 * sh + th - eps) / ah;
     }
-    const TextureHandle atlasTex = renderer.uploadTexture(aw, ah, 4, atlas.data());
-    const TextureHandle normalAtlasTex = renderer.uploadTexture(aw, ah, 4, normalAtlas.data());
+    TextureHandle atlasTex = renderer.uploadTexture(aw, ah, 4, atlas.data());
+    TextureHandle normalAtlasTex = renderer.uploadTexture(aw, ah, 4, normalAtlas.data());
+    // MANY-VIEW IMPOSTORS (Glenn, 2026-10-18: "So can we make multi angle imposter cards"; forest.h): each variant
+    // seen from kImpostorAzimuths round it at kImpostorElevations, a block of cells a variant, the blocks in a grid;
+    // RT_IMPOSTOR_VIEWS=0 for the crossed cards above (the A/B)
+    const bool impViews = !(std::getenv("RT_IMPOSTOR_VIEWS") && std::string(std::getenv("RT_IMPOSTOR_VIEWS")) == "0");
+    if (impViews) {
+        const int vcw = 64, vch = 128;
+        const int bw = kImpostorAzimuths * vcw, bh = kImpostorElevations * vch;
+        const int perRow = std::max(1, static_cast<int>(std::ceil(std::sqrt(nVar * static_cast<double>(bh) / bw))));
+        const int vw = perRow * bw, vh = ((nVar + perRow - 1) / perRow) * bh;
+        std::vector<uint8_t> vcol(static_cast<std::size_t>(vw) * vh * 4, 0), vnrm(static_cast<std::size_t>(vw) * vh * 4, 0);
+        for (std::size_t q = 0; q < vnrm.size(); q += 4) { vnrm[q] = 128; vnrm[q + 1] = 128; vnrm[q + 2] = 255; vnrm[q + 3] = 255; }
+        const double maxEl = (kImpostorElevations - 1) * kImpostorElevationStep;
+        for (int i = 0; i < nVar; ++i) {
+            Var& var = vars[i];
+            if (var.species < 0) continue;
+            ImpostorSlot& sl = var.slot;
+            sl.centreY = 0.5 * var.tree.height;
+            double rb = 0.1;
+            for (const RenderMesh* m : {&var.tree.bark, &var.tree.foliage})
+                for (const Vertex& vx : m->vertices) rb = std::max(rb, std::hypot(vx.position.x, vx.position.z));
+            sl.Rb = rb * 1.03 + 0.05;
+            sl.Hh = impostorViewHalfHeight(var.tree, sl.centreY, maxEl) * 1.03 + 0.05;
+            const int bx = (i % perRow) * bw, by = (i / perRow) * bh;
+            for (int e = 0; e < kImpostorElevations; ++e)
+                for (int a = 0; a < kImpostorAzimuths; ++a) {
+                    const std::size_t off = (static_cast<std::size_t>(by + e * vch) * vw + bx + a * vcw) * 4;
+                    renderImpostorView(var.tree, folData[var.species], a * 2.0 * PI / kImpostorAzimuths, e * kImpostorElevationStep,
+                                       sl.centreY, sl.Rb, sl.Hh, vcw, vch, colourScale, vcol.data() + off, vw * 4, vnrm.data() + off);
+                }
+            sl.vu0 = static_cast<double>(bx) / vw; sl.vv0 = static_cast<double>(by) / vh;
+            sl.cellU = static_cast<double>(vcw) / vw; sl.cellV = static_cast<double>(vch) / vh;
+        }
+        if (const char* dump = std::getenv("RT_IMPOSTOR_DUMP")) {   // the views, over grey (a look at what the far trees wear)
+            std::vector<uint8_t> rgb(static_cast<std::size_t>(vw) * vh * 3);
+            for (std::size_t q = 0, n = static_cast<std::size_t>(vw) * vh; q < n; ++q) {
+                const double a = vcol[q * 4 + 3] / 255.0;
+                for (int k = 0; k < 3; ++k)
+                    rgb[q * 3 + k] = static_cast<uint8_t>(std::clamp(vcol[q * 4 + k] / static_cast<double>(colourScale) * a + 110.0 * (1.0 - a), 0.0, 255.0));
+            }
+            stbi_write_png(dump, vw, vh, 3, rgb.data(), vw * 3);
+        }
+        atlasTex = renderer.uploadTexture(vw, vh, 4, vcol.data());
+        normalAtlasTex = renderer.uploadTexture(vw, vh, 4, vnrm.data());
+    }
 
     // WHERE: off the roads, the graded ground and the water
     FlattenGrid keepOut;
@@ -2343,28 +2387,41 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     farMat.lodIn1 = static_cast<float>(fp.nearM);
     farMat.lodOut0 = static_cast<float>(fp.farM * 0.85);
     farMat.lodOut1 = static_cast<float>(fp.farM);
-    std::map<std::pair<int, int>, RenderMesh> farCells;
+    if (impViews) {
+        farMat.normalMap = normalAtlasTex;   // (the views' normals always: mesh.frag reads them)
+        farMat.flags |= RenderMaterial::FLAG_IMPOSTOR_VIEWS;
+    }
+    RenderMaterial farShadowMat = farMat;   // (a many-view impostor's shadow: crossed cards, nothing else)
+    farShadowMat.flags = (farMat.flags & ~RenderMaterial::FLAG_IMPOSTOR_VIEWS) | RenderMaterial::FLAG_SHADOW_ONLY;
+    std::map<std::pair<int, int>, RenderMesh> farCells, farShadowCells;
     for (const ForestTree& t : trees) {
         if (vars[t.variant].species < 0) continue;
         if (fp.species[static_cast<std::size_t>(vars[t.variant].species)].understory) continue;   // bushes: near only
-        RenderMesh& m = farCells[{static_cast<int>(std::floor(t.pos.x / fp.cellM)), static_cast<int>(std::floor(t.pos.z / fp.cellM))}];
-        appendImpostor(m, t, vars[t.variant].slot, vars[t.variant].shade / colourScale);
+        const std::pair<int, int> key{static_cast<int>(std::floor(t.pos.x / fp.cellM)), static_cast<int>(std::floor(t.pos.z / fp.cellM))};
+        if (impViews) {
+            appendImpostorViews(farCells[key], t, vars[t.variant].slot, vars[t.variant].shade / colourScale);
+            appendImpostorShadow(farShadowCells[key], t, vars[t.variant].slot);
+        } else {
+            appendImpostor(farCells[key], t, vars[t.variant].slot, vars[t.variant].shade / colourScale);
+        }
     }
     std::size_t farVerts = 0;
-    for (auto& [key, mesh] : farCells) {
-        farVerts += mesh.vertices.size();
-        mesh.materialIndex = 0;
-        Entity e = world.create();
-        world.add<Transform>(e, Transform{});
-        world.add<PrevTransform>(e, PrevTransform{Transform{}});
-        Renderable r;
-        r.mesh = assets.acquireMesh(mesh, "forest:far:" + std::to_string(fp.seed) + ":" + std::to_string(key.first) + ":" + std::to_string(key.second));
-        r.material = farMat;
-        r.drawDistance = fp.farM + fp.cellM;
-        r.drawClass = engine::DrawClass::Scenery;
-        r.renderLayer = engine::LayerFoliage;
-        world.add<Renderable>(e, r);
-    }
+    for (int pass = 0; pass < 2; ++pass)
+        for (auto& [key, mesh] : pass == 0 ? farCells : farShadowCells) {
+            farVerts += mesh.vertices.size();
+            mesh.materialIndex = 0;
+            Entity e = world.create();
+            world.add<Transform>(e, Transform{});
+            world.add<PrevTransform>(e, PrevTransform{Transform{}});
+            Renderable r;
+            r.mesh = assets.acquireMesh(mesh, std::string(pass == 0 ? "forest:far:" : "forest:farshadow:") + std::to_string(fp.seed) + ":" +
+                                                  std::to_string(key.first) + ":" + std::to_string(key.second));
+            r.material = pass == 0 ? farMat : farShadowMat;
+            r.drawDistance = fp.farM + fp.cellM;
+            r.drawClass = engine::DrawClass::Scenery;
+            r.renderLayer = engine::LayerFoliage;
+            world.add<Renderable>(e, r);
+        }
     // ROCKS (ADR-0131): the forest block's rock layers, instanced per cell, bedded and tilted
     std::size_t nRocks = 0;
     if (!fp.rocks.empty()) {

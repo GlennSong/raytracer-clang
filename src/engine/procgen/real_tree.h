@@ -68,6 +68,18 @@ TextureData realFoliageTexture(RealSpecies species, int size, uint32_t seed);
 void renderImpostor(const RealTree& tree, const TextureData& foliage, bool top, int w, int h,
                     double colourScale, uint8_t* rgbaOut, int strideBytes, uint8_t* normalOut = nullptr);
 
+// MANY-VIEW IMPOSTORS (Glenn, 2026-10-18: "So can we make multi angle imposter cards"): the tree seen from any
+// direction -- `azimuth` round it (0: from +z, toward +x as it grows) and `elevation` above the horizon (radians) --
+// an orthographic picture framed on its centre (`centreY` up its axis): x -Rb..Rb across (Rb: its reach from the axis),
+// y -Hh..Hh up the view (Hh: impostorViewHalfHeight, the same for every view, so one window fits them all). The
+// view's frame (the normal map's): T = r = (cos az, 0, -sin az), N = d = toward the viewer, B = u = d x r.
+// Colour, alpha and normals as renderImpostor's.
+void renderImpostorView(const RealTree& tree, const TextureData& foliage, double azimuth, double elevation, double centreY,
+                        double Rb, double Hh, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,
+                        uint8_t* normalOut = nullptr);
+// ...the window's half height for views up to `maxElevation` (radians): every part of the tree inside it from any of them
+double impostorViewHalfHeight(const RealTree& tree, double centreY, double maxElevation);
+
 // The same picture of any bark and foliage, framed by the caller: the side view (along -z) spans x0..x1 across and
 // y0..y1 up the image; the top view (`top`, down -y) x0..x1 across and z y0..y1 down it. (renderImpostor frames a
 // whole tree; branch_cards.h a sprig in its own frame.)

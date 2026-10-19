@@ -128,11 +128,26 @@ struct ImpostorSlot {
     double sv0 = -1, sv1 = -1;                  // the SECOND side picture's rows (the tree turned 90 deg); < 0: none
     double tu0 = 0, tv0 = 0, tu1 = 1, tv1 = 1; // top picture
     double halfW = 1.0, height = 1.0, crownBase = 0.0;
+    // MANY VIEWS (real_tree.h renderImpostorView): the variant's block of kImpostorAzimuths x kImpostorElevations
+    // cells from (vu0, vv0), each cellU x cellV; the window half extents Rb, Hh about the centre centreY up its axis
+    // (unit scale). vu0 < 0: no views (the crossed cards above).
+    double vu0 = -1, vv0 = 0, cellU = 0, cellV = 0;
+    double Rb = 1.0, Hh = 1.0, centreY = 0.5;
 };
+// the view grid: azimuths round the tree, elevations kImpostorElevationStep apart from the horizon (radians)
+constexpr int kImpostorAzimuths = 8, kImpostorElevations = 3;
+constexpr double kImpostorElevationStep = 35.0 * 3.14159265358979323846 / 180.0;
 
 // Append `t`'s impostor (two crossed side cards + a top card) to `mesh`, world space. `colour` is the
 // vertex colour (1 / the atlas's colour scale).
 void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& slot, double colour);
+// ...or its MANY-VIEW impostor: ONE card, turned to the camera by mesh.vert (RenderMaterial::FLAG_IMPOSTOR_VIEWS),
+// mesh.frag picking and blending the views nearest the camera's direction round the tree. Each corner carries the
+// tree's centre plus its offset (so the mesh's bounds hold the trees), the window and yaw in its tangent slot, the
+// variant's block in its normal, and `colour` and cellV in its colour: the mesh is tangentIsData. It casts no
+// shadow (a card turned to the camera cannot): appendImpostorShadow's crossed cards do, FLAG_SHADOW_ONLY.
+void appendImpostorViews(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& slot, double colour);
+void appendImpostorShadow(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& slot);
 
 }  // namespace engine
 

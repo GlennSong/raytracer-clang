@@ -72,6 +72,8 @@ layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec3 outWorldTangent;
 layout(location = 5) flat out vec3 outInstanceOrigin;   // per-instance variation (ADR-0098)
 layout(location = 6) out vec3 outUvBlend;   // FLAG_UV_BLEND (bit 23): the tangent slot's data -- a second UV and its weight
+layout(location = 7) flat out vec4 outImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw
+layout(location = 8) flat out vec4 outImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 void main() {
     const bool grass = (pc.surfaceFlags.y & (1u << 17)) != 0u;   // FLAG_GRASS
@@ -133,6 +135,26 @@ void main() {
         world.xz += g.wind1.xz * (g.wind2.z * weight * gust);
     }
 
+    // FLAG_IMPOSTOR_VIEWS (bit 24, forest.h appendImpostorViews): ONE card a tree, turned to the camera about the
+    // tree's centre -- upright while the camera is near the horizon, tipping back as it climbs (its up stays in the
+    // plane of the world's up and the view); mesh.frag works out which baked views it shows
+    outImpA = vec4(0.0);
+    outImpB = vec4(0.0);
+    if ((pc.surfaceFlags.y & (1u << 24)) != 0u) {
+        const vec2 corner = inTexcoord;
+        const float rb = inTangent.x, hh = inTangent.y;
+        const vec3 c = (M * vec4(inPosition - vec3(corner.x * rb, corner.y * hh, corner.x * rb), 1.0)).xyz;
+        const vec3 toCam = normalize(g.cameraPosition.xyz - c);
+        vec3 right = cross(vec3(0.0, 1.0, 0.0), toCam);
+        right = dot(right, right) > 1e-6 ? normalize(right) : vec3(g.view[0][0], g.view[1][0], g.view[2][0]);
+        const vec3 up = cross(toCam, right);
+        world = vec4(c + right * (corner.x * rb) + up * (corner.y * hh), 1.0);
+        outImpA = vec4(c, inTangent.z);
+        outImpB = vec4(rb, hh, inNormal.x, inNormal.y);
+        normal = toCam;
+        tangent = right;
+    }
+
     outWorldPos = world.xyz;
     outInstanceOrigin = M[3].xyz;
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
@@ -142,6 +164,8 @@ void main() {
     outWorldTangent = normalize((M * vec4(tangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
     outUvBlend = (pc.surfaceFlags.y & (1u << 23)) != 0u ? inTangent.xyz : vec3(0.0);
+    if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outUvBlend = vec3(inNormal.z, inColor.g, 0.0);   // (the cell's size)
     outColor = signalLit > 0.5 ? inColor.rgb * 8.0 : signalLit < -0.5 ? inColor.rgb * 0.06 : inColor.rgb;   // (a lit signal lamp: see mesh.frag)
+    if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outColor = vec3(inColor.r);   // (an impostor's shade; g carries its cell)
     gl_Position = g.viewProjection * world;
 }
