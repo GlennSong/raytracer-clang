@@ -10731,3 +10731,17 @@ of the lab's box figure: "why not use one of the agent models?".
   38 had capped the whorls), trunks girthier.
 - Not yet: the default (no age) still grows the base recipe, the young size -- the forests and the lab rows use it;
   the other species; forest-grown forms (tall clear boles in a stand).
+
+## ADR-0197 — The recipe trees on the island (A/B)
+
+Glenn, 2026-10-18: "I guess the next step is to bring these trees to the island".
+
+- A real_tree forest block's `"recipes": true` -- or RT_FOREST_RECIPES=1 (=0 off) -- grows each `kind` as its recipe
+  at `"recipeAge"` (default mature, real sizes; RT_FOREST_RECIPE_AGE): oak, maple, birch, pine, spruce as themselves;
+  beech an oak and fir a spruce (no recipes of their own yet), aspen a river birch, willow a weeping willow, alder a
+  multistem, the shrub understory a hawthorn. A switch, not an edit: the island levels are generated (untracked).
+- island_8_nature, from above a forest stand (RT_GPU_TIMES, RT_VSYNC=0): 10.9 ms against the real_tree forest's
+  10.7 ms. The forest's build 121 s against 42 s (44 variants grown four levels each, the mature oak's crown grown to
+  its shape); the level 178 s against 96 s. Near groups 31k (three levels a tree) against 10k.
+- Owed: the load (cache the grown levels per recipe+seed, as the bakes are cached); beech, fir, aspen, alder recipes;
+  forest-grown forms; an age mix in a stand; the city's street trees.

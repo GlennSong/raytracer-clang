@@ -6,6 +6,8 @@
 #include "terrain_maps.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <map>
 #include <cmath>
 #include <memory>
 #include <thread>
@@ -62,11 +64,30 @@ ForestParams forestFromJson(const nlohmann::json& j) {
             L.drawM = r.value("draw", L.drawM);
             p.rocks.push_back(L);
         }
+    // THE RECIPE TREES IN A real_tree FOREST (Glenn, 2026-10-18: "I guess the next step is to bring these trees to the
+    // island"): "recipes": true -- or RT_FOREST_RECIPES=1 (=0 off: the A/B) -- grows each `kind` as its recipe
+    // (tree_recipes.lua), at "recipeAge" (default mature: real sizes, ADR-0196; RT_FOREST_RECIPE_AGE overrides); a
+    // kind with no recipe of its own takes its nearest (beech an oak, fir a spruce ...), one with none stays real_tree
+    bool recipes = j.value("recipes", false);
+    if (const char* e = std::getenv("RT_FOREST_RECIPES")) recipes = std::string(e) != "0";
+    std::string recipeAge = j.value("recipeAge", std::string("mature"));
+    if (const char* e = std::getenv("RT_FOREST_RECIPE_AGE")) recipeAge = e;
+    static const std::map<std::string, std::string> kRecipeOf = {
+        {"oak", "oak"}, {"maple", "maple"}, {"beech", "oak"}, {"birch", "birch"}, {"aspen", "river_birch"},
+        {"willow", "weeping_willow"}, {"alder", "multistem"}, {"pine", "pine"}, {"spruce", "spruce"}, {"fir", "spruce"},
+        {"shrub", "hawthorn"}};
     if (j.contains("species") && j["species"].is_array())
         for (const auto& s : j["species"]) {
             ForestSpecies fs;
             fs.recipe = s.value("recipe", std::string());
             fs.age = s.value("age", std::string());
+            if (recipes && fs.recipe.empty()) {
+                const auto it = kRecipeOf.find(s.value("kind", std::string("spruce")));
+                if (it != kRecipeOf.end()) {
+                    fs.recipe = it->second;
+                    if (fs.age.empty() && !s.value("understory", false)) fs.age = recipeAge;
+                }
+            }
             if (fs.recipe.empty() && !realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) continue;
             fs.scale = s.value("scale", fs.scale);
             fs.variants = std::clamp(s.value("variants", fs.variants), 1, 16);
