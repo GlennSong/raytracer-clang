@@ -10580,3 +10580,24 @@ open; more of the grammar's branching only made more crossing limbs.
   is the spacing they fill: up to 3x a twig's segment).
 - Oak old (iterations 12, 9000 points, step 0.32) 12.5 x 14 m; ancient (18000 points, step 0.4) 19 x 32 m, trunk r 1.45
   m; ~30k bark + ~40k foliage triangles. Grown in ~25 s for the four ages (the test).
+
+## ADR-0188 — Old crowns: an authored shape, lobes over it, a guided limb and a fan per lobe
+
+Glenn, 2026-10-18, of the space-colonized ancient oak: "Those tree tops look too sparse and they don't really appear
+to have any kind of definable shape"; "how do we develop the lobes ... What's the best way to harness both of these
+algorithms"; of the per-lobe colonization: "Those look messy"; of guided limbs: "that's better"; of the bases: "I'm not
+a huge fan of the massive base".
+
+- **The crown's shape is authored** (crownRadius, crownBottom, crownTop): measured from the scaffold, a coarse
+  scaffold shrank the whole crown.
+- **Lobes over its surface** (lobeSize of its radius, ~0.8 of its area covered: more and they merge into a hairball),
+  relaxed apart (lobeOverlap) and toward the light, inside the dome.
+- **colonize = 2** (kept): each lobe colonized only from its own branches, anchored at the scaffold's nearest node.
+  Messy: jagged steps, no hierarchy, any angle, long paths through other lobes.
+- **colonize = 3** (the oak's): each lobe ONE smooth cubic limb from the scaffold node best aimed at it, sagging with
+  droop, kept off the ground, small fans along its outer reach, and a FAN in the lobe (leading shoot + alternate side
+  shoots at branchAngle, each order shorter, kept to the lobe). Grown AFTER the scaffold is bent (bending ran down the
+  grown chains and twisted them off their clumps), radii by the pipe model after.
+- Dead limbs in grown crowns only where they carry little (a snapped limb took its clump). Root reach 3-4 trunk radii,
+  thinner, diving sooner.
+- Test `a_crowns_lobes_are_grown_into` (RT_TREE_WIRE: bare branching from the side and above with the lobes).
