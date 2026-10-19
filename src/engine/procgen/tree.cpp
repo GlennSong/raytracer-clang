@@ -1066,8 +1066,9 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
 // scaffold `nodes` (parent before child), new nodes toward points scattered through the crown's envelope -- a dome round
 // the scaffold's limbs, its points kept mostly to the outer shell -- each step every node the nearest to some live
 // points growing `step` toward their mean (with a lift to the light), the points a node comes within two steps of spent.
-void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32_t seed) {
+void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32_t seed, std::vector<TreeMesh::Lobe>* lobesOut) {
     if (nodes.size() < 2 || p.colonizePoints <= 0) return;
+    const bool lobed = p.colonize == 2;
     const double D = std::max(0.05, static_cast<double>(p.colonizeStep));
     // the envelope: round the scaffold's limbs (not its trunk below the first fork)
     std::vector<int> kids(nodes.size(), 0);
@@ -1081,16 +1082,108 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
         rx = std::max(rx, std::hypot(n.pos.x - foot.x, n.pos.z - foot.z));
         top = std::max(top, n.pos.y);
     }
+    // (the dome over the crown's limbs, not the foot: a leaning tree's crown is off its foot)
+    Vec3 mid(0, 0, 0);
+    int nm = 0;
+    for (const SkeletonNode& n : nodes) if (n.pos.y >= crownBase) { mid = mid + n.pos; ++nm; }
+    if (nm) { mid = mid * (1.0 / nm); foot = Vec3(mid.x, foot.y, mid.z); }
+    rx = 0.5;
+    for (const SkeletonNode& n : nodes) if (n.pos.y >= crownBase) rx = std::max(rx, std::hypot(n.pos.x - foot.x, n.pos.z - foot.z));
     rx *= p.crownWiden;
     top = foot.y + (top - foot.y) * p.crownHeighten;
-    const double low = crownBase + 0.15 * (top - crownBase);   // (the dome's lower edge: a little above the first fork)
+    double low = crownBase + 0.15 * (top - crownBase);   // (the dome's lower edge: a little above the first fork)
+    if (lobed && p.crownRadius > 0.0f && p.crownTop > p.crownBottom) {   // (the crown's shape, authored)
+        rx = p.crownRadius;
+        low = foot.y + p.crownBottom;
+        top = foot.y + p.crownTop;
+    }
     const Vec3 c(foot.x, 0.5 * (low + top), foot.z);
     const double ry = 0.5 * (top - low);
     std::mt19937 rng(seed ^ 0xc0101u);
     std::uniform_real_distribution<double> u01(0.0, 1.0);
     std::vector<Vec3> pts;
+    std::vector<int> ptOwner;                       // (lobed: the lobe a point is for; -1 any node)
+    std::vector<int> owner(nodes.size(), -1);       // (lobed: the lobe a node grows for; -1 none -- the scaffold's inside)
+    double maxLobeR = 0.0;
+    std::vector<int> lobeAnchor;                    // (lobed: each lobe's scaffold node, its branches' start)
     pts.reserve(static_cast<std::size_t>(p.colonizePoints));
-    while (static_cast<int>(pts.size()) < p.colonizePoints) {
+    if (lobed) {
+        // THE LOBES over the crown's surface: as many as cover it (its area over a lobe's disc), placed by the golden
+        // spiral over the upper part of the dome and a ring under it (the underside flatter), sunk a lobe's radius in
+        const double lobeR = std::max(0.8, static_cast<double>(p.lobeSize) * rx);
+        struct L { Vec3 c; double r; int tip; };
+        std::vector<L> lobes;
+        const double area = 2.0 * PI * rx * rx + 2.0 * PI * rx * ry;
+        const double lobeCover = 0.8;   // (the lobes' discs over the crown's area: more, and they merge into one hairball)
+        const int nLobes = std::clamp(static_cast<int>(lobeCover * area / (PI * lobeR * lobeR)), 6, 80);
+        for (int k = 0; k < nLobes; ++k) {
+            const double t = (k + 0.5) / nLobes;
+            const double zc = 1.0 - 1.4 * t;   // (from the top to a little under the middle)
+            const double sq = std::sqrt(std::max(0.0, 1.0 - zc * zc)), phi = k * 2.39996 + u01(rng) * 0.5;
+            Vec3 d(sq * std::cos(phi), zc, sq * std::sin(phi));
+            if (d.y < 0.0) d.y *= 0.6;
+            const double R = lobeR * (0.8 + 0.4 * u01(rng));
+            const double in = 1.0 - 0.7 * R / std::max(rx, ry);
+            lobes.push_back({c + Vec3(d.x * rx * in, d.y * ry * in, d.z * rx * in), R, -1});
+        }
+        // each lobe's ANCHOR: the scaffold's nearest node in the crown (a limb's end preferred)
+        std::vector<int> anchor;
+        for (L& l : lobes) {
+            int best = -1;
+            double bd = 1e30;
+            for (std::size_t i = 0; i < nodes.size(); ++i) {
+                if (nodes[i].pos.y < crownBase - 0.5) continue;
+                const double dd = (nodes[i].pos - l.c).length() * (nodes[i].isTip ? 0.8 : 1.0);
+                if (dd < bd) { bd = dd; best = static_cast<int>(i); }
+            }
+            l.tip = best < 0 ? 0 : best;
+            anchor.push_back(l.tip);
+        }
+        lobeAnchor = anchor;
+        // RELAXED: apart where they crowd, toward the light (up and out), inside the dome
+        for (int it = 0; it < 24; ++it) {
+            std::vector<Vec3> move(lobes.size(), Vec3(0, 0, 0));
+            for (std::size_t a = 0; a < lobes.size(); ++a) {
+                for (std::size_t b = 0; b < lobes.size(); ++b) {
+                    if (a == b) continue;
+                    Vec3 d = lobes[a].c - lobes[b].c;
+                    const double dist = d.length(), want = (1.0 - p.lobeOverlap) * (lobes[a].r + lobes[b].r);
+                    if (dist >= want) continue;
+                    d = dist > 1e-6 ? d * (1.0 / dist) : Vec3(std::cos(a * 2.4), 0.2, std::sin(a * 2.4));
+                    move[a] = move[a] + d * (0.5 * (want - dist) * lobes[b].r / (lobes[a].r + lobes[b].r));
+                }
+                Vec3 out(lobes[a].c.x - foot.x, 0.0, lobes[a].c.z - foot.z);
+                out = out.length() > 1e-6 ? normalize(out) : Vec3(0, 0, 0);
+                move[a] = move[a] + (out * 0.6 + Vec3(0, 1, 0)) * (0.02 * lobes[a].r);   // (to the light)
+            }
+            for (std::size_t a = 0; a < lobes.size(); ++a) {
+                Vec3 q = lobes[a].c + move[a];
+                // (inside the dome: its centre no further out than the dome less the lobe's own radius)
+                const Vec3 e((q.x - c.x) / std::max(0.5, rx - 0.6 * lobes[a].r), (q.y - c.y) / std::max(0.5, ry), (q.z - c.z) / std::max(0.5, rx - 0.6 * lobes[a].r));
+                const double el = e.length();
+                if (el > 1.0) q = c + (q - c) * (1.0 / el);
+                q.y = std::max(q.y, low + 0.3 * lobes[a].r);
+                lobes[a].c = q;
+            }
+        }
+        // the points: each lobe its share by volume, in its outer shell, its underside flatter
+        double vol = 0.0;
+        for (const L& l : lobes) vol += l.r * l.r * l.r;
+        for (std::size_t a = 0; a < lobes.size(); ++a) {
+            const int n = static_cast<int>(p.colonizePoints * lobes[a].r * lobes[a].r * lobes[a].r / std::max(1e-9, vol));
+            for (int k = 0; k < n; ++k) {
+                const double z = 2.0 * u01(rng) - 1.0, phi = 2.0 * PI * u01(rng), sq = std::sqrt(std::max(0.0, 1.0 - z * z));
+                Vec3 d(sq * std::cos(phi), z, sq * std::sin(phi));
+                if (d.y < 0.0) d.y *= 0.5;
+                const double depth = 1.0 - p.colonizeShell * std::pow(u01(rng), 1.5);
+                pts.push_back(lobes[a].c + d * (lobes[a].r * depth));
+                ptOwner.push_back(static_cast<int>(a));
+            }
+            if (lobesOut) lobesOut->push_back({lobes[a].c, static_cast<float>(lobes[a].r)});
+            maxLobeR = std::max(maxLobeR, lobes[a].r + (lobes[a].c - nodes[static_cast<std::size_t>(lobes[a].tip)].pos).length());
+        }
+    }
+    while (!lobed && static_cast<int>(pts.size()) < p.colonizePoints) {
         // a direction over the dome (its lower half squashed: an open-grown crown's underside is flatter), a depth in
         // from the shell
         const double z = 2.0 * u01(rng) - 1.0, phi = 2.0 * PI * u01(rng), s = std::sqrt(std::max(0.0, 1.0 - z * z));
@@ -1102,7 +1195,8 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
     std::vector<char> alive(pts.size(), 1);
     // (the attraction reach: wide enough that the whole dome is within reach of the scaffold -- at seven steps most of
     // a 30 m crown stayed unreached and its points never grew a branch)
-    const double di = std::max(7.0 * D, 0.3 * std::max(rx, ry)), dk = 2.0 * D;
+    // (lobed: every point of a lobe within reach of its own limb's end)
+    const double di = std::max({7.0 * D, 0.3 * std::max(rx, ry), 1.1 * maxLobeR}), dk = (lobed ? 2.5 : 2.0) * D;
     // nodes in a grid of di cells
     auto cellOf = [&](const Vec3& q) {
         return std::make_tuple(static_cast<int>(std::floor(q.x / di)), static_cast<int>(std::floor(q.y / di)), static_cast<int>(std::floor(q.z / di)));
@@ -1110,15 +1204,16 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
     std::map<std::tuple<int, int, int>, std::vector<int>> grid;
     for (std::size_t i = 0; i < nodes.size(); ++i) grid[cellOf(nodes[i].pos)].push_back(static_cast<int>(i));
     // (points within the kill distance of the scaffold are spent at once)
-    auto killNear = [&](const Vec3& q) {
+    // (lobed: a branch spends only its OWN lobe's points -- passing through a neighbour's it left that lobe unreached)
+    auto killNear = [&](const Vec3& q, int own = -2) {
         for (std::size_t k = 0; k < pts.size(); ++k)
-            if (alive[k] && (pts[k] - q).lengthSquared() < dk * dk) alive[k] = 0;
+            if (alive[k] && (own == -2 || !lobed || ptOwner[k] == own) && (pts[k] - q).lengthSquared() < dk * dk) alive[k] = 0;
     };
     for (const SkeletonNode& n : nodes) killNear(n.pos);
     const std::size_t cap = nodes.size() + static_cast<std::size_t>(p.colonizePoints) * 3;
     for (int iter = 0; iter < 400 && nodes.size() < cap; ++iter) {
-        std::map<int, Vec3> pull;
-        std::map<int, int> count;
+        std::map<std::pair<int, int>, Vec3> pull;   // (by node and, lobed, the lobe it grows for)
+        std::map<std::pair<int, int>, int> count;
         for (std::size_t k = 0; k < pts.size(); ++k) {
             if (!alive[k]) continue;
             const auto [gx, gy, gz] = cellOf(pts[k]);
@@ -1130,20 +1225,24 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
                         auto it = grid.find({gx + dx, gy + dy, gz + dz});
                         if (it == grid.end()) continue;
                         for (int ni : it->second) {
+                            // (lobed: its own lobe's branches, or its anchor on the scaffold)
+                            if (lobed && owner[static_cast<std::size_t>(ni)] != ptOwner[k] && ni != lobeAnchor[static_cast<std::size_t>(ptOwner[k])]) continue;
                             const double d2 = (pts[k] - nodes[static_cast<std::size_t>(ni)].pos).lengthSquared();
                             if (d2 < bd) { bd = d2; best = ni; }
                         }
                     }
             if (best < 0) continue;
             const Vec3 dir = pts[k] - nodes[static_cast<std::size_t>(best)].pos;
-            pull[best] = pull[best] + dir * (1.0 / std::max(1e-6, dir.length()));
-            ++count[best];
+            const std::pair<int, int> key{best, lobed ? ptOwner[k] : -1};
+            pull[key] = pull[key] + dir * (1.0 / std::max(1e-6, dir.length()));
+            ++count[key];
         }
         if (pull.empty()) break;
         std::vector<int> fresh;
-        for (const auto& [ni, sum] : pull) {
+        for (const auto& [key, sum] : pull) {
+            const int ni = key.first;
             const SkeletonNode& from = nodes[static_cast<std::size_t>(ni)];
-            Vec3 dir = sum * (1.0 / count[ni]);
+            Vec3 dir = sum * (1.0 / count[key]);
             dir = dir + Vec3(0, 0.12, 0);   // (a lift to the light)
             if (dir.length() < 1e-6) continue;
             dir = normalize(dir);
@@ -1156,12 +1255,13 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
             n.isTip = true;
             nodes[static_cast<std::size_t>(ni)].isTip = false;
             nodes.push_back(n);
+            owner.push_back(lobed ? key.second : owner[static_cast<std::size_t>(ni)]);
             const int id = static_cast<int>(nodes.size()) - 1;
             grid[cellOf(n.pos)].push_back(id);
             fresh.push_back(id);
         }
         if (fresh.empty()) break;
-        for (int id : fresh) killNear(nodes[static_cast<std::size_t>(id)].pos);
+        for (int id : fresh) killNear(nodes[static_cast<std::size_t>(id)].pos, lobed ? owner[static_cast<std::size_t>(id)] : -2);
     }
     for (SkeletonNode& n : nodes) n.childCount = 0;
     for (const SkeletonNode& n : nodes) if (n.parent >= 0) nodes[static_cast<std::size_t>(n.parent)].childCount++;
@@ -1173,7 +1273,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
 
     Skeleton skel = buildSkeleton(s, params.angleJitter, rng);
     std::vector<SkeletonNode>& nodes = skel.nodes;
-    if (params.colonize == 1) colonizeCrown(nodes, params, seed);   // (the crown grown to its shape)
+    std::vector<TreeMesh::Lobe> lobes;
+    if (params.colonize >= 1) colonizeCrown(nodes, params, seed, &lobes);   // (the crown grown to its shape)
     assignRadii(nodes, params);
     shapeBranches(nodes, params, rng, seed);
     // THE LEAN: the whole tree tipped off vertical about its foot, toward a seeded azimuth
@@ -1331,7 +1432,9 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 continue;
             }
             if (lead[static_cast<std::size_t>(par)] == static_cast<int>(n)) continue;
-            if (nodes[n].radius < 0.015f || nodes[n].radius > 0.4f * trunkR) continue;
+            // (a crown grown to its shape: only small limbs -- a big one snapped took its whole clump with it)
+            const float deadMax = params.colonize >= 1 ? std::max(0.12f * trunkR, 3.0f * params.tipRadius * params.radiusScale) : 0.4f * trunkR;
+            if (nodes[n].radius < 0.015f || nodes[n].radius > deadMax) continue;
             if (u01(drng) >= params.deadChance) continue;
             dead[n] = 1;
             depth[n] = 0;
@@ -1358,6 +1461,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     }
 
     TreeMesh out;
+    out.lobes = lobes;
 
     // Decompose the skeleton into branch chains: from each node, the child whose
     // direction best continues the incoming direction is the "apical" leader

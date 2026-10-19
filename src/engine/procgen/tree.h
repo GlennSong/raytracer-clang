@@ -115,6 +115,21 @@ struct TreeParams {
     float colonizeShell = 0.35f;
     float crownWiden = 1.15f;
     float crownHeighten = 1.08f;
+    // THE LOBES (colonize = 2; Glenn, 2026-10-18: "how do we develop the lobes ... What's the best way to harness both
+    // of these algorithms"): the L-system grows the SCAFFOLD -- the species' trunk and big limbs, its character -- and the
+    // crown (authored: crownRadius / crownBottom / crownTop) is laid with LOBES over its surface, each lobeSize of the
+    // crown's radius, its underside flatter; the lobes RELAXED apart where they overlap more than lobeOverlap. Each lobe
+    // is grown from the scaffold's nearest limb (its ANCHOR: the limb reaches out to its clump), colonized only by that
+    // limb's branches, its points (colonizePoints shared by volume) in its outer shell: clumps of foliage on a few
+    // big limbs, the gaps of sky between them -- an old tree's billowing crown.
+    float lobeSize = 0.35f;
+    // THE CROWN'S SHAPE, authored (colonize = 2): a dome crownRadius metres round and from crownBottom to crownTop metres
+    // up (0: from the scaffold's own reach -- which a coarse scaffold shrinks). The lobes are laid over its surface,
+    // each grown from the scaffold's nearest limb.
+    float crownRadius = 0.0f;
+    float crownBottom = 0.0f;
+    float crownTop = 0.0f;
+    float lobeOverlap = 0.35f;
     float trunkZoneCell = 0.04f;
     int   trunkZoneTris = 3500;
 
@@ -201,6 +216,8 @@ struct TreeMesh {
         RenderMesh bark, leaves;
     };
     std::vector<Sprig> sprigs;
+    struct Lobe { Vec3 centre; float radius = 0; };   // (colonize = 2: the crown's lobes, TreeParams::lobeSize)
+    std::vector<Lobe> lobes;
     // THE FINE BRANCHING the sprigs stand for (Glenn, 2026-10-18, of baked mini-tree cards: "it needs to be a branch
     // without leaves and with leaves or maybe a Y branch ... smaller segments planted along"): every internode inside a
     // sprig, parent end to node, its radius and whether it carries leaves (a tip or thin enough: leafThickness) --

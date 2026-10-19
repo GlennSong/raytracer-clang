@@ -1095,3 +1095,72 @@ TEST_CASE(a_trees_ages_grow_older) {
         }
     }
 }
+
+// THE CROWN'S STRUCTURE (colonize = 2, TreeParams::lobeSize; Glenn, 2026-10-18: "can we build the major branches with
+// the space colonization and see what the branching structure looks like?"): the old and ancient oaks' lobes -- one a
+// limb end, none swallowing another -- and every lobe grown into (its limb's branches reach into it). RT_TREE_WIRE
+// renders the bare branching from the side and from above, the lobes drawn as circles: crown_<age>.png.
+TEST_CASE(a_crowns_lobes_are_grown_into) {
+    const TreeRecipeBook book = shipped();
+    const TreeRecipe* r = book.find("oak");
+    CHECK(r != nullptr);
+    if (!r) return;
+    for (const char* age : {"old", "ancient"}) {
+        const TreeRecipe aged = agedRecipe(*r, age);
+        std::map<std::string, double> set{{"colonize", 2.0}};
+        for (const auto& [k, v] : knobsFromEnv()) set[k] = v;
+        const TreeMesh t = growRecipeTree(aged, 3u, set);
+        // each lobe: the limbs inside it
+        int reached = 0;
+        for (const TreeMesh::Lobe& lb : t.lobes) {
+            int inside = 0;
+            for (const TreeMesh::Limb& l : t.limbs) inside += (l.b - lb.centre).length() < 1.2 * lb.radius;
+            reached += inside >= 4;
+        }
+        double h = 0, w = 0;
+        for (const TreeMesh::Limb& l : t.limbs) { h = std::max(h, static_cast<double>(l.b.y)); w = std::max(w, std::hypot(l.b.x, l.b.z)); }
+        std::printf("    [crown] oak %-8s %zu lobes, %d grown into; %zu limbs; %.1f m tall, %.1f m wide\n", age, t.lobes.size(), reached,
+                    t.limbs.size(), h, 2 * w);
+        CHECK(t.lobes.size() >= 6);
+        CHECK(reached * 10 >= static_cast<int>(t.lobes.size()) * 7);
+        if (const char* dir = std::getenv("RT_TREE_WIRE")) {
+            const int W = 1400, H = 1400;
+            const double half = std::max(h * 0.55, w * 1.1);
+            for (int view = 0; view < 2; ++view) {   // 0 side (x right, y up), 1 top (x right, z down)
+                Image img(W, H);
+                for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) img.setPixel(x, y, Vec3(0.93, 0.94, 0.95));
+                auto proj = [&](const Vec3& p, double& px, double& py) {
+                    px = (p.x / half * 0.5 + 0.5) * W;
+                    py = view == 0 ? (1.0 - (p.y - (h * 0.5)) / half * 0.5 - 0.5) * H : (p.z / half * 0.5 + 0.5) * H;
+                };
+                auto disc = [&](double cx, double cy, double rad, const Vec3& col) {
+                    for (int y = std::max(0, static_cast<int>(cy - rad)); y <= std::min(H - 1, static_cast<int>(cy + rad)); ++y)
+                        for (int x = std::max(0, static_cast<int>(cx - rad)); x <= std::min(W - 1, static_cast<int>(cx + rad)); ++x)
+                            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= rad * rad) img.setPixel(x, y, col);
+                };
+                for (const TreeMesh::Lobe& lb : t.lobes) {   // (the lobes as rings)
+                    double cx, cy;
+                    proj(lb.centre, cx, cy);
+                    const double rr = lb.radius / half * 0.5 * W;
+                    for (int k = 0; k < 720; ++k) {
+                        const double a = k * 3.14159265 / 360.0;
+                        const int x = static_cast<int>(cx + rr * std::cos(a)), y = static_cast<int>(cy + rr * std::sin(a));
+                        if (x >= 0 && y >= 0 && x < W && y < H) img.setPixel(x, y, Vec3(0.35, 0.65, 0.35));
+                    }
+                }
+                for (const TreeMesh::Limb& l : t.limbs) {   // (the limbs, thickness to scale, darker the thicker)
+                    double ax, ay, bx, by;
+                    proj(l.a, ax, ay);
+                    proj(l.b, bx, by);
+                    const int n = static_cast<int>(std::max(std::fabs(bx - ax), std::fabs(by - ay))) + 1;
+                    for (int i = 0; i <= n; ++i) {
+                        const double u = static_cast<double>(i) / n;
+                        const double r = std::max(0.6, (l.ra + (l.rb - l.ra) * u) / half * 0.5 * W);
+                        disc(ax + (bx - ax) * u, ay + (by - ay) * u, r, l.dead ? Vec3(0.6, 0.6, 0.6) : Vec3(0.30, 0.20, 0.12) * (r > 3 ? 0.6 : 1.0));
+                    }
+                }
+                img.writePng(std::string(dir) + "/crown_" + age + (view == 0 ? "_side" : "_top") + ".png");
+            }
+        }
+    }
+}
