@@ -878,6 +878,10 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
             double len = 0;
             for (const TreeMesh::Twig& t : hero.twigs) { leafy += t.leafy; len += (t.b - t.a).length(); }
             std::printf("    [twigs] %-14s %zu twigs (%zu leafy), %.0f m\n", name.c_str(), hero.twigs.size(), leafy, len);
+            double h = 0, w = 0;   // (its size: Glenn, of the scale, "the trees need to be 2x to 4x taller than me")
+            for (const RenderMesh* m : {&hero.branches, &hero.leaves})
+                for (const Vertex& v : m->vertices) { h = std::max(h, v.position.y); w = std::max(w, std::hypot(v.position.x, v.position.z)); }
+            std::printf("    [size]  %-14s %.1f m tall, %.1f m wide\n", name.c_str(), h, 2.0 * w);
         }
         std::printf("    [cards] %-14s hero bark %5zu tris (joints %4zu), %3zu sprigs -> %4zu card tris; mid bark %5zu, cards %5zu; %zu pictures\n",
                     name.c_str(), bark, (hero.jointIndexEnd - hero.jointIndexStart) / 3, hero.sprigs.size(), cards,
@@ -1163,5 +1167,32 @@ TEST_CASE(a_crowns_lobes_are_grown_into) {
                 img.writePng(std::string(dir) + "/crown_" + age + (view == 0 ? "_side" : "_top") + ".png");
             }
         }
+    }
+}
+
+// A FOREST'S LEVELS (Glenn, 2026-10-18, of recipe_forest: "the forest seems pretty heavy. The fps is around 27"): each
+// species' triangles at each level with the forest's bands (hero 22, mid 70, light 150, far to the impostors) --
+// further, never heavier, and the far levels a small share of the hero (each stands for many more trees: the area of
+// a ring grows with its radius).
+TEST_CASE(a_forests_levels_lighten_with_distance) {
+    const TreeRecipeBook book = shipped();
+    RecipeLodBands bands;
+    bands.hero0 = 16; bands.hero1 = 22; bands.mid0 = 58; bands.mid1 = 70; bands.light0 = 130; bands.light1 = 150;
+    for (const char* name : {"oak", "birch", "maple", "river_birch", "spruce", "pine", "magnolia", "sakura"}) {
+        const TreeRecipe* r = book.find(name);
+        if (!r) continue;
+        BranchCardSet cards;
+        const std::vector<RecipeTreeLevel> levels = growRecipeLevels(*r, 5u, {}, bands, true, &cards);
+        std::string line;
+        std::size_t last = ~std::size_t(0);
+        for (const RecipeTreeLevel& L : levels) {
+            const std::size_t bark = L.tree.branches.indices.size() / 3, leaves = L.tree.leaves.indices.size() / 3;
+            char buf[96];
+            std::snprintf(buf, sizeof buf, "  %5zu+%-6zu", bark, leaves);
+            line += buf;
+            CHECK(bark + leaves <= last);
+            last = bark + leaves;
+        }
+        std::printf("    [forest levels] %-12s (bark+leaves, hero..far)%s\n", name, line.c_str());
     }
 }

@@ -69,8 +69,8 @@
       "shoreClear": -1000,
       "maxSlopeDeg": 40,
       "cell": 128,
-      "near": 280,
-      "nearFade": 40,
+      "near": 150,
+      "nearFade": 20,
       "far": 1200,
       "hero": 22,
       "heroFade": 6,
@@ -229,8 +229,8 @@
         }
       ],
       "understoryDraw": 60,
-      "light": 150,
-      "lightFade": 20
+      "light": 110,
+      "lightFade": 15
     }
   },
   "grass": {

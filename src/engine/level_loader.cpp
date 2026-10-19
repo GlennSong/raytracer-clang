@@ -2228,7 +2228,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     // RT_IMPOSTOR_VIEWS=0 for the crossed cards above (the A/B)
     const bool impViews = !(std::getenv("RT_IMPOSTOR_VIEWS") && std::string(std::getenv("RT_IMPOSTOR_VIEWS")) == "0");
     if (impViews) {
-        const int vcw = 64, vch = 128;
+        const int vcw = 80, vch = 160;   // (the impostors start nearer now: 150 m in recipe_forest)
         const int bw = kImpostorAzimuths * vcw, bh = kImpostorElevations * vch;
         const int perRow = std::max(1, static_cast<int>(std::ceil(std::sqrt(nVar * static_cast<double>(bh) / bw))));
         const int vw = perRow * bw, vh = ((nVar + perRow - 1) / perRow) * bh;
@@ -2238,6 +2238,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         for (int i = 0; i < nVar; ++i) {
             Var& var = vars[i];
             if (var.species < 0) continue;
+            if (fp.species[static_cast<std::size_t>(var.species)].understory) continue;   // (bushes have no impostor)
             ImpostorSlot& sl = var.slot;
             sl.centreY = 0.5 * var.tree.height;
             double rb = 0.1;

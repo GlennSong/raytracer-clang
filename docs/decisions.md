@@ -10696,3 +10696,18 @@ Glenn, 2026-10-18: "sakura trees should have different sizes right?"
   bare. Old/ancient raise near_leaves (12k/18k): foliage 107k/161k tris, as the ancient oak's.
 - The ages test checks every age wears leaves (the maple's 0-leaf hero, ADR-0192, as a check).
 - Owed: the ancient reads lopsided and sparse for its 26 m -- an authored crown (colonize 3, as the old oak) is next.
+
+## ADR-0195 — The forest's weight: impostors from 150 m, the conifers' far levels thinned
+
+Glenn, 2026-10-18, of recipe_forest: "the forest seems pretty heavy. The fps is around 27".
+
+- Measured (test `a_forests_levels_lighten_with_distance`, the forest's bands): the rings hold ~50 hero trees,
+  ~460 mid, ~1840 light, ~5800 far; the spruce's levels 82k / 72k / 48k / 23k triangles, the pine's alike -- about
+  120M triangles a frame, and the shadow pass again. The many-view impostors themselves cost ~1 ms.
+- The impostors hold up near now (ADR-0193): recipe_forest's impostors from 150 m (fade 20), the light level to 110 m.
+  Their cells 80 x 160 (bushes, which never wear one, no longer baked).
+- The needle cards' share by level: mid 0.9 -> 0.55, light 0.6 -> 0.25, far 0.35 -> 0.12 (the fronds carry a far
+  crown's mass in few planes): spruce 72k/48k/23k -> 50k/26k/8k.
+- GPU frame (RT_GPU_TIMES, RT_VSYNC=0, each pose held): Treetops 36.7 -> 10.8 ms, Across the ridge 18.2 -> 7.0 ms.
+- Owed: the conifers' modelled branches at the mid and light levels (spruce mid bark 15k) and the oak's thin far
+  levels (the impostors inherit them).
