@@ -95,7 +95,8 @@ tree_recipes = {
       -- (REAL SIZES -- Glenn, 2026-10-18, against the scale lab's street: "Let's get the scale right": an open-grown
       -- English oak is ~9 m at thirty years, ~20 m mature, ~24 m old and broad, ~26 m and twice as wide ancient; the
       -- city's storey is 3.2 m, so a mature oak tops a five-storey walk-up)
-      young   = { axiom = "T(1.9,2)", vars = { crown = 0.85, pitch = {36, 50} }, sprig = 1.2,
+      young   = { axiom = "T(1.9,2)", vars = { crown = 0.85, pitch = {36, 50}, tip = 0.17 }, sprig = 1.2,
+                  near_leaves = 10000, near_twig_tris = 12000,   -- (a street tree's crown full, not tufts on bare forks)
                   params = { radiusScale = 2.0, deadChance = 0.01 } },
       mature  = { axiom = "T(1.5,2)", iterations = 12, vars = { tip = 0.9, crown = 1.2, pitch = {44, 58}, side = {0.82, 0.87} },
                   sprig = 1.8, near_leaves = 12000, near_twig_tris = 14000,
@@ -143,7 +144,9 @@ tree_recipes = {
       leaf = { shape = "lobed", length = 0.32, width = 0.13, lobes = 3 },
       stem_width = 0.014, cup = 0.5,
     },
-    branch_cards = { sprig = 0.95 },
+    -- (leafy shoots along the limbs up to 7 cm through, not only at their ends: a young oak's crown is leaf all
+    -- through, not tufts at the tips of bare forks)
+    branch_cards = { sprig = 0.95, fill_radius = 0.07, fill_spacing = 0.22 },
   },
 
   -- BIRCH: one slim leader whorling light branches up its length, their twigs drooping; white bark, hardly fluted.

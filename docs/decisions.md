@@ -10805,3 +10805,11 @@ Glenn, 2026-10-19: "keep going" (the island's stands; the city's street and park
     cached).
 - Owed: young broadleaves read thin as street trees (the near leaf budget over a 10 m crown); recipes for the island's
   palms and flowering trees; the switches on by default once Glenn has walked them.
+
+## ADR-0201 — Young broadleaves fuller (street trees)
+
+The young oak and beech as street trees (ADR-0200) read as tufts at the ends of bare forks. The oak's (and so the
+beech's) leafy shoots now sprout along limbs to 7 cm through (fill_radius 0.07, every 0.22 m; the mid level's cards
+3.7k -> 6.6k tris), and the young age's twig ends shorter (tip 0.17) with a larger hero leaf budget (near_leaves
+10000, near_twig_tris 12000; hero foliage 47k -> 79k tris). Fuller, but the young oak's few big forks remain its
+character -- its branching inside the crown is a recipe change owed in the lab with Glenn.
