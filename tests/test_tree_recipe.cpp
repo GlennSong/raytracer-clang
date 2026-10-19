@@ -1107,7 +1107,7 @@ TEST_CASE(a_crowns_lobes_are_grown_into) {
     if (!r) return;
     for (const char* age : {"old", "ancient"}) {
         const TreeRecipe aged = agedRecipe(*r, age);
-        std::map<std::string, double> set{{"colonize", 2.0}};
+        std::map<std::string, double> set;
         for (const auto& [k, v] : knobsFromEnv()) set[k] = v;
         const TreeMesh t = growRecipeTree(aged, 3u, set);
         // each lobe: the limbs inside it

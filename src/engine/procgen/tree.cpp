@@ -1068,7 +1068,7 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
 // points growing `step` toward their mean (with a lift to the light), the points a node comes within two steps of spent.
 void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32_t seed, std::vector<TreeMesh::Lobe>* lobesOut) {
     if (nodes.size() < 2 || p.colonizePoints <= 0) return;
-    const bool lobed = p.colonize == 2;
+    const bool lobed = p.colonize == 2 || p.colonize == 3;
     const double D = std::max(0.05, static_cast<double>(p.colonizeStep));
     // the envelope: round the scaffold's limbs (not its trunk below the first fork)
     std::vector<int> kids(nodes.size(), 0);
@@ -1165,6 +1165,111 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
                 q.y = std::max(q.y, low + 0.3 * lobes[a].r);
                 lobes[a].c = q;
             }
+        }
+        if (p.colonize == 3) {
+            // GUIDED LIMBS AND FANS (Glenn, 2026-10-18, of the colonized crowns: "Those look messy"): each lobe ONE
+            // smooth limb out from the scaffold limb best aimed at it -- leaving along that limb's heading, arriving
+            // pointing out of the crown and a little up, sagging under its own weight -- and in the lobe a FAN: a
+            // leading shoot and alternate side shoots, each order shorter, bending outward and up, kept to the lobe;
+            // small fans along the limb's outer reach so it is not a bare pole. A clear hierarchy -- trunk, big
+            // limbs, a limb a clump, its twigs -- smooth, and no branch crossing into another clump.
+            const std::size_t nScaffold = nodes.size();
+            auto headingOf = [&](std::size_t i) {
+                const int par = nodes[i].parent;
+                Vec3 h = par >= 0 ? nodes[i].pos - nodes[static_cast<std::size_t>(par)].pos : nodes[i].heading;
+                return h.length() > 1e-9 ? normalize(h) : Vec3(0, 1, 0);
+            };
+            auto addNode = [&](int parent, const Vec3& pos, const Vec3& dir) {
+                SkeletonNode n;
+                n.pos = pos;
+                n.heading = dir;
+                n.parent = parent;
+                const SkeletonNode& par = nodes[static_cast<std::size_t>(parent)];
+                n.depth = par.depth + 1;
+                n.distFromRoot = par.distFromRoot + static_cast<float>((pos - par.pos).length());
+                n.isTip = true;
+                nodes.push_back(n);
+                return static_cast<int>(nodes.size()) - 1;
+            };
+            const double fanAngle = std::clamp(static_cast<double>(p.branchAngle), 25.0, 65.0) * PI / 180.0;
+            const double sagK = std::clamp(static_cast<double>(p.droop), 0.0, 0.5);
+            // a fan from node `at` along `dir`, `len` its first shoot, kept within `lobe`
+            std::function<void(int, Vec3, double, int, const L&, double)> fan = [&](int at, Vec3 dir, double len, int depth,
+                                                                                 const L& lobe, double roll) {
+                const double minLen = std::max(0.12, 0.08 * lobe.r);
+                if (len < minLen || depth > 7) return;
+                const Vec3 from = nodes[static_cast<std::size_t>(at)].pos;
+                // (the shoot in two steps, bending outward and up, a little down under its weight)
+                Vec3 out = from - c;
+                out.y *= 0.3;
+                out = out.length() > 1e-6 ? normalize(out) : Vec3(0, 0, 0);
+                Vec3 d1 = normalize(dir + out * 0.12 + Vec3(0, 0.10 - 0.25 * sagK, 0));
+                const int m = addNode(at, from + d1 * (0.5 * len), d1);
+                Vec3 d2 = normalize(d1 + out * 0.10 + Vec3(0, 0.06 - 0.2 * sagK, 0) + Vec3(u01(rng) - 0.5, u01(rng) - 0.5, u01(rng) - 0.5) * 0.25);
+                Vec3 end = nodes[static_cast<std::size_t>(m)].pos + d2 * (0.5 * len);
+                end.y = std::max(end.y, low - 0.35 * (top - low));
+                // (kept to its lobe: drawn back in where it would leave it)
+                const Vec3 rel = end - lobe.c;
+                if (rel.length() > 1.15 * lobe.r) end = lobe.c + rel * (1.15 * lobe.r / rel.length());
+                const int e = addNode(m, end, d2);
+                // the side shoot: off the middle, to one side (alternating round the shoot), shorter
+                const Vec3 ref = std::fabs(d1.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+                const Vec3 s1 = normalize(cross(d1, ref)), s2 = cross(d1, s1);
+                const Vec3 side = s1 * std::cos(roll) + s2 * std::sin(roll);
+                const double a = fanAngle * (0.8 + 0.4 * u01(rng));
+                fan(m, normalize(d1 * std::cos(a) + side * std::sin(a)), len * 0.62, depth + 1, lobe, roll + 2.39996);
+                // and the shoot leads on
+                fan(e, d2, len * 0.78, depth + 1, lobe, roll + PI + 0.4 * (u01(rng) - 0.5));
+            };
+            for (std::size_t a = 0; a < lobes.size(); ++a) {
+                L& lobe = lobes[a];
+                Vec3 out = lobe.c - c;
+                out = out.length() > 1e-6 ? normalize(out) : Vec3(0, 1, 0);
+                // the anchor: the scaffold node nearest the lobe, weighted toward one whose limb already heads there
+                int best = 0;
+                double bs = 1e30;
+                for (std::size_t i = 1; i < nScaffold; ++i) {
+                    if (nodes[i].pos.y < crownBase - 0.5) continue;
+                    const Vec3 v = lobe.c - nodes[i].pos;
+                    const double dist = v.length();
+                    if (dist < 1e-6) continue;
+                    const double align = dot(headingOf(i), v * (1.0 / dist));
+                    const double sc = dist * (1.7 - 0.7 * align) * (nodes[i].isTip ? 0.85 : 1.0);
+                    if (sc < bs) { bs = sc; best = static_cast<int>(i); }
+                }
+                // the limb: a cubic from the anchor along its heading to the lobe's inner side, arriving out and up
+                const Vec3 P0 = nodes[static_cast<std::size_t>(best)].pos;
+                const Vec3 P3 = lobe.c - out * (0.35 * lobe.r);
+                const double S = (P3 - P0).length();
+                const Vec3 h0 = headingOf(static_cast<std::size_t>(best));
+                const Vec3 h3 = normalize(out + Vec3(0, 0.35, 0));
+                Vec3 P1 = P0 + h0 * (0.35 * S), P2 = P3 - h3 * (0.35 * S);
+                P1.y -= sagK * 0.20 * S;
+                P2.y -= sagK * 0.12 * S;
+                const int steps = std::max(2, static_cast<int>(std::ceil(S / D)));
+                int at = best;
+                for (int k = 1; k <= steps; ++k) {
+                    const double t = static_cast<double>(k) / steps, u = 1.0 - t;
+                    Vec3 q = P0 * (u * u * u) + P1 * (3 * u * u * t) + P2 * (3 * u * t * t) + P3 * (t * t * t);
+                    q.y = std::max(q.y, std::min(P0.y, low - 0.25 * (top - low)));   // (a sweeping limb, not one dragging the ground)
+                    const Vec3 dq = (P1 - P0) * (3 * u * u) + (P2 - P1) * (6 * u * t) + (P3 - P2) * (3 * t * t);
+                    at = addNode(at, q, dq.length() > 1e-9 ? normalize(dq) : h3);
+                    // (small fans along its outer reach, every couple of metres, up and out to one side)
+                    if (t > 0.45 && t < 0.92 && k % std::max(1, static_cast<int>(2.2 / D)) == 0) {
+                        const Vec3 tg = dq.length() > 1e-9 ? normalize(dq) : h3;
+                        const Vec3 sd = normalize(cross(tg, Vec3(0, 1, 0)) * ((k / 3) % 2 ? 1.0 : -1.0) + Vec3(0, 0.6, 0) + out * 0.3);
+                        L near{q, 0.6 * lobe.r, 0};
+                        fan(at, normalize(tg * 0.4 + sd), 0.3 * lobe.r, 2, near, u01(rng) * 6.28);
+                    }
+                }
+                // and its fan, filling the lobe
+                fan(at, h3, 0.55 * lobe.r, 0, lobe, u01(rng) * 6.28);
+                if (lobesOut) lobesOut->push_back({lobe.c, static_cast<float>(lobe.r)});
+            }
+            for (SkeletonNode& n : nodes) n.childCount = 0;
+            for (const SkeletonNode& n : nodes) if (n.parent >= 0) nodes[static_cast<std::size_t>(n.parent)].childCount++;
+            for (SkeletonNode& n : nodes) n.isTip = n.childCount == 0;
+            return;
         }
         // the points: each lobe its share by volume, in its outer shell, its underside flatter
         double vol = 0.0;
@@ -1273,10 +1378,16 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
 
     Skeleton skel = buildSkeleton(s, params.angleJitter, rng);
     std::vector<SkeletonNode>& nodes = skel.nodes;
+    // (the crown grown to its shape AFTER the scaffold is bent and gnarled -- bending runs down whole chains, and the
+    // grown limbs and fans, bent again, sagged and twisted off their clumps -- then the radii, by the pipe model, over
+    // all of it)
     std::vector<TreeMesh::Lobe> lobes;
-    if (params.colonize >= 1) colonizeCrown(nodes, params, seed, &lobes);   // (the crown grown to its shape)
     assignRadii(nodes, params);
     shapeBranches(nodes, params, rng, seed);
+    if (params.colonize >= 1) {
+        colonizeCrown(nodes, params, seed, &lobes);
+        assignRadii(nodes, params);
+    }
     // THE LEAN: the whole tree tipped off vertical about its foot, toward a seeded azimuth
     if (params.lean > 0.0f && !nodes.empty()) {
         std::uniform_real_distribution<float> az(0.0f, 2.0f * static_cast<float>(PI));
@@ -1419,6 +1530,11 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             }
         }
         const float trunkR = nodes[0].radius;
+        // (a crown grown to its shape: a limb dies only if it carries little -- snapping one that fed a clump took
+        // the whole clump with it)
+        std::vector<int> carried(nodes.size(), 1);
+        for (std::size_t i = nodes.size(); i-- > 1;)
+            if (nodes[i].parent >= 0) carried[static_cast<std::size_t>(nodes[i].parent)] += carried[i];
         std::vector<int> depth(nodes.size(), -1), keepTo(nodes.size(), 0);
         std::vector<char> drop(nodes.size(), 0);
         for (size_t n = 1; n < nodes.size(); ++n) {
@@ -1435,6 +1551,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             // (a crown grown to its shape: only small limbs -- a big one snapped took its whole clump with it)
             const float deadMax = params.colonize >= 1 ? std::max(0.12f * trunkR, 3.0f * params.tipRadius * params.radiusScale) : 0.4f * trunkR;
             if (nodes[n].radius < 0.015f || nodes[n].radius > deadMax) continue;
+            if (params.colonize >= 1 && carried[n] > 24) continue;
             if (u01(drng) >= params.deadChance) continue;
             dead[n] = 1;
             depth[n] = 0;
