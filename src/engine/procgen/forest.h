@@ -41,6 +41,10 @@ struct ForestSpecies {
     std::string recipe;
     std::string age;   // ...at this age (tree_recipe.h TreeAge: "young", "old", ...; empty: the recipe as it is)
     std::string form;  // ...in this form (TreeRecipe::forms: "stand", a forest-grown tree; empty: open-grown)
+    // ...where it grows thick only (Glenn's island: a lone tree in a meadow grown as in a stand read as a lollipop, a
+    // bare pole under a small crown): the variants twice over, the first half open-grown, the second in `form`, and a
+    // tree takes the second half as the stand thickens round it (placeForest)
+    bool formByDensity = false;
     // ...or a MIX of ages (Glenn, 2026-10-18: the island's forests -- a stand is not one age): the variants dealt out
     // by these weights (a variant is an age; the trees pick variants evenly), "age" then unused
     std::vector<std::pair<std::string, double>> ageMix;

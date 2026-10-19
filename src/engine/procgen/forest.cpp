@@ -99,6 +99,7 @@ ForestParams forestFromJson(const nlohmann::json& j) {
                         fs.age = recipeAge;
                         fs.ageMix = recipeMix;
                         fs.form = recipeForm;
+                        fs.formByDensity = !recipeForm.empty();
                     }
                 }
             }
@@ -110,6 +111,7 @@ ForestParams forestFromJson(const nlohmann::json& j) {
             if (fs.recipe.empty() && !realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) continue;
             fs.scale = s.value("scale", fs.scale);
             fs.variants = std::clamp(s.value("variants", fs.variants), 1, 16);
+            if (fs.formByDensity) fs.variants = std::min(16, 2 * fs.variants);   // (open-grown, then in the stand)
             fs.altLo = s.value("altLo", fs.altLo);
             fs.altHi = s.value("altHi", fs.altHi);
             fs.weight = s.value("weight", fs.weight);
@@ -224,7 +226,13 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                         const double tl = p.treelineM;
                         const double stunt = 1.0 - 0.5 * smooth(tl - 220.0, tl, alt);
                         tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d) * fs.scale);
-                        tr.variant = static_cast<uint16_t>(best * vps + static_cast<int>(unit(h ^ 0x3131u) * fs.variants) % fs.variants);
+                        // (its variant -- in a species grown both ways, the stand-grown half as the stand is thick here)
+                        int nv = fs.variants, first = 0;
+                        if (fs.formByDensity && nv >= 2) {
+                            nv /= 2;
+                            if (unit(h ^ 0xF0F0u) < smooth(0.30, 0.65, d)) first = nv;
+                        }
+                        tr.variant = static_cast<uint16_t>(best * vps + first + static_cast<int>(unit(h ^ 0x3131u) * nv) % nv);
                         parts[t].push_back(tr);
                     }
             });

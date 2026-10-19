@@ -10782,3 +10782,26 @@ species).
   beech (the oak grown straight, smooth grey, oval leaves; its seeds vary in size), silver fir (the spruce's whorls
   level, flat needles, smooth grey bark), aspen (the birch's leader, climbing branches, grey-green bark, round leaves),
   alder (a dark cone, fissured bark, dark round leaves). The island's kinds now map to them. Scale lab row z 200.
+
+## ADR-0200 — Stands only where the forest is thick; the city's street and park trees from recipes (A/B)
+
+Glenn, 2026-10-19: "keep going" (the island's stands; the city's street and park trees).
+
+- The island with stands everywhere: a lone tree in a meadow grown as in a stand read as a lollipop, a bare pole under
+  a small crown. **ForestSpecies::formByDensity**: a recipes forest's species grown both ways -- its variants twice
+  over, the first half open-grown, the second in its form (each half the same age mix) -- and placeForest takes the
+  stand-grown half as the stand thickens (smooth 0.30 -> 0.65 of the local density). island_8_nature: 66 variants,
+  the forest grown in 215 s (cached after: tree_cache.h), 16.8 ms a frame above a slope (14.8 with one form).
+- **recipeTreeParts** (level_loader.cpp): a recipe tree's levels as banded bark and leaf parts -- the forest's near
+  trees and the city's now one code path.
+- **The city's recipe trees** (RT_STREET_RECIPES=1; cityRecipeKits: a recipe at an age, the city's bands -- hero 24 m,
+  mid 60, light 130 -- the last level out to the draw distance, in the tree cache):
+  - street trees: the oak and the beech young (~10 m: three storeys), the maple, the coconut palm; the kinds with no
+    recipe (royal palm, monkeypod, poinciana, jacaranda, plumeria) stay real_tree.h's. Instanced per kerb cell, a group
+    a level part.
+  - the parks' and yards' trees (the lot pass's growTree kit, an entity a tree): a park mix -- oaks young and grown, a
+    maple, a sakura, a birch, a young beech -- instanced per 280 m cell, drawn to 600 m.
+  - river_town: 518 lot trees in 992 groups; 7.8 ms a frame against 7.0; the first load 35 s against 15 (grown, then
+    cached).
+- Owed: young broadleaves read thin as street trees (the near leaf budget over a 10 m crown); recipes for the island's
+  palms and flowering trees; the switches on by default once Glenn has walked them.

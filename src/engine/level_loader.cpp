@@ -2024,6 +2024,112 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // crossed side cards and a top card on one atlas), merged into one mesh per far cell; the two
 // crossfade per pixel over [near - nearFade, near] (FLAG_LOD_BAND). Kept off the roads, the city's
 // graded ground and the water, exactly as the scatter is.
+// A RECIPE TREE'S LEVELS AS DRAWABLE PARTS (tree_lods.h; the forest's near trees and the city's street trees): each
+// level's bark and leaves, banded to fade in and out at its own distances -- the last out over [lastOut0, lastOut1]
+// and drawn to lastDrawM -- the bark in `wood` (its trunk zone's bark crossfading), the leaves in their level's atlas,
+// uploaded once a species by foliage mode (`leafTex`)
+struct RecipeTreePart { MeshHandle mesh; RenderMaterial mat; double drawM = 0, minM = 0; };
+static std::vector<RecipeTreePart> recipeTreeParts(const std::vector<RecipeTreeLevel>& levels, const std::string& key,
+                                                   const RenderMaterial& wood, const RenderMaterial& leafBase,
+                                                   std::map<int, std::pair<TextureHandle, TextureHandle>>& leafTex,
+                                                   double lastOut0, double lastOut1, double lastDrawM, Renderer& renderer,
+                                                   AssetManager& assets) {
+    auto uploadTex = [&](const TextureData& td) -> TextureHandle {
+        if (td.pixels.empty()) return TextureHandle{};
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+    std::vector<RecipeTreePart> parts;
+    for (std::size_t li = 0; li < levels.size(); ++li) {
+        const RecipeTreeLevel& L = levels[li];
+        const bool last = li + 1 == levels.size();
+        auto band = [&](RenderMaterial& m) {
+            m.flags |= RenderMaterial::FLAG_LOD_BAND;
+            m.lodIn0 = L.in0; m.lodIn1 = L.in1;
+            m.lodOut0 = last ? static_cast<float>(lastOut0) : L.out0;
+            m.lodOut1 = last ? static_cast<float>(lastOut1) : L.out1;
+        };
+        const double drawM = last ? lastDrawM : L.maxDistance;
+        RecipeTreePart bark;
+        bark.mat = wood;
+        if (L.tree.barkBlend) bark.mat.flags |= RenderMaterial::FLAG_UV_BLEND;   // (a trunk zone's bark crossfades)
+        band(bark.mat);
+        bark.mesh = assets.acquireMesh(L.tree.branches, key + ":" + std::to_string(li) + ":bark");
+        bark.drawM = drawM;
+        bark.minM = L.minDistance;
+        parts.push_back(bark);
+        if (!L.tree.leaves.vertices.empty()) {
+            auto it = leafTex.find(L.tree.foliage);
+            if (it == leafTex.end())
+                it = leafTex.emplace(L.tree.foliage, std::make_pair(uploadTex(L.atlas.albedo), uploadTex(L.atlas.normal))).first;
+            RecipeTreePart leaf;
+            leaf.mat = leafBase;
+            leaf.mat.roughness = 0.7f;
+            leaf.mat.albedoMap = it->second.first;
+            leaf.mat.normalMap = it->second.second;
+            leaf.mat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
+            if (L.tree.foliage >= 1) leaf.mat.flags |= RenderMaterial::FLAG_TWO_SIDED;
+            band(leaf.mat);
+            leaf.mesh = assets.acquireMesh(L.tree.leaves, key + ":" + std::to_string(li) + ":leaves");
+            leaf.drawM = drawM;
+            leaf.minM = L.minDistance;
+            parts.push_back(leaf);
+        }
+    }
+    return parts;
+}
+
+#ifdef RT_ENABLE_SCRIPTING
+// THE CITY'S RECIPE TREES (RT_STREET_RECIPES=1: the street trees and the parks' and yards'; Glenn, 2026-10-18:
+// "everything needs to be in proportion"): a recipe at an age grown from each of `seeds` at the city's bands (hero to
+// 24 m, mid to 60, light to 130, the last level out to `drawTo`), kept in the tree cache, as drawable parts and the
+// tree's height. Empty: no such recipe.
+struct CityRecipeKit { std::vector<RecipeTreePart> parts; double height = 9.0; };
+static std::vector<CityRecipeKit> cityRecipeKits(const std::string& recipe, const std::string& age,
+                                                 const std::vector<uint32_t>& seeds, const std::string& label, double drawTo,
+                                                 Renderer& renderer, AssetManager& assets, bool* fromCache = nullptr) {
+    std::vector<CityRecipeKit> kits;
+    std::string path;
+    const TreeRecipeBook& book = shippedTreeRecipes(&path);
+    const TreeRecipe* found = book.find(recipe);
+    if (!found) return kits;
+    const TreeRecipe rr = agedRecipe(*found, age);
+    RecipeLodBands bands;
+    bands.hero0 = 18; bands.hero1 = 24; bands.mid0 = 50; bands.mid1 = 60; bands.light0 = 110; bands.light1 = 130;
+    const uint64_t ckey = recipeSpeciesKey(path, recipe, "city|" + age, seeds, bands);
+    std::vector<std::vector<RecipeTreeLevel>> levels;
+    const bool hit = loadRecipeSpecies(ckey, levels) && levels.size() == seeds.size();
+    if (!hit) {
+        levels.clear();
+        BranchCardSet cards;
+        for (uint32_t sd : seeds) levels.push_back(growRecipeLevels(rr, sd, {}, bands, true, &cards));
+        if (ckey) saveRecipeSpecies(ckey, levels);
+    }
+    if (fromCache) *fromCache = hit;
+    RenderMaterial wood;
+    wood.albedo = Vec3(1, 1, 1);
+    wood.roughness = 1.0f;
+    BarkKind bk;
+    if (barkKindFromName(rr.bark, bk)) {
+        const BarkTextures bt = barkTextures(bk, 1u);
+        wood.albedoMap = renderer.uploadTexture(bt.albedo.width, bt.albedo.height, bt.albedo.channels, bt.albedo.pixels.data());
+        wood.normalMap = renderer.uploadTexture(bt.normal.width, bt.normal.height, bt.normal.channels, bt.normal.pixels.data());
+    }
+    RenderMaterial leafBase;
+    leafBase.albedo = Vec3(1, 1, 1);
+    std::map<int, std::pair<TextureHandle, TextureHandle>> leafTex;
+    for (std::size_t v = 0; v < levels.size(); ++v) {
+        CityRecipeKit k;
+        k.parts = recipeTreeParts(levels[v], label + ":" + std::to_string(v), wood, leafBase, leafTex, drawTo - 40.0, drawTo,
+                                  drawTo + 10.0, renderer, assets);
+        k.height = 0.0;
+        for (const RenderMesh* mm : {&levels[v].front().tree.branches, &levels[v].front().tree.leaves})
+            for (const Vertex& vx : mm->vertices) k.height = std::max(k.height, static_cast<double>(vx.position.y));
+        kits.push_back(std::move(k));
+    }
+    return kits;
+}
+#endif
+
 static void loadForest(const json& fj, const TerrainParams& terrain, const Noise& terrainNoise, World& world,
                        Renderer& renderer, AssetManager& assets, double placeDilate,
                        std::function<double(double, double)> drawnGround,
@@ -2074,6 +2180,8 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             }
             // (its age -- or each variant its own, dealt out by the mix's weights, the largest share first -- and its form)
             std::vector<std::string> variantAges(static_cast<std::size_t>(fs.variants), fs.age);
+            // (a species grown both ways, forest.h formByDensity: its ages dealt over each half alike)
+            const int dealN = fs.formByDensity ? std::max(1, fs.variants / 2) : fs.variants;
             if (!fs.ageMix.empty()) {
                 double sum = 0.0;
                 for (const auto& [a, w] : fs.ageMix) sum += std::max(0.0, w);
@@ -2081,19 +2189,25 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 std::vector<int> count(fs.ageMix.size(), 0);
                 int dealt = 0;
                 for (std::size_t k = 0; k < fs.ageMix.size() && sum > 0.0; ++k) {
-                    const double share = fs.variants * std::max(0.0, fs.ageMix[k].second) / sum;
+                    const double share = dealN * std::max(0.0, fs.ageMix[k].second) / sum;
                     count[k] = static_cast<int>(share);
                     dealt += count[k];
                     rem.emplace_back(share - count[k], k);
                 }
                 std::stable_sort(rem.begin(), rem.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
-                for (std::size_t q = 0; dealt < fs.variants && q < rem.size(); ++q, ++dealt) count[rem[q].second]++;
+                for (std::size_t q = 0; dealt < dealN && q < rem.size(); ++q, ++dealt) count[rem[q].second]++;
                 std::size_t v = 0;
                 for (std::size_t k = 0; k < fs.ageMix.size(); ++k)
-                    for (int c = 0; c < count[k] && v < variantAges.size(); ++c) variantAges[v++] = fs.ageMix[k].first;
+                    for (int c = 0; c < count[k] && v < static_cast<std::size_t>(dealN); ++c) variantAges[v++] = fs.ageMix[k].first;
+                for (std::size_t w = static_cast<std::size_t>(dealN); w < variantAges.size(); ++w)
+                    variantAges[w] = variantAges[w % static_cast<std::size_t>(dealN)];
             }
+            std::vector<std::string> variantForms(variantAges.size(), fs.form);
+            if (fs.formByDensity)
+                for (int v = 0; v < dealN && v < fs.variants; ++v) variantForms[static_cast<std::size_t>(v)].clear();   // (open-grown)
             std::vector<TreeRecipe> variantRecipes;
-            for (const std::string& a : variantAges) variantRecipes.push_back(formedRecipe(agedRecipe(*found, a), fs.form));
+            for (std::size_t v = 0; v < variantAges.size(); ++v)
+                variantRecipes.push_back(formedRecipe(agedRecipe(*found, variantAges[v]), variantForms[v]));
             const TreeRecipe* r = &variantRecipes.front();
             // its levels' distances: a tree's the forest's; a bush's within its own shorter reach
             const double reach = fs.understory && fp.understoryM > 0 ? fp.understoryM : fp.nearM;
@@ -2121,8 +2235,8 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             // bands were grown before by this build, else grown here and written for the next load)
             std::vector<uint32_t> seeds;
             for (int v = 0; v < fs.variants; ++v) seeds.push_back(fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17));
-            std::string agesKey = fs.form;
-            for (const std::string& a : variantAges) agesKey += "|" + a;
+            std::string agesKey;
+            for (std::size_t v = 0; v < variantAges.size(); ++v) agesKey += "|" + variantForms[v] + ":" + variantAges[v];
             const uint64_t cacheKey = recipeSpeciesKey(path, fs.recipe, agesKey, seeds, bands);
             std::vector<std::vector<RecipeTreeLevel>> cached, grown;
             const bool hit = loadRecipeSpecies(cacheKey, cached) && cached.size() == seeds.size();
@@ -2136,42 +2250,9 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                         : growRecipeLevels(variantRecipes[static_cast<std::size_t>(v)], seed, {}, bands, true, &branchCards);
                 if (!hit && cacheKey) grown.push_back(levels);
                 const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
-                for (std::size_t li = 0; li < levels.size(); ++li) {
-                    RecipeTreeLevel& L = levels[li];
-                    const bool last = li + 1 == levels.size();
-                    auto band = [&](RenderMaterial& m) {
-                        m.flags |= RenderMaterial::FLAG_LOD_BAND;
-                        m.lodIn0 = L.in0; m.lodIn1 = L.in1;
-                        m.lodOut0 = last ? static_cast<float>(reach - reachFade) : L.out0;
-                        m.lodOut1 = last ? static_cast<float>(reach) : L.out1;
-                    };
-                    const double drawM = last ? reach + 10.0 : L.maxDistance;
-                    Part bark;
-                    bark.mat = wood;
-                    if (L.tree.barkBlend) bark.mat.flags |= RenderMaterial::FLAG_UV_BLEND;   // (a trunk zone's bark crossfades)
-                    band(bark.mat);
-                    bark.mesh = assets.acquireMesh(L.tree.branches, key + ":" + std::to_string(li) + ":bark");
-                    bark.drawM = drawM;
-                    bark.minM = L.minDistance;
-                    var.parts.push_back(bark);
-                    if (!L.tree.leaves.vertices.empty()) {
-                        auto it = leafTex.find(L.tree.foliage);
-                        if (it == leafTex.end())
-                            it = leafTex.emplace(L.tree.foliage, std::make_pair(uploadTex(L.atlas.albedo), uploadTex(L.atlas.normal))).first;
-                        Part leaf;
-                        leaf.mat = barkMat;
-                        leaf.mat.roughness = 0.7f;
-                        leaf.mat.albedoMap = it->second.first;
-                        leaf.mat.normalMap = it->second.second;
-                        leaf.mat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
-                        if (L.tree.foliage >= 1) leaf.mat.flags |= RenderMaterial::FLAG_TWO_SIDED;
-                        band(leaf.mat);
-                        leaf.mesh = assets.acquireMesh(L.tree.leaves, key + ":" + std::to_string(li) + ":leaves");
-                        leaf.drawM = drawM;
-                        leaf.minM = L.minDistance;
-                        var.parts.push_back(leaf);
-                    }
-                }
+                for (const RecipeTreePart& pt : recipeTreeParts(levels, key, wood, barkMat, leafTex, reach - reachFade, reach,
+                                                                reach + 10.0, renderer, assets))
+                    var.parts.push_back({pt.mesh, pt.mat, pt.drawM, pt.minM});
                 // the impostor's tree: the light level, measured as real_tree.h measures its own
                 const TreeMesh& lt = levels.back().tree;
                 RealTree& rt = var.tree;
@@ -6096,6 +6177,23 @@ bool LevelLoader::load(const std::string& path,
                              RenderMaterial barkMat, leafMat;
                              double height = 9.0; };   // the grown model's top, for what may stand over it
             std::vector<TreeKit> treeKits;
+            // ...or, RT_STREET_RECIPES=1, the recipe trees (cityRecipeKits): a park's mix -- oaks young and grown, a maple,
+            // a sakura, a birch, a young beech -- instanced by 280 m cell, each level a group, as the street trees are
+            const bool lotRecipes = std::getenv("RT_STREET_RECIPES") && std::string(std::getenv("RT_STREET_RECIPES")) == "1";
+            std::vector<CityRecipeKit> lotRecipeKits;
+            std::map<std::pair<int, int>, std::map<std::size_t, std::vector<Mat4>>> lotRecipeCells;
+#ifdef RT_ENABLE_SCRIPTING
+            if (lotRecipes) {
+                const std::pair<const char*, const char*> mix[] = {{"oak", "young"}, {"oak", "mature"}, {"maple", ""},
+                                                                   {"sakura", "mature"}, {"birch", ""}, {"beech", "young"}};
+                for (std::size_t m = 0; m < sizeof(mix) / sizeof(mix[0]); ++m) {
+                    std::vector<CityRecipeKit> k = cityRecipeKits(mix[m].first, mix[m].second, {0xF00Du + static_cast<uint32_t>(m) * 977u},
+                                                                  std::string("lotTree:recipe:") + mix[m].first + ":" + mix[m].second, 600.0,
+                                                                  renderer, assets);
+                    if (!k.empty()) lotRecipeKits.push_back(std::move(k.front()));
+                }
+            }
+#endif
             auto treeKit = [&](std::size_t variety) -> const TreeKit& {
                 while (treeKits.size() <= variety) {
                     const std::size_t i = treeKits.size();
@@ -6615,6 +6713,14 @@ bool LevelLoader::load(const std::string& path,
                     Vec3 tPos(px, 0, pz);
                     tPos.y = dressingGround ? dressingGround(tPos.x, tPos.z)
                                             : (entityGround ? entityGround(tPos.x, tPos.z) : 0.0);
+                    if (!lotRecipeKits.empty()) {   // (a recipe tree: an instance in its cell's group)
+                        const std::size_t ki = th % lotRecipeKits.size();
+                        const double h = lotRecipeKits[ki].height;
+                        if (lotRoad.overhead(tPos.x, tPos.z, tPos.y, tPos.y + h * scale, 0.3 * h * scale)) { ++lotTreesOnRoad; return; }
+                        lotRecipeCells[{static_cast<int>(std::floor(tPos.x / 280.0)), static_cast<int>(std::floor(tPos.z / 280.0))}][ki].push_back(
+                            Mat4::trs(tPos, Quat::fromAxisAngle(Vec3(0, 1, 0), (th % 628u) / 100.0), Vec3(scale, scale, scale)));
+                        return;
+                    }
                     const TreeKit& kit = treeKit(th % 3u);
                     // ...and never up through what is drawn over it (a track, a viaduct): see the street trees
                     if (lotRoad.overhead(tPos.x, tPos.z, tPos.y, tPos.y + kit.height * scale, 0.3 * kit.height * scale)) { ++lotTreesOnRoad; return; }
@@ -6752,6 +6858,33 @@ bool LevelLoader::load(const std::string& path,
                                     th >> 16);
                     }
                 }
+            }
+            {   // (the recipe lot trees: a group a cell, a kit and a level part)
+                std::size_t planted = 0, groups = 0;
+                for (auto& [cell, byKit] : lotRecipeCells)
+                    for (auto& [ki, xf] : byKit) {
+                        planted += xf.size();
+                        for (const RecipeTreePart& pt : lotRecipeKits[ki].parts) {
+                            InstanceGroup g;
+                            g.mesh = pt.mesh;
+                            g.material = pt.mat;
+                            g.transforms = xf;
+                            g.drawDistance = pt.drawM;
+                            g.minDistance = pt.minM;
+                            g.drawClass = engine::DrawClass::Scenery;
+                            g.renderLayer = engine::LayerFoliage;
+                            Vec3 cen(0, 0, 0);
+                            for (const Mat4& m : xf) cen = cen + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+                            cen = cen / static_cast<Real>(xf.size());
+                            Real spread = 0;
+                            for (const Mat4& m : xf) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
+                            g.boundsCenter = cen;
+                            g.boundsRadius = spread + lotRecipeKits[ki].height * 1.3;
+                            world.add<InstanceGroup>(world.create(), g);
+                            ++groups;
+                        }
+                    }
+                if (planted) LOG_INFO << "[trees] lot trees as recipe trees: " << planted << " in " << groups << " groups";
             }
             LOG_INFO << "[trees] scatter: " << treesOnPad << " on pad, "
                      << treesOffPad << " skipped (not placeable on their pad), "
@@ -7819,9 +7952,43 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<char> used(static_cast<std::size_t>(kKinds), 0);
                 for (const engine::StreetTree& st : fplan.trees) used[static_cast<std::size_t>(st.species) % used.size()] = 1;
                 auto streetHeight = streetTreeHeight;
+                // RECIPE STREET TREES (RT_STREET_RECIPES=1; Glenn, 2026-10-18: "everything needs to be in proportion" --
+                // the city's street trees as the island's forests grow, ADR-0196..0199): the kinds a recipe grows, at a
+                // street age (an oak or a beech young, ~10 m: three storeys), at their levels, banded out to the kerb's
+                // draw distance and kept in the tree cache; the kinds with none (the island's palms and flowering trees)
+                // stay real_tree.h's
+                const bool streetRecipes = std::getenv("RT_STREET_RECIPES") && std::string(std::getenv("RT_STREET_RECIPES")) == "1";
+                static const std::map<std::string, std::pair<std::string, std::string>> kStreetRecipe = {
+                    {"oak", {"oak", "young"}}, {"beech", {"beech", "young"}}, {"maple", {"maple", ""}},
+                    {"coconut_palm", {"coconut_palm", ""}}};
+                std::vector<std::vector<RecipeTreePart>> recipeKits(kits.size());
+                std::vector<double> recipeTall(kits.size(), 0.0);
                 for (int kd = 0; kd < kKinds; ++kd) {
                     if (!used[static_cast<std::size_t>(kd)]) continue;
                     const engine::StreetSpecies ss = static_cast<engine::StreetSpecies>(kd);
+#ifdef RT_ENABLE_SCRIPTING
+                    if (streetRecipes) {
+                        const auto mt = kStreetRecipe.find(engine::streetSpeciesName(ss));
+                        const uint32_t texSeed = 0x57EE7u + static_cast<uint32_t>(kd) * 7919u;
+                        std::vector<uint32_t> seeds;
+                        for (int vr = 0; vr < kVariants; ++vr) seeds.push_back(texSeed + static_cast<uint32_t>(vr) * 104729u);
+                        bool hit = false;
+                        std::vector<CityRecipeKit> rk;
+                        if (mt != kStreetRecipe.end())
+                            rk = cityRecipeKits(mt->second.first, mt->second.second, seeds,
+                                                std::string("streetTree:recipe:") + engine::streetSpeciesName(ss), kerbDist, renderer, assets, &hit);
+                        if (!rk.empty()) {
+                            for (int vr = 0; vr < kVariants; ++vr) {
+                                const std::size_t ki = static_cast<std::size_t>(kd * kVariants + vr);
+                                recipeKits[ki] = rk[static_cast<std::size_t>(vr)].parts;
+                                recipeTall[ki] = rk[static_cast<std::size_t>(vr)].height;
+                            }
+                            LOG_INFO << "[furniture] street " << engine::streetSpeciesName(ss) << ": the " << mt->second.first << " recipe"
+                                     << (mt->second.second.empty() ? "" : " (" + mt->second.second + ")") << (hit ? ", from the tree cache" : ", grown");
+                            continue;
+                        }
+                    }
+#endif
                     engine::RealSpecies rs = engine::RealSpecies::Maple;
                     if (!engine::realSpeciesFromName(engine::streetSpeciesName(ss), rs))
                         LOG_WARN << "[furniture] no tree model for street species " << engine::streetSpeciesName(ss) << ": a maple stands in";
@@ -7857,6 +8024,21 @@ bool LevelLoader::load(const std::string& path,
                 }
                 for (auto& [key, byKit] : treeCells)
                     for (auto& [ki, xf] : byKit) {
+                        if (!recipeKits[static_cast<std::size_t>(ki)].empty()) {   // (a recipe kind: a group a level part)
+                            for (const RecipeTreePart& pt : recipeKits[static_cast<std::size_t>(ki)]) {
+                                InstanceGroup g;
+                                g.mesh = pt.mesh;
+                                g.material = pt.mat;
+                                g.transforms = xf;
+                                g.drawDistance = std::min(pt.drawM, kerbDist);
+                                g.minDistance = pt.minM;
+                                g.drawClass = engine::DrawClass::Scenery;
+                                g.renderLayer = engine::LayerFoliage;
+                                groupBounds(g, recipeTall[static_cast<std::size_t>(ki)] * 1.3);
+                                world.add<InstanceGroup>(world.create(), g);
+                            }
+                            continue;
+                        }
                         const StreetTreeKit& kit = kits[static_cast<std::size_t>(ki)];
                         const double reach = streetHeight(static_cast<engine::StreetSpecies>(ki / kVariants)) * 1.3;
                         InstanceGroup g;
