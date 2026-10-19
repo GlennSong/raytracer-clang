@@ -10711,3 +10711,23 @@ Glenn, 2026-10-18, of recipe_forest: "the forest seems pretty heavy. The fps is 
 - GPU frame (RT_GPU_TIMES, RT_VSYNC=0, each pose held): Treetops 36.7 -> 10.8 ms, Across the ridge 18.2 -> 7.0 ms.
 - Owed: the conifers' modelled branches at the mid and light levels (spruce mid bark 15k) and the oak's thin far
   levels (the impostors inherit them).
+
+## ADR-0196 — Real scale: the scale lab, and the oak and spruce at real sizes
+
+Glenn, 2026-10-18: "the trees need to be 2x to 4x taller than me. It doesn't quite feel like they're scaled right";
+"they also need to fit with [the buildings] so everything needs to be in proportion"; "Let's get the scale right";
+of the lab's box figure: "why not use one of the agent models?".
+
+- Measured: the player 1.8 m (eye 1.6); the city true to scale (storey 3.2 m, ground floor 4.5, door 2.7, lanes
+  3.2-3.6, sedan 1.45 m high, lamp 4.6, signal 5.6); the recipe trees at their default 6-10 m -- a real oak or spruce
+  is about three times that.
+- **scale_lab.json** (scale_block.lua): a street of the city's own things -- a house, a 4-, 6- and 8-storey building
+  grown by the architect (seeds rolled to those storeys), a sedan, a street lamp, the city's walkers, a 30 m pole banded
+  every metre -- and across it the trees, a row a species, an age a column.
+- **The standing person moved to the engine** (procgen/person.h buildStandingPerson + the outfits; citysim's
+  buildPersonMesh forwards to it) and Lua `mesh.person{swing, outfit}` (origin at the feet).
+- **The oak's ages re-based on real sizes**: young 10 m, mature 21 m (now a grown crown, colonize 3), old 25 x 31 m,
+  ancient 28 x 38 m. **The spruce's**: young 9.5, mature 25.6, old 34, ancient 40 m (iterations raised: the grammar's
+  38 had capped the whorls), trunks girthier.
+- Not yet: the default (no age) still grows the base recipe, the young size -- the forests and the lab rows use it;
+  the other species; forest-grown forms (tall clear boles in a stand).

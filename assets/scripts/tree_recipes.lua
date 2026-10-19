@@ -90,9 +90,19 @@ tree_recipes = {
     -- limbs spreading and sagging lower, crooked, and some dead; an ancient one a short massive bole under a crown
     -- twice as wide as it is tall
     ages = {
-      young   = { axiom = "T(0.8,2)", vars = { tip = 0.15 }, sprig = 0.6,
-                  params = { radiusScale = 1.3, flare = {0.2, 0.4}, rootCount = 3, lobeDepth = 0.06, deadChance = 0 } },
-      mature  = { params = { deadChance = 0.03 } },
+      -- (REAL SIZES -- Glenn, 2026-10-18, against the scale lab's street: "Let's get the scale right": an open-grown
+      -- English oak is ~9 m at thirty years, ~20 m mature, ~24 m old and broad, ~26 m and twice as wide ancient; the
+      -- city's storey is 3.2 m, so a mature oak tops a five-storey walk-up)
+      young   = { axiom = "T(1.9,2)", vars = { crown = 0.85, pitch = {36, 50} }, sprig = 1.2,
+                  params = { radiusScale = 2.0, deadChance = 0.01 } },
+      mature  = { axiom = "T(1.5,2)", iterations = 12, vars = { tip = 0.9, crown = 1.2, pitch = {44, 58}, side = {0.82, 0.87} },
+                  sprig = 1.8, near_leaves = 12000, near_twig_tris = 14000,
+                  params = { colonize = 3, colonizePoints = 1500, colonizeStep = 0.50, colonizeShell = 0.35, lobeOverlap = 0.15,
+                             crownRadius = 7.5, crownBottom = 4.0, crownTop = 18.0, lobeSize = 0.32,
+                             crownWiden = 1.2, crownHeighten = 1.1, pipeExponent = 2.6,
+                             radiusScale = 2.5, droop = {0.08, 0.14}, crookChance = {0.2, 0.35}, flare = {0.4, 0.6},
+                             lobeDepth = {0.14, 0.22}, rootSpread = {3.0, 4.0}, deadChance = 0.03, trunkZone = 0.11,
+                             trunkZoneTris = 3200 } },
       -- OLD and ANCIENT: the grammar grows only the SCAFFOLD (a long $tip: the trunk and a few massive limbs), and the
       -- rest of the crown is grown TO ITS SHAPE (colonize: toward points in a dome round it, most in its outer shell)
       -- -- the inside open to the big limbs, the fine branching and the leaves out in the shell (Glenn: "skip the
@@ -100,7 +110,7 @@ tree_recipes = {
       old     = { axiom = "T(1.6,2)", iterations = 12, vars = { tip = 1.0, crown = 1.3, pitch = {50, 66}, side = {0.83, 0.88} },
                   sprig = 2.0, near_leaves = 14000, near_twig_tris = 16000,
                   params = { colonize = 3, colonizePoints = 1500, colonizeStep = 0.50, colonizeShell = 0.35, lobeOverlap = 0.15,
-                             crownRadius = 7.0, crownBottom = 2.8, crownTop = 12.5, lobeSize = 0.30,
+                             crownRadius = 10.0, crownBottom = 3.8, crownTop = 21.5, lobeSize = 0.30,
                              crownWiden = 1.25, crownHeighten = 1.1, pipeExponent = 2.7,
                              radiusScale = 4.5, droop = {0.10, 0.18}, crookChance = {0.25, 0.40}, flare = {0.45, 0.65},
                              lobeDepth = {0.18, 0.28}, rootSpread = {3.5, 4.5}, deadChance = 0.06, trunkZone = 0.12,
@@ -109,7 +119,7 @@ tree_recipes = {
                                                                side = {0.85, 0.90}, side2 = {0.82, 0.88} },
                   sprig = 2.6, near_leaves = 20000, near_twig_tris = 22000,
                   params = { colonize = 3, colonizePoints = 3200, colonizeStep = 0.55, colonizeShell = 0.30, lobeOverlap = 0.15,
-                             crownRadius = 12.5, crownBottom = 3.0, crownTop = 18.0, lobeSize = 0.26,
+                             crownRadius = 15.0, crownBottom = 3.5, crownTop = 23.0, lobeSize = 0.26,
                              crownWiden = 1.3, crownHeighten = 1.05, pipeExponent = 2.7,
                              radiusScale = 6.0, droop = {0.12, 0.20}, meander = {0.04, 0.08}, crookChance = {0.10, 0.18}, flare = {0.55, 0.75},
                              lobes = {6, 9}, lobeDepth = {0.22, 0.34}, rootSpread = {3.0, 4.0}, rootCount = 6,
@@ -201,15 +211,19 @@ tree_recipes = {
     -- AGES: a young spruce a narrow spire of few whorls; an old one tall and broad, full to the ground, its lower
     -- branches long and sweeping, the odd dead one low down
     ages = {
-      young   = { vars = { whorls = {12, 18}, len = {0.26, 0.32}, reach = {1.3, 1.6} }, params = { radiusScale = 1.0 } },
-      mature  = { params = { deadChance = 0.02 } },
-      old     = { vars = { whorls = {40, 48}, len = {0.48, 0.56}, reach = {2.2, 2.6} }, sprig = 2.6, near_leaves = 22000,
+      -- (REAL SIZES -- Glenn, 2026-10-18: "Let's get the scale right": a Norway spruce is ~8 m at twenty years,
+      -- ~25 m mature -- an eight-storey office -- and 32-40 m old, its crown staying narrow: ~8 m across at 25 m)
+      young   = { vars = { whorls = {20, 24}, len = {0.40, 0.45}, reach = {1.4, 1.7} }, params = { radiusScale = 1.1 } },
+      mature  = { iterations = 62, vars = { whorls = {50, 56}, len = {0.58, 0.64}, reach = {1.3, 1.6} }, sprig = 2.2,
+                  near_leaves = 20000, near_twig_tris = 11000, params = { radiusScale = 3.0, droop = {0.08, 0.14}, deadChance = 0.03,
+                                                     trunkZoneTris = 2800 } },
+      old     = { iterations = 70, vars = { whorls = {58, 64}, len = {0.70, 0.76}, reach = {1.6, 1.9} }, sprig = 2.6, near_leaves = 22000,
                   near_twig_tris = 12000,
-                  params = { radiusScale = 2.5, droop = {0.10, 0.16}, flare = 0.9, rootSpread = 2.6, deadChance = 0.05,
+                  params = { radiusScale = 4.0, droop = {0.10, 0.16}, flare = 0.9, rootSpread = 2.6, deadChance = 0.05,
                              trunkZoneTris = 3000 } },
-      ancient = { vars = { whorls = {50, 58}, len = {0.56, 0.64}, reach = {2.6, 3.0} }, sprig = 3.4, near_leaves = 26000,
+      ancient = { iterations = 76, vars = { whorls = {64, 70}, len = {0.80, 0.86}, reach = {1.8, 2.2} }, sprig = 3.4, near_leaves = 26000,
                   near_twig_tris = 14000,
-                  params = { radiusScale = 3.6, droop = {0.12, 0.18}, flare = 1.1, rootSpread = 3.0, deadChance = 0.08,
+                  params = { radiusScale = 5.5, droop = {0.12, 0.18}, flare = 1.1, rootSpread = 3.0, deadChance = 0.08,
                              trunkZoneTris = 3600, barkNoise = 0.07 } },
     },
     bark = "plated",

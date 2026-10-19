@@ -1,0 +1,254 @@
+{
+  "version": 1,
+  "watch_scripts": true,
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.45,
+        0.62,
+        -0.4
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.88
+      ],
+      "intensity": 7.0,
+      "castsShadow": true
+    },
+    "exposure": 0.6,
+    "ambientMultiplier": 0.7
+  },
+  "player": {
+    "position": [
+      0,
+      1.8,
+      10
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.6
+    }
+  },
+  "terrain": {
+    "size": 480,
+    "resolution": 256,
+    "heightScale": 0.04,
+    "noiseScale": 0.02,
+    "octaves": 1,
+    "seed": 3,
+    "material": {
+      "albedo": [
+        1,
+        1,
+        1
+      ],
+      "roughness": 1.0,
+      "surface": "terrain"
+    },
+    "groundCover": {
+      "dirtPatches": 0.15,
+      "seed": 5
+    }
+  },
+  "name": "scale_lab",
+  "_note": "THE SCALE LAB (Glenn, 2026-10-18: \"everything needs to be in proportion to each other ... Let's get the scale right\"): the city's own things at their own sizes along a street (scale_block.lua: a house, a 4-, 6- and 8-storey building, a sedan, a street lamp, a 1.8 m person, a 30 m pole banded every metre, red every 5) and, across it, the recipe trees a row a species, an age a column (young, mature, old, ancient). Edit the recipes and the level reloads.",
+  "entities": [
+    {
+      "id": 1,
+      "name": "scale_block",
+      "shape": "script",
+      "file": "scale_block.lua",
+      "seed": 1,
+      "opts": {}
+    },
+    {
+      "id": 2,
+      "name": "oak_young",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        30.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 3,
+      "name": "oak_mature",
+      "shape": "tree",
+      "position": [
+        30.0,
+        0,
+        30.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 4,
+      "name": "oak_old",
+      "shape": "tree",
+      "position": [
+        72.0,
+        0,
+        30.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 5,
+      "name": "oak_ancient",
+      "shape": "tree",
+      "position": [
+        128.0,
+        0,
+        30.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "ancient"
+      }
+    },
+    {
+      "id": 6,
+      "name": "spruce_young",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        80.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 7,
+      "name": "spruce_mature",
+      "shape": "tree",
+      "position": [
+        30.0,
+        0,
+        80.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 8,
+      "name": "spruce_old",
+      "shape": "tree",
+      "position": [
+        72.0,
+        0,
+        80.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 9,
+      "name": "spruce_ancient",
+      "shape": "tree",
+      "position": [
+        128.0,
+        0,
+        80.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "ancient"
+      }
+    },
+    {
+      "id": 10,
+      "name": "sakura_young",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 11,
+      "name": "sakura_mature",
+      "shape": "tree",
+      "position": [
+        30.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 12,
+      "name": "sakura_old",
+      "shape": "tree",
+      "position": [
+        72.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 13,
+      "name": "sakura_ancient",
+      "shape": "tree",
+      "position": [
+        128.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "ancient"
+      }
+    }
+  ]
+}

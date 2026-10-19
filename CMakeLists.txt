@@ -97,6 +97,7 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/car_mesh.cpp
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
+    src/engine/procgen/person.cpp
     src/engine/procgen/vehicle/train_mesh.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp

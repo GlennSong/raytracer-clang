@@ -12,6 +12,7 @@
 #include "../procgen/vehicle_mesh.h"
 #include "../procgen/vehicle/car_mesh.h"
 #include "../procgen/vehicle/occupant.h"
+#include "../procgen/person.h"
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
@@ -520,6 +521,22 @@ int l_mesh_occupant(lua_State* L) {
         readColor(L, 1, "skin", &p.skin);
     }
     pushMesh(L, std::make_shared<RenderMesh>(buildSeatedOccupant(p)));
+    return 1;
+}
+
+// mesh.person{ swing = radians, outfit = n } -> Mesh
+// A STANDING person (procgen/person.h: the city's walkers' body, 1.8 m), its ORIGIN AT ITS FEET (stand it on the
+// ground), facing +Z -- a scale reference anywhere (scale_block.lua).
+int l_mesh_person(lua_State* L) {
+    Real swing = 0;
+    int outfit = 0;
+    if (lua_istable(L, 1)) {
+        swing = static_cast<Real>(optField(L, 1, "swing", 0.0));
+        outfit = static_cast<int>(optField(L, 1, "outfit", 0.0));
+    }
+    RenderMesh m = buildStandingPerson(swing, outfit);
+    for (Vertex& v : m.vertices) v.position.y += 0.9;
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(m)));
     return 1;
 }
 
@@ -4100,6 +4117,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"car_shell", l_mesh_car_shell},
         {"car", l_mesh_car},
         {"occupant", l_mesh_occupant},
+        {"person", l_mesh_person},
         {"merge", l_mesh_merge},
         {"lathe", l_mesh_lathe},
         {"translate", l_mesh_translate},
