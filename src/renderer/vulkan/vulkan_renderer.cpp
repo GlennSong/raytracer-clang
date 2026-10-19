@@ -193,6 +193,10 @@ struct GlobalsUBO {
     float    viewerBoxA[4];
     float    viewerBoxB[4];
     float    glassMode[4];
+    // Terrain normal map (set 0 binding 5, ADR-0205): xy world origin, z 1/extent, w enabled; and x the camera distance
+    // it starts blending in at, y 1/(the blend's length)
+    float    terrainNormal[4];
+    float    terrainNormal2[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -668,6 +672,10 @@ struct VulkanRenderer::Impl {
     // enabled flag gates the lookup, so the default's content never matters.
     VkImageView horizonView = VK_NULL_HANDLE;
     void updateGlobalHorizonDescriptor();
+    // Terrain normal map (set 0 binding 5, ADR-0205; the mipped material sampler, repeat -- the shader keeps to the
+    // map's square). Default texture when none is bound, gated by the UBO's flag.
+    VkImageView terrainNormalView = VK_NULL_HANDLE;
+    void updateGlobalTerrainNormalDescriptor();
 
     // Split-sum BRDF integration LUT (set 0 binding 3), baked once at init.
     VkImage brdfLutImage = VK_NULL_HANDLE;
@@ -993,7 +1001,8 @@ struct VulkanRenderer::Impl {
     std::vector<RetiredTexture> retiredTextures;
     void collectRetired(bool all);
 
-    bool createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h, GpuTexture& out);
+    bool createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h, GpuTexture& out,
+                          VkFormat format = VK_FORMAT_R8G8B8A8_UNORM, uint32_t bytesPerPixel = 4);
     void transitionImageLayout(VkCommandBuffer cmd, VkImage image,
                                VkImageLayout from, VkImageLayout to);
     void destroyTexture(GpuTexture& t);
@@ -3561,7 +3570,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3582,6 +3591,10 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[5].binding = 5;   // terrain normal map (ADR-0205)
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -3608,8 +3621,8 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 2> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 4;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + terrain normals
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 5;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -3707,6 +3720,25 @@ void VulkanRenderer::Impl::updateGlobalEnvDescriptor() {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = descriptorSets[i];
         write.dstBinding = 2;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+}
+
+void VulkanRenderer::Impl::updateGlobalTerrainNormalDescriptor() {
+    VkImageView view = terrainNormalView ? terrainNormalView : defaultTexture.view;
+    if (!view || !textureSampler) return;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorImageInfo img{};
+        img.sampler = textureSampler;   // linear, mipped: a far slope reads its mips, not one aliased texel
+        img.imageView = view;
+        img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = descriptorSets[i];
+        write.dstBinding = 5;
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         write.descriptorCount = 1;
         write.pImageInfo = &img;
@@ -4613,8 +4645,9 @@ void VulkanRenderer::Impl::transitionImageLayout(VkCommandBuffer cmd, VkImage im
 }
 
 bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                            GpuTexture& out) {
-    VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * 4;
+                                            GpuTexture& out, VkFormat format, uint32_t bytesPerPixel) {
+    // (`format` another 8-bit UNORM layout of `bytesPerPixel` -- R8G8 for a two-channel map; every one blits)
+    VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * bytesPerPixel;
     // Into the upload queue: staged now, copied and mip-blitted with the batch.
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceSize stagingOffset = 0;
@@ -4631,7 +4664,7 @@ bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uin
     image.extent = {w, h, 1};
     image.mipLevels = mipLevels;
     image.arrayLayers = 1;
-    image.format = VK_FORMAT_R8G8B8A8_UNORM;   // matches Metal's RGBA8Unorm (no sRGB decode)
+    image.format = format;   // RGBA8: matches Metal's RGBA8Unorm (no sRGB decode)
     image.tiling = VK_IMAGE_TILING_OPTIMAL;
     image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     // TRANSFER_SRC too: each mip is the blit source for the next.
@@ -4729,7 +4762,7 @@ bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uin
     view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view.image = out.image;
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view.format = VK_FORMAT_R8G8B8A8_UNORM;
+    view.format = format;
     view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     view.subresourceRange.levelCount = mipLevels;
     view.subresourceRange.layerCount = 1;
@@ -4797,6 +4830,7 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         LOG_ERROR("[vulkan] default texture creation failed");
         return false;
     }
+    updateGlobalTerrainNormalDescriptor();   // (binding 5 needs a view before the first frame: the default's)
     return true;
 }
 
@@ -6469,7 +6503,14 @@ BoundingSphere VulkanRenderer::getMeshBounds(MeshHandle handle) const {
 TextureHandle VulkanRenderer::uploadTexture(int width, int height, int channels,
                                             const uint8_t* data) {
     GpuTexture tex;
-    if (impl->device && data && width > 0 && height > 0) {
+    if (impl->device && data && width > 0 && height > 0 && channels == 2) {
+        // two channels stay two (a normal's x and z: the terrain normal map, ADR-0205): half the memory of RGBA
+        if (!impl->createImageRGBA8(data, static_cast<uint32_t>(width), static_cast<uint32_t>(height), tex,
+                                    VK_FORMAT_R8G8_UNORM, 2)) {
+            LOG_ERROR("[vulkan] uploadTexture (RG8) failed");
+            tex = GpuTexture{};
+        }
+    } else if (impl->device && data && width > 0 && height > 0) {
         // Expand to RGBA8 (the engine hands us 1..4 channels; the GPU image is
         // always 4-channel to match the Metal backend's upload path).
         std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4, 255);
@@ -6587,6 +6628,25 @@ void VulkanRenderer::setTerrainHorizon(TextureHandle map, float originX, float o
     impl->cpuGlobals.terrainHorizon2[2] = 0.0f;
     impl->cpuGlobals.terrainHorizon2[3] = 0.0f;
     impl->updateGlobalHorizonDescriptor();
+}
+
+void VulkanRenderer::setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent,
+                                         float fadeStart, float fadeEnd) {
+    GpuTexture* t = impl->textures.get(map);
+    const bool on = t && t->view && extent > 0.0f;
+    if ((on ? t->view : VK_NULL_HANDLE) != impl->terrainNormalView) {
+        if (impl->device) vkDeviceWaitIdle(impl->device);   // descriptor in-use safety
+        impl->terrainNormalView = on ? t->view : VK_NULL_HANDLE;
+        impl->updateGlobalTerrainNormalDescriptor();
+    }
+    impl->cpuGlobals.terrainNormal[0] = originX;
+    impl->cpuGlobals.terrainNormal[1] = originZ;
+    impl->cpuGlobals.terrainNormal[2] = on ? 1.0f / extent : 0.0f;
+    impl->cpuGlobals.terrainNormal[3] = on ? 1.0f : 0.0f;
+    impl->cpuGlobals.terrainNormal2[0] = fadeStart;
+    impl->cpuGlobals.terrainNormal2[1] = 1.0f / std::max(1.0f, fadeEnd - fadeStart);
+    impl->cpuGlobals.terrainNormal2[2] = 0.0f;
+    impl->cpuGlobals.terrainNormal2[3] = 0.0f;
 }
 
 void VulkanRenderer::removeTexture(TextureHandle handle) {
@@ -7014,7 +7074,7 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     for (uint32_t k = 0; k < item.textures.size(); ++k)
         if (item.textures[k].valid()) textureFlags |= (1u << k);
     item.push.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
-    item.push.surfaceFlags[1] = material.flags;
+    item.push.surfaceFlags[1] = material.flags | RenderMaterial::FLAG_TERRAIN;
     item.push.surfaceFlags[2] = textureFlags;
     float one = 1.0f;
     std::memcpy(&item.push.surfaceFlags[3], &one, sizeof(float));   // opaque

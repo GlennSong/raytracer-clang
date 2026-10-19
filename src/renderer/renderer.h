@@ -155,6 +155,9 @@ struct RenderMaterial {
     // camera, mesh.frag picks and blends the baked views nearest the camera's direction round the tree and lights
     // them by their normals. Casts no shadow (FLAG_SHADOW_ONLY crossed cards do). Vulkan.
     static constexpr uint32_t FLAG_IMPOSTOR_VIEWS = 1u << 24;
+    // FLAG_TERRAIN (bit 25): the CDLOD ground, set by the backends' drawTerrain (never by a material) -- the lit pass
+    // reads the terrain normal map for it (setTerrainNormalMap). Vulkan.
+    static constexpr uint32_t FLAG_TERRAIN = 1u << 25;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
@@ -791,6 +794,8 @@ public:
     virtual MeshHandle uploadPrepared(PreparedMesh&& mesh) { return uploadMesh(mesh.raw); }
     virtual void removeMesh(MeshHandle handle) = 0;
     virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
+    // (`channels` 2 keeps two channels on the GPU where the backend can: a normal's x and z, Vulkan's RG8; the others
+    // read the same .rg from RGBA)
     virtual TextureHandle uploadTexture(int width, int height, int channels,
                                         const uint8_t* data) = 0;
     // Float (HDR) texture upload — e.g. equirectangular environment maps decoded
@@ -815,6 +820,12 @@ public:
     virtual void setTerrainHorizon(TextureHandle /*map*/, float /*originX*/,
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}
+    // TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_normal_map.h): a two-channel texture of the ground's normal
+    // (x, z; 0..1 for -1..1) over the square [originX, originX + extent)^2. The terrain (FLAG_TERRAIN) lights by it
+    // instead of its vertex normals beyond the camera distance where its mesh grows coarser than a texel, blended in
+    // over [fadeStart, fadeEnd]. An invalid handle switches it off. No-op by default (Vulkan).
+    virtual void setTerrainNormalMap(TextureHandle /*map*/, float /*originX*/, float /*originZ*/, float /*extent*/,
+                                     float /*fadeStart*/, float /*fadeEnd*/) {}
     virtual RenderStats getRenderStats() const = 0;
     // The newest occlusion depth the GPU has finished (engine/occlusion.h), or null where the
     // backend has none (the caller then culls by frustum only).

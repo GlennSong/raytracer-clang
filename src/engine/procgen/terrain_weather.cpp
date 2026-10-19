@@ -115,6 +115,8 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
             sp.diffusion = 0.0;
             sp.rescale = false;
             sp.seaLevel = sea;
+            sp.stochastic = w.refineStochasticFrom > 0 && n - 1 >= w.refineStochasticFrom;
+            sp.seed = seed + static_cast<uint32_t>(level);
             const std::vector<float> zero(u.h.size(), 0.0f);
             // the drain cuts hard in the mountains and hardly at all on the low ground: at full strength
             // everywhere it sawed smooth-walled slot canyons into the foothills
@@ -191,6 +193,7 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
         p.refineSlopeDamp = r.value("slopeDamp", p.refineSlopeDamp);
         p.refineIncise = r.value("incise", p.refineIncise);
         p.refineInciseIterations = r.value("iterations", p.refineInciseIterations);
+        p.refineStochasticFrom = r.value("stochasticFrom", p.refineStochasticFrom);
     }
     const nlohmann::json g = w.value("grow", nlohmann::json::object());
     p.growRes = g.value("res", p.growRes);

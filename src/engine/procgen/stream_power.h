@@ -15,6 +15,7 @@
 
 #include "erosion.h"   // Heightmap
 
+#include <cstdint>
 #include <vector>
 
 namespace engine {
@@ -32,15 +33,24 @@ struct StreamPowerParams {
     double seaLevel = -1e30;   // cells below it (initially) are sea: fixed outlets
     bool   rescale = true;     // map the result onto [targetLo, targetHi] (unset: the land's starting range)
     double targetLo = 0.0, targetHi = -1.0;
+    // STOCHASTIC ROUTING (ADR-0206; Glenn's 8192 island ground: "gullies in parallel diagonal lines"): a cell drains
+    // to one of its downhill neighbours drawn in proportion to the slope toward it, not always the steepest. On an
+    // even slope between two of the grid's eight directions the steepest is the same one for every cell, and the
+    // drainage cut parallel channels along it; drawn, the flow lines wander about the true downhill direction and
+    // follow it on average. Seeded: the same ground every bake. Off by default (every existing ground as it was).
+    bool   stochastic = false;
+    uint32_t seed = 0;
 };
 
 // Grow `hm` under `uplift` (n x n, 0..1; the grid's edge and the sea are the outlets, held fixed).
 // Returns the number of iterations run.
 // `erodibility` (optional, n x n, around 1): K's multiplier per cell -- softer and harder rock, so the
 // valleys do not all come out alike.
-// `areaOut` (optional) gets the last iteration's drainage area per cell (m^2).
+// `areaOut` (optional) gets the last iteration's drainage area per cell (m^2), `receiversOut` its receivers (the cell
+// each drains to; -1 at an outlet).
 int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const StreamPowerParams& p,
-                     const std::vector<float>* erodibility = nullptr, std::vector<float>* areaOut = nullptr);
+                     const std::vector<float>* erodibility = nullptr, std::vector<float>* areaOut = nullptr,
+                     std::vector<int32_t>* receiversOut = nullptr);
 
 }  // namespace engine
 

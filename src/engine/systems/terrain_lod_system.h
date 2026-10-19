@@ -17,6 +17,7 @@ namespace engine {
 
 class PhysicsSystem;
 class LodMeshStream;        // procgen/terrain_lod.h
+struct TerrainNormalMap;    // procgen/terrain_normal_map.h
 struct TerrainGenInputs;    // per-revision recipe snapshot (terrain_lod_system.cpp)
 
 // Drives CDLOD heightfield terrain (ADR-0036). Each frame: read the level's
@@ -66,6 +67,10 @@ private:
     std::shared_ptr<const TerrainGenInputs> genInputs_;
     std::shared_ptr<LodMeshStream> stream_;
     static constexpr std::size_t kMaxInFlight = 16;
+
+    // The terrain normal map on the GPU (ADR-0205): uploaded when the config's map changes, released with the level
+    const TerrainNormalMap* normalMapShown_ = nullptr;
+    TextureHandle normalMapTex_;
 
     PhysicsSystem* physics_ = nullptr;
     std::unordered_map<int64_t, PhysicsBodyId> colliders_;   // leaf key -> body

@@ -8,7 +8,7 @@
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec3 inTangent;   // morph-target position for terrain
+layout(location = 2) in vec3 inTangent;   // the morph target: y its height, x and z the coarser level's normal
 layout(location = 3) in vec2 inTexcoord;
 layout(location = 4) in vec3 inColor;
 
@@ -61,10 +61,12 @@ void main() {
     float dist = distance(g.cameraPosition.xyz, inPosition);
     float k = clamp((dist - pc.morphStart) / max(pc.morphEnd - pc.morphStart, 1e-3),
                     0.0, 1.0);
-    vec3 worldPos = mix(inPosition, inTangent, k);
+    vec3 worldPos = vec3(inPosition.x, mix(inPosition.y, inTangent.y, k), inPosition.z);
+    // ...and its normal toward the coarser level's (ADR-0204), so a tile meets its parent shading as the parent does
+    vec3 coarseN = vec3(inTangent.x, sqrt(max(0.0, 1.0 - inTangent.x * inTangent.x - inTangent.z * inTangent.z)), inTangent.z);
 
     outWorldPos = worldPos;
-    outWorldNormal = normalize(inNormal);
+    outWorldNormal = normalize(mix(normalize(inNormal), coarseN, k));
     outWorldTangent = vec3(1.0, 0.0, 0.0);   // terrain has no normal map
     outTexcoord = inTexcoord;
     outColor = inColor;

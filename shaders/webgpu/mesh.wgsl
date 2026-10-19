@@ -155,14 +155,19 @@ fn vs_shadow_instanced(
 }
 
 // CDLOD terrain (ADR-0036): identity model, world-space verts. `tangent` holds
-// the morph-target position (where this vertex collapses on the next-coarser
-// grid); mix toward it by camera distance so the node matches the neighbour LOD
+// the morph target: y the height this vertex collapses to on the next-coarser grid, x and z that grid's normal
+// (ADR-0204); mix toward it by camera distance so the node matches the neighbour LOD
 // before it switches, killing the popping seam. (Ported from lighting.metal.)
-fn terrainMorphPos(position : vec3<f32>, morphTarget : vec3<f32>) -> vec3<f32> {
+fn terrainMorphK(position : vec3<f32>) -> f32 {
   let dist = distance(position, g.cameraPosition.xyz);
-  let k = clamp((dist - d.terrainMorph.x) / max(d.terrainMorph.y - d.terrainMorph.x, 1e-3),
-                0.0, 1.0);
-  return mix(position, morphTarget, k);
+  return clamp((dist - d.terrainMorph.x) / max(d.terrainMorph.y - d.terrainMorph.x, 1e-3), 0.0, 1.0);
+}
+fn terrainMorphPos(position : vec3<f32>, morphTarget : vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(position.x, mix(position.y, morphTarget.y, terrainMorphK(position)), position.z);
+}
+fn terrainMorphNormal(position : vec3<f32>, normal : vec3<f32>, morphTarget : vec3<f32>) -> vec3<f32> {
+  let c = vec3<f32>(morphTarget.x, sqrt(max(0.0, 1.0 - morphTarget.x * morphTarget.x - morphTarget.z * morphTarget.z)), morphTarget.z);
+  return normalize(mix(normalize(normal), c, terrainMorphK(position)));
 }
 @vertex
 fn vs_terrain(
@@ -175,7 +180,7 @@ fn vs_terrain(
   var out : VSOut;
   let world = vec4<f32>(terrainMorphPos(position, tangent), 1.0);
   out.worldPos = world.xyz;
-  out.worldNormal = normalize(normal);
+  out.worldNormal = terrainMorphNormal(position, normal, tangent);
   out.worldTangent = vec3<f32>(0.0);   // terrain never normal-maps (tangent is morph)
   out.color = color;
   out.uv = texcoord;

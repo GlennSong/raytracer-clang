@@ -10864,3 +10864,36 @@ spruce/pine trees."
   it. The terrain minus `forest` now goes into the key (as the ground cache key already did, ADR-0113); a level
   without a forest keys exactly as before.
 - Test: test_scatter `a_forest_region_grows_its_own_mix_below_the_species_band`.
+
+## ADR-0204 — Terrain normals by level, morphed to the parent's
+
+Glenn (2026-10-19): the grassland "looks faceted"; and more rocky detail on the mountains.
+
+- **Cause found in a model, smaller in the game.** Baked CDLOD tiles took every vertex normal over +-2 m whatever the
+  level (ADR-0095: one span so the levels shade alike). On a far tile (16-64 m cells) each vertex took the tilt of
+  the bump it stood on and Gouraud spread it over the triangle: blotchy blocks in a hillshade model of the island's
+  ground (32 m mesh, 2 m normals). In the viewer the difference is small at the distances measured: tiles out to
+  ~2.5 km are 1-4 m, where 2 m was already the cell. It is a correctness fix for the far tiles, not the answer to the
+  faceting Glenn sees (still to locate).
+- **A vertex's normal is the drawn ground's MEAN slope over its own cell** (never under 2 m): exactly, the mean
+  heights along the square's edges, nine samples an edge (`bakedTileNormal`; per tile the edge samples are read once
+  along every grid column and row). Test: an 8 m tile's normals sit 0.07 deg off the hills under 1 m bumps (1.77 deg
+  over 2 m); a tile builds in 33 ms on a worker.
+- **The levels meet in the morph.** The morph target in the tangent slot only ever moved y (x, z were the vertex's
+  own): its x and z now carry the coarser level's normal (`packMorphTarget`), and terrain.vert (and the Metal and
+  WebGPU ports) blends the normal toward it with the height. A child's even vertices morph to exactly its parent's
+  normals (tested).
+- A/B: RT_TERRAIN_NORMALS=fixed (the 2 m span on every level).
+
+## ADR-0205 — The terrain normal map
+
+- **The far ground lights by a baked map of its own slope.** `bakeTerrainNormalMap` (procgen/terrain_normal_map.h)
+  samples the baked pyramid's drawn ground every half texel and stores each texel's mean slope over a two-texel
+  square (x, z of the normal in RG8). Texel max(2 m, world / 8192): the island's is 8192^2 at 2.44 m, 128 MB, baked in
+  2.3 s and cached beside the tiles (cache/terrain/<key>.nmap, keyed on the pyramid).
+- **Uploaded once, mipped** (`uploadTexture` with 2 channels is RG8 on Vulkan), at set 0 binding 5 with its origin,
+  scale and blend band in the globals (`setTerrainNormalMap`). mesh.frag blends from the vertex normal to the map's
+  over the half range before the first CDLOD level whose cell is a texel or more, for FLAG_TERRAIN
+  (bit 25, set by drawTerrain) -- world-space, so no tile edge shows.
+- **Seen:** the far mountains gain their gullies and ribs (island_8_weathered from Glenn's Weyby spot, 120 m up).
+- A/B: RT_TERRAIN_NORMAL_MAP=0. Owed: Metal and WebGPU (no binding there yet).

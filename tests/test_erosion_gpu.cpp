@@ -326,6 +326,49 @@ TEST_CASE(stream_power_grows_a_drained_relief_from_uplift) {
     CHECK(pits < land / 100);
 }
 
+// STOCHASTIC ROUTING (ADR-0206): on an even slope falling 15 deg off the grid's x axis, every cell's steepest neighbour
+// is the same (+x), so steepest-descent flow lines all run along the grid, 15 deg off the true fall -- the parallel
+// channels the island's 8192 ground cut. Drawn in proportion to slope, the lines wander but keep to the fall on
+// average; and the same seed gives the same lines.
+TEST_CASE(stochastic_routing_follows_the_true_fall_not_the_grid) {
+    const double a = 15.0 * 3.14159265358979 / 180.0;
+    auto run = [&](bool stochastic, std::vector<int32_t>& rec) {
+        Heightmap hm;
+        hm.n = 161;
+        hm.worldSize = 1600.0f;
+        hm.h.resize(static_cast<std::size_t>(hm.n) * hm.n);
+        for (int z = 0; z < hm.n; ++z)
+            for (int x = 0; x < hm.n; ++x)
+                hm.h[static_cast<std::size_t>(z) * hm.n + x] = static_cast<float>(400.0 - 0.3 * 10.0 * (x * std::cos(a) + z * std::sin(a)));
+        StreamPowerParams p;
+        p.iterations = 1;
+        p.K = 0.0;
+        p.diffusion = 0.0;
+        p.uplift = 0.0;
+        p.rescale = false;
+        p.stochastic = stochastic;
+        p.seed = 7;
+        streamPowerErode(hm, std::vector<float>(hm.h.size(), 0.0f), p, nullptr, nullptr, &rec);
+        // forty flow lines from the up-slope side, 80 steps each: their mean heading
+        double sx = 0, sz = 0;
+        for (int k = 0; k < 40; ++k) {
+            int c = (20 + 3 * k) * hm.n + 10;
+            const int x0 = c % hm.n, z0 = c / hm.n;
+            for (int s = 0; s < 80 && rec[static_cast<std::size_t>(c)] >= 0; ++s) c = rec[static_cast<std::size_t>(c)];
+            sx += c % hm.n - x0;
+            sz += c / hm.n - z0;
+        }
+        return std::atan2(sz, sx) * 180.0 / 3.14159265358979;
+    };
+    std::vector<int32_t> r0, r1, r2;
+    const double steepest = run(false, r0), drawn = run(true, r1);
+    run(true, r2);
+    std::printf("    [stochastic routing] flow heading %.1f deg steepest, %.1f deg drawn (the fall: 15)\n", steepest, drawn);
+    CHECK(std::fabs(steepest) < 1.0);
+    CHECK(std::fabs(drawn - 15.0) < 4.0);
+    CHECK(r1 == r2);
+}
+
 // (review) The weathered ground's one content key: what only paints or stands on the ground leaves it alone;
 // what shapes the ground changes it.
 TEST_CASE(weathered_ground_key_folds_what_shapes_the_ground_and_nothing_else) {

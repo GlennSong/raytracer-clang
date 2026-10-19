@@ -52,12 +52,15 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  viewerBoxB;         // xy its axis u (x, z), z half across it, w half up
     vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none),
                               // y the ceiling over the viewer (0: none)
+    vec4  terrainNormal;      // the terrain normal map (binding 5, ADR-0205): xy world origin, z 1/extent, w enabled
+    vec4  terrainNormal2;     // x the camera distance it blends in from, y 1/(the blend's length)
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF LUT
 layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
+layout(set = 0, binding = 5) uniform sampler2D terrainNormalMap;    // the ground's slope per texel (ADR-0205)
 
 const float ENV_PI = 3.14159265359;
 vec3 sampleEquirect(vec3 dir) {
@@ -663,6 +666,20 @@ float terrainShadow(vec3 worldPos, vec3 L) {
     return smoothstep(h - 0.012, h + 0.012, L.y);
 }
 
+// THE TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_normal_map.h): beyond the distance where the CDLOD mesh
+// grows coarser than a texel, the ground lights by the baked slope of what it covers rather than its vertices' (16-64
+// m apart on a far tile) -- the erosion's gullies and spurs on the far mountains. Blended in over one level's range,
+// so no tile edge shows; outside the map's square, the vertex normal.
+vec3 terrainMapNormal(vec3 worldPos, vec3 vertexN) {
+    if (g.terrainNormal.w < 0.5) return vertexN;
+    const vec2 uv = (worldPos.xz - g.terrainNormal.xy) * g.terrainNormal.z;
+    const vec2 t = texture(terrainNormalMap, uv).rg * 2.0 - 1.0;   // (uniform flow: a draw is terrain or not)
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vertexN;
+    const vec3 mapN = vec3(t.x, sqrt(max(1.0 - dot(t, t), 0.0)), t.y);
+    const float w = clamp((distance(worldPos, g.cameraPosition.xyz) - g.terrainNormal2.x) * g.terrainNormal2.y, 0.0, 1.0);
+    return normalize(mix(vertexN, mapN, w));
+}
+
 float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
     int count = g.counts.y;
     if (count <= 0) return 1.0;
@@ -931,10 +948,13 @@ void main() {
     }
     uint texFlags = pc.surfaceFlags.z;
     float ao = 1.0;
+    // the surface's normal: the vertices', or on the CDLOD ground (FLAG_TERRAIN, bit 25) far off, its normal map's
+    const vec3 geomN = (pc.surfaceFlags.y & (1u << 25)) != 0u ? terrainMapNormal(inWorldPos, normalize(inWorldNormal))
+                                                               : normalize(inWorldNormal);
     // TERRAIN LAYERS: the texture slots are the ground's layers, not the usual maps.
     const bool layered = pc.surfaceFlags.x == 19u;
     if (layered) {
-        albedo = terrainLayers(inColor, inTexcoord.x, inWorldPos, normalize(inWorldNormal));
+        albedo = terrainLayers(inColor, inTexcoord.x, inWorldPos, geomN);
         roughness = 0.95;
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }
@@ -1123,7 +1143,7 @@ void main() {
     if ((texFlags & 8u) != 0u) ao = texture(aoMap, inTexcoord).r;
     if ((texFlags & 16u) != 0u) emission *= texture(emissiveMap, inTexcoord).rgb;
 
-    vec3 N = normalize(inWorldNormal);
+    vec3 N = geomN;
     if (featNormal) N = featN;
     // FOLIAGE CARDS (Glenn, 2026-10-02: "grass and tree cards are noticeable as cards ... the lighting on them is
     // off"): a card lit by its own flat normal shows its orientation -- each blade or leaf plane a different shade,

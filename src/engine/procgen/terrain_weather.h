@@ -58,7 +58,9 @@ struct WeatherParams {
     double peakUplift = 1.0;
     // REFINE (ADR-0127): the grown grid doubled level by level to `res` -- upscale, blur, detail, drain.
     // "refine": { "detail" (m at 10 m cells), "roughness" (amplitude ~ cell^roughness), "wavelength" (cells),
-    //             "slopeDamp" (detail / (1 + k |grad|^2)), "incise" (stream-power K a level), "iterations" }
+    //             "slopeDamp" (detail / (1 + k |grad|^2)), "incise" (stream-power K a level), "iterations",
+    //             "stochasticFrom" (cells a side: the levels this fine and finer drain by stochastic routing, ADR-0206;
+    //             0 = none, so the coarser levels -- the ground a city was planned on -- stay as they were) }
     bool refine = false;
     double refineDetailM = 8.0;
     double refineRoughness = 0.8;
@@ -66,6 +68,7 @@ struct WeatherParams {
     double refineSlopeDamp = 1.5;
     double refineIncise = 2.0e-3;
     int refineInciseIterations = 10;
+    int refineStochasticFrom = 0;
 };
 
 WeatherParams weatherFromJson(const nlohmann::json& weather, const nlohmann::json& terrainBlock);

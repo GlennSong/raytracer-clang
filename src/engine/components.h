@@ -12,6 +12,7 @@
 #include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
+#include "procgen/terrain_normal_map.h"   // TerrainLodConfig::normalMap (ADR-0205)
 #include "world.h"
 #include <array>
 #include <unordered_map>
@@ -319,6 +320,8 @@ struct TerrainLodConfig {
     // gridRes are the pyramid's grid (bakedCdlodGeometry) and TerrainLodSystem draws its
     // stored tiles instead of evaluating `params` per vertex.
     std::shared_ptr<const pyramid::Pyramid> baked;
+    // ...and its slope per texel (ADR-0205): the far ground lights by it (TerrainLodSystem uploads it)
+    std::shared_ptr<const TerrainNormalMap> normalMap;
 };
 
 // The ears of the scene (ADR-0069): AudioSystem drives the AudioEngine

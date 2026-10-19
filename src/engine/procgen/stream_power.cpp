@@ -11,7 +11,7 @@
 namespace engine {
 
 int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const StreamPowerParams& p,
-                     const std::vector<float>* erodibility, std::vector<float>* areaOut) {
+                     const std::vector<float>* erodibility, std::vector<float>* areaOut, std::vector<int32_t>* receiversOut) {
     if (erodibility && erodibility->size() != hm.h.size()) erodibility = nullptr;
     const int n = hm.n;
     if (n < 3 || uplift.size() != hm.h.size()) return 0;
@@ -70,17 +70,33 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             }
         }
         // ...but a cell drains to its STEEPEST downhill neighbour on the filled surface where it has one (the
-        // flood's tree otherwise follows the queue's order across open slopes)
+        // flood's tree otherwise follows the queue's order across open slopes) -- or, stochastic, to one drawn in
+        // proportion to the slope toward it
         for (std::size_t i = 0; i < N; ++i) {
             if (outlet[i]) continue;
             const int cx = static_cast<int>(i % n), cz = static_cast<int>(i / n);
-            double best = 0.0;
+            double best = 0.0, sum = 0.0, s8[8] = {};
             for (int k = 0; k < 8; ++k) {
                 const int nx = cx + dx[k], nz = cz + dz[k];
                 if (nx < 0 || nz < 0 || nx >= n || nz >= n) continue;
                 const std::size_t nb = static_cast<std::size_t>(nz) * n + nx;
                 const double s = (hf[i] - hf[nb]) / dl[k];
+                if (s > 0.0) { s8[k] = s; sum += s; }
                 if (s > best) { best = s; rec[i] = static_cast<int32_t>(nb); rlen[i] = dl[k]; }
+            }
+            if (p.stochastic && sum > 0.0) {
+                uint32_t hsh = static_cast<uint32_t>(i) * 0x9E3779B1u ^ static_cast<uint32_t>(it) * 0x85EBCA77u ^ p.seed * 0xC2B2AE3Du;
+                hsh ^= hsh >> 16; hsh *= 0x7FEB352Du; hsh ^= hsh >> 15; hsh *= 0x846CA68Bu; hsh ^= hsh >> 16;
+                double roll = (hsh & 0xFFFFFFu) / 16777216.0 * sum;
+                for (int k = 0; k < 8; ++k) {
+                    if (s8[k] <= 0.0) continue;
+                    roll -= s8[k];
+                    if (roll <= 0.0 || k == 7) {
+                        rec[i] = static_cast<int32_t>(static_cast<std::size_t>(cz + dz[k]) * n + (cx + dx[k]));
+                        rlen[i] = dl[k];
+                        break;
+                    }
+                }
             }
         }
         // the order must put every receiver before its donors: rebuild it from the tree (donor lists, outlets
@@ -135,6 +151,7 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
     }
     for (std::size_t i = 0; i < N; ++i) hm.h[i] = static_cast<float>(h[i]);
     if (areaOut) areaOut->assign(area.begin(), area.end());
+    if (receiversOut) *receiversOut = rec;
     return it;
 }
 

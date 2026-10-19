@@ -1914,6 +1914,32 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }
+        // THE NORMAL MAP (ADR-0205): the drawn ground's slope per texel over the authored world, the far ground's
+        // shading -- a texel of max(2 m, the world / 8192), or the cdlod block's "normalTexel"; cached beside the tiles
+        {
+            const auto tn = std::chrono::steady_clock::now();
+            const double extent = 2.0 * cfg.worldHalf;
+            const double texel = std::max(c.value("normalTexel", std::max(2.0 * spec.cell0, extent / 8192.0)), extent / 16384.0);
+            const int size = std::max(16, static_cast<int>(std::ceil(extent / texel)));
+            uint64_t nkey = key;
+            const double np[] = {extent, static_cast<double>(size)};
+            nkey = engine::bundle::fnv1a(np, sizeof(np), nkey);
+            const char tag[] = "terrain-normal-map-v1";
+            nkey = engine::bundle::fnv1a(tag, sizeof(tag), nkey);
+            const std::string nPath = "cache/terrain/" + engine::bundle::hex16(nkey) + ".nmap";
+            auto nm = std::make_shared<TerrainNormalMap>();
+            const bool nHit = useCache && readTerrainNormalMap(nPath, nkey, *nm);
+            if (!nHit) {
+                const std::shared_ptr<const pyramid::Pyramid> pc = pyr;
+                *nm = bakeTerrainNormalMap([pc](double x, double z) { return pc->height(x, z); }, -cfg.worldHalf, -cfg.worldHalf,
+                                           extent, size);
+                if (useCache && !writeTerrainNormalMap(*nm, nkey, nPath)) LOG_WARN << "[terrain] normal map not cached: " << nPath;
+            }
+            cfg.normalMap = nm;
+            LOG_INFO << "[terrain] normal map: " << size << "^2 (" << nm->texel() << " m), " << nm->xz.size() / 1048576 << " MB, "
+                     << (nHit ? "read from " : "baked and cached as ") << nPath << " in "
+                     << std::chrono::duration<double>(std::chrono::steady_clock::now() - tn).count() << " s";
+        }
         const CdlodGeometry g = bakedCdlodGeometry(cfg.worldHalf);
         cfg.worldHalf = static_cast<float>(g.worldHalf);
         cfg.numLods = g.numLods;

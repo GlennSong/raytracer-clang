@@ -129,8 +129,17 @@ constexpr double kBakedTolerance = 0.05;   // m: a child is stored where the par
 pyramid::PyramidSpec bakedPyramidSpec(double authoredWorldHalf, double cell0 = kBakedCell0,
                                       double tolerance = kBakedTolerance);
 
-// A baked tile's render mesh: the tile's own samples, normals from the drawn surface at one
-// world-wide `normalEps`, the CDLOD morph target in `tangent` (as generateLodNodeMesh), and
+// THE MORPH TARGET in a terrain vertex's tangent slot (terrain.vert, and the Metal and WebGPU ports): its y is the
+// height the vertex collapses to on the next-coarser grid (its x and z don't move), its x and z the coarser level's
+// normal there (y up: sqrt(1 - x^2 - z^2)), blended in with the height
+inline Vec3 packMorphTarget(double height, const Vec3& coarseNormal) { return Vec3(coarseNormal.x, height, coarseNormal.z); }
+// a baked tile's vertex normal: the drawn surface's MEAN slope over the square +-span (exactly: its edges' mean heights,
+// nine samples an edge); the span is the tile's cell, never under `normalEps`
+Vec3 bakedTileNormal(const pyramid::Pyramid& p, double x, double z, double span);
+double bakedNormalSpan(double cell, double normalEps);
+
+// A baked tile's render mesh: the tile's own samples, normals from the drawn surface over its own cell (never under
+// `normalEps`), the CDLOD morph target -- the coarser level's height and normal -- in `tangent`, and
 // SKIRTS -- short walls hanging from the four edges (1 m + the tile's error) that hide the
 // crack where a stored leaf meets a finer neighbour.
 LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::HeightTile& t,

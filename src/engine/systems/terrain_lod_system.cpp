@@ -66,6 +66,29 @@ void TerrainLodSystem::render(FrameContext& ctx) {
     const TerrainLodConfig* cfg = nullptr;
     ctx.world.each<TerrainLodConfig>(
         [&](Entity, TerrainLodConfig& c) { if (!cfg) cfg = &c; });
+
+    // THE NORMAL MAP (ADR-0205): onto the GPU when the level's changes; off (and freed) when it has none.
+    // RT_TERRAIN_NORMAL_MAP=0: the vertex normals everywhere (A/B)
+    static const bool mapOff = [] { const char* e = std::getenv("RT_TERRAIN_NORMAL_MAP"); return e && e[0] == '0'; }();
+    const TerrainNormalMap* wantMap = cfg && cfg->normalMap && !cfg->normalMap->empty() && !mapOff ? cfg->normalMap.get() : nullptr;
+    if (wantMap != normalMapShown_) {
+        ctx.renderer.setTerrainNormalMap(TextureHandle{}, 0, 0, 0, 0, 0);
+        if (normalMapTex_.valid()) ctx.renderer.removeTexture(normalMapTex_);
+        normalMapTex_ = TextureHandle{};
+        normalMapShown_ = wantMap;
+        if (wantMap) {
+            normalMapTex_ = ctx.renderer.uploadTexture(wantMap->size, wantMap->size, 2, wantMap->xz.data());
+            // it takes over from the vertices where the mesh grows coarser than a texel: over the range before the
+            // first level whose cell is at least one
+            const std::vector<float> r = lodRangesForWorld(cfg->worldHalf, cfg->numLods, cfg->rangeFactor);
+            const double cell0 = cfg->baked ? cfg->baked->spec.cell0 : (2.0 * cfg->worldHalf) / (1 << std::max(0, cfg->numLods - 1)) / std::max(2, cfg->gridRes);
+            int L = 0;
+            while (L + 1 < cfg->numLods && cell0 * (1 << L) < wantMap->texel()) ++L;
+            const float end = L > 0 ? r[static_cast<std::size_t>(L - 1)] : 0.0f;
+            ctx.renderer.setTerrainNormalMap(normalMapTex_, static_cast<float>(wantMap->originX), static_cast<float>(wantMap->originZ),
+                                             static_cast<float>(wantMap->extent), 0.5f * end, end);
+        }
+    }
     if (!cfg) return;
 
     // RT_SYNC_CDLOD=1: the pre-streaming path — every cut node built inline on
@@ -106,8 +129,8 @@ void TerrainLodSystem::render(FrameContext& ctx) {
     float leafSize = (cfg->worldHalf * 2.0f) /
                      static_cast<float>(1 << std::max(0, cfg->numLods - 1));
     double normalEps = leafSize / static_cast<float>(std::max(2, cfg->gridRes));
-    // Baked (ADR-0095): normals of the drawn surface at 2 m, every level -- the 1 m leaf
-    // step would alias to glitter on the far tiles that share it.
+    // Baked (ADR-0095): normals of the drawn surface over each level's own cell, never under 2 m (the 1 m leaf step
+    // glitters); the levels meet by morphing to the coarser level's normal (ADR-0204, generateBakedTileMesh).
     if (cfg->baked) normalEps = 2.0 * cfg->baked->spec.cell0;
 
     ++frame_;

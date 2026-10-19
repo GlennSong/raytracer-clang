@@ -82,6 +82,7 @@ add_library(engine_core STATIC
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
     src/engine/procgen/terrain_horizon.cpp
+    src/engine/procgen/terrain_normal_map.cpp
     src/engine/procgen/terrain_lod.cpp
     src/engine/procgen/height_pyramid.cpp
     src/engine/procgen/lsystem.cpp
