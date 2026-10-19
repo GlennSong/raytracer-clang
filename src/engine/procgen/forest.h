@@ -39,6 +39,7 @@ struct ForestSpecies {
     // A RECIPE species (tree_recipes.lua, tree_lods.h; Glenn, 2026-10-17: "can we try a forest?"): grown from the
     // recipe -- hero, mid and light levels near, impostors of the light level far -- instead of real_tree.h's `kind`
     std::string recipe;
+    std::string age;   // ...at this age (tree_recipe.h TreeAge: "young", "old", ...; empty: the recipe as it is)
     double scale = 1.0;                // its trees' size on top of the placement's spread
 };
 

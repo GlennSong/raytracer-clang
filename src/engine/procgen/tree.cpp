@@ -1189,6 +1189,66 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         }
     }
 
+    // DEAD LIMBS (TreeParams::deadChance): side limbs -- not the one a node carries on in -- snapped off one to three
+    // internodes out; the stub keeps no foliage and wears grey bark
+    std::vector<char> dead(nodes.size(), 0);
+    if (params.deadChance > 0.0f && nodes.size() > 2) {
+        std::mt19937 drng(seed ^ 0xdead1u);
+        std::uniform_real_distribution<double> u01(0.0, 1.0);
+        std::vector<std::vector<int>> kids(nodes.size());
+        for (size_t i = 1; i < nodes.size(); ++i)
+            if (nodes[i].parent >= 0) kids[static_cast<std::size_t>(nodes[i].parent)].push_back(static_cast<int>(i));
+        std::vector<int> lead(nodes.size(), -1);   // (each node's continuing child: the best in line)
+        for (size_t n = 0; n < nodes.size(); ++n) {
+            const Vec3 in = nodes[n].parent >= 0 ? normalize(nodes[n].pos - nodes[nodes[n].parent].pos) : Vec3(0, 1, 0);
+            double best = -2.0;
+            for (int c : kids[n]) {
+                const Vec3 d = nodes[c].pos - nodes[n].pos;
+                if (d.length() < 1e-9) continue;
+                const double al = dot(normalize(d), in) + nodes[c].radius / std::max(1e-6f, nodes[n].radius);
+                if (al > best) { best = al; lead[n] = c; }
+            }
+        }
+        const float trunkR = nodes[0].radius;
+        std::vector<int> depth(nodes.size(), -1), keepTo(nodes.size(), 0);
+        std::vector<char> drop(nodes.size(), 0);
+        for (size_t n = 1; n < nodes.size(); ++n) {
+            const int par = nodes[n].parent;
+            if (par < 0) continue;
+            if (dead[static_cast<std::size_t>(par)]) {   // (on along a dead limb, to where it snapped)
+                dead[n] = 1;
+                depth[n] = depth[static_cast<std::size_t>(par)] + 1;
+                keepTo[n] = keepTo[static_cast<std::size_t>(par)];
+                drop[n] = drop[static_cast<std::size_t>(par)] || depth[n] > keepTo[n] || lead[static_cast<std::size_t>(par)] != static_cast<int>(n);
+                continue;
+            }
+            if (lead[static_cast<std::size_t>(par)] == static_cast<int>(n)) continue;
+            if (nodes[n].radius < 0.015f || nodes[n].radius > 0.4f * trunkR) continue;
+            if (u01(drng) >= params.deadChance) continue;
+            dead[n] = 1;
+            depth[n] = 0;
+            keepTo[n] = u01(drng) < 0.5 ? 0 : 1;   // (snapped at its first node or the next: a stub, not a dead branch)
+        }
+        std::vector<int> remap(nodes.size(), -1);
+        std::vector<SkeletonNode> kept;
+        std::vector<char> keptDead;
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            if (drop[i] || (nodes[i].parent >= 0 && remap[static_cast<std::size_t>(nodes[i].parent)] < 0)) continue;
+            remap[i] = static_cast<int>(kept.size());
+            SkeletonNode c = nodes[i];
+            c.parent = c.parent >= 0 ? remap[static_cast<std::size_t>(c.parent)] : -1;
+            c.childCount = 0;
+            kept.push_back(c);
+            keptDead.push_back(dead[i]);
+        }
+        for (SkeletonNode& c : kept)
+            if (c.parent >= 0) kept[static_cast<std::size_t>(c.parent)].childCount++;
+        for (std::size_t i = 0; i < kept.size(); ++i)
+            if (kept[i].childCount == 0) kept[i].isTip = true;
+        nodes.swap(kept);
+        dead.swap(keptDead);
+    }
+
     TreeMesh out;
 
     // Decompose the skeleton into branch chains: from each node, the child whose
@@ -1238,6 +1298,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             for (size_t n = 1; n < nodes.size(); ++n) {
                 const int par = nodes[n].parent;
                 if (par < 0) continue;
+                if (dead[n]) continue;   // (a dead stub is wood, bare)
                 if (sprigOf[par] >= 0) sprigOf[n] = sprigOf[par];
                 else if (reach[n] <= params.sprigSize) {
                     sprigOf[n] = static_cast<int>(out.sprigs.size());
@@ -1575,9 +1636,10 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             }
         }
         // A TIP ends in a point, not a sawn-off end (near foliage only -- a card hides it)
-        const bool pointTip = (params.foliage != 0 && endsAt < 0 && lastNode >= 0 && children[lastNode].empty()) ||
+        const bool pointTip = (params.foliage != 0 && endsAt < 0 && lastNode >= 0 && children[lastNode].empty() && !dead[static_cast<std::size_t>(first)]) ||
                               (intoSprig && path.points.size() >= 2 && params.foliage != 2);
         Vec3 color = params.barkColor * vary(rng);
+        if (dead[static_cast<std::size_t>(first)]) color = color * 0.45 + Vec3(0.30, 0.29, 0.27);   // (weathered grey)
         Socket sock;
         const Socket* sp = nullptr;
         // (out of the trunk zone, a limb comes out of its STUB in the zone instead -- buildTrunkZone)
@@ -2138,6 +2200,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         // at the same odds, not the first maxLeafCards in turtle order (which left the last-grown limbs -- the top --
         // bare)
         auto leafyNode = [&](const SkeletonNode& n) {
+            if (dead[static_cast<std::size_t>(&n - nodes.data())]) return false;   // (a dead stub: bare)
             return n.isTip || (params.leafThickness > 0.0f && n.radius <= params.leafThickness);
         };
         // SPRAYS (foliage_kit.h): the species' variants, laid along their twigs, the fan level -- their own count a
@@ -2348,7 +2411,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     }
 
     for (const SkeletonNode& n : nodes)
-        if (n.parent >= 0) out.limbs.push_back({nodes[n.parent].pos, n.pos, nodes[n.parent].radius, n.radius});
+        if (n.parent >= 0) out.limbs.push_back({nodes[n.parent].pos, n.pos, nodes[n.parent].radius, n.radius, dead[static_cast<std::size_t>(&n - nodes.data())] != 0});
 
     // (the bark blends where the trunk zone meets itself: every vertex's tangent slot then its second UV and weight --
     // a tube's its own UV, weight 0 -- and the mesh says so: RenderMaterial::FLAG_UV_BLEND)

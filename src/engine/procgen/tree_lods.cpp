@@ -86,7 +86,8 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 L.tree = growRecipeTree(r, seed, o);
                 if (needles) {   // (the hero all its side shoots; further, fewer)
                     const bool mid = !near && edge <= bc.woodEdge * 1.7, light = !near && !mid && edge < 0.2;
-                    const double share = near ? 1.0 : mid ? 0.6 : light ? 0.3 : 0.15;
+                    // (the cards are cheap: further out nearly as full -- at 0.6 the mid read as a fishbone again)
+                    const double share = near ? 1.0 : mid ? 0.9 : light ? 0.6 : 0.35;
                     const int wood = near ? bc.nearTwigTris : mid ? 3000 : light ? 800 : 0;
                     const int planes = static_cast<int>(2 * bc.nearLeaves * share);   // (a plane two triangles)
                     wearNeedles(L.tree, r, set, share, wood, planes, seed ^ 0x9e3779b9u);

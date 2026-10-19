@@ -66,6 +66,7 @@ ForestParams forestFromJson(const nlohmann::json& j) {
         for (const auto& s : j["species"]) {
             ForestSpecies fs;
             fs.recipe = s.value("recipe", std::string());
+            fs.age = s.value("age", std::string());
             if (fs.recipe.empty() && !realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) continue;
             fs.scale = s.value("scale", fs.scale);
             fs.variants = std::clamp(s.value("variants", fs.variants), 1, 16);

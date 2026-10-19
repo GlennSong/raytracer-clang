@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "tree_recipe.h"
 
 #include "lsystem.h"
@@ -43,7 +44,7 @@ const std::vector<Field>& fields() {
         {"woodMinRadius", &TreeParams::woodMinRadius}, {"leafLod", &TreeParams::leafLod},
         {"sprigSize", &TreeParams::sprigSize}, {"sprigDonor", nullptr, &TreeParams::sprigDonor},
         {"woodEdge", &TreeParams::woodEdge}, {"ringAngle", &TreeParams::ringAngle}, {"ringSpacing", &TreeParams::ringSpacing},
-        {"trunkZone", &TreeParams::trunkZone}, {"trunkZoneCell", &TreeParams::trunkZoneCell},
+        {"trunkZone", &TreeParams::trunkZone}, {"deadChance", &TreeParams::deadChance}, {"trunkZoneCell", &TreeParams::trunkZoneCell},
         {"trunkZoneTris", nullptr, &TreeParams::trunkZoneTris},
         {"barkMottle", &TreeParams::barkMottle}, {"barkFootDark", &TreeParams::barkFootDark},
         {"barkFootHeight", &TreeParams::barkFootHeight},
@@ -139,6 +140,28 @@ std::string substituteVars(const std::string& text, const std::map<std::string, 
         }
         i = j;
     }
+    return out;
+}
+
+TreeRecipe agedRecipe(const TreeRecipe& r, const std::string& age) {
+    auto it = r.ages.find(age);
+    if (it == r.ages.end()) return r;
+    const TreeAge& a = it->second;
+    TreeRecipe out = r;
+    if (!a.axiom.empty()) out.axiom = a.axiom;
+    if (a.iterations >= 0) out.iterations = a.iterations;
+    auto over = [](std::vector<RecipeRange>& base, const std::vector<RecipeRange>& top) {
+        for (const RecipeRange& g : top) {
+            auto f = std::find_if(base.begin(), base.end(), [&](const RecipeRange& b) { return b.name == g.name; });
+            if (f != base.end()) *f = g; else base.push_back(g);
+        }
+    };
+    over(out.params, a.params);
+    over(out.vars, a.vars);
+    if (a.sprig >= 0) out.branchCards.sprig = a.sprig;
+    if (a.nearLeaves >= 0) out.branchCards.nearLeaves = static_cast<int>(a.nearLeaves);
+    if (a.nearTwigTris >= 0) out.branchCards.nearTwigTris = static_cast<int>(a.nearTwigTris);
+    out.ages.clear();
     return out;
 }
 

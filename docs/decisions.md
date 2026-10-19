@@ -10540,3 +10540,25 @@ leaves on the trees" (fixed before this: near leaves ride only wood that is buil
   tree uploaded its species' atlas and bark maps for every level -- and a second viewer beside it crashed in the
   driver (ImGui's texture update, out of VRAM). Now 128 textures, 304 MB.
 - **Owed**: pine tufts still read a little fan-like; a fir recipe (`flat` is ready).
+
+## ADR-0186 — Tree ages: a recipe grown young, mature, old, ancient
+
+Glenn, 2026-10-18: "They all look like young trees ... Where's the 300 year old hero tree that could sit on a hill ...
+we need height and oldness in our variety"; of the first ancient oak: "The trunk should be thicker shouldn't it?"
+
+- **`ages = { young = {...}, mature = {...}, old = {...}, ancient = {...} }`** (TreeRecipe::ages, TreeAge): an age's
+  axiom, iterations, params and vars laid over the recipe's (its names win), and its branch-card budgets (sprig,
+  near_leaves, near_twig_tris). `agedRecipe(recipe, age)`; a tree entity's `"age"`, a forest species' `"age"`.
+- **Size without an explosion**: the oak's branching stops at a `$tip` length and its crown starts at `$crown` of the
+  trunk's stretch -- an older oak a longer first stretch AND a longer tip, so it is bigger by a few more orders, not
+  thousands more twigs (a longer first stretch alone: 17000 twigs and a 5 m trunk by the pipe model). The iterations
+  must reach the tip (13 stopped the ancient short: no change at all). The girth is set apart (radiusScale): the pipe
+  model ties it to the twig count.
+- **Age's marks** (`TreeParams::deadChance`): side limbs 1.5 cm to two fifths of the trunk snapped one or two
+  internodes out, bare, grey; no needles or sprouts on them.
+- **Oak**: young 4 m x 5 m (r 0.14 m), mature 6 x 10 (0.21), old 10 x 12 (0.58), ancient 18 x 23 m, a trunk ~2.9 m
+  across, 7 roots, deep lobes, 12% dead limbs. **Spruce**: young 5 m, mature 13.5, old 16.5 x 13.6, ancient 19 x 18.
+- **Cost**: an ancient hero ~31k bark + ~160k foliage triangles (a showpiece, near only); the lab's age rows at
+  z -110 (oak) and -150 (spruce). Needle levels further out keep more side shoots (0.9 / 0.6 / 0.35).
+- **Owed**: the ancient crown's interior tangle; 4-sided limbs reading as planks up close; ages for the other species;
+  a hill for the ancient oak; forests mixing ages.

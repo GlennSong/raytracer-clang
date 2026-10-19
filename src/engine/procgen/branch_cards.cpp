@@ -428,7 +428,7 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
     if (fillSpacing > 0.0) {
         double roll = rnd() * 2.0 * PI;
         for (const TreeMesh::Limb& l : tree.limbs) {
-            if (l.rb > fillRadius || l.rb <= 0.0f) continue;
+            if (l.rb > fillRadius || l.rb <= 0.0f || l.dead) continue;   // (no sprouts on a dead stub)
             const Vec3 d = l.b - l.a;
             const double len = d.length();
             if (len < 1e-3) continue;
@@ -531,7 +531,7 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
     }
     if (fillSpacing > 0.0)   // (sprouts along the thin modelled limbs: from ON the limb, with wood, while it lasts)
         for (const TreeMesh::Limb& l : tree.limbs) {
-            if (l.rb > fillRadius || l.rb <= 0.0f) continue;
+            if (l.rb > fillRadius || l.rb <= 0.0f || l.dead) continue;   // (no sprouts on a dead stub)
             const Vec3 d = l.b - l.a;
             const double len = d.length();
             if (len < 1e-3) continue;
@@ -867,7 +867,7 @@ int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, d
     for (const TreeMesh::Twig& t : tree.twigs) along.push_back({t.a, t.b, t.leafy});
     if (nd.limbRadius > 0.0)
         for (const TreeMesh::Limb& l : tree.limbs)
-            if (l.rb <= nd.limbRadius && l.ra <= 1.6 * nd.limbRadius && l.b.y > 0.3) along.push_back({l.a, l.b, false});
+            if (!l.dead && l.rb <= nd.limbRadius && l.ra <= 1.6 * nd.limbRadius && l.b.y > 0.3) along.push_back({l.a, l.b, false});
     // THE BUDGET (card planes): each shoot's own planes, and its side shoots' as many as fit -- thinned evenly
     const int perShoot = flat ? 2 : 3;
     double planned = 0.0, sides = 0.0;

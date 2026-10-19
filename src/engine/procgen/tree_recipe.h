@@ -117,6 +117,18 @@ struct NeedleSpec {
     Vec3 twigColor{0.45, 0.30, 0.18};
 };
 
+// AN AGE of a species (Glenn, 2026-10-18: "They all look like young trees ... Where's the 300 year old hero tree that
+// could sit on a hill ... we need height and oldness in our variety"): the recipe grown older -- its own axiom (a
+// longer first stretch: the grammar's length thresholds then give more orders of branching, a wider, taller crown),
+// iterations, params and vars laid OVER the recipe's (a name the age gives wins; the rest are the recipe's), and the
+// branch cards' budgets for a tree that size.
+struct TreeAge {
+    std::string axiom;               // empty: the recipe's
+    int iterations = -1;             // < 0: the recipe's
+    std::vector<RecipeRange> params, vars;
+    double sprig = -1, nearLeaves = -1, nearTwigTris = -1;   // < 0: the recipe's branch_cards
+};
+
 struct TreeRecipe {
     std::string name;
     bool shrub = false;              // kind = "shrub" (or "blades"): a shrub or a perennial (knee to head height), not a tree
@@ -144,6 +156,7 @@ struct TreeRecipe {
     FrondSpec fronds;                // a palm's crown (params.foliage = 4)
     BranchCardSpec branchCards;      // branch_cards = {...}: the far side of the near kit (branch_cards.h)
     NeedleSpec needles;              // needles = {...}: a conifer's foliage at every level (branch_cards.h)
+    std::map<std::string, TreeAge> ages;   // ages = { young = {...}, old = {...}, ... } (agedRecipe)
 };
 
 class TreeRecipeBook {
@@ -166,6 +179,10 @@ TreeParams drawTreeParams(const TreeRecipe& r, uint32_t seed, std::map<std::stri
 
 // `text` with every $name replaced by its value in `vars`; `missing` gets a name with no value.
 std::string substituteVars(const std::string& text, const std::map<std::string, double>& vars, std::string* missing = nullptr);
+
+// The recipe at `age` (TreeRecipe::ages): its axiom, iterations, params and vars laid over, its branch cards' budgets.
+// An age the recipe does not name (or "") is the recipe as it is.
+TreeRecipe agedRecipe(const TreeRecipe& r, const std::string& age);
 
 // Grow one tree of the recipe. `overrides` (a level's per-tree knobs: the lab's gnarl row) win over the draw.
 TreeMesh growRecipeTree(const TreeRecipe& r, uint32_t seed, const std::map<std::string, double>& overrides = {});

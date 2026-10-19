@@ -69,13 +69,13 @@ tree_recipes = {
     iterations = 13,
     rules = {
       { "T(l,n):n>0",   "F(l)/(97)T(l*0.95,n-1)" },
-      { "T(l,n):n<=0",  "B(l*0.9)" },
-      { "B(l):l>0.22",  "F(l)/($roll)[&($pitch)B(l*$side)]/(180)[&($pitch2)B(l*$side2)]", 3 },
-      { "B(l):l>0.22",  "F(l)/($roll)[&($pitch)B(l*$side)]^(10)B(l*$lead)", 2 },
-      { "B(l):l<=0.22", "F(l)/(137.5)[&(55)A(l)]/(137.5)[&(55)A(l)]/(137.5)[&(40)A(l)]A(l)" },
+      { "T(l,n):n<=0",  "B(l*$crown)" },
+      { "B(l):l>$tip",  "F(l)/($roll)[&($pitch)B(l*$side)]/(180)[&($pitch2)B(l*$side2)]", 3 },
+      { "B(l):l>$tip",  "F(l)/($roll)[&($pitch)B(l*$side)]^(10)B(l*$lead)", 2 },
+      { "B(l):l<=$tip", "F(l)/(137.5)[&(55)A(l)]/(137.5)[&(55)A(l)]/(137.5)[&(40)A(l)]A(l)" },
     },
     vars = { roll = {70, 110}, pitch = {42, 58}, pitch2 = {30, 46}, side = {0.80, 0.86}, side2 = {0.76, 0.84},
-             lead = {0.80, 0.86} },
+             lead = {0.80, 0.86}, tip = 0.22, crown = 0.9 },
     params = {
       joints = 1, trunkZone = 0.10, trunkZoneTris = 2800,   -- (the trunk, its first limbs, its roots: one surface)
       droop = {0.10, 0.20}, light = {0.15, 0.30}, crookChance = {0.15, 0.30}, crookAngle = {15, 30},
@@ -84,6 +84,26 @@ tree_recipes = {
       barkNoise = {0.04, 0.08}, twist = {4, 12}, rootCount = 5, rootSpread = {2.5, 3.5}, collar = {0.5, 0.7},
       tipRadius = 0.012, pipeExponent = {2.2, 2.5}, radiusScale = 1.8, ringSegments = 10,
       leafSize = {0.36, 0.46}, leavesPerTip = 4, leafThickness = 0.05, leafClump = 0.9, maxLeafCards = 6000,
+    },
+    -- AGES (tree_recipe.h TreeAge): the oak grown older -- a longer first stretch and a longer twig ($tip: the
+    -- branching stops there -- so a bigger tree is a few more orders, not thousands more twigs), a girthier trunk, its
+    -- limbs spreading and sagging lower, crooked, and some dead; an ancient one a short massive bole under a crown
+    -- twice as wide as it is tall
+    ages = {
+      young   = { axiom = "T(0.8,2)", vars = { tip = 0.15 }, sprig = 0.6,
+                  params = { radiusScale = 1.3, flare = {0.2, 0.4}, rootCount = 3, lobeDepth = 0.06, deadChance = 0 } },
+      mature  = { params = { deadChance = 0.03 } },
+      old     = { axiom = "T(1.6,2)", iterations = 17, vars = { tip = 0.26, crown = 1.2, pitch = {50, 66}, side = {0.83, 0.88} },
+                  sprig = 1.2, near_leaves = 14000, near_twig_tris = 16000,
+                  params = { radiusScale = 2.5, droop = {0.18, 0.28}, crookChance = {0.25, 0.40}, flare = {0.8, 1.1},
+                             lobeDepth = {0.18, 0.28}, rootSpread = {3.5, 4.5}, deadChance = 0.08, trunkZone = 0.12,
+                             trunkZoneTris = 3600 } },
+      ancient = { axiom = "T(1.9,2)", iterations = 20, vars = { tip = 0.48, crown = 1.6, pitch = {56, 72}, pitch2 = {40, 56}, side = {0.85, 0.90},
+                                               side2 = {0.82, 0.88} },
+                  sprig = 2.5, near_leaves = 20000, near_twig_tris = 22000,
+                  params = { radiusScale = 3.4, droop = {0.24, 0.34}, crookChance = {0.30, 0.45}, flare = {1.0, 1.4},
+                             lobes = {6, 9}, lobeDepth = {0.22, 0.34}, rootSpread = {4.0, 5.5}, rootCount = 7,
+                             deadChance = 0.12, trunkZone = 0.14, trunkZoneTris = 4500, barkNoise = {0.07, 0.10} } },
     },
     bark = "furrowed",
     bark_color = { {0.26, 0.21, 0.16}, {0.34, 0.27, 0.20} },
@@ -167,6 +187,20 @@ tree_recipes = {
       tipRadius = 0.010, pipeExponent = 2.4, radiusScale = 1.4, ringSegments = 8,
       leafSize = {0.40, 0.50}, leavesPerTip = 4, leafThickness = 0.07, leafClump = 1.0, leafPitch = {18, 30},
       maxLeafCards = 16000,
+    },
+    -- AGES: a young spruce a narrow spire of few whorls; an old one tall and broad, full to the ground, its lower
+    -- branches long and sweeping, the odd dead one low down
+    ages = {
+      young   = { vars = { whorls = {12, 18}, len = {0.26, 0.32}, reach = {1.3, 1.6} }, params = { radiusScale = 1.0 } },
+      mature  = { params = { deadChance = 0.02 } },
+      old     = { vars = { whorls = {40, 48}, len = {0.48, 0.56}, reach = {2.2, 2.6} }, sprig = 2.6, near_leaves = 22000,
+                  near_twig_tris = 12000,
+                  params = { radiusScale = 2.5, droop = {0.10, 0.16}, flare = 0.9, rootSpread = 2.6, deadChance = 0.05,
+                             trunkZoneTris = 3000 } },
+      ancient = { vars = { whorls = {50, 58}, len = {0.56, 0.64}, reach = {2.6, 3.0} }, sprig = 3.4, near_leaves = 26000,
+                  near_twig_tris = 14000,
+                  params = { radiusScale = 3.6, droop = {0.12, 0.18}, flare = 1.1, rootSpread = 3.0, deadChance = 0.08,
+                             trunkZoneTris = 3600, barkNoise = 0.07 } },
     },
     bark = "plated",
     bark_color = { {0.22, 0.16, 0.12}, {0.28, 0.20, 0.15} },

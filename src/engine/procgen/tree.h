@@ -97,6 +97,10 @@ struct TreeParams {
     // (sdf.h polygonizeSdfSparse), simplified to trunkZoneTris (MeshBuilder::simplify) and settled back onto the
     // field. Thinner limbs are tubes welded into it as before. 0 = off (every limb a tube).
     float trunkZone = 0.0f;
+    // AGE'S MARKS (Glenn, 2026-10-18: "oldness in our variety"): this share of the side limbs between 1.5 cm and two
+    // fifths of the trunk's girth are DEAD -- snapped off one or two internodes out (a broken stub), no foliage, the
+    // bark greyed. 0 = none.
+    float deadChance = 0.0f;
     float trunkZoneCell = 0.04f;
     int   trunkZoneTris = 3500;
 
@@ -161,7 +165,7 @@ struct TreeMesh {
     RenderMesh leaves;                    // textured leaf cards
     // THE SKELETON it was skinned on: every internode, parent end to child end, with its radii (the validation that
     // every leaf and every piece of bark hangs on the tree; later the LODs)
-    struct Limb { Vec3 a, b; float ra = 0, rb = 0; };
+    struct Limb { Vec3 a, b; float ra = 0, rb = 0; bool dead = false; };   // (dead: a dead limb's, TreeParams::deadChance)
     std::vector<Limb> limbs;
     int joints = 0, jointsPlain = 0;      // forks joined as one surface (ADR-0181), and those closed by a plain hull
     std::vector<uint32_t> jointRingStarts;   // ...the first vertex of every limb end ring a joint joined

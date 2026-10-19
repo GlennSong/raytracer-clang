@@ -1648,6 +1648,126 @@
         "recipe": "weeping_willow",
         "seed": 3
       }
+    },
+    {
+      "id": 110,
+      "name": "oak_age_young",
+      "shape": "tree",
+      "position": [
+        -60.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 111,
+      "name": "oak_age_mature",
+      "shape": "tree",
+      "position": [
+        -36.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 112,
+      "name": "oak_age_old",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 113,
+      "name": "oak_age_ancient",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "ancient"
+      }
+    },
+    {
+      "id": 114,
+      "name": "spruce_age_young",
+      "shape": "tree",
+      "position": [
+        -60.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 115,
+      "name": "spruce_age_mature",
+      "shape": "tree",
+      "position": [
+        -36.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 116,
+      "name": "spruce_age_old",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 117,
+      "name": "spruce_age_ancient",
+      "shape": "tree",
+      "position": [
+        30.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "ancient"
+      }
     }
   ],
   "terrain": {

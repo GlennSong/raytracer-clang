@@ -898,7 +898,10 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         if (!path.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), path) == g_loadedScriptFiles.end())
             g_loadedScriptFiles.push_back(path);   // (the script watcher reloads the level on an edit)
         const std::string name = ent["tree"]["recipe"].get<std::string>();
-        if (const TreeRecipe* r = book.find(name)) {
+        // (its AGE: "tree": {"recipe": "oak", "age": "ancient"} -- tree_recipe.h TreeAge)
+        const TreeRecipe* found = book.find(name);
+        const TreeRecipe agedR = found ? agedRecipe(*found, ent["tree"].value("age", std::string())) : TreeRecipe{};
+        if (const TreeRecipe* r = found ? &agedR : nullptr) {
             std::map<std::string, double> overrides;
             if (ent["tree"].contains("set") && ent["tree"]["set"].is_object())
                 for (auto it = ent["tree"]["set"].begin(); it != ent["tree"]["set"].end(); ++it)
@@ -2060,11 +2063,13 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             const TreeRecipeBook& book = shippedTreeRecipes(&path);
             if (!path.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), path) == g_loadedScriptFiles.end())
                 g_loadedScriptFiles.push_back(path);
-            const TreeRecipe* r = book.find(fs.recipe);
-            if (!r) {
+            const TreeRecipe* found = book.find(fs.recipe);
+            if (!found) {
                 LOG_WARN << "[forest] no recipe '" << fs.recipe << "' in tree_recipes.lua";
                 continue;
             }
+            const TreeRecipe agedR = agedRecipe(*found, fs.age);   // (its age: tree_recipe.h TreeAge)
+            const TreeRecipe* r = &agedR;
             // its levels' distances: a tree's the forest's; a bush's within its own shorter reach
             const double reach = fs.understory && fp.understoryM > 0 ? fp.understoryM : fp.nearM;
             const double reachFade = fs.understory && fp.understoryM > 0 ? 10.0 : fp.nearFadeM;

@@ -1055,3 +1055,43 @@ TEST_CASE(a_trees_trunk_zone_is_one_closed_surface) {
         }
     }
 }
+
+// AGES (tree_recipe.h TreeAge; Glenn, 2026-10-18: "They all look like young trees ... Where's the 300 year old hero
+// tree ... we need height and oldness in our variety"): a recipe's ages grow it older -- each age taller (or as
+// tall), wider in the crown, thicker in the trunk than the one before -- and the old ones carry dead limbs. Printed:
+// the height, crown width, trunk radius a metre up, limbs, dead limbs, bark and foliage triangles of the hero.
+TEST_CASE(a_trees_ages_grow_older) {
+    const TreeRecipeBook book = shipped();
+    for (const char* name : {"oak", "spruce"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r != nullptr);
+        if (!r) continue;
+        CHECK(r->ages.size() >= 3);
+        double lastH = 0, lastW = 0, lastR = 0;
+        for (const char* age : {"young", "mature", "old", "ancient"}) {
+            if (!r->ages.count(age)) continue;
+            const TreeRecipe aged = agedRecipe(*r, age);
+            const std::vector<RecipeTreeLevel> levels = growRecipeLevels(aged, 3u, {}, RecipeLodBands{}, true);
+            const TreeMesh& t = levels.front().tree;
+            double h = 0, w = 0, tr = 0;
+            int deadLimbs = 0;
+            for (const TreeMesh::Limb& l : t.limbs) {
+                h = std::max({h, l.a.y, l.b.y});
+                w = std::max({w, std::hypot(l.b.x, l.b.z)});
+                deadLimbs += l.dead;
+                const double y0 = std::min(l.a.y, l.b.y), y1 = std::max(l.a.y, l.b.y);
+                if (y0 <= 1.0 && y1 >= 1.0 && y1 > y0) tr = std::max(tr, static_cast<double>(l.ra + (l.rb - l.ra) * (1.0 - l.a.y) / (l.b.y - l.a.y)));
+            }
+            {
+                std::size_t leafy = 0;
+                for (const TreeMesh::Twig& tw : t.twigs) leafy += tw.leafy;
+                std::printf("    [age] %-6s %-8s %zu twigs (%zu leafy)\n", name, age, t.twigs.size(), leafy);
+            }
+            std::printf("    [age] %-6s %-8s %5.1f m tall, %5.1f m wide, trunk r %.2f m; %4zu limbs (%d dead); bark %5zu, foliage %6zu tris\n",
+                        name, age, h, 2.0 * w, tr, t.limbs.size(), deadLimbs, t.branches.indices.size() / 3, t.leaves.indices.size() / 3);
+            CHECK(h >= 0.95 * lastH && 2.0 * w >= 0.95 * lastW && tr >= 0.95 * lastR);
+            if (std::string(age) == "old" || std::string(age) == "ancient") CHECK(deadLimbs > 0);
+            lastH = h; lastW = 2.0 * w; lastR = tr;
+        }
+    }
+}
