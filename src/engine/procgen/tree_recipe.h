@@ -112,6 +112,11 @@ struct NeedleSpec {
                                      //   pendant shoots, filling the gap to the whorl below)
     double limbRadius = 0.0;         // the modelled limbs this thin carry needles and side shoots too (a spruce's whole
                                      //   branches are clothed; a pine's bare inside: 0)
+    double frondSpacing = 0.0;       // FRONDS (Glenn, 2026-10-18, of the spruce and pine: "they need more volume in the
+                                     //   middle because you can see through them"): along the modelled branches (not
+                                     //   the trunk, not the finest), a frond each side every this many metres --
+                                     //   a big card of a whole needled sub-branch, some hanging (0: none)
+    double frondLength = 0.55;       // ...each (m)
     Vec3 color{0.07, 0.17, 0.07}, colorHi{0.10, 0.22, 0.09};
     Vec3 tipColor{0.20, 0.36, 0.16};  // this year's growth at the shoot ends
     Vec3 twigColor{0.45, 0.30, 0.18};

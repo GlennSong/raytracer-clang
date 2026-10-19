@@ -257,6 +257,8 @@ tree_recipes = {
     -- twig's needles and its side shoots in a fishbone in the branch's plane, this year's growth lighter at the ends
     needles = { kind = "brush", length = 0.025, width = 0.0019, density = 14, forward = 55,
                 shoot_length = 0.26, side_shoots = 8, side_angle = 55, limb_radius = 0.035, hang = 0.5,
+                -- (fronds along the thick inner branch: no seeing through the middle)
+                frond_spacing = 0.3, frond_length = 0.55,
                 color = { {0.08, 0.17, 0.12}, {0.12, 0.22, 0.16} }, tip_color = {0.22, 0.36, 0.20},
                 twig_color = {0.30, 0.19, 0.11} },
     branch_cards = { sprig = 1.6, near_leaves = 16000 },   -- (needle card planes: two a "leaf")
@@ -406,6 +408,7 @@ tree_recipes = {
     -- NEEDLES (Glenn's pine sprig: long needles in bundles of two or three, crowded round the twig ends -- the inner
     -- twig bare): a tuft at every twig's end, needles along its last 45%
     needles = { kind = "tuft", length = 0.12, width = 0.0022, density = 3, forward = 35, side_shoots = 0, reach = 0.45,
+                frond_spacing = 0.45, frond_length = 0.5,   -- (tufted side twigs along the bare inner branch)
                 color = { {0.06, 0.15, 0.06}, {0.09, 0.19, 0.08} }, tip_color = {0.14, 0.26, 0.10},
                 twig_color = {0.26, 0.20, 0.15} },
     branch_cards = { sprig = 1.0 },

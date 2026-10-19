@@ -10633,3 +10633,18 @@ volume and thickness?"; of a third crossed plane per card: "I don't know if I wa
 - **Domed sprays** (wearTwigCards): each spray plane's middle lifted a fifth of its size out of the lobe, four
   triangles about it, the rim's normals leaning off it. Old oak foliage 72k -> 82k tris, ancient 137k -> 149k.
 - Not done: a third plane per card (+50% foliage triangles).
+
+## ADR-0191 — Conifer fronds: big needled sub-branch cards along the branches
+
+Glenn, 2026-10-18, of the spruce and pine: "I feel like they need more volume in the middle because you can see
+through them and that doesn't seem right."
+
+- Measured: the spruce's branches are all thin enough to wear needles already (limbRadius 0.035 covered them; a
+  first cut that put fronds only on thicker limbs placed none). What one sees through is the space BETWEEN branches:
+  four flat fishbones a whorl, the sky between.
+- **Fronds** (NeedleSpec frond_spacing, frond_length; bakeNeedleCards kind 3, two rows): a whole needled sub-branch,
+  ~0.55 m -- a spruce's main shoot with sprayed side shoots, a pine's bare twig with tufts on side twigs. Worn along
+  every branch but the trunk and the finest, a frond each side every frond_spacing, forward and out in the branch's
+  plane or (0.6 x hang of them) hanging: the curtain. Two planes in a shallow V.
+- At most a third of the level's card planes; the shoots wear the rest, so a tree at its budget keeps its triangle
+  count (spruce hero 64k foliage tris, 1144 fronds). The umbrella pine had headroom: 24k -> 30k.
