@@ -39,7 +39,7 @@ struct BranchCardSet {
     struct Picture {
         std::vector<View> views;
         float length = 0, halfWidth = 0;        // the sprig it shows (TreeMesh::Sprig)
-        int kind = -1;                          // a TWIG SEGMENT's: 0 leafy, 1 leafy Y, 2 bare, 3 bare Y (-1 a sprig)
+        int kind = -1;                          // a TWIG SEGMENT's: 0 leafy, 1 leafy Y, 2 bare, 3 bare Y, 4 a SPRAY (-1 a sprig)
     };
     float twigLength = 0;                       // the twig segments' own length (m): a card scales from it
     std::vector<Picture> pictures;

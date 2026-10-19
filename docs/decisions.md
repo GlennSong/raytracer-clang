@@ -10601,3 +10601,20 @@ a huge fan of the massive base".
 - Dead limbs in grown crowns only where they carry little (a snapped limb took its clump). Root reach 3-4 trunk radii,
   thinner, diving sooner.
 - Test `a_crowns_lobes_are_grown_into` (RT_TREE_WIRE: bare branching from the side and above with the lobes).
+
+## ADR-0189 — Sprays: the lobes of a grown crown covered with big fanned cards
+
+Glenn, 2026-10-18, of the guided-limb oaks: "those clumps need to be made puffier ... Can we make a set of cards that
+are longer with wider attachment points and cover more space?"
+
+- **A fifth card kind, the SPRAY** (BranchCardSet::Picture kind 4), baked beside the twig segments in bakeTwigCards
+  (`variants + 1` of them, cells two columns wide): a short stem and 5..7 leafy twigs fanned off its end like a hand,
+  the middle ones longest, each with a side twig or two -- 4x the twig length (1.2..2.2 m) of foliage with the leaves
+  at their own size, the twigs tilted in and out of the picture for its depth shading.
+- **Laid over each lobe's outer face** (wearTwigCards, when the tree has TreeMesh::lobes -- colonize >= 2): directions
+  kept by how much they face out of the crown (the underside thinner), enough to cover the face about twice, a spray
+  half the lobe's radius (0.9..2.6 m). Each leans 25..50 degrees out of the surface, its face and normals out of the lobe,
+  its foot on the nearest leafy twig end within reach (it grows from wood); points deep inside a neighbouring lobe are
+  skipped. The twig segments stay as the inner layer.
+- The lobes now read as rounded masses of leaves instead of the twigs' scatter; the limbs show under the crown, not
+  through it. A crown without lobes is unchanged.

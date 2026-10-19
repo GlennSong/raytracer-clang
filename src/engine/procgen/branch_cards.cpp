@@ -228,7 +228,10 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
     set.twigLength = static_cast<float>(L);
     const int nv = std::max(1, variants);
     const int count = 4 * nv;
-    const int cols = 4, rows = (count + cols - 1) / cols;
+    const int cols = 4, twigRows = (count + cols - 1) / cols;
+    // (the SPRAYS below them: cells two columns wide, two to a row)
+    const int sprays = nv + 1, sprayRows = (sprays + 1) / 2;
+    const int rows = twigRows + sprayRows;
     const int cw = 192, ch = 384;
     const int W = cols * cw, H = rows * ch;
     for (TextureData* t : {&set.atlas.albedo, &set.atlas.normal}) {
@@ -353,6 +356,64 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
             pic.kind = kind;
             set.pictures.push_back(pic);
         }
+    // SPRAYS (kind 4; Glenn, 2026-10-18, of an old oak's clumps: "those clumps need to be made puffier ... Can we make a
+    // set of cards that are longer with wider attachment points and cover more space?"): a short stem and 5..7 leafy
+    // twigs fanned off its end like a hand, each with a side twig or two -- about a metre and a half of foliage, its
+    // leaves their own size, the twigs tilted in and out of the picture (depth for its shading)
+    const double sprayLen = std::clamp(4.0 * L, 1.2, 2.2);
+    for (int v = 0; v < sprays; ++v) {
+        paletteNo = v;
+        RenderMesh wood, leaves;
+        const double stem = sprayLen * (0.22 + 0.08 * rnd()), r0 = std::max(0.006, 0.012 * sprayLen);
+        const std::vector<Vec3> spine = twig(wood, leaves, Vec3(0, 0, 0), Vec3((rnd() - 0.5) * 0.1, 1, 0), stem, r0, false);
+        const int n = 5 + static_cast<int>(rnd() * 3.0);
+        const double spread = (50.0 + 15.0 * rnd()) * PI / 180.0;
+        for (int k = 0; k < n; ++k) {
+            const double f = n > 1 ? static_cast<double>(k) / (n - 1) : 0.5;   // (0..1 across the hand)
+            const double a = (f - 0.5) * 2.0 * spread + (rnd() - 0.5) * 0.15;
+            const Vec3 dir = normalize(Vec3(std::sin(a), std::cos(a), (rnd() - 0.5) * 0.5));
+            // (the middle ones longest; each from a point up the stem's top half)
+            const double len = (sprayLen - stem) * (0.65 + 0.35 * std::cos((f - 0.5) * PI)) * (0.85 + 0.2 * rnd());
+            const double at = 0.55 + 0.45 * rnd();
+            const Vec3 from = spine[2] + (spine.back() - spine[2]) * at;
+            const std::vector<Vec3> tw = twig(wood, leaves, from, dir, len, r0 * 0.6, true);
+            const int sides = 1 + (rnd() < 0.5 ? 1 : 0);
+            for (int j = 0; j < sides; ++j) {   // (a side twig off it, toward the hand's outside)
+                const double x = (0.3 + 0.3 * rnd()) * (tw.size() - 1);
+                const int i = std::min(static_cast<int>(tw.size()) - 2, static_cast<int>(x));
+                const Vec3 p0 = tw[i] + (tw[i + 1] - tw[i]) * (x - i);
+                const Vec3 ax = normalize(tw[i + 1] - tw[i]), sd = normalize(cross(Vec3(0, 0, 1), ax));
+                const double sgn = j == 0 ? (a < 0.0 ? -1.0 : 1.0) : (a < 0.0 ? 1.0 : -1.0);
+                const double b = (30.0 + 20.0 * rnd()) * PI / 180.0;
+                twig(wood, leaves, p0 - ax * (0.2 * r0), normalize(ax * std::cos(b) + sd * (sgn * std::sin(b))),
+                     len * (0.4 + 0.15 * rnd()), r0 * 0.35, true);
+            }
+        }
+        double x0 = 1e9, x1 = -1e9, y1 = -1e9;
+        for (const RenderMesh* m : {&wood, &leaves})
+            for (const Vertex& vx : m->vertices) {
+                x0 = std::min(x0, vx.position.x); x1 = std::max(x1, vx.position.x); y1 = std::max(y1, vx.position.y);
+            }
+        const double half = std::max(std::fabs(x0), std::fabs(x1)) * 1.03 + 0.01;
+        const double y0 = -0.02 * sprayLen;
+        y1 = y1 * 1.03 + 0.01;
+        const int c = (v % 2) * 2, rr = twigRows + v / 2;
+        const int sw = 2 * cw;
+        const std::size_t off = (static_cast<std::size_t>(rr) * ch * W + static_cast<std::size_t>(c) * cw) * 4;
+        renderCardView(wood, leaves, leafAtlas.albedo, false, -half, half, y0, y1, sw, ch, set.colourScale,
+                       set.atlas.albedo.pixels.data() + off, W * 4, set.atlas.normal.pixels.data() + off, &extras);
+        BranchCardSet::Picture pic;
+        BranchCardSet::View vw;
+        vw.u0 = static_cast<float>(c) / cols; vw.u1 = static_cast<float>(c + 2) / cols;
+        vw.v0 = static_cast<float>(rr) / rows; vw.v1 = static_cast<float>(rr + 1) / rows;
+        vw.x0 = static_cast<float>(-half); vw.x1 = static_cast<float>(half);
+        vw.y0 = static_cast<float>(y0); vw.y1 = static_cast<float>(y1);
+        pic.views.push_back(vw);
+        pic.length = static_cast<float>(y1);
+        pic.halfWidth = static_cast<float>(half);
+        pic.kind = 4;
+        set.pictures.push_back(pic);
+    }
     return set;
 }
 
@@ -360,9 +421,9 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
                   uint32_t seed, int perTwig, double clusterScale) {
     if (set.empty() || set.twigLength <= 0.0f) return 0;
     tree.foliage = 5;
-    std::vector<int> byKind[4];
+    std::vector<int> byKind[5];
     for (std::size_t i = 0; i < set.pictures.size(); ++i)
-        if (set.pictures[i].kind >= 0 && set.pictures[i].kind < 4) byKind[set.pictures[i].kind].push_back(static_cast<int>(i));
+        if (set.pictures[i].kind >= 0 && set.pictures[i].kind < 5) byKind[set.pictures[i].kind].push_back(static_cast<int>(i));
     if (byKind[0].empty() || byKind[2].empty()) return 0;
     // the crown's middle and reach (the normals' bend and the shade inside, as the sprig cards)
     Vec3 mid(0, 0, 0);
@@ -456,6 +517,87 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
                 const double r = l.ra + (l.rb - l.ra) * (s / len);
                 const Vec3 at = l.a + ax * s + out * (0.8 * r);
                 lay(pick(rnd() < 0.4 ? 1 : 0), at, dir, set.twigLength * (0.7 + 0.5 * rnd()), (rnd() - 0.5) * 0.8);
+            }
+        }
+    }
+    // THE PLUMAGE (a crown grown to lobes: Glenn, "those clumps need to be made puffier"): SPRAYS over each lobe's
+    // outer face -- a lobe's surface more toward out of the crown, its underside thinner -- each anchored on the twig end
+    // nearest its foot, leaning out of the surface, its face (and its normals) out of the lobe: the lobes read as
+    // rounded masses of leaves instead of the twigs' scatter. Hidden ones (deep inside a neighbouring lobe) are skipped.
+    if (!tree.lobes.empty() && !byKind[4].empty()) {
+        std::vector<Vec3> ends;
+        for (const TreeMesh::Twig& t : tree.twigs) if (t.leafy) ends.push_back(t.b);
+        Vec3 lobeMid(0, 0, 0);
+        for (const TreeMesh::Lobe& lb : tree.lobes) lobeMid = lobeMid + lb.centre;
+        lobeMid = lobeMid * (1.0 / tree.lobes.size());
+        auto spray = [&](int pi, const Vec3& foot, const Vec3& axis, const Vec3& faceOut, double size, const Vec3& lobeC) {
+            const BranchCardSet::Picture& pic = set.pictures[static_cast<std::size_t>(pi)];
+            const BranchCardSet::View& p = pic.views.front();
+            const double s = size / std::max(0.05f, pic.length);
+            const Vec3 side0 = normalize(cross(axis, faceOut));
+            const Vec3 out0 = normalize(cross(side0, axis));
+            for (int pl = 0; pl < 2; ++pl) {   // (two planes in a V about the stem, opening out of the lobe)
+                const double rr = (pl == 0 ? -1.0 : 1.0) * (0.5 * fold + 0.3);
+                const Vec3 right = normalize(side0 * std::cos(rr) + out0 * std::sin(rr));
+                Vec3 face = normalize(cross(right, axis));
+                if (dot(face, faceOut) < 0.0) face = face * -1.0;
+                const uint32_t b = static_cast<uint32_t>(m.vertices.size());
+                const double xs[2] = {p.x0, p.x1}, ys[2] = {p.y0, p.y1};
+                for (int yi = 0; yi < 2; ++yi)
+                    for (int xi = 0; xi < 2; ++xi) {
+                        const Vec3 pos = foot + axis * (ys[yi] * s) + right * (xs[xi] * s);
+                        Vec3 out = normalize(pos - lobeC) * 0.6 + normalize(pos - mid) * 0.4;
+                        out = out.length() > 1e-6 ? normalize(out) : Vec3(0, 1, 0);
+                        const Vec3 nrm = normalize(face * (1.0 - spec.bend) + out * spec.bend);
+                        const Vec3 tg = normalize(right - nrm * dot(right, nrm));
+                        Vertex vx(pos, nrm, tg, xi ? p.u1 : p.u0, yi ? p.v0 : p.v1);
+                        const double ao = 0.5 + 0.5 * std::clamp((pos - mid).length() / crownR, 0.0, 1.0);
+                        vx.color = Vec3(ao * inv, ao * inv, ao * inv);
+                        m.vertices.push_back(vx);
+                    }
+                MeshBuilder::quadFacing(m, b + 0, b + 1, b + 3, b + 2, face);
+            }
+            ++laid;
+        };
+        for (const TreeMesh::Lobe& lb : tree.lobes) {
+            const double R = lb.radius;
+            if (R <= 0.1) continue;
+            const double size = std::clamp(0.5 * R, 0.9, 2.6);
+            Vec3 lobeOut = lb.centre - lobeMid;
+            lobeOut.y = std::max(0.0, lobeOut.y) + 0.5 * R;   // (a lobe faces out and up)
+            lobeOut = normalize(lobeOut);
+            // (enough to cover its face about twice over: a spray covers about half its size squared)
+            const int n = std::clamp(static_cast<int>(2.0 * 2.0 * PI * R * R / (0.5 * size * size)), 6, 90);
+            std::vector<Vec3> held;   // (the twig ends this lobe holds)
+            for (const Vec3& e : ends) if ((e - lb.centre).length() < 1.15 * R) held.push_back(e);
+            for (int k = 0, tries = 0; k < n && tries < 4 * n; ++tries) {
+                // (a direction over the sphere, kept by how much it faces out of the crown)
+                const double zz = 2.0 * rnd() - 1.0, ph = 2.0 * PI * rnd(), rs = std::sqrt(std::max(0.0, 1.0 - zz * zz));
+                const Vec3 dir(rs * std::cos(ph), zz, rs * std::sin(ph));
+                if (rnd() > 0.25 + 0.75 * std::max(0.0, dot(dir, lobeOut)) || dir.y < -0.6) continue;
+                ++k;
+                const Vec3 P = lb.centre + dir * (0.92 * R);
+                bool hidden = false;   // (deep inside another lobe: nobody sees it)
+                for (const TreeMesh::Lobe& o : tree.lobes)
+                    if (&o != &lb && (P - o.centre).length() < 0.75 * o.radius) { hidden = true; break; }
+                if (hidden) continue;
+                // (its stem along the surface, leaning out of it, upward more than not)
+                Vec3 T = Vec3((rnd() - 0.5) * 2.0, 0.8 + rnd(), (rnd() - 0.5) * 2.0);
+                T = T - dir * dot(T, dir);
+                if (T.length() < 1e-3) T = cross(dir, Vec3(1, 0, 0));
+                T = normalize(T);
+                const double lean = (25.0 + 25.0 * rnd()) * PI / 180.0;
+                const Vec3 axis = normalize(T * std::cos(lean) + dir * std::sin(lean));
+                const double sz = size * (0.8 + 0.4 * rnd());
+                Vec3 foot = P - axis * (0.45 * sz) - dir * (0.1 * sz);
+                // (on the twig end nearest its foot, when there is one near enough: the spray grows from wood)
+                double best = 0.6 * sz;
+                for (const Vec3& e : held) {
+                    const double dd = (e - foot).length();
+                    if (dd < best) { best = dd; foot = e; }
+                }
+                spray(byKind[4][static_cast<std::size_t>(rnd() * byKind[4].size()) % byKind[4].size()], foot, axis, dir, sz,
+                      lb.centre);
             }
         }
     }

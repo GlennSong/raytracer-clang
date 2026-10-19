@@ -926,7 +926,7 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
         if (twigCards) {   // (a twig segment along every fine internode -- two planes each -- and the fill besides)
             CHECK(!carded.twigs.empty());
             CHECK(carded.leaves.indices.size() / 3 >= carded.twigs.size() * (needles ? 2 : 4));
-            for (const BranchCardSet::Picture& pic : cache.pictures) CHECK(pic.kind >= 0 && pic.kind < 4);
+            for (const BranchCardSet::Picture& pic : cache.pictures) CHECK(pic.kind >= 0 && pic.kind < 5);
             if (needles) CHECK(hero.leaves.indices.size() / 3 >= hero.twigs.size() * 2);
         } else {
             CHECK(cards == hero.sprigs.size() * 4 * static_cast<std::size_t>(r->branchCards.views));
