@@ -357,7 +357,7 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
 }
 
 int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec& spec, double fillRadius, double fillSpacing,
-                  uint32_t seed) {
+                  uint32_t seed, int perTwig, double clusterScale) {
     if (set.empty() || set.twigLength <= 0.0f) return 0;
     tree.foliage = 5;
     std::vector<int> byKind[4];
@@ -379,11 +379,11 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
     RenderMesh& m = tree.leaves;
     int laid = 0;
     // one segment: picture `pi` from `a` along `axis` for `len`, its face rolled `roll` from the sky about the axis
-    auto lay = [&](int pi, const Vec3& a, const Vec3& axis, double len, double roll) {
+    auto lay = [&](int pi, const Vec3& a, const Vec3& axis, double len, double roll, double big = 1.0) {
         const BranchCardSet::Picture& pic = set.pictures[static_cast<std::size_t>(pi)];
         const BranchCardSet::View& p = pic.views.front();
-        const double s = std::clamp(len / set.twigLength, 0.45, 1.8);   // along: to the internode
-        const double sw = std::clamp(s, 0.75, 1.25);                     // across: a leaf stays near its size
+        const double s = std::clamp(len / set.twigLength, 0.45, 1.8 * big);   // along: to the internode
+        const double sw = std::clamp(s, 0.75, 1.25 * big);                    // across: a leaf stays near its size
         Vec3 up = Vec3(0, 1, 0) - axis * dot(Vec3(0, 1, 0), axis);
         if (up.length() < 0.2) up = cross(axis, Vec3(1, 0, 0));
         up = normalize(up);
@@ -415,14 +415,27 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
     };
     auto pick = [&](int kind) { const auto& v = byKind[kind].empty() ? byKind[kind & 2] : byKind[kind];
                                 return v[static_cast<std::size_t>(rnd() * v.size()) % v.size()]; };
-    // along the fine branching
+    // along the fine branching -- a leafy twig `perTwig` segments, fanned round it from points on it (a big crown's
+    // CLUSTERS: Glenn, of the ancient oak, "I would expect more plumage and foliage")
     for (const TreeMesh::Twig& t : tree.twigs) {
         const Vec3 d = t.b - t.a;
         const double len = d.length();
         if (len < 1e-3) continue;
+        const Vec3 ax = d * (1.0 / len);
         const bool y = rnd() < (t.forks >= 2 ? 0.15 : 0.35);
         const int kind = (t.leafy ? 0 : 2) + (y ? 1 : 0);
-        lay(pick(kind), t.a, d * (1.0 / len), len, (rnd() - 0.5) * 0.8);
+        lay(pick(kind), t.a, ax, len, (rnd() - 0.5) * 0.8);
+        if (!t.leafy) continue;
+        const Vec3 ref = std::fabs(ax.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+        const Vec3 e1 = normalize(cross(ax, ref)), e2 = cross(ax, e1);
+        for (int k = 1; k < perTwig; ++k) {
+            const double roll = k * 2.39996 + rnd() * 0.6, ang = (35.0 + 25.0 * rnd()) * PI / 180.0;
+            const Vec3 out = e1 * std::cos(roll) + e2 * std::sin(roll);
+            const Vec3 dir = normalize(ax * std::cos(ang) + out * std::sin(ang) + Vec3(0, 0.2, 0));
+            // (a big crown's clusters are big: a 30 m crown's leafy sprays a couple of metres, not a twig's half metre)
+            lay(pick(rnd() < 0.4 ? 1 : 0), t.a + d * (0.2 + 0.7 * rnd()), dir, set.twigLength * clusterScale * (0.7 + 0.5 * rnd()),
+                (rnd() - 0.5) * 0.8, clusterScale);
+        }
     }
     // FILLING OUT the thin modelled limbs: leafy segments sprouting off them, round them by the golden angle
     if (fillSpacing > 0.0) {

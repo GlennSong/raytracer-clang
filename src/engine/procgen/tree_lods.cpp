@@ -94,7 +94,7 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                     L.atlas = set.atlas;
                     return L;
                 }
-                if (twigs && near) {   // (the hero: twigs of bark and leaves one by one)
+                if (twigs && near && drawn.colonize == 0) {   // (the hero: twigs of bark and leaves one by one)
                     wearNearLeaves(L.tree, r, bc.nearLeaves, bc.nearTwigTris, bc.fillRadius, bc.fillSpacing, seed ^ 0x51ed27u);
                     L.atlas = recipeLeafAtlas(r, L.tree);
                     return L;
@@ -107,7 +107,12 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                         const double med = lens.empty() ? 0.3 : lens[lens.size() / 2];
                         set = bakeTwigCards(r, std::clamp(med * 1.15, 0.15, 0.6), bc.variants, nameHash(r.name));
                     }
-                    wearTwigCards(L.tree, set, bc, bc.fillRadius, bc.fillSpacing, seed ^ 0x9e3779b9u);
+                    // (a crown grown to its shape -- an old tree's, big -- wears leafy CLUSTERS even near: leaves one by
+                    // one cannot fill a shell that size; three segments a leafy twig at the hero, two at the mid)
+                    const int per = drawn.colonize ? (near ? 4 : 3) : 1;
+                    // (the clusters to the crown: its step between nodes is the spacing they fill)
+                    const double cluster = drawn.colonize ? std::clamp(2.2 * drawn.colonizeStep / std::max(0.05, set.twigLength * 1.0), 1.0, 3.0) : 1.0;
+                    wearTwigCards(L.tree, set, bc, bc.fillRadius, bc.fillSpacing, seed ^ 0x9e3779b9u, per, cluster);
                 } else {
                     wearBranchCards(L.tree, set, bc, seed ^ 0x9e3779b9u);
                 }

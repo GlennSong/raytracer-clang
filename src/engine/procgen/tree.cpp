@@ -14,6 +14,7 @@
 #include <functional>
 #include <unordered_map>
 #include <map>
+#include <tuple>
 #include <random>
 #include <sstream>
 
@@ -1061,11 +1062,118 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
 
 }  // namespace
 
+// THE CROWN GROWN TO ITS SHAPE (TreeParams::colonize; space colonization, Runions, Lane & Prusinkiewicz 2007): from the
+// scaffold `nodes` (parent before child), new nodes toward points scattered through the crown's envelope -- a dome round
+// the scaffold's limbs, its points kept mostly to the outer shell -- each step every node the nearest to some live
+// points growing `step` toward their mean (with a lift to the light), the points a node comes within two steps of spent.
+void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32_t seed) {
+    if (nodes.size() < 2 || p.colonizePoints <= 0) return;
+    const double D = std::max(0.05, static_cast<double>(p.colonizeStep));
+    // the envelope: round the scaffold's limbs (not its trunk below the first fork)
+    std::vector<int> kids(nodes.size(), 0);
+    for (const SkeletonNode& n : nodes) if (n.parent >= 0) ++kids[static_cast<std::size_t>(n.parent)];
+    double crownBase = 1e30;
+    for (std::size_t i = 0; i < nodes.size(); ++i) if (kids[i] >= 2) crownBase = std::min(crownBase, nodes[i].pos.y);
+    if (crownBase > 1e29) crownBase = 0.5 * nodes.back().pos.y;
+    Vec3 foot = nodes[0].pos;
+    double rx = 0.5, top = crownBase + 1.0;
+    for (const SkeletonNode& n : nodes) {
+        rx = std::max(rx, std::hypot(n.pos.x - foot.x, n.pos.z - foot.z));
+        top = std::max(top, n.pos.y);
+    }
+    rx *= p.crownWiden;
+    top = foot.y + (top - foot.y) * p.crownHeighten;
+    const double low = crownBase + 0.15 * (top - crownBase);   // (the dome's lower edge: a little above the first fork)
+    const Vec3 c(foot.x, 0.5 * (low + top), foot.z);
+    const double ry = 0.5 * (top - low);
+    std::mt19937 rng(seed ^ 0xc0101u);
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    std::vector<Vec3> pts;
+    pts.reserve(static_cast<std::size_t>(p.colonizePoints));
+    while (static_cast<int>(pts.size()) < p.colonizePoints) {
+        // a direction over the dome (its lower half squashed: an open-grown crown's underside is flatter), a depth in
+        // from the shell
+        const double z = 2.0 * u01(rng) - 1.0, phi = 2.0 * PI * u01(rng), s = std::sqrt(std::max(0.0, 1.0 - z * z));
+        Vec3 d(s * std::cos(phi), z, s * std::sin(phi));
+        if (d.y < 0.0) d.y *= 0.55;
+        const double depth = 1.0 - p.colonizeShell * std::pow(u01(rng), 1.5);
+        pts.push_back(c + Vec3(d.x * rx, d.y * ry, d.z * rx) * depth);
+    }
+    std::vector<char> alive(pts.size(), 1);
+    // (the attraction reach: wide enough that the whole dome is within reach of the scaffold -- at seven steps most of
+    // a 30 m crown stayed unreached and its points never grew a branch)
+    const double di = std::max(7.0 * D, 0.3 * std::max(rx, ry)), dk = 2.0 * D;
+    // nodes in a grid of di cells
+    auto cellOf = [&](const Vec3& q) {
+        return std::make_tuple(static_cast<int>(std::floor(q.x / di)), static_cast<int>(std::floor(q.y / di)), static_cast<int>(std::floor(q.z / di)));
+    };
+    std::map<std::tuple<int, int, int>, std::vector<int>> grid;
+    for (std::size_t i = 0; i < nodes.size(); ++i) grid[cellOf(nodes[i].pos)].push_back(static_cast<int>(i));
+    // (points within the kill distance of the scaffold are spent at once)
+    auto killNear = [&](const Vec3& q) {
+        for (std::size_t k = 0; k < pts.size(); ++k)
+            if (alive[k] && (pts[k] - q).lengthSquared() < dk * dk) alive[k] = 0;
+    };
+    for (const SkeletonNode& n : nodes) killNear(n.pos);
+    const std::size_t cap = nodes.size() + static_cast<std::size_t>(p.colonizePoints) * 3;
+    for (int iter = 0; iter < 400 && nodes.size() < cap; ++iter) {
+        std::map<int, Vec3> pull;
+        std::map<int, int> count;
+        for (std::size_t k = 0; k < pts.size(); ++k) {
+            if (!alive[k]) continue;
+            const auto [gx, gy, gz] = cellOf(pts[k]);
+            int best = -1;
+            double bd = di * di;
+            for (int dx = -1; dx <= 1; ++dx)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dz = -1; dz <= 1; ++dz) {
+                        auto it = grid.find({gx + dx, gy + dy, gz + dz});
+                        if (it == grid.end()) continue;
+                        for (int ni : it->second) {
+                            const double d2 = (pts[k] - nodes[static_cast<std::size_t>(ni)].pos).lengthSquared();
+                            if (d2 < bd) { bd = d2; best = ni; }
+                        }
+                    }
+            if (best < 0) continue;
+            const Vec3 dir = pts[k] - nodes[static_cast<std::size_t>(best)].pos;
+            pull[best] = pull[best] + dir * (1.0 / std::max(1e-6, dir.length()));
+            ++count[best];
+        }
+        if (pull.empty()) break;
+        std::vector<int> fresh;
+        for (const auto& [ni, sum] : pull) {
+            const SkeletonNode& from = nodes[static_cast<std::size_t>(ni)];
+            Vec3 dir = sum * (1.0 / count[ni]);
+            dir = dir + Vec3(0, 0.12, 0);   // (a lift to the light)
+            if (dir.length() < 1e-6) continue;
+            dir = normalize(dir);
+            SkeletonNode n;
+            n.pos = from.pos + dir * D;
+            n.heading = dir;
+            n.parent = ni;
+            n.depth = from.depth + 1;
+            n.distFromRoot = from.distFromRoot + static_cast<float>(D);
+            n.isTip = true;
+            nodes[static_cast<std::size_t>(ni)].isTip = false;
+            nodes.push_back(n);
+            const int id = static_cast<int>(nodes.size()) - 1;
+            grid[cellOf(n.pos)].push_back(id);
+            fresh.push_back(id);
+        }
+        if (fresh.empty()) break;
+        for (int id : fresh) killNear(nodes[static_cast<std::size_t>(id)].pos);
+    }
+    for (SkeletonNode& n : nodes) n.childCount = 0;
+    for (const SkeletonNode& n : nodes) if (n.parent >= 0) nodes[static_cast<std::size_t>(n.parent)].childCount++;
+    for (SkeletonNode& n : nodes) n.isTip = n.childCount == 0;
+}
+
 TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed) {
     std::mt19937 rng(seed);
 
     Skeleton skel = buildSkeleton(s, params.angleJitter, rng);
     std::vector<SkeletonNode>& nodes = skel.nodes;
+    if (params.colonize == 1) colonizeCrown(nodes, params, seed);   // (the crown grown to its shape)
     assignRadii(nodes, params);
     shapeBranches(nodes, params, rng, seed);
     // THE LEAN: the whole tree tipped off vertical about its foot, toward a seeded azimuth

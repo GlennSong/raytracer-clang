@@ -10562,3 +10562,21 @@ we need height and oldness in our variety"; of the first ancient oak: "The trunk
   z -110 (oak) and -150 (spruce). Needle levels further out keep more side shoots (0.9 / 0.6 / 0.35).
 - **Owed**: the ancient crown's interior tangle; 4-sided limbs reading as planks up close; ages for the other species;
   a hill for the ancient oak; forests mixing ages.
+
+## ADR-0187 — Old crowns grown to their shape (space colonization), worn as leafy clusters
+
+Glenn, 2026-10-18, of the ancient oak: "we should skip the tangle of branches for an ancient oak. I would expect more
+plumage and foliage". An old open-grown tree is a few massive limbs under a dense outer shell of foliage, its inside
+open; more of the grammar's branching only made more crossing limbs.
+
+- **`colonize = 1`** (TreeParams; Runions, Lane & Prusinkiewicz 2007): the grammar grows only the SCAFFOLD (a long
+  `$tip`: the trunk and a few big limbs), then `colonizeCrown` grows the rest toward `colonizePoints` points in a dome
+  round it (`crownWiden`, `crownHeighten`; its underside flatter), most within `colonizeShell` of its surface. Each
+  step every node nearest to live points grows `colonizeStep` toward their mean, lifted to the light; points within two
+  steps of a node are spent. Branches compete for room -- they spread, they do not cross -- and end in the shell. The
+  attraction reach is 0.3 of the crown's radius (at seven steps most of a 30 m dome was never reached).
+- **Worn as clusters**: a crown grown to its shape wears the twig segment cards even at the hero (leaves one by one
+  cannot fill a shell that size), several to a leafy twig fanned round it, each scaled to the crown (the colonize step
+  is the spacing they fill: up to 3x a twig's segment).
+- Oak old (iterations 12, 9000 points, step 0.32) 12.5 x 14 m; ancient (18000 points, step 0.4) 19 x 32 m, trunk r 1.45
+  m; ~30k bark + ~40k foliage triangles. Grown in ~25 s for the four ages (the test).

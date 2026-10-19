@@ -101,6 +101,20 @@ struct TreeParams {
     // fifths of the trunk's girth are DEAD -- snapped off one or two internodes out (a broken stub), no foliage, the
     // bark greyed. 0 = none.
     float deadChance = 0.0f;
+    // THE CROWN GROWN TO ITS SHAPE (Glenn, 2026-10-18, of the ancient oak: "skip the tangle of branches ... I would
+    // expect more plumage and foliage"; space colonization, Runions, Lane & Prusinkiewicz 2007): colonize = 1 takes the
+    // grammar's tree as the SCAFFOLD -- its trunk and few big limbs -- and grows the rest toward colonizePoints points
+    // scattered through the crown's envelope (a dome round the scaffold, crownWiden wider and crownHeighten taller),
+    // most of them in its outer shell (colonizeShell: the share of the radius they keep to). Each step every node with
+    // points nearer it than any other node grows colonizeStep toward their mean; a point a node reaches is spent. The
+    // branches so compete for room -- they spread, they do not cross -- and end in the shell, the inside left open to
+    // the big limbs, as an old tree's is.
+    int   colonize = 0;
+    int   colonizePoints = 4000;
+    float colonizeStep = 0.3f;
+    float colonizeShell = 0.35f;
+    float crownWiden = 1.15f;
+    float crownHeighten = 1.08f;
     float trunkZoneCell = 0.04f;
     int   trunkZoneTris = 3500;
 
