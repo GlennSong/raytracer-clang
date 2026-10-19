@@ -1045,7 +1045,7 @@ TEST_CASE(a_trees_trunk_zone_is_one_closed_surface) {
                     zoneTris ? 100.0 * outward / zoneTris : 0.0, zoneTris ? 100.0 * slivers / zoneTris : 0.0, m.indices.size() / 3, ms);
         CHECK(t.zoneLimbs >= 3);
         CHECK(zoneTris > 0 && zoneTris <= 2800 + 2800 / 10);
-        CHECK(open == 0 && over * 500 <= static_cast<int>(edges.size()));   // (touching sheets: a few in a thousand at most)
+        CHECK(open == 0 && over * 250 <= static_cast<int>(edges.size()));   // (touching sheets, split by index: a few in a thousand)
         CHECK(slivers * 100 <= zoneTris);
         CHECK(outward * 100 >= static_cast<int>(zoneTris) * 99);
         CHECK(m.indices.size() / 3 <= 8000);

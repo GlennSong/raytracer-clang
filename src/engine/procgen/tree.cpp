@@ -710,13 +710,15 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
         dir.y = 0.0;
         dir = dir.length() > 1e-6 ? normalize(dir) : Vec3(1, 0, 0);
         const Vec3 side = normalize(cross(up, dir));
-        const double reach = size * std::max(6.0 * footR, static_cast<double>((tube.points.back() - foot).length()) * 1.4);
+        // (out two trunk widths at most: an old oak's buttresses drop into the ground within a couple of trunk widths
+        // -- Glenn, of six radii on a 3 m trunk: "I'm not a huge fan of the massive base")
+        const double reach = size * std::clamp(static_cast<double>((tube.points.back() - foot).length()), 3.0 * footR, 4.0 * footR);
         std::uniform_real_distribution<double> wob(-0.15, 0.15);
         // (along it: out, up off the ground, radius over the trunk's, height over width)
         // (sized from the trunk's flared foot, not its bare radius: beside the flare a root of the bare one is a spike)
         const double foot2 = footR * (1.0 + 0.5 * std::max(0.0f, params.flare));
-        const double prof[6][4] = {{0.10, 0.85, 1.00, 1.15}, {0.26, 0.40, 0.80, 1.0}, {0.44, 0.14, 0.58, 0.85},
-                                   {0.63, 0.02, 0.40, 0.8}, {0.82, -0.10, 0.26, 0.8}, {1.00, -0.40, 0.15, 0.8}};
+        const double prof[6][4] = {{0.12, 0.70, 0.62, 1.2}, {0.30, 0.30, 0.48, 1.0}, {0.50, 0.08, 0.32, 0.85},
+                                   {0.68, -0.06, 0.20, 0.8}, {0.85, -0.20, 0.13, 0.8}, {1.00, -0.45, 0.08, 0.8}};
         BranchPath rp;
         std::vector<float> tall;
         double lateral = 0.0;
