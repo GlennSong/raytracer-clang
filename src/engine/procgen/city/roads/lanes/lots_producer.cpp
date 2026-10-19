@@ -78,8 +78,12 @@ public:
             k = bundle::fnv1a(&c.key, sizeof(c.key), k); id.inputs = c.inputs;
         } else k = bundle::fnv1aStr("nocity", k);
         k = bundle::fnv1aStr(in.level.value("citysim", nlohmann::json::object()).dump(), k);
-        // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at.
-        k = bundle::fnv1aStr(in.level.value("terrain", nlohmann::json()).dump(), k);
+        // The ground the lots stand on: the terrain and water blocks, and the cell it is drawn at -- the terrain
+        // without its forest, which the loader places at load and the lots never read (a species mix tweak on the
+        // island must not re-bake its 8.8 GB of city; a level with no forest keys exactly as before)
+        nlohmann::json terrainKey = in.level.value("terrain", nlohmann::json());
+        if (terrainKey.is_object()) terrainKey.erase("forest");
+        k = bundle::fnv1aStr(terrainKey.dump(), k);
         k = bundle::fnv1aStr(in.level.value("water", nlohmann::json()).dump(), k);
         const double drawnCell = levelDrawnGroundCell(in.level);
         k = bundle::fnv1a(&drawnCell, sizeof(drawnCell), k);

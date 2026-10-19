@@ -49,6 +49,7 @@ struct ForestSpecies {
     // by these weights (a variant is an age; the trees pick variants evenly), "age" then unused
     std::vector<std::pair<std::string, double>> ageMix;
     double scale = 1.0;                // its trees' size on top of the placement's spread
+    std::string kind;                  // its name in the level ("spruce"; a region names species by it)
 };
 
 // ROCKS (ADR-0131, Glenn: "scattered rocks"): layers placed by the same fast grid, each by what the
@@ -65,8 +66,22 @@ struct RockLayer {
     double drawM = 600.0;
 };
 
+// A REGION with its own mix (Glenn, 2026-10-19: "one of the forests near the mountains should be spruce/pine trees"):
+// inside a ragged disc round `centre`, each species' weight is multiplied by its entry in `weight` (one per species,
+// `others` for those the region doesn't name), fading to the island's mix over the last `edge` metres; and the
+// species it names grow down to `altLo` there (a spruce wood at a mountain's foot, below the spruce's own band)
+// (the first 8 regions; a level holds a few)
+struct ForestRegion {
+    std::string name;
+    double cx = 0.0, cz = 0.0, radius = 1000.0, edge = 300.0;
+    double altLo = 0.0;
+    std::vector<double> weight;   // per species, filled from the region's "species" { kind: weight } and `others`
+    std::vector<bool> named;
+};
+
 struct ForestParams {
     std::vector<ForestSpecies> species;
+    std::vector<ForestRegion> regions;
     double spacing = 7.5;          // metres between trees in a full stand
     double coverage = 0.55;        // share of the eligible land that is forest
     double standScaleM = 650.0;    // stands and clearings
@@ -94,6 +109,8 @@ struct ForestParams {
 };
 
 ForestParams forestFromJson(const nlohmann::json& j);
+// how far inside a region a point is: 1 inside, 0 outside, smooth over its ragged edge
+double forestRegionAt(const ForestRegion& r, uint32_t seed, double x, double z);
 
 struct ForestTree {
     Vec3 pos;
@@ -105,6 +122,11 @@ struct ForestTree {
 // leaf and needle litter under the trees): the density's stands, soil, shore, treeline and slope.
 double forestCanopy(const ForestParams& p, double seaLevel, const TerrainMaps* maps, double x, double z, double y,
                     double slopeDeg);
+
+// WHY a point has no forest (the census, RT_FOREST_WHY): each factor of the density, 1 = no cut
+struct ForestWhy { double stand = 0, soil = 1, scree = 1, shore = 1, treeline = 1, slope = 1, cover = 1; };
+ForestWhy forestWhy(const ForestParams& p, double seaLevel, const GroundCover* cover, const TerrainMaps* maps, double x,
+                    double z, double y, double slopeDeg);
 
 // Place the forest over the square [-half, half]^2. `ground` is the drawn ground (thread-safe),
 // `exclude` true where no tree may stand (roads, pads, water). Variant `v` of species `s` is global

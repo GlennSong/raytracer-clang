@@ -217,6 +217,17 @@
    "coverage": 0.42,
    "standScale": 650,
    "treeline": 640,
+   "regions": [
+    {
+     "name": "the pinewood in the foothills east of Saltwood",
+     "at": [-1500, -2300],
+     "radius": 900,
+     "edge": 300,
+     "altLo": 40,
+     "species": {"spruce": 6, "pine": 4, "fir": 1.5},
+     "others": 0.08
+    }
+   ],
    "shoreClear": 4,
    "maxSlopeDeg": 40,
    "cell": 256,

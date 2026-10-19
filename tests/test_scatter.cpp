@@ -619,3 +619,29 @@ TEST_CASE(impostor_views_frame_the_tree_from_every_side) {
     for (const Vertex& v : shadow.vertices)
         CHECK(v.u >= 0.25 - 1e-6 && v.u <= 0.25 + kImpostorAzimuths * 0.01 + 1e-6 && v.v >= 0.5 - 1e-6 && v.v <= 0.52 + 1e-6);
 }
+
+// A FOREST REGION (Glenn, 2026-10-19: "one of the forests near the mountains should be spruce/pine trees"): on flat
+// ground at 100 m, below the spruce's own band, a region naming spruce makes its middle a spruce wood, and outside it
+// the island's mix is as before (no spruce at all at this height)
+TEST_CASE(a_forest_region_grows_its_own_mix_below_the_species_band) {
+    const nlohmann::json j = nlohmann::json::parse(R"({
+        "seed": 3, "spacing": 7.5, "coverage": 1.0,
+        "species": [{"kind": "oak", "altLo": 0, "altHi": 200}, {"kind": "spruce", "altLo": 220, "altHi": 720}],
+        "regions": [{"name": "pinewood", "at": [0, 0], "radius": 300, "edge": 60, "altLo": 0,
+                     "species": {"spruce": 6}, "others": 0.08}]})");
+    const ForestParams p = forestFromJson(j);
+    CHECK(p.regions.size() == 1 && p.regions[0].named.size() == 2 && !p.regions[0].named[0] && p.regions[0].named[1]);
+    CHECK(std::fabs(p.regions[0].weight[0] - 0.08) < 1e-12 && std::fabs(p.regions[0].weight[1] - 6.0) < 1e-12);
+    const auto trees = placeForest(p, 700.0, 0.0, nullptr, nullptr, [](double, double) { return 100.0; }, {}, 4);
+    int in = 0, inSpruce = 0, out = 0, outSpruce = 0;
+    for (const ForestTree& t : trees) {
+        const double r = std::hypot(t.pos.x, t.pos.z);
+        const bool spruce = t.variant / 4 == 1;   // (4 variants a species)
+        if (r < 150) { ++in; inSpruce += spruce; }
+        if (r > 500) { ++out; outSpruce += spruce; }
+    }
+    std::printf("    [forest region] inside %d trees, %d spruce; outside %d trees, %d spruce\n", in, inSpruce, out, outSpruce);
+    CHECK(in > 300 && out > 3000);
+    CHECK(inSpruce > in * 9 / 10);
+    CHECK(outSpruce == 0);
+}

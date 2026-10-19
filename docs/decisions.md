@@ -10839,3 +10839,28 @@ They appear bright and don't blend with the landscape."
   fallback).
 - **A/B:** RT_IMPOSTOR_SELF_SHADOW=0 and RT_GRASS_GROUND=0 (renderer globals terrainHorizon2.z / .w).
 - Owed: the Metal and WebGPU impostor shaders (with the views themselves, ADR-0193).
+
+## ADR-0203 — A spruce and pine wood in the foothills; forest regions; the census
+
+Glenn (2026-10-19): "we don't plant a lot of spruces. I feel like one of the forests near the mountains should be
+spruce/pine trees."
+
+- **Measured first.** The loader now logs a census after placing the forest (`[forest] census:` each species' count,
+  share and 10th-90th percentile altitude), and RT_FOREST_DUMP=path writes every tree as `x z alt species`.
+  RT_FOREST_WHY=1 adds each density factor's mean per 100 m of altitude (`forestWhy`). island_8_weathered (the
+  island's forest block, headless through level_tests): of ~200k canopy trees, oak, maple and beech were 97%; spruce
+  2,635, pine 2,701, fir 259.
+- **Why so few.** Spruce's band starts at 220 m, and above 200 m the island is steep crag: at 300-400 m the slope
+  factor is 0.22, the soil 0.06 and the rock cover 0.21, for a density of 0.004 (0.17 below 100 m). The conifer
+  bands lie on ground the density already clears; the forests "near the mountains" are the foothill woods at
+  100-250 m, which the band gave to the broadleaves.
+- **Forest regions** (forest.h ForestRegion, `"regions"` in the forest block): a ragged disc (radius +-25% by angle,
+  faded over `edge`) in which each named species' weight is multiplied (`others` for the rest) and the named
+  species grow down to the region's `altLo`. The island's first: the foothill woods east of Saltwood, at
+  (-1500, -2300), radius 900 m, spruce 6, pine 4, fir 1.5, others 0.08, altLo 40. Spruce 2,635 -> 7,177 and pine
+  2,701 -> 4,743 island-wide; the pines take the lower western lobe, the spruce the slopes above.
+- **The lots bake no longer keys on the forest.** The lots producer hashed the whole terrain block, so a forest tweak
+  marked the island's 8.8 GB city bundle out of date though the forest is placed at load and the lots never read
+  it. The terrain minus `forest` now goes into the key (as the ground cache key already did, ADR-0113); a level
+  without a forest keys exactly as before.
+- Test: test_scatter `a_forest_region_grows_its_own_mix_below_the_species_band`.

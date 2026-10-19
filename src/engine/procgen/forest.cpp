@@ -117,10 +117,32 @@ ForestParams forestFromJson(const nlohmann::json& j) {
             fs.weight = s.value("weight", fs.weight);
             fs.wet = s.value("wet", fs.wet);
             fs.understory = s.value("understory", fs.understory);
+            fs.kind = s.value("kind", fs.recipe);
             p.species.push_back(fs);
+        }
+    // "regions": [{ "name", "at": [x, z], "radius", "edge", "altLo", "species": { kind: weight }, "others" }]
+    if (j.contains("regions") && j["regions"].is_array())
+        for (const auto& r : j["regions"]) {
+            ForestRegion R;
+            R.name = r.value("name", std::string());
+            if (r.contains("at") && r["at"].is_array() && r["at"].size() >= 2) { R.cx = r["at"][0].get<double>(); R.cz = r["at"][1].get<double>(); }
+            R.radius = r.value("radius", R.radius);
+            R.edge = std::max(1.0, r.value("edge", R.edge));
+            R.altLo = r.value("altLo", R.altLo);
+            const double others = r.value("others", 1.0);
+            R.weight.assign(p.species.size(), others);
+            R.named.assign(p.species.size(), false);
+            if (r.contains("species") && r["species"].is_object())
+                for (std::size_t s = 0; s < p.species.size(); ++s)
+                    if (r["species"].contains(p.species[s].kind)) {
+                        R.weight[s] = r["species"][p.species[s].kind].get<double>();
+                        R.named[s] = true;
+                    }
+            p.regions.push_back(std::move(R));
         }
     return p;
 }
+
 
 namespace {
 const Noise& forestNoise(uint32_t seed) {
@@ -157,6 +179,40 @@ double forestGrounded(const ForestParams& p, double sea, const GroundCover* cove
     return std::clamp(d, 0.0, 1.0);
 }
 }  // namespace
+
+ForestWhy forestWhy(const ForestParams& p, double sea, const GroundCover* cover, const TerrainMaps* maps, double x,
+                    double z, double y, double slopeDeg) {
+    ForestWhy w;
+    const Noise& nz = forestNoise(p.seed);
+    const double stand = 0.5 + 0.5 * nz.fbm2(x / p.standScaleM + 7.7, z / p.standScaleM - 2.9, 4) + 0.08 * nz.noise2(x * 0.03, z * 0.03);
+    const double t0 = 1.0 - p.coverage - 0.1;
+    w.stand = smooth(t0, t0 + 0.2, stand);
+    if (maps) {
+        const TerrainMapSample m = maps->at(x, z);
+        w.soil = smooth(0.12, 0.45, m.soil);
+        w.scree = 1.0 - smooth(0.2, 0.55, m.scree);
+    }
+    const double alt = y - (sea > -1e29 ? sea : 0.0);
+    w.shore = smooth(p.shoreClearM, p.shoreClearM + 8.0, alt);
+    const double tl = p.treelineM + 90.0 * nz.fbm2(x * 0.0017 + 3.3, z * 0.0017 - 1.1, 3);
+    w.treeline = 1.0 - smooth(tl - 70.0, tl, alt);
+    w.slope = 1.0 - smooth(p.maxSlopeDeg - 8.0, p.maxSlopeDeg, slopeDeg);
+    if (cover) {
+        const Cover c = cover->at(x, z, y, std::cos(slopeDeg * 3.14159265358979 / 180.0));
+        w.cover = std::max(0.0, 1.0 - 1.6 * (c.rock + c.snow + c.sand));
+    }
+    return w;
+}
+
+double forestRegionAt(const ForestRegion& R, uint32_t seed, double x, double z) {
+    // a ragged edge: the radius wanders +-25% round the centre (a wood is not a disc)
+    const Noise& nz = forestNoise(seed);
+    const double dx = x - R.cx, dz = z - R.cz, d = std::hypot(dx, dz);
+    if (d > 1.25 * R.radius + R.edge) return 0.0;
+    const double a = std::atan2(dz, dx);
+    const double r = R.radius * (1.0 + 0.25 * nz.fbm2(std::cos(a) * 1.7 + R.cx * 1e-3, std::sin(a) * 1.7 + R.cz * 1e-3, 3));
+    return 1.0 - smooth(r - R.edge, r, d);
+}
 
 double forestCanopy(const ForestParams& p, double sea, const TerrainMaps* maps, double x, double z, double y,
                     double slopeDeg) {
@@ -205,16 +261,27 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                         // patchy field of its own (stands, not a salad)
                         const double alt = y - (sea > -1e29 ? sea : 0.0);
                         const double wet = maps ? maps->at(x, z).wet : 0.0;
+                        // ...and the regions it stands in, each with its own mix (ForestRegion)
+                        double inRegion[8] = {};
+                        const std::size_t nRegions = std::min<std::size_t>(8, p.regions.size());
+                        for (std::size_t r = 0; r < nRegions; ++r) inRegion[r] = forestRegionAt(p.regions[r], p.seed, x, z);
                         int best = -1;
                         double bw = -1e9;
                         for (std::size_t s = 0; s < p.species.size(); ++s) {
                             const ForestSpecies& fs = p.species[s];
                             if (fs.understory != under) continue;
-                            const double band = smooth(fs.altLo - 60.0, fs.altLo + 20.0, alt) * (1.0 - smooth(fs.altHi - 20.0, fs.altHi + 60.0, alt));
+                            double altLo = fs.altLo, regionK = 1.0;
+                            for (std::size_t r = 0; r < nRegions; ++r) {
+                                if (inRegion[r] <= 0.0) continue;
+                                const ForestRegion& R = p.regions[r];
+                                regionK *= 1.0 + (R.weight[s] - 1.0) * inRegion[r];
+                                if (R.named[s]) altLo += (std::min(altLo, R.altLo) - altLo) * inRegion[r];
+                            }
+                            const double band = smooth(altLo - 60.0, altLo + 20.0, alt) * (1.0 - smooth(fs.altHi - 20.0, fs.altHi + 60.0, alt));
                             if (band <= 0.0) continue;
-                            const double wetK = 1.0 + fs.wet * ((0.03 + smooth(0.45, 0.8, wet)) * 4.0 - 1.0);
+                            const double k = regionK * (1.0 + fs.wet * ((0.03 + smooth(0.45, 0.8, wet)) * 4.0 - 1.0));
                             const double patch = sn.fbm2(x * 0.004 + 17.0 * s, z * 0.004 - 11.0 * s, 3);
-                            const double w = std::log(band * fs.weight * wetK + 1e-6) + 1.6 * patch + 0.35 * unit(h ^ (0x1234u + static_cast<uint32_t>(s)));
+                            const double w = std::log(band * fs.weight * k + 1e-6) + 1.6 * patch + 0.35 * unit(h ^ (0x1234u + static_cast<uint32_t>(s)));
                             if (w > bw) { bw = w; best = static_cast<int>(s); }
                         }
                         if (best < 0) continue;

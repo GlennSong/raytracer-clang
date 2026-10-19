@@ -2443,6 +2443,54 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     const GroundCover* cover = terrain.cover.get();
     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
     const std::vector<ForestTree> trees = placeForest(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, vps);
+    {   // THE CENSUS (Glenn, 2026-10-19: "we don't plant a lot of spruces"): each species' share and its altitudes, and
+        // with RT_FOREST_DUMP=path every tree as `x z alt species` (a map of what grows where)
+        std::vector<std::vector<float>> alts(fp.species.size());
+        std::FILE* dump = std::getenv("RT_FOREST_DUMP") ? std::fopen(std::getenv("RT_FOREST_DUMP"), "w") : nullptr;
+        const double sea = terrain.seaLevel > -1e29 ? terrain.seaLevel : 0.0;
+        for (const ForestTree& t : trees) {
+            const int s = vars[t.variant].species;
+            if (s < 0) continue;
+            alts[static_cast<std::size_t>(s)].push_back(static_cast<float>(t.pos.y - sea));
+            if (dump) std::fprintf(dump, "%.1f %.1f %.1f %d\n", t.pos.x, t.pos.z, t.pos.y - sea, s);
+        }
+        if (dump) std::fclose(dump);
+        std::ostringstream os;
+        for (std::size_t s = 0; s < alts.size(); ++s) {
+            auto& a = alts[s];
+            const ForestSpecies& fs = fp.species[s];
+            os << " " << (fs.recipe.empty() ? realSpeciesName(fs.species) : fs.recipe.c_str());
+            if (a.empty()) { os << " 0;"; continue; }
+            std::sort(a.begin(), a.end());
+            os << " " << a.size() << " (" << std::lround(100.0 * a.size() / std::max<std::size_t>(1, trees.size()))
+               << "%, " << std::lround(a[a.size() / 10]) << "-" << std::lround(a[a.size() * 9 / 10]) << " m);";
+        }
+        LOG_INFO << "[forest] census:" << os.str();
+        if (std::getenv("RT_FOREST_WHY")) {   // ...and per 100 m of altitude, each factor's mean over the land
+            constexpr int kBands = 12;
+            double sum[kBands][8] = {};
+            const double half = terrain.size * 0.5;
+            for (double z = -half; z < half; z += 50.0)
+                for (double x = -half; x < half; x += 50.0) {
+                    const double y = groundAt(x, z), alt = y - sea;
+                    if (alt < 2.0) continue;
+                    const double e = 1.5;
+                    const double gx = (groundAt(x + e, z) - groundAt(x - e, z)) / (2 * e), gz = (groundAt(x, z + e) - groundAt(x, z - e)) / (2 * e);
+                    const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 180.0 / 3.14159265358979;
+                    const ForestWhy w = forestWhy(fp, terrain.seaLevel, cover, maps, x, z, y, slope);
+                    const int b = std::min(kBands - 1, static_cast<int>(alt / 100.0));
+                    const double f[8] = {1, w.stand, w.soil, w.scree, w.treeline, w.slope, w.cover,
+                                         w.stand * w.soil * w.scree * w.shore * w.treeline * w.slope * w.cover};
+                    for (int k = 0; k < 8; ++k) sum[b][k] += f[k];
+                }
+            for (int b = 0; b < kBands; ++b)
+                if (sum[b][0] > 0)
+                    LOG_INFO << "[forest] why " << b * 100 << "-" << b * 100 + 100 << " m: land " << sum[b][0] * 0.0025 << " km2, stand "
+                             << sum[b][1] / sum[b][0] << " soil " << sum[b][2] / sum[b][0] << " scree " << sum[b][3] / sum[b][0]
+                             << " treeline " << sum[b][4] / sum[b][0] << " slope " << sum[b][5] / sum[b][0] << " cover "
+                             << sum[b][6] / sum[b][0] << " => density " << sum[b][7] / sum[b][0];
+        }
+    }
 
     // TRUNK COLLIDERS (#55): a standing capsule per tree (not the understory), streamed round the player
     // by NatureColliderSystem
