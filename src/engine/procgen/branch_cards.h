@@ -66,8 +66,9 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
 // where the tree carries leaves, bare inside, a Y now and then), and leafy segments sprouting along its thin modelled
 // limbs (under `fillRadius` m), every `fillSpacing` m -- each segment two planes in a shallow V about its axis.
 int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec& spec, double fillRadius, double fillSpacing,
-                  uint32_t seed, int perTwig = 1, double clusterScale = 1.0);   // (perTwig: segments a leafy twig, fanned round it --
-                                                                                // a big crown's clusters, clusterScale times a twig's size)
+                  uint32_t seed, int perTwig = 1, double clusterScale = 1.0,   // (perTwig: segments a leafy twig, fanned round it --
+                  double sprayShare = 1.0);                                     // a big crown's clusters, clusterScale times a twig's
+                                                                                // size; sprayShare: of the lobes' sprays, a far level's)
 
 // THE NEAR FOLIAGE (Glenn, 2026-10-18: "For up close you'd want to make individual leaves and branches because they
 // will have the most scrutiny ... make sure the twigs look like they're solid like the 3D trunks/branches. The leaves

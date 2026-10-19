@@ -3,6 +3,7 @@
 #include "test_framework.h"
 #include "../src/engine/procgen/tree_recipe.h"
 #include "../src/engine/procgen/tree_lods.h"
+#include "../src/engine/procgen/tree_cache.h"
 #include "../src/engine/procgen/branch_cards.h"
 #include "../src/engine/scripting/tree_recipes_lua.h"
 #include "../src/engine/procgen/leaf_card.h"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -1178,11 +1180,17 @@ TEST_CASE(a_forests_levels_lighten_with_distance) {
     const TreeRecipeBook book = shipped();
     RecipeLodBands bands;
     bands.hero0 = 16; bands.hero1 = 22; bands.mid0 = 58; bands.mid1 = 70; bands.light0 = 130; bands.light1 = 150;
-    for (const char* name : {"oak", "birch", "maple", "river_birch", "spruce", "pine", "magnolia", "sakura"}) {
-        const TreeRecipe* r = book.find(name);
-        if (!r) continue;
+    for (const char* name : {"oak", "birch", "maple", "river_birch", "spruce", "pine", "magnolia", "sakura"})
+      for (const char* age : {"", "mature"}) {
+        const TreeRecipe* base = book.find(name);
+        if (!base) continue;
+        if (*age && !base->ages.count(age)) continue;
+        const TreeRecipe aged = agedRecipe(*base, age);
+        const TreeRecipe* r = &aged;
         BranchCardSet cards;
+        const auto t0 = std::chrono::steady_clock::now();
         const std::vector<RecipeTreeLevel> levels = growRecipeLevels(*r, 5u, {}, bands, true, &cards);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         std::string line;
         std::size_t last = ~std::size_t(0);
         for (const RecipeTreeLevel& L : levels) {
@@ -1193,6 +1201,50 @@ TEST_CASE(a_forests_levels_lighten_with_distance) {
             CHECK(bark + leaves <= last);
             last = bark + leaves;
         }
-        std::printf("    [forest levels] %-12s (bark+leaves, hero..far)%s\n", name, line.c_str());
+        std::printf("    [forest levels] %-12s %-7s %6.0f ms (bark+leaves, hero..far)%s\n", name, age, ms, line.c_str());
     }
+}
+
+// THE TREE CACHE (procgen/tree_cache.h; Glenn, of the island's recipe forest: built in 121 s, every load): a species'
+// variants written and read back are the same levels -- meshes, atlas, bands, limbs -- and a changed recipe file is a
+// new key.
+TEST_CASE(a_species_grown_once_reads_back_the_same) {
+    const std::string dir = "test_tree_cache_tmp";
+    setenv("RT_TREE_CACHE_DIR", dir.c_str(), 1);
+    unsetenv("RT_TREE_CACHE");
+    std::string path;
+    const TreeRecipeBook& book = shippedTreeRecipes(&path);
+    const TreeRecipe* r = book.find("birch");
+    CHECK(r != nullptr && !path.empty());
+    if (!r) return;
+    RecipeLodBands bands;
+    bands.hero0 = 16; bands.hero1 = 22; bands.mid0 = 58; bands.mid1 = 70;
+    const std::vector<uint32_t> seeds = {11u, 12u};
+    std::vector<std::vector<RecipeTreeLevel>> grown;
+    BranchCardSet cards;
+    for (uint32_t sd : seeds) grown.push_back(growRecipeLevels(*r, sd, {}, bands, true, &cards));
+    const uint64_t key = recipeSpeciesKey(path, "birch", "", seeds, bands);
+    CHECK(key != 0);
+    CHECK(saveRecipeSpecies(key, grown));
+    std::vector<std::vector<RecipeTreeLevel>> back;
+    CHECK(loadRecipeSpecies(key, back));
+    CHECK(back.size() == grown.size());
+    for (std::size_t v = 0; v < std::min(back.size(), grown.size()); ++v) {
+        CHECK(back[v].size() == grown[v].size());
+        for (std::size_t i = 0; i < std::min(back[v].size(), grown[v].size()); ++i) {
+            const RecipeTreeLevel &a = grown[v][i], &b = back[v][i];
+            CHECK(a.tree.branches.indices == b.tree.branches.indices && a.tree.leaves.indices == b.tree.leaves.indices);
+            CHECK(a.tree.leaves.vertices.size() == b.tree.leaves.vertices.size());
+            CHECK(!a.tree.leaves.vertices.empty() &&
+                  (a.tree.leaves.vertices[7].position - b.tree.leaves.vertices[7].position).length() < 1e-4);
+            CHECK(a.tree.branches.tangentIsData == b.tree.branches.tangentIsData && a.tree.foliage == b.tree.foliage);
+            CHECK(a.atlas.albedo.pixels == b.atlas.albedo.pixels && a.atlas.normal.width == b.atlas.normal.width);
+            CHECK(a.in0 == b.in0 && a.out1 == b.out1 && a.maxDistance == b.maxDistance && a.tree.limbs.size() == b.tree.limbs.size());
+        }
+    }
+    // (another age, other seeds, other bands: other keys)
+    CHECK(recipeSpeciesKey(path, "birch", "old", seeds, bands) != key);
+    CHECK(recipeSpeciesKey(path, "birch", "", {11u, 13u}, bands) != key);
+    std::filesystem::remove_all(dir);
+    unsetenv("RT_TREE_CACHE_DIR");
 }

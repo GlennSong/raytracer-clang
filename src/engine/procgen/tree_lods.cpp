@@ -113,10 +113,14 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                     }
                     // (a crown grown to its shape -- an old tree's, big -- wears leafy CLUSTERS even near: leaves one by
                     // one cannot fill a shell that size; three segments a leafy twig at the hero, two at the mid)
-                    const int per = drawn.colonize ? (near ? 4 : 3) : 1;
+                    // (and further out fewer, a forest's rings holding ever more trees: the mature oak's far level wore the
+                    // mid's 85k triangles -- each level's clusters and lobe sprays thinned as the needles are, ADR-0195)
+                    const bool midL = !near && edge <= bc.woodEdge * 1.7, lightL = !near && !midL && edge < 0.2;
+                    const int per = drawn.colonize ? (near ? 4 : midL ? 2 : 1) : 1;
+                    const double sprays = near ? 1.0 : midL ? 0.55 : lightL ? 0.3 : 0.15;
                     // (the clusters to the crown: its step between nodes is the spacing they fill)
                     const double cluster = drawn.colonize ? std::clamp(2.2 * drawn.colonizeStep / std::max(0.05, set.twigLength * 1.0), 1.0, 3.0) : 1.0;
-                    wearTwigCards(L.tree, set, bc, bc.fillRadius, bc.fillSpacing, seed ^ 0x9e3779b9u, per, cluster);
+                    wearTwigCards(L.tree, set, bc, bc.fillRadius, bc.fillSpacing, seed ^ 0x9e3779b9u, per, cluster, sprays);
                 } else {
                     wearBranchCards(L.tree, set, bc, seed ^ 0x9e3779b9u);
                 }

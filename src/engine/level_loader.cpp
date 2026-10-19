@@ -28,6 +28,7 @@
 #include "procgen/stylized_tree.h"
 #include "procgen/forest.h"
 #include "procgen/tree_lods.h"      // a recipe tree's hero / mid / light levels         // "forest": real trees + impostors at island scale (ADR-0129)
+#include "procgen/tree_cache.h"     // ...grown once, kept on disk
 #include "procgen/branch_cards.h"   // the recipe trees' branch cards (one atlas a forest species)
 #include "procgen/terrain_maps.h"
 #include "procgen/terrain_weather.h"
@@ -2092,12 +2093,21 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             }
             std::map<int, std::pair<TextureHandle, TextureHandle>> leafTex;   // by foliage mode: one atlas a species
             BranchCardSet branchCards;   // (and one branch-card atlas: baked from the first variant, worn by all)
+            // (the species' variants grown once and kept, procgen/tree_cache.h: read back if this recipe, age, seeds and
+            // bands were grown before by this build, else grown here and written for the next load)
+            std::vector<uint32_t> seeds;
+            for (int v = 0; v < fs.variants; ++v) seeds.push_back(fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17));
+            const uint64_t cacheKey = recipeSpeciesKey(path, fs.recipe, fs.age, seeds, bands);
+            std::vector<std::vector<RecipeTreeLevel>> cached, grown;
+            const bool hit = loadRecipeSpecies(cacheKey, cached) && cached.size() == seeds.size();
             for (int v = 0; v < fs.variants; ++v) {
                 Var& var = vars[s * vps + v];
                 var.species = static_cast<int>(s);
                 var.shade = 0.6;
-                const uint32_t seed = fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17);
-                std::vector<RecipeTreeLevel> levels = growRecipeLevels(*r, seed, {}, bands, true, &branchCards);
+                const uint32_t seed = seeds[static_cast<std::size_t>(v)];
+                std::vector<RecipeTreeLevel> levels = hit ? std::move(cached[static_cast<std::size_t>(v)])
+                                                          : growRecipeLevels(*r, seed, {}, bands, true, &branchCards);
+                if (!hit && cacheKey) grown.push_back(levels);
                 const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
                 for (std::size_t li = 0; li < levels.size(); ++li) {
                     RecipeTreeLevel& L = levels[li];
@@ -2161,6 +2171,9 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 rt.trunkRadius = trunkR * 1.45;
                 if (folData[s].pixels.empty()) folData[s] = levels.back().atlas.albedo;
             }
+            if (!hit && cacheKey && grown.size() == seeds.size()) saveRecipeSpecies(cacheKey, grown);
+            LOG_INFO << "[forest] " << fs.recipe << (fs.age.empty() ? "" : " (" + fs.age + ")") << ": " << fs.variants
+                     << " variants " << (hit ? "from the tree cache" : cacheKey ? "grown, cached" : "grown");
 #endif
             continue;
         }

@@ -10745,3 +10745,19 @@ Glenn, 2026-10-18: "I guess the next step is to bring these trees to the island"
   its shape); the level 178 s against 96 s. Near groups 31k (three levels a tree) against 10k.
 - Owed: the load (cache the grown levels per recipe+seed, as the bakes are cached); beech, fir, aspen, alder recipes;
   forest-grown forms; an age mix in a stand; the city's street trees.
+
+## ADR-0198 — The tree cache, and the grown crowns thinned with distance
+
+Glenn, 2026-10-18: "Can you do those things next" (the island's recipe forest built in 121 s; its load first).
+
+- Measured (test `a_forests_levels_lighten_with_distance`, now timed and with each species' mature age): the mature
+  oak grows in ~7.5 s a variant, and its mid, light and far levels each wore 85k leaf triangles -- a grown crown's
+  clusters (per twig) and lobe sprays did not thin with the level. Now clusters 4 / 2 / 1 / 1 and sprays
+  1 / 0.55 / 0.3 / 0.15 by level (wearTwigCards sprayShare): 105k / 56k / 31k / 28k.
+- **procgen/tree_cache.h**: a forest's recipe species -- every variant's levels (meshes as the bundle codecs pack them,
+  the atlases, bands, limbs) -- in one file under cache/trees, keyed by the recipe file's bytes, recipe, age, seeds,
+  bands, kTreeCacheVersion and the build's git describe (a commit is a new key). A read touches its file; a write
+  prunes the least recently used past RT_TREE_CACHE_MAX_GB (default 4). RT_TREE_CACHE=0 grows every load.
+- island_8_nature with RT_FOREST_RECIPES=1: forest 107 s grown (and written, 1.1 GB) -> 46 s from the cache; the level
+  162 -> 100 s (the real_tree forest's: 42 s, 96 s).
+- Test `a_species_grown_once_reads_back_the_same`.

@@ -422,7 +422,7 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
 }
 
 int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec& spec, double fillRadius, double fillSpacing,
-                  uint32_t seed, int perTwig, double clusterScale) {
+                  uint32_t seed, int perTwig, double clusterScale, double sprayShare) {
     if (set.empty() || set.twigLength <= 0.0f) return 0;
     tree.foliage = 5;
     std::vector<int> byKind[5];
@@ -588,7 +588,7 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
             lobeOut.y = std::max(0.0, lobeOut.y) + 0.5 * R;   // (a lobe faces out and up)
             lobeOut = normalize(lobeOut);
             // (enough to cover its face about twice over: a spray covers about half its size squared)
-            const int n = std::clamp(static_cast<int>(2.0 * 2.0 * PI * R * R / (0.5 * size * size)), 6, 90);
+            const int n = std::max(2, static_cast<int>(sprayShare * std::clamp(2.0 * 2.0 * PI * R * R / (0.5 * size * size), 6.0, 90.0)));
             std::vector<Vec3> held;   // (the twig ends this lobe holds)
             for (const Vec3& e : ends) if ((e - lb.centre).length() < 1.15 * R) held.push_back(e);
             for (int k = 0, tries = 0; k < n && tries < 4 * n; ++tries) {
