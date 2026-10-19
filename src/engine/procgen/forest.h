@@ -40,6 +40,10 @@ struct ForestSpecies {
     // recipe -- hero, mid and light levels near, impostors of the light level far -- instead of real_tree.h's `kind`
     std::string recipe;
     std::string age;   // ...at this age (tree_recipe.h TreeAge: "young", "old", ...; empty: the recipe as it is)
+    std::string form;  // ...in this form (TreeRecipe::forms: "stand", a forest-grown tree; empty: open-grown)
+    // ...or a MIX of ages (Glenn, 2026-10-18: the island's forests -- a stand is not one age): the variants dealt out
+    // by these weights (a variant is an age; the trees pick variants evenly), "age" then unused
+    std::vector<std::pair<std::string, double>> ageMix;
     double scale = 1.0;                // its trees' size on top of the placement's spread
 };
 

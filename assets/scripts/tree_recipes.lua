@@ -65,6 +65,8 @@ tree_recipes = {
   -- sympodial zig-zag that makes an oak's limbs crooked) -- out to sprays of twigs. Gnarled: crooks, a fluted foot,
   -- knotty limbs.
   oak = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { axiom_prefix = "F(3.0)", scale = { params = { crownRadius = 0.6, crownBottom = 2.2 } }, params = { pruneBelow = 0.45 } } },
     axiom = "T(1.3,2)",
     iterations = 13,
     rules = {
@@ -141,11 +143,13 @@ tree_recipes = {
       leaf = { shape = "lobed", length = 0.32, width = 0.13, lobes = 3 },
       stem_width = 0.014, cup = 0.5,
     },
-    branch_cards = { sprig = 0.8 },
+    branch_cards = { sprig = 0.95 },
   },
 
   -- BIRCH: one slim leader whorling light branches up its length, their twigs drooping; white bark, hardly fluted.
   birch = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { axiom_prefix = "F(3.0)", params = { pruneBelow = 0.45 } } },
     axiom = "T(1.3,2)",
     iterations = 16,
     rules = {
@@ -188,6 +192,8 @@ tree_recipes = {
   -- SPRUCE: a straight whorled leader; each whorl's branches longest at the bottom (n counts down the tree), sagging
   -- and turning their tips back up; flat sprays of twigs off them.
   spruce = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { scale = { vars = { reach = 0.8 } }, params = { pruneBelow = 0.30 } } },
     axiom = "C($len,$whorls)",
     iterations = 38,
     rules = {
@@ -353,6 +359,8 @@ tree_recipes = {
   -- the last), reaching out level in layered tiers with the tips turned up; seven-lobed palmate leaves. Each tree
   -- picks a palette -- crimson, orange, turning, or still green -- blended limb by limb across its crown.
   maple = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { axiom_prefix = "F(2.0)", params = { pruneBelow = 0.4 } } },
     -- (Glenn, 2026-10-18: "What about the maple tree? It looks pretty bad" -- it forked at half a metre and its
     -- limbs sagged to the ground: a heap of leaves. A Japanese maple: a clear trunk to head height, a few limbs
     -- rising into a broad vase wider than it is tall, the sprays held out in layers, the branching seen under them)
@@ -405,6 +413,8 @@ tree_recipes = {
   -- JAPANESE BLACK PINE (Pinus thunbergii): a crooked, leaning trunk, bare below; a few long limbs fanning out
   -- level from its upper half, their ends gathered into dense, upturned clouds of long paired needles.
   pine = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { params = { pruneBelow = 0.55 } } },
     axiom = "F($bare)C($len,$whorls)",
     iterations = 16,
     rules = {
@@ -771,6 +781,8 @@ tree_recipes = {
   -- three or four leaning, sinuous leaders, the crown open -- narrow grey-green leaves in sparse tufts at the ends,
   -- the limbs showing through.
   multistem = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { axiom_prefix = "F(1.5)", params = { pruneBelow = 0.25 } } },
     axiom = "T(0.7,2)",
     iterations = 13,
     rules = {
@@ -812,6 +824,8 @@ tree_recipes = {
   -- RIVER BIRCH (the street row's tree): one trunk, a dense oval crown with drooping edges, small toothed leaves
   -- turning yellow here and there; the bark tan and peeling.
   river_birch = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { axiom_prefix = "F(2.5)", params = { pruneBelow = 0.4 } } },
     axiom = "T(1.2,2)",
     iterations = 16,
     rules = {
@@ -895,6 +909,8 @@ tree_recipes = {
   -- WEEPING WILLOW (by the water): a stout trunk, limbs arching up and out, and from them long curtains of thin
   -- hanging shoots with narrow leaves, swaying to the ground.
   weeping_willow = {
+    -- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole
+    forms = { stand = { axiom_prefix = "F(1.0)", params = { pruneBelow = 0.20 } } },
     axiom = "T(1.0,2)",
     iterations = 12,
     rules = {
@@ -933,3 +949,85 @@ tree_recipes = {
     branch_cards = { sprig = 2.2 },
   },
 }
+
+-- DERIVED SPECIES (Glenn, 2026-10-18: the island's beech, fir, aspen and alder, grown till now as an oak, a spruce, a
+-- river birch and a multistem): each its nearest kin -- its grammar, ages and forms -- with what makes it itself laid
+-- over. `derive`: a copy of the kin; a table in `over` merges into the kin's key by key, a list (a range, the rules)
+-- replaces it.
+local function copy(t)
+  if type(t) ~= "table" then return t end
+  local o = {}
+  for k, v in pairs(t) do o[k] = copy(v) end
+  return o
+end
+local function derive(kin, over)
+  local o = copy(kin)
+  for k, v in pairs(over) do
+    if type(v) == "table" and type(o[k]) == "table" and v[1] == nil and next(v) ~= nil then o[k] = derive(o[k], v)
+    else o[k] = copy(v) end
+  end
+  return o
+end
+local R = tree_recipes
+
+-- BEECH: the oak's frame grown straight -- a smooth grey column, hardly a crook, limbs climbing into a dense dome --
+-- its leaves oval, wavy-edged, alternate along the shoot; in a stand the longest clear bole of them all
+R.beech = derive(R.oak, {
+  vars = { pitch = {34, 48}, pitch2 = {26, 40}, crown = {0.80, 1.02} },   -- (straight: its seeds differ in size instead)
+  params = { crookChance = {0.02, 0.06}, crookAngle = {6, 12}, meander = {0.03, 0.06}, lobeDepth = {0.02, 0.05},
+             flare = {0.30, 0.45}, barkNoise = 0.02, twist = 0, nodeSwell = 0.04 },
+  ages = { mature = { params = { crookChance = {0.04, 0.08} } }, old = { params = { crookChance = {0.05, 0.10} } },
+           ancient = { params = { crookChance = {0.06, 0.12} } } },
+  bark = "smooth",
+  bark_color = { {0.40, 0.40, 0.38}, {0.50, 0.50, 0.47} },
+  leaf_color = { {0.15, 0.32, 0.08}, {0.23, 0.42, 0.12} },
+  leaves = { size = 0.08 },
+  card = {
+    axiom = "S(4)", iterations = 5,
+    rules = {
+      { "S(n):n>0",  "F(0.08)+($bend)[+($a)L($s)]F(0.08)-($bend)[-($a)L($s*0.95)]S(n-1)" },
+      { "S(n):n<=0", "F(0.04)L(0.9)" },
+    },
+    vars = { a = {48, 62}, s = {0.9, 1.05}, bend = {-6, 6} },
+    leaf = { shape = "oval", length = 0.24, width = 0.14 },
+  },
+  forms = { stand = { axiom_prefix = "F(4.5)", params = { pruneBelow = 0.5 } } },
+  branch_cards = { sprig = 1.15 },   -- (its straighter limbs model more wood than the oak's: the hero held to its 8k)
+})
+
+-- SILVER FIR: the spruce's whorls held level, not swept down, the crown narrower and flat-topped old; its needles
+-- FLAT in two ranks, dark above with a pale line beneath; the bark smooth grey
+R.fir = derive(R.spruce, {
+  vars = { pitch = {70, 82} },
+  params = { droop = {0.02, 0.06} },
+  bark = "smooth",
+  bark_color = { {0.34, 0.34, 0.33}, {0.42, 0.42, 0.40} },
+  needles = { kind = "flat", length = 0.028, width = 0.0026, forward = 70, side_angle = 70,
+              color = { {0.05, 0.14, 0.08}, {0.08, 0.18, 0.10} }, tip_color = {0.15, 0.30, 0.16} },
+})
+
+-- ASPEN: the birch's slim leader, its branches climbing (a narrow crown), the bark smooth grey-green; round leaves on
+-- long flat stalks -- they tremble
+R.aspen = derive(R.birch, {
+  vars = { pitch = {26, 38} },
+  params = { barkMottle = 0.35, barkFootDark = 0.85, droop = {0.10, 0.18} },
+  bark = "smooth",
+  bark_color = { {0.60, 0.62, 0.55}, {0.70, 0.72, 0.64} },
+  leaf_color = { {0.22, 0.42, 0.12}, {0.32, 0.52, 0.16} },
+  leaves = { size = 0.06, droop = 0.3 },
+  card = { leaf = { shape = "oval", length = 0.12, width = 0.11 } },
+})
+
+-- ALDER: by the water, a dark cone round a straight leader, its limbs held out level; the bark dark and fissured;
+-- round leaves, notched at the tip, dark and glossy
+R.alder = derive(R.birch, {
+  vars = { pitch = {48, 62}, side = {0.60, 0.70} },
+  params = { barkMottle = 0.0, barkFootDark = 1.0, droop = {0.06, 0.12}, flare = 0.4, barkNoise = 0.05 },
+  bark = "furrowed",
+  bark_color = { {0.20, 0.18, 0.16}, {0.28, 0.25, 0.22} },
+  leaf_color = { {0.09, 0.22, 0.06}, {0.14, 0.29, 0.08} },
+  leaves = { size = 0.075, droop = 0.2 },
+  card = { leaf = { shape = "oval", length = 0.13, width = 0.12 } },
+  forms = { stand = { axiom_prefix = "F(2.0)", params = { pruneBelow = 0.4 } } },
+})
+

@@ -10761,3 +10761,24 @@ Glenn, 2026-10-18: "Can you do those things next" (the island's recipe forest bu
 - island_8_nature with RT_FOREST_RECIPES=1: forest 107 s grown (and written, 1.1 GB) -> 46 s from the cache; the level
   162 -> 100 s (the real_tree forest's: 42 s, 96 s).
 - Test `a_species_grown_once_reads_back_the_same`.
+
+## ADR-0199 — Stands: forest-grown forms, a mix of ages, and beech, fir, aspen and alder
+
+Glenn, 2026-10-18: "Can you do those things next" (an age mix in a stand, forest-grown forms, the island's missing
+species).
+
+- **Forms** (TreeRecipe::forms, formedRecipe): laid over a recipe after its age, as an age is -- and able to SCALE
+  numbers (`scale = { params = {...}, vars = {...} }`), so one form fits every age. `stand`, a forest-grown tree:
+  - TreeParams::pruneBelow: a side limb leaving its parent below that share of the height and staying low (all of it
+    under 1.35 x the cut -- the stand's shade) is snapped to a stub; a scaffold limb climbing into the crown is not.
+  - a clear bole: the form's `axiom_prefix` ("F(3)") goes before whatever axiom the age grows (oak 3 m, beech 4.5),
+    so an open-grown tree's draw is untouched.
+  - the oak's grown crowns narrower (crownRadius x 0.6) and higher (crownBottom x 2.2); the spruce's reach x 0.8.
+  Test `a_stand_grown_tree_has_a_clear_bole`: lowest leaves oak 3.1 -> 5.9 m, birch 3.3 -> 6.4, spruce 0 -> 3.4.
+- **A mix of ages** (ForestSpecies::ageMix): a species' variants dealt out by weight (largest remainder); a recipes
+  forest defaults to young 1 : mature 2 : old 1, in the stand form ("recipeForm", "ageMix", RT_FOREST_RECIPE_AGE pins
+  one age). The tree cache keys every variant's age and the form.
+- **Derived species** (tree_recipes.lua `derive`: a copy of the kin, a table merged key by key, a list replaced):
+  beech (the oak grown straight, smooth grey, oval leaves; its seeds vary in size), silver fir (the spruce's whorls
+  level, flat needles, smooth grey bark), aspen (the birch's leader, climbing branches, grey-green bark, round leaves),
+  alder (a dark cone, fissured bark, dark round leaves). The island's kinds now map to them. Scale lab row z 200.

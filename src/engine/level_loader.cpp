@@ -901,7 +901,10 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
         const std::string name = ent["tree"]["recipe"].get<std::string>();
         // (its AGE: "tree": {"recipe": "oak", "age": "ancient"} -- tree_recipe.h TreeAge)
         const TreeRecipe* found = book.find(name);
-        const TreeRecipe agedR = found ? agedRecipe(*found, ent["tree"].value("age", std::string())) : TreeRecipe{};
+        // (and its FORM: "form": "stand", a forest-grown tree -- TreeRecipe::forms)
+        const TreeRecipe agedR = found ? formedRecipe(agedRecipe(*found, ent["tree"].value("age", std::string())),
+                                                      ent["tree"].value("form", std::string()))
+                                       : TreeRecipe{};
         if (const TreeRecipe* r = found ? &agedR : nullptr) {
             std::map<std::string, double> overrides;
             if (ent["tree"].contains("set") && ent["tree"]["set"].is_object())
@@ -2069,8 +2072,29 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 LOG_WARN << "[forest] no recipe '" << fs.recipe << "' in tree_recipes.lua";
                 continue;
             }
-            const TreeRecipe agedR = agedRecipe(*found, fs.age);   // (its age: tree_recipe.h TreeAge)
-            const TreeRecipe* r = &agedR;
+            // (its age -- or each variant its own, dealt out by the mix's weights, the largest share first -- and its form)
+            std::vector<std::string> variantAges(static_cast<std::size_t>(fs.variants), fs.age);
+            if (!fs.ageMix.empty()) {
+                double sum = 0.0;
+                for (const auto& [a, w] : fs.ageMix) sum += std::max(0.0, w);
+                std::vector<std::pair<double, std::size_t>> rem;
+                std::vector<int> count(fs.ageMix.size(), 0);
+                int dealt = 0;
+                for (std::size_t k = 0; k < fs.ageMix.size() && sum > 0.0; ++k) {
+                    const double share = fs.variants * std::max(0.0, fs.ageMix[k].second) / sum;
+                    count[k] = static_cast<int>(share);
+                    dealt += count[k];
+                    rem.emplace_back(share - count[k], k);
+                }
+                std::stable_sort(rem.begin(), rem.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+                for (std::size_t q = 0; dealt < fs.variants && q < rem.size(); ++q, ++dealt) count[rem[q].second]++;
+                std::size_t v = 0;
+                for (std::size_t k = 0; k < fs.ageMix.size(); ++k)
+                    for (int c = 0; c < count[k] && v < variantAges.size(); ++c) variantAges[v++] = fs.ageMix[k].first;
+            }
+            std::vector<TreeRecipe> variantRecipes;
+            for (const std::string& a : variantAges) variantRecipes.push_back(formedRecipe(agedRecipe(*found, a), fs.form));
+            const TreeRecipe* r = &variantRecipes.front();
             // its levels' distances: a tree's the forest's; a bush's within its own shorter reach
             const double reach = fs.understory && fp.understoryM > 0 ? fp.understoryM : fp.nearM;
             const double reachFade = fs.understory && fp.understoryM > 0 ? 10.0 : fp.nearFadeM;
@@ -2097,7 +2121,9 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             // bands were grown before by this build, else grown here and written for the next load)
             std::vector<uint32_t> seeds;
             for (int v = 0; v < fs.variants; ++v) seeds.push_back(fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17));
-            const uint64_t cacheKey = recipeSpeciesKey(path, fs.recipe, fs.age, seeds, bands);
+            std::string agesKey = fs.form;
+            for (const std::string& a : variantAges) agesKey += "|" + a;
+            const uint64_t cacheKey = recipeSpeciesKey(path, fs.recipe, agesKey, seeds, bands);
             std::vector<std::vector<RecipeTreeLevel>> cached, grown;
             const bool hit = loadRecipeSpecies(cacheKey, cached) && cached.size() == seeds.size();
             for (int v = 0; v < fs.variants; ++v) {
@@ -2105,8 +2131,9 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 var.species = static_cast<int>(s);
                 var.shade = 0.6;
                 const uint32_t seed = seeds[static_cast<std::size_t>(v)];
-                std::vector<RecipeTreeLevel> levels = hit ? std::move(cached[static_cast<std::size_t>(v)])
-                                                          : growRecipeLevels(*r, seed, {}, bands, true, &branchCards);
+                std::vector<RecipeTreeLevel> levels =
+                    hit ? std::move(cached[static_cast<std::size_t>(v)])
+                        : growRecipeLevels(variantRecipes[static_cast<std::size_t>(v)], seed, {}, bands, true, &branchCards);
                 if (!hit && cacheKey) grown.push_back(levels);
                 const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
                 for (std::size_t li = 0; li < levels.size(); ++li) {
@@ -2172,7 +2199,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                 if (folData[s].pixels.empty()) folData[s] = levels.back().atlas.albedo;
             }
             if (!hit && cacheKey && grown.size() == seeds.size()) saveRecipeSpecies(cacheKey, grown);
-            LOG_INFO << "[forest] " << fs.recipe << (fs.age.empty() ? "" : " (" + fs.age + ")") << ": " << fs.variants
+            LOG_INFO << "[forest] " << fs.recipe << " (" << agesKey << ")" << ": " << fs.variants
                      << " variants " << (hit ? "from the tree cache" : cacheKey ? "grown, cached" : "grown");
 #endif
             continue;

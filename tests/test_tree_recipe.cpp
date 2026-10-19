@@ -1068,7 +1068,7 @@ TEST_CASE(a_trees_trunk_zone_is_one_closed_surface) {
 // the height, crown width, trunk radius a metre up, limbs, dead limbs, bark and foliage triangles of the hero.
 TEST_CASE(a_trees_ages_grow_older) {
     const TreeRecipeBook book = shipped();
-    for (const char* name : {"oak", "spruce", "sakura"}) {
+    for (const char* name : {"oak", "spruce", "sakura", "beech", "fir"}) {
         const TreeRecipe* r = book.find(name);
         CHECK(r != nullptr);
         if (!r) continue;
@@ -1180,7 +1180,8 @@ TEST_CASE(a_forests_levels_lighten_with_distance) {
     const TreeRecipeBook book = shipped();
     RecipeLodBands bands;
     bands.hero0 = 16; bands.hero1 = 22; bands.mid0 = 58; bands.mid1 = 70; bands.light0 = 130; bands.light1 = 150;
-    for (const char* name : {"oak", "birch", "maple", "river_birch", "spruce", "pine", "magnolia", "sakura"})
+    for (const char* name : {"oak", "birch", "maple", "river_birch", "spruce", "pine", "magnolia", "sakura", "beech", "fir",
+                             "aspen", "alder"})
       for (const char* age : {"", "mature"}) {
         const TreeRecipe* base = book.find(name);
         if (!base) continue;
@@ -1247,4 +1248,26 @@ TEST_CASE(a_species_grown_once_reads_back_the_same) {
     CHECK(recipeSpeciesKey(path, "birch", "", {11u, 13u}, bands) != key);
     std::filesystem::remove_all(dir);
     unsetenv("RT_TREE_CACHE_DIR");
+}
+
+// A FOREST-GROWN TREE (TreeRecipe::forms.stand, TreeParams::pruneBelow; the island's forests): its lower limbs shaded
+// off the trunk -- its lowest leaves well above the open-grown tree's -- and the form a recipe file reads.
+TEST_CASE(a_stand_grown_tree_has_a_clear_bole) {
+    const TreeRecipeBook book = shipped();
+    for (const char* name : {"oak", "spruce", "birch"}) {
+        const TreeRecipe* r = book.find(name);
+        CHECK(r != nullptr && r->forms.count("stand") == 1);
+        if (!r) continue;
+        auto lowLeaf = [](const TreeMesh& t, double& top) {
+            double low = 1e9;
+            top = 0.0;
+            for (const Vertex& v : t.leaves.vertices) { low = std::min(low, v.position.y); top = std::max(top, v.position.y); }
+            return low;
+        };
+        double topOpen = 0, topStand = 0;
+        const double open = lowLeaf(growRecipeTree(*r, 4u), topOpen);
+        const double stand = lowLeaf(growRecipeTree(formedRecipe(*r, "stand"), 4u), topStand);
+        std::printf("    [stand] %-7s lowest leaves %.1f m open, %.1f m in a stand (of %.1f / %.1f m)\n", name, open, stand, topOpen, topStand);
+        CHECK(stand > open + 0.1 * topOpen);
+    }
 }

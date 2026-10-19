@@ -44,7 +44,7 @@ const std::vector<Field>& fields() {
         {"woodMinRadius", &TreeParams::woodMinRadius}, {"leafLod", &TreeParams::leafLod},
         {"sprigSize", &TreeParams::sprigSize}, {"sprigDonor", nullptr, &TreeParams::sprigDonor},
         {"woodEdge", &TreeParams::woodEdge}, {"ringAngle", &TreeParams::ringAngle}, {"ringSpacing", &TreeParams::ringSpacing},
-        {"trunkZone", &TreeParams::trunkZone}, {"deadChance", &TreeParams::deadChance},
+        {"trunkZone", &TreeParams::trunkZone}, {"deadChance", &TreeParams::deadChance}, {"pruneBelow", &TreeParams::pruneBelow},
         {"colonize", nullptr, &TreeParams::colonize}, {"colonizePoints", nullptr, &TreeParams::colonizePoints},
         {"colonizeStep", &TreeParams::colonizeStep}, {"colonizeShell", &TreeParams::colonizeShell},
         {"crownWiden", &TreeParams::crownWiden}, {"crownHeighten", &TreeParams::crownHeighten},
@@ -148,12 +148,11 @@ std::string substituteVars(const std::string& text, const std::map<std::string, 
     return out;
 }
 
-TreeRecipe agedRecipe(const TreeRecipe& r, const std::string& age) {
-    auto it = r.ages.find(age);
-    if (it == r.ages.end()) return r;
-    const TreeAge& a = it->second;
-    TreeRecipe out = r;
+namespace {
+// an age or a form laid over a recipe: its axiom, iterations, set numbers, scaled numbers, branch-card budgets
+void layOver(TreeRecipe& out, const TreeAge& a) {
     if (!a.axiom.empty()) out.axiom = a.axiom;
+    if (!a.axiomPrefix.empty()) out.axiom = a.axiomPrefix + out.axiom;
     if (a.iterations >= 0) out.iterations = a.iterations;
     auto over = [](std::vector<RecipeRange>& base, const std::vector<RecipeRange>& top) {
         for (const RecipeRange& g : top) {
@@ -166,7 +165,32 @@ TreeRecipe agedRecipe(const TreeRecipe& r, const std::string& age) {
     if (a.sprig >= 0) out.branchCards.sprig = a.sprig;
     if (a.nearLeaves >= 0) out.branchCards.nearLeaves = static_cast<int>(a.nearLeaves);
     if (a.nearTwigTris >= 0) out.branchCards.nearTwigTris = static_cast<int>(a.nearTwigTris);
+    auto scale = [](std::vector<RecipeRange>& base, const std::vector<RecipeRange>& by) {
+        for (const RecipeRange& g : by) {
+            auto f = std::find_if(base.begin(), base.end(), [&](const RecipeRange& b) { return b.name == g.name; });
+            if (f != base.end()) { f->lo *= g.lo; f->hi *= g.lo; }
+        }
+    };
+    scale(out.params, a.paramsScale);
+    scale(out.vars, a.varsScale);
+}
+}  // namespace
+
+TreeRecipe agedRecipe(const TreeRecipe& r, const std::string& age) {
+    auto it = r.ages.find(age);
+    if (it == r.ages.end()) return r;
+    TreeRecipe out = r;
+    layOver(out, it->second);
     out.ages.clear();
+    return out;
+}
+
+TreeRecipe formedRecipe(const TreeRecipe& r, const std::string& form) {
+    auto it = r.forms.find(form);
+    if (it == r.forms.end()) return r;
+    TreeRecipe out = r;
+    layOver(out, it->second);
+    out.forms.clear();
     return out;
 }
 

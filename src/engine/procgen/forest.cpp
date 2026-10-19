@@ -66,15 +66,25 @@ ForestParams forestFromJson(const nlohmann::json& j) {
         }
     // THE RECIPE TREES IN A real_tree FOREST (Glenn, 2026-10-18: "I guess the next step is to bring these trees to the
     // island"): "recipes": true -- or RT_FOREST_RECIPES=1 (=0 off: the A/B) -- grows each `kind` as its recipe
-    // (tree_recipes.lua), at "recipeAge" (default mature: real sizes, ADR-0196; RT_FOREST_RECIPE_AGE overrides); a
-    // kind with no recipe of its own takes its nearest (beech an oak, fir a spruce ...), one with none stays real_tree
+    // (tree_recipes.lua), at "recipeAge" (default mature: real sizes, ADR-0196; RT_FOREST_RECIPE_AGE overrides): the
+    // willow a weeping willow, the shrub a hawthorn; beech, fir, aspen and alder their own recipes (derived from their
+    // kin); a kind with no recipe stays real_tree
     bool recipes = j.value("recipes", false);
     if (const char* e = std::getenv("RT_FOREST_RECIPES")) recipes = std::string(e) != "0";
     std::string recipeAge = j.value("recipeAge", std::string("mature"));
     if (const char* e = std::getenv("RT_FOREST_RECIPE_AGE")) recipeAge = e;
+    // (and in a stand, of mixed ages: "recipeForm" (default stand), "ageMix" { age = weight } (default young 1, mature 2,
+    // old 1; RT_FOREST_RECIPE_AGE pins one age instead))
+    const std::string recipeForm = j.value("recipeForm", std::string("stand"));
+    std::vector<std::pair<std::string, double>> recipeMix;
+    if (j.contains("ageMix") && j["ageMix"].is_object()) {
+        for (auto it = j["ageMix"].begin(); it != j["ageMix"].end(); ++it) recipeMix.emplace_back(it.key(), it.value().get<double>());
+    } else if (!std::getenv("RT_FOREST_RECIPE_AGE") && !j.contains("recipeAge")) {
+        recipeMix = {{"young", 1.0}, {"mature", 2.0}, {"old", 1.0}};
+    }
     static const std::map<std::string, std::string> kRecipeOf = {
-        {"oak", "oak"}, {"maple", "maple"}, {"beech", "oak"}, {"birch", "birch"}, {"aspen", "river_birch"},
-        {"willow", "weeping_willow"}, {"alder", "multistem"}, {"pine", "pine"}, {"spruce", "spruce"}, {"fir", "spruce"},
+        {"oak", "oak"}, {"maple", "maple"}, {"beech", "beech"}, {"birch", "birch"}, {"aspen", "aspen"},
+        {"willow", "weeping_willow"}, {"alder", "alder"}, {"pine", "pine"}, {"spruce", "spruce"}, {"fir", "fir"},
         {"shrub", "hawthorn"}};
     if (j.contains("species") && j["species"].is_array())
         for (const auto& s : j["species"]) {
@@ -85,8 +95,17 @@ ForestParams forestFromJson(const nlohmann::json& j) {
                 const auto it = kRecipeOf.find(s.value("kind", std::string("spruce")));
                 if (it != kRecipeOf.end()) {
                     fs.recipe = it->second;
-                    if (fs.age.empty() && !s.value("understory", false)) fs.age = recipeAge;
+                    if (fs.age.empty() && !s.value("understory", false)) {
+                        fs.age = recipeAge;
+                        fs.ageMix = recipeMix;
+                        fs.form = recipeForm;
+                    }
                 }
+            }
+            if (s.contains("form")) fs.form = s.value("form", std::string());
+            if (s.contains("ageMix") && s["ageMix"].is_object()) {
+                fs.ageMix.clear();
+                for (auto it = s["ageMix"].begin(); it != s["ageMix"].end(); ++it) fs.ageMix.emplace_back(it.key(), it.value().get<double>());
             }
             if (fs.recipe.empty() && !realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) continue;
             fs.scale = s.value("scale", fs.scale);

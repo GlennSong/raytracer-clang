@@ -129,9 +129,14 @@ struct NeedleSpec {
 // branch cards' budgets for a tree that size.
 struct TreeAge {
     std::string axiom;               // empty: the recipe's
+    std::string axiomPrefix;         // ...or this put before whatever axiom the tree has (a form's: a stand's clear bole,
+                                     //   "F(3)", under every age's trunk -- an open-grown tree's draw untouched)
     int iterations = -1;             // < 0: the recipe's
     std::vector<RecipeRange> params, vars;
     double sprig = -1, nearLeaves = -1, nearTwigTris = -1;   // < 0: the recipe's branch_cards
+    // ...and numbers SCALED rather than set (`scale = { params = {...}, vars = {...} }`, each a factor): a FORM's way
+    // (below), so one form fits every age -- a stand oak's crown 0.6 of whatever crown its age grows
+    std::vector<RecipeRange> paramsScale, varsScale;
 };
 
 struct TreeRecipe {
@@ -162,6 +167,10 @@ struct TreeRecipe {
     BranchCardSpec branchCards;      // branch_cards = {...}: the far side of the near kit (branch_cards.h)
     NeedleSpec needles;              // needles = {...}: a conifer's foliage at every level (branch_cards.h)
     std::map<std::string, TreeAge> ages;   // ages = { young = {...}, old = {...}, ... } (agedRecipe)
+    // FORMS (Glenn, 2026-10-18: forests on the island; formedRecipe): how the tree grows WHERE it grows, on top of its
+    // age -- `stand`, among other trees: its lower limbs shaded off (pruneBelow, a clear bole), its crown narrow and
+    // high (scaled) -- as against the open-grown tree a recipe is
+    std::map<std::string, TreeAge> forms;
 };
 
 class TreeRecipeBook {
@@ -188,6 +197,9 @@ std::string substituteVars(const std::string& text, const std::map<std::string, 
 // The recipe at `age` (TreeRecipe::ages): its axiom, iterations, params and vars laid over, its branch cards' budgets.
 // An age the recipe does not name (or "") is the recipe as it is.
 TreeRecipe agedRecipe(const TreeRecipe& r, const std::string& age);
+// ...and in `form` (TreeRecipe::forms: "stand"), laid over the same way after the age (its scales scale the aged
+// numbers). A form the recipe does not name (or "") is the recipe as it is.
+TreeRecipe formedRecipe(const TreeRecipe& r, const std::string& form);
 
 // Grow one tree of the recipe. `overrides` (a level's per-tree knobs: the lab's gnarl row) win over the draw.
 TreeMesh growRecipeTree(const TreeRecipe& r, uint32_t seed, const std::map<std::string, double>& overrides = {});

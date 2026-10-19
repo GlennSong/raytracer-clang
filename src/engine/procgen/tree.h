@@ -101,6 +101,9 @@ struct TreeParams {
     // fifths of the trunk's girth are DEAD -- snapped off one or two internodes out (a broken stub), no foliage, the
     // bark greyed. 0 = none.
     float deadChance = 0.0f;
+    // A FOREST-GROWN tree's clear bole (forms.stand; Glenn, 2026-10-18, the island's forests): the side limbs off the
+    // trunk below this share of the tree's height shaded off as it grew -- snapped at the trunk, a short grey stub each
+    float pruneBelow = 0.0f;
     // THE CROWN GROWN TO ITS SHAPE (Glenn, 2026-10-18, of the ancient oak: "skip the tangle of branches ... I would
     // expect more plumage and foliage"; space colonization, Runions, Lane & Prusinkiewicz 2007): colonize = 1 takes the
     // grammar's tree as the SCAFFOLD -- its trunk and few big limbs -- and grows the rest toward colonizePoints points

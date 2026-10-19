@@ -1514,7 +1514,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     // DEAD LIMBS (TreeParams::deadChance): side limbs -- not the one a node carries on in -- snapped off one to three
     // internodes out; the stub keeps no foliage and wears grey bark
     std::vector<char> dead(nodes.size(), 0);
-    if (params.deadChance > 0.0f && nodes.size() > 2) {
+    if ((params.deadChance > 0.0f || params.pruneBelow > 0.0f) && nodes.size() > 2) {
         std::mt19937 drng(seed ^ 0xdead1u);
         std::uniform_real_distribution<double> u01(0.0, 1.0);
         std::vector<std::vector<int>> kids(nodes.size());
@@ -1539,6 +1539,17 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             if (nodes[i].parent >= 0) carried[static_cast<std::size_t>(nodes[i].parent)] += carried[i];
         std::vector<int> depth(nodes.size(), -1), keepTo(nodes.size(), 0);
         std::vector<char> drop(nodes.size(), 0);
+        // (the clear bole, TreeParams::pruneBelow: a side limb that leaves its parent below the cut and STAYS low -- all of
+        // it under 1.35 x the cut: in the stand's shade -- is shaded off; a scaffold limb climbing into the crown, however
+        // low its fork, is not)
+        double treeTop = 0.0;
+        for (const SkeletonNode& nd : nodes) treeTop = std::max(treeTop, static_cast<double>(nd.pos.y));
+        const double cut = params.pruneBelow * treeTop;
+        std::vector<double> subTop(nodes.size(), 0.0);   // (the highest point of each node's subtree)
+        for (std::size_t i = 0; i < nodes.size(); ++i) subTop[i] = nodes[i].pos.y;
+        for (std::size_t i = nodes.size(); i-- > 1;)
+            if (nodes[i].parent >= 0)
+                subTop[static_cast<std::size_t>(nodes[i].parent)] = std::max(subTop[static_cast<std::size_t>(nodes[i].parent)], subTop[i]);
         for (size_t n = 1; n < nodes.size(); ++n) {
             const int par = nodes[n].parent;
             if (par < 0) continue;
@@ -1550,6 +1561,13 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 continue;
             }
             if (lead[static_cast<std::size_t>(par)] == static_cast<int>(n)) continue;
+            if (params.pruneBelow > 0.0f && nodes[static_cast<std::size_t>(par)].pos.y < cut && subTop[n] < 1.35 * cut) {   // (shaded off)
+                dead[n] = 1;
+                depth[n] = 0;
+                keepTo[n] = 0;
+                continue;
+            }
+            if (params.deadChance <= 0.0f) continue;
             // (a crown grown to its shape: only small limbs -- a big one snapped took its whole clump with it)
             const float deadMax = params.colonize >= 1 ? std::max(0.12f * trunkR, 3.0f * params.tipRadius * params.radiusScale) : 0.4f * trunkR;
             if (nodes[n].radius < 0.015f || nodes[n].radius > deadMax) continue;

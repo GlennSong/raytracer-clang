@@ -60,7 +60,7 @@
     }
   },
   "name": "scale_lab",
-  "_note": "THE SCALE LAB (Glenn, 2026-10-18: \"everything needs to be in proportion to each other ... Let's get the scale right\"): the city's own things at their own sizes along a street (scale_block.lua: a house, a 4-, 6- and 8-storey building, a sedan, a street lamp, a 1.8 m person, a 30 m pole banded every metre, red every 5) and, across it, the recipe trees a row a species, an age a column (young, mature, old, ancient). Edit the recipes and the level reloads.",
+  "_note": "THE SCALE LAB (Glenn, 2026-10-18: \"everything needs to be in proportion to each other ... Let's get the scale right\"): the city's own things at their own sizes along a street (scale_block.lua: a house, a 4-, 6- and 8-storey building, a sedan, a street lamp, a 1.8 m person, a 30 m pole banded every metre, red every 5) and, across it, the recipe trees a row a species, an age a column (young, mature, old, ancient). Edit the recipes and the level reloads. A last row (z 160): forest-grown trees (form stand: a clear bole, a narrower crown). Row z 200: the derived species (beech, fir, aspen, alder) mature.",
   "entities": [
     {
       "id": 1,
@@ -248,6 +248,146 @@
         "recipe": "sakura",
         "seed": 3,
         "age": "ancient"
+      }
+    },
+    {
+      "id": 14,
+      "name": "oak_young_stand",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "young",
+        "form": "stand"
+      }
+    },
+    {
+      "id": 15,
+      "name": "oak_mature_stand",
+      "shape": "tree",
+      "position": [
+        30.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "mature",
+        "form": "stand"
+      }
+    },
+    {
+      "id": 16,
+      "name": "spruce_young_stand",
+      "shape": "tree",
+      "position": [
+        72.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "young",
+        "form": "stand"
+      }
+    },
+    {
+      "id": 17,
+      "name": "spruce_mature_stand",
+      "shape": "tree",
+      "position": [
+        100.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "mature",
+        "form": "stand"
+      }
+    },
+    {
+      "id": 18,
+      "name": "birch_mature_stand",
+      "shape": "tree",
+      "position": [
+        128.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 3,
+        "age": "mature",
+        "form": "stand"
+      }
+    },
+    {
+      "id": 19,
+      "name": "beech_mature",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        200.0
+      ],
+      "tree": {
+        "recipe": "beech",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 20,
+      "name": "fir_mature",
+      "shape": "tree",
+      "position": [
+        30.0,
+        0,
+        200.0
+      ],
+      "tree": {
+        "recipe": "fir",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 21,
+      "name": "aspen_mature",
+      "shape": "tree",
+      "position": [
+        60.0,
+        0,
+        200.0
+      ],
+      "tree": {
+        "recipe": "aspen",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 22,
+      "name": "alder_mature",
+      "shape": "tree",
+      "position": [
+        90.0,
+        0,
+        200.0
+      ],
+      "tree": {
+        "recipe": "alder",
+        "seed": 3,
+        "age": "mature"
       }
     }
   ]

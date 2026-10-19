@@ -383,37 +383,56 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             readColour(L, st, "color", sp.color, sp.colorHi);
         }
         lua_pop(L, 1);
-        lua_getfield(L, t, "ages");
-        if (lua_istable(L, -1)) {   // AGES (tree_recipe.h TreeAge): { young = {...}, old = {...}, ... }
-            const int at = lua_gettop(L);
-            lua_pushnil(L);
-            while (lua_next(L, at) != 0) {
-                if (!lua_isstring(L, -2) || !lua_istable(L, -1)) { lua_settop(L, base); return fail(err, where + ".ages: not name = {...}"); }
-                const std::string an = lua_tostring(L, -2);
-                const std::string aw = where + ".ages." + an;
-                const int a = lua_gettop(L);
-                TreeAge age;
-                age.axiom = strField(L, a, "axiom");
-                age.iterations = static_cast<int>(numField(L, a, "iterations", -1));
-                age.sprig = numField(L, a, "sprig", -1);
-                age.nearLeaves = numField(L, a, "near_leaves", -1);
-                age.nearTwigTris = numField(L, a, "near_twig_tris", -1);
-                if (!readRanges(L, a, "params", age.params, aw, err) || !readRanges(L, a, "vars", age.vars, aw, err)) {
-                    lua_settop(L, base);
-                    return false;
-                }
-                for (const TreeRecipe::Range& g : age.params) {
-                    const auto& names = treeParamNames();
-                    if (std::find(names.begin(), names.end(), g.name) == names.end()) {
+        // AGES and FORMS (tree_recipe.h TreeAge): { young = {...}, old = {...} }, { stand = {...} } -- each its axiom,
+        // iterations, params and vars set, `scale = { params = {...}, vars = {...} }` factors, branch-card budgets
+        for (const char* table : {"ages", "forms"}) {
+            lua_getfield(L, t, table);
+            if (lua_istable(L, -1)) {
+                const int at = lua_gettop(L);
+                lua_pushnil(L);
+                while (lua_next(L, at) != 0) {
+                    if (!lua_isstring(L, -2) || !lua_istable(L, -1)) {
                         lua_settop(L, base);
-                        return fail(err, aw + ".params: unknown param '" + g.name + "'");
+                        return fail(err, where + "." + table + ": not name = {...}");
                     }
+                    const std::string an = lua_tostring(L, -2);
+                    const std::string aw = where + "." + table + "." + an;
+                    const int a = lua_gettop(L);
+                    TreeAge age;
+                    age.axiom = strField(L, a, "axiom");
+                    age.axiomPrefix = strField(L, a, "axiom_prefix");
+                    age.iterations = static_cast<int>(numField(L, a, "iterations", -1));
+                    age.sprig = numField(L, a, "sprig", -1);
+                    age.nearLeaves = numField(L, a, "near_leaves", -1);
+                    age.nearTwigTris = numField(L, a, "near_twig_tris", -1);
+                    if (!readRanges(L, a, "params", age.params, aw, err) || !readRanges(L, a, "vars", age.vars, aw, err)) {
+                        lua_settop(L, base);
+                        return false;
+                    }
+                    lua_getfield(L, a, "scale");
+                    if (lua_istable(L, -1)) {
+                        const int sc = lua_gettop(L);
+                        if (!readRanges(L, sc, "params", age.paramsScale, aw + ".scale", err) ||
+                            !readRanges(L, sc, "vars", age.varsScale, aw + ".scale", err)) {
+                            lua_settop(L, base);
+                            return false;
+                        }
+                    }
+                    lua_pop(L, 1);
+                    for (const std::vector<TreeRecipe::Range>* list : {&age.params, &age.paramsScale})
+                        for (const TreeRecipe::Range& g : *list) {
+                            const auto& names = treeParamNames();
+                            if (std::find(names.begin(), names.end(), g.name) == names.end()) {
+                                lua_settop(L, base);
+                                return fail(err, aw + ".params: unknown param '" + g.name + "'");
+                            }
+                        }
+                    (std::string(table) == "ages" ? r.ages : r.forms)[an] = age;
+                    lua_pop(L, 1);
                 }
-                r.ages[an] = age;
-                lua_pop(L, 1);
             }
+            lua_pop(L, 1);
         }
-        lua_pop(L, 1);
         lua_getfield(L, t, "needles");
         if (lua_istable(L, -1)) {   // A CONIFER'S NEEDLES (procgen/branch_cards.h)
             const int nt = lua_gettop(L);
