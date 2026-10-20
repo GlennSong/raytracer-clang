@@ -832,7 +832,7 @@ public:
     // TERRAIN SURFACE MAPS (ADR-0208, the same square): `cover`, four channels -- the ground-cover weights grass, dirt,
     // sand, snow (rock the rest) -- which the terrain's layers take over from its vertices' over [fadeStart, fadeEnd];
     // `macro`, four -- convexity (0.5 flat, 0 a gully, 1 a ridge), wetness, the rock's band tone (0.5: none) and its
-    // hardness (ADR-0209) -- shading the ground everywhere. Invalid
+    // stains (ADR-0213: streaks below ledges, creases) -- shading the ground everywhere. Invalid
     // handles switch them off. No-op by default (Vulkan).
     virtual void setTerrainSurfaceMaps(TextureHandle /*cover*/, TextureHandle /*macro*/, float /*originX*/, float /*originZ*/,
                                        float /*extent*/, float /*fadeStart*/, float /*fadeEnd*/) {}

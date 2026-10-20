@@ -313,6 +313,75 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
     // THE WEATHERED GROUND (ADR-0126): grown from uplift and weathered by water offline, cached on disk
     if (tj.contains("weather") && tj["weather"].is_object()) {
         auto grid = std::make_shared<const Heightmap>(weatheredTerrainCached(tj));
+        // ROCK RELIEF (ADR-0213, "rockRelief": { "amplitude" (m), "scale" (m, the largest of three octaves), "slopeLo",
+        // "slopeHi" (deg), "fromHeight" (m above the sea, fading in over the next 60 m) }): the detail finer than the
+        // weathered grid's 2.4 m cells on steep rock -- ridged noise, its valleys the cracks -- laid on the ground as it
+        // is read, so the drawn tiles (1 m), their colliders, the normal map and everything placed on the ground carry
+        // it alike. Displacement, baked: the near mountain faces break up where the grid could only round them.
+        if (tj.contains("rockRelief") && tj["rockRelief"].is_object()) {
+            const json& rr = tj["rockRelief"];
+            const double amp = rr.value("amplitude", 0.6), sc = rr.value("scale", 6.0);
+            const double tLo = std::tan(rr.value("slopeLo", 35.0) * 3.14159265358979 / 180.0);
+            const double tHi = std::tan(rr.value("slopeHi", 50.0) * 3.14159265358979 / 180.0);
+            const double sea = tj.value("seaLevel", 0.0), from = sea + rr.value("fromHeight", 40.0);
+            auto nz = std::make_shared<const Noise>(tj.value("seed", 0u) + 7711u);
+            const double cell = grid->worldSize / (grid->n - 1);
+            // ("blockCell" (m) > 0: BLOCKS instead of the ridged noise -- "tilt" (deg), "crackDepth", "crackWidth" (m))
+            const double blockCell = rr.value("blockCell", 0.0);
+            const double tanTilt = std::tan(rr.value("tilt", 10.0) * 3.14159265358979 / 180.0);
+            const double crackDepth = rr.value("crackDepth", 0.5), crackWidth = rr.value("crackWidth", 0.6);
+            auto f = std::make_shared<const std::function<double(double, double)>>([grid, nz, amp, sc, tLo, tHi, from, cell, blockCell, tanTilt,
+                                                                                   crackDepth, crackWidth](double x, double z) {
+                auto G = [&](double a, double b) { return static_cast<double>(grid->sampleWorld(static_cast<float>(a), static_cast<float>(b))); };
+                const double h = G(x, z);
+                if (h < from) return h;
+                const double gx = (G(x + cell, z) - G(x - cell, z)) / (2 * cell), gz = (G(x, z + cell) - G(x, z - cell)) / (2 * cell);
+                const double s = std::clamp((std::sqrt(gx * gx + gz * gz) - tLo) / (tHi - tLo), 0.0, 1.0);
+                const double up = std::clamp((h - from) / 60.0, 0.0, 1.0);
+                const double m = s * s * (3.0 - 2.0 * s) * up;
+                if (m <= 0.0) return h;
+                if (blockCell > 0.0) {
+                    // BLOCKS (after Paris et al. 2020, "Modeling Rocky Scenery using Implicit Blocks"; ADR-0213): the
+                    // face cut into Voronoi cells ~blockCell across -- each a flat block, the ground's own slope over
+                    // it tilted its own way and stepped out or in by up to `amp`, a crack sunk along its edges. The
+                    // face becomes a mosaic of blocks (an object laid on a smooth face read as rocks stuck on it)
+                    auto hsh = [](int64_t a, int64_t b, uint32_t s) {
+                        uint32_t q = static_cast<uint32_t>(a) * 0x9E3779B1u ^ static_cast<uint32_t>(b) * 0x85EBCA77u ^ s * 0xC2B2AE3Du;
+                        q ^= q >> 16; q *= 0x7FEB352Du; q ^= q >> 15; q *= 0x846CA68Bu; q ^= q >> 16;
+                        return (q & 0xFFFFFFu) / 16777216.0;
+                    };
+                    const double C = blockCell;
+                    const int64_t cx = static_cast<int64_t>(std::floor(x / C)), cz = static_cast<int64_t>(std::floor(z / C));
+                    double d1 = 1e30, d2 = 1e30, sx = 0, sz = 0;
+                    int64_t bx = 0, bz = 0;
+                    for (int64_t dz = -1; dz <= 1; ++dz)
+                        for (int64_t dx = -1; dx <= 1; ++dx) {
+                            const double px = (cx + dx + 0.15 + 0.7 * hsh(cx + dx, cz + dz, 1)) * C, pz = (cz + dz + 0.15 + 0.7 * hsh(cx + dx, cz + dz, 2)) * C;
+                            const double d = std::hypot(px - x, pz - z);
+                            if (d < d1) { d2 = d1; d1 = d; sx = px; sz = pz; bx = cx + dx; bz = cz + dz; }
+                            else if (d < d2) d2 = d;
+                        }
+                    const double e = 0.5 * C;
+                    const double pgx = (G(sx + e, sz) - G(sx - e, sz)) / (2 * e) + tanTilt * (2.0 * hsh(bx, bz, 3) - 1.0);
+                    const double pgz = (G(sx, sz + e) - G(sx, sz - e)) / (2 * e) + tanTilt * (2.0 * hsh(bx, bz, 4) - 1.0);
+                    const double plane = G(sx, sz) + pgx * (x - sx) + pgz * (z - sz) + amp * (2.0 * hsh(bx, bz, 5) - 1.0);
+                    const double edge = 0.5 * (d2 - d1);                      // metres to the cell's border
+                    const double crack = crackDepth * (1.0 - std::clamp(edge / crackWidth, 0.0, 1.0));
+                    return h + m * (plane - crack - h);
+                }
+                double r = 0.0, a = 1.0, f = 1.0 / sc, tot = 0.0;
+                for (int o = 0; o < 3; ++o) {   // ridged: 1 - |n|, the creases at its zeros
+                    const double v = 1.0 - std::abs(nz->noise2(x * f + 11.3 * o, z * f - 7.1 * o));
+                    r += a * v * v;
+                    tot += a;
+                    a *= 0.5;
+                    f *= 2.0;
+                }
+                return h + m * amp * (r / tot - 0.5) * 2.0;
+            });
+            memo[key] = f;
+            return f;
+        }
         auto f = std::make_shared<const std::function<double(double, double)>>(
             [grid](double x, double z) { return static_cast<double>(grid->sampleWorld(static_cast<float>(x), static_cast<float>(z))); });
         memo[key] = f;

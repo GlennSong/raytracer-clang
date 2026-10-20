@@ -1085,6 +1085,8 @@ void main() {
         // water gathers darker and less rough
         const float gully = clamp((0.5 - macro.x) * 2.0, 0.0, 1.0), ridge = clamp((macro.x - 0.5) * 2.0, 0.0, 1.0);
         albedo *= (1.0 - 0.22 * gully) * (1.0 + 0.07 * ridge) * (1.0 - 0.22 * macro.y * (1.0 - gTerrainSnow));
+        // THE STAINS (ADR-0213): streaks down a face below its ledges, the creases darker -- on the rock, under no snow
+        albedo *= 1.0 - 0.45 * macro.w * gTerrainRock;
         roughness = 0.95 - 0.3 * macro.y * (1.0 - gTerrainSnow);   // (wet ground is less rough)
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }

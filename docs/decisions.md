@@ -11040,3 +11040,23 @@ Glenn's terrain plan, step 5 (and: "some of the pebbling you did earlier also he
   managed blocks, roads and pads.
 - In the island levels and the labs: stones size 0.9 (stones ~10-20 cm), every 0.75 m, out to ~32 m; twigs every 1.1 m
   out to ~26 m. The grass layers are outside the terrain block: no re-bake.
+
+## ADR-0213 — Stains from the shape; block relief baked into steep rock (tested on island_8_rocky)
+
+Glenn (2026-10-19): "Do those things and let's test with island 8 rocky" -- weathering from the shape, displacement
+near the camera, the cliff blocks of Paris et al. 2020.
+
+- **Stains** (the macro map's fourth channel, was the rock's hardness, unused): on a steep face, walk up the fall line
+  from each texel; the nearest convex break above (a ledge, a facet's lip) darkens it with distance, broken into
+  streaks across the face by noise along the contour; every crease (concave) a little dark too. mesh.frag darkens the
+  rock by it, up to 45%. Baked with the macro map (1 s on the island).
+- **Rock relief** ("rockRelief" in the terrain block, read where the weathered grid becomes the ground, so the 1 m
+  tiles, their colliders, the normal map and everything placed on the ground carry it alike -- displacement, baked).
+  Two forms: ridged noise (amplitude, scale), and BLOCKS ("blockCell" > 0, after Paris et al. 2020): the steep rock
+  cut into Voronoi cells, each a flat block -- the ground's slope over it tilted its own way and stepped out or in by
+  up to the amplitude -- a crack sunk along its edges. Masked by slope (slopeLo..slopeHi) and height above the sea.
+  The ridged noise at 0.7 and 1.8 m read as nothing from 50 m; blocks of 5 m barely; blocks of 9 m with 1.5 m steps,
+  20 deg tilt and 1.2 m cracks break a face into angular planes and give the crests a jagged line. island_8_rocky
+  carries that; the ground cache key leaves it out of the weathered grid (it is laid on as read).
+- **Instanced cliff blocks failed again** (slabs planted like clutter on the face, in the terrain's own material): at
+  every density they read as boulders lying on a smooth slope. Removed; the blocks live in the ground.

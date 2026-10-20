@@ -217,7 +217,8 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
 
 nlohmann::json groundShapingBlock(const nlohmann::json& tjIn) {
     nlohmann::json tj = tjIn;
-    for (const char* k : {"rivers", "groundCover", "cdlod", "material", "forest", "trails"}) tj.erase(k);
+    // ("rockRelief" too: it is laid on the weathered grid as it is read, ADR-0213 -- the grid itself is the same)
+    for (const char* k : {"rivers", "groundCover", "cdlod", "material", "forest", "trails", "rockRelief"}) tj.erase(k);
     return tj;
 }
 

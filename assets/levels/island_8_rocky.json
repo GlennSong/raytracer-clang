@@ -525,6 +525,16 @@
      "draw": 600
     }
    ]
+  },
+  "rockRelief": {
+   "blockCell": 9.0,
+   "amplitude": 1.5,
+   "tilt": 20,
+   "crackDepth": 1.2,
+   "crackWidth": 0.8,
+   "slopeLo": 33,
+   "slopeHi": 45,
+   "fromHeight": 40
   }
  },
  "vehicles": [
@@ -810,7 +820,36 @@
     ]
    ]
   },
-{"clutter": "stones", "seed": 41, "size": 0.9, "variants": 6, "spacing": 0.75, "nearRadius": 14, "radius": 34, "fadeStart": 22, "fadeEnd": 32, "clumpScale": 0.08, "clumpCut": 0.05, "color": [0.12, 0.112, 0.098]},
-{"clutter": "twigs", "seed": 43, "size": 0.9, "variants": 6, "spacing": 1.1, "nearRadius": 12, "radius": 28, "fadeStart": 18, "fadeEnd": 26, "clumpScale": 0.06, "clumpCut": 0.0}
-]
+  {
+   "clutter": "stones",
+   "seed": 41,
+   "size": 0.9,
+   "variants": 6,
+   "spacing": 0.75,
+   "nearRadius": 14,
+   "radius": 34,
+   "fadeStart": 22,
+   "fadeEnd": 32,
+   "clumpScale": 0.08,
+   "clumpCut": 0.05,
+   "color": [
+    0.12,
+    0.112,
+    0.098
+   ]
+  },
+  {
+   "clutter": "twigs",
+   "seed": 43,
+   "size": 0.9,
+   "variants": 6,
+   "spacing": 1.1,
+   "nearRadius": 12,
+   "radius": 28,
+   "fadeStart": 18,
+   "fadeEnd": 26,
+   "clumpScale": 0.06,
+   "clumpCut": 0.0
+  }
+ ]
 }

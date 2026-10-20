@@ -1978,7 +1978,13 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
                     if (t.contains("weather") && t["weather"].is_object() && t["weather"].contains("grow") &&
                         t["weather"]["grow"].is_object() && t["weather"]["grow"].contains("layers"))
                         rock = std::make_unique<RockLayers>(rockLayersFromJson(t["weather"]["grow"]["layers"]), t.value("seed", 0u) + 17u);
-                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v6", cSize, key, [&] {
+                    // ...and the STAINS (ADR-0213; the macro map's fourth channel): on a steep face, water running off a
+                    // ledge or a facet's lip above streaks the rock dark below it -- walk up the fall line from each
+                    // texel, the nearest convex break above (the maps' convexity) darkening it with distance, broken into
+                    // streaks across the face (noise along the contour); and every crease (concave) a little dark too
+                    const Noise stainNoise(t.value("seed", 0u) + 4271u);
+                    const std::shared_ptr<const TerrainWorldMap> nmap = cfg.normalMap;
+                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v7", cSize, key, [&] {
                         return bakeTerrainWorldMap(4, [&](double x, double z, uint8_t* out) {
                             const TerrainMapSample ms = maps->at(x, z);
                             auto b = [](double v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); };
@@ -1986,7 +1992,23 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
                             out[1] = b(ms.wet);
                             const double y = rock ? pc->height(x, z) : 0.0;
                             out[2] = b(rock ? rock->tone(x, z, y) : 0.5);
-                            out[3] = b(rock ? rock->hardness(x, z, y) : 0.0);
+                            double stain = 0.0;
+                            const Vec3 nrm = nmap->normalAt(x, z);
+                            const double steep = std::clamp((1.0 - nrm.y - 0.25) / 0.25, 0.0, 1.0);   // ~40..60 deg
+                            if (steep > 0.0) {
+                                const double hl = std::hypot(nrm.x, nrm.z);
+                                const double ux = -nrm.x / std::max(hl, 1e-6), uz = -nrm.z / std::max(hl, 1e-6);   // up the fall line
+                                for (int k = 1; k <= 8; ++k) {
+                                    const double d = 3.0 * k;
+                                    const double cv = maps->at(x + ux * d, z + uz * d).convex;
+                                    stain = std::max(stain, std::clamp(cv * 2.5, 0.0, 1.0) * (1.0 - d / 30.0));
+                                }
+                                const double across = x * uz - z * ux;   // along the contour
+                                const double streak = std::clamp(0.5 + 1.4 * stainNoise.fbm2(across / 2.5, y / 40.0, 3), 0.0, 1.0);
+                                stain *= steep * streak;
+                            }
+                            stain = std::max(stain, std::clamp(-ms.convex * 1.5, 0.0, 1.0) * 0.5);   // the creases
+                            out[3] = b(stain);
                         }, -cfg.worldHalf, -cfg.worldHalf, extent, cSize);
                     });
                 }
