@@ -776,6 +776,25 @@ TEST_CASE(lanes_a_track_lift_runs_on_across_a_joint_between_sections) {
     checkInvariants(*r);
 }
 
+// A SKEWED CROSSING OVER A CLIMB: the lift clears the lower road's highest point under the upper band, and along the
+// lower road that band runs on for the lower's own half width over the tangent -- the island loop crossed the pass at
+// 28 deg with the pass 13.9 % up, and the pass's outer lane, 6 m on, came 21 cm short of the clearance.
+TEST_CASE(lanes_a_track_over_a_steep_road_at_a_skew_clears_its_outer_lane) {
+    const double c = std::cos(28.0 * 3.14159265358979 / 180.0), s = std::sin(28.0 * 3.14159265358979 / 180.0);
+    nlohmann::json g;
+    g["name"] = "skew";
+    g["classes"]["mountain"] = {{"w", 3.5}, {"fwd", 1}, {"back", 1}, {"shoulder", 1.0}, {"g_max", 0.15}, {"window", 60}, {"thick", 0.5}};
+    g["edges"] = nlohmann::json::array({
+        {{"id", "rail"}, {"class", "rail"}, {"path", {{"type", "polyline"}, {"points", {{-600, 0}, {600, 0}}}}}},
+        // up 14 % through the crossing: held at 21 m 150 m on, 0 m 150 m back
+        {{"id", "climb"}, {"class", "mountain"}, {"path", {{"type", "polyline"}, {"points", {{-300 * c, -300 * s}, {300 * c, 300 * s}}}}},
+         {"floor", {{150 * c, 150 * s, 21.0, 20.0}}}}});
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+    const EdgeSpec& cl = *r->graph.find("climb");
+    std::printf("    [skew] climb %.1f m at the crossing, %.1f m 20 m on\n", interp(cl.s, cl.z, 300.0), interp(cl.s, cl.z, 320.0));
+    checkInvariants(*r);
+}
+
 // THE LIGHT RAIL LAB: held up over its streets, its stations reached from below -- the way passes under the line at
 // the street's level, and each platform stands level along its length.
 TEST_CASE(lanes_light_rail_lab_reaches_its_stations_from_below) {

@@ -169,8 +169,12 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
                     const Vec2 th = tangent(hi, sHi), tl = tangent(lo, sLo); const double sinT = std::max(0.25, std::fabs(cross(th, tl)));
                     const double span = (0.5 * pavedW(lo) + 0.5 * pavedW(hi) + 1.0) / sinT;
                     // clear the lower road's HIGHEST point under the upper deck, not its height at the centreline:
-                    // the pass climbs 12% under the island freeway, a metre across its 20 m carriageway
-                    const double spanLo = (0.5 * pavedW(hi) + 1.0) / sinT;
+                    // the pass climbs 12% under the island freeway, a metre across its 20 m carriageway. Along the lower road
+                    // the two bands overlap for the upper's half width over the sine AND the lower's own half width over the
+                    // tangent: at a skew its outer lane passes under the upper's edge further on (the island loop over the
+                    // pass at 28 deg: 6 m on, the pass 13.9 % up, 21 cm short)
+                    const double cosT = std::sqrt(std::max(0.0, 1.0 - sinT * sinT));
+                    const double spanLo = (0.5 * pavedW(hi) + 1.0) / sinT + 0.5 * pavedW(lo) * cosT / sinT;
                     double zLo = aHi ? zb : za;
                     for (int k = -4; k <= 4; ++k) zLo = std::max(zLo, interp(lo.s, lo.z, std::clamp(sLo + spanLo * k / 4.0, 0.0, lo.s.back())));
                     // over a TRACK, the thicker of the two slabs, as the clearance invariant measures it (a footbridge over

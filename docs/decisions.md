@@ -11060,3 +11060,49 @@ near the camera, the cliff blocks of Paris et al. 2020.
   carries that; the ground cache key leaves it out of the weathered grid (it is laid on as read).
 - **Instanced cliff blocks failed again** (slabs planted like clutter on the face, in the terrain's own material): at
   every density they read as boulders lying on a smooth slope. Removed; the blocks live in the ground.
+
+## ADR-0214 — island_8_nature re-planned on the rocky ground; link roads kept to their class and off the streets; the map as built
+
+Glenn (2026-10-20): "yeah do it" -- rebuild island_8_nature on island_8_rocky's ground, re-plan the cities, keep his
+citysim edits.
+
+- **Keep the sites** (`city_plan island-cities ... --keep-sites LEVEL`): the places, names, kinds and hubs come from a
+  level already built, so the re-plan on new ground keeps the island Glenn knows; only the streets, links and
+  interchanges are laid again to fit it.
+- **A link is a collector, and the planner checks it climbs like one.** Weyby's link on the rocky ground ran straight
+  up 11.7 % over its last 330 m. The builder graded it at 10 % and could only cut: 16 m into the hill at the freeway,
+  where the diamond's ramps land -- they came out 16.7 % (9 % allowed) and 110 m short of the length their climb
+  needed. A town node 1 m off the link and 11.5 m below it made it worse: the builder spreads a tee's correction over
+  R = 1.5 |dz| / (0.2 g/4), here 3.4 km, which pulled the whole link down. `linkCityToFreeway` now samples each
+  candidate's ground and passes over one steeper than `maxGrade` over 150 m (or 90 % of a short one). city_plan
+  passes 9 %: 10 % less the climb onto a freeway on a bridge (Brookcliff's 9.3 % ground built 10.6 % up to a 73 m
+  bridge; at 9 % it takes a 6 % candidate, no bridge).
+- **...and keeps off the city's streets.** With the steep links gone, Saltwood's nearest candidate left its arterial
+  14 deg off it; started from the next node over it still ran 5 m beside it, and the builder read the 100 m where they
+  overlap as an overpass 2.7 m clear (23 clearance fails, 4 m steps, a 3.2 m node mismatch). A candidate that runs
+  within 15 m of a street it is within 30 deg of, past its first 20 m, is passed over (`cityStreets`).
+- **Weyby has no link** on this ground: all 428 candidates climb 12-17.5 %, and the one flat one has no room beside
+  the pass's diamond. Its interchange is the pass's; the island ring (X1) falls back to a place's pass interchange
+  when it has no link, so it keeps its 8 stops.
+- **A skewed crossing clears the lower road's outer lane** (lanes.cpp, the clearance lift). The lift clears the lower
+  road's highest point under the upper deck, sampled along it for the upper's half width over the crossing sine. At a
+  skew the lower road's own half width runs on along it too (over the tangent): the island loop crossed the pass at
+  28 deg with the pass 13.9 % up, and the pass's outer lane, 6 m further on, came 21 cm short of the clearance. Now
+  sampled over both.
+- Tests: `a_link_too_steep_for_its_class_is_passed_over`, `a_link_leaving_along_a_street_is_passed_over`
+  (test_island_links.cpp), `lanes_a_track_over_a_steep_road_at_a_skew_clears_its_outer_lane` (test_lanes.cpp; 0.2 m
+  short without the fix).
+- **The island map** (writeIslandSvg) draws the freeway AS BUILT (w.freewayRoute, the route the diamonds and the graph
+  were laid on), not the legs as first routed: Glenn saw sharp corners and a spike to the coast at Brookcliff that the
+  road doesn't have (built radii there 192-429 m). `island-cities --rail` lays the island loop and the cities' light
+  rail in the same run (the `island-rail` / `city-rail` verbs and it share addIslandRail / addCityRail; the graph it
+  writes is identical to the two verbs'), so the map draws the railway, light rail and station footways from the
+  finished graph. A LEGEND in a panel beside the map names every layer, each swatch drawn the way the map draws it, each
+  intercity bus line by name (Glenn: "so we can see trails, rails, freeways etc.").
+- **Owed:** the diamond planner sizes its ramps from the ground at the terminal, not the landing street's built
+  profile; the builder's tee correction radius (kilometres for a big tee) should be bounded by the street it moves;
+  freeway curves against a design speed (Ivycombe's and Brookcliff's are 192-197 m: about 70 km/h, not 100).
+- **Next (Glenn, 2026-10-20: "neither system is guessing"):** every fix above is the planner guessing what the builder
+  will do, or the builder inferring what the planner meant. The vertical design (class rules, profiles, junction
+  levels, crossing kinds and clearances) moves out of the builder into one shared stage; the planner runs it and writes
+  each road's profile and every crossing's kind into the graph; the builder meshes and checks against it.

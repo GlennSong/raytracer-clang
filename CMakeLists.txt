@@ -854,6 +854,7 @@ add_executable(run_tests
     tests/test_lot_road_clearance.cpp
     tests/test_city_plan.cpp
     tests/test_road_signs.cpp
+    tests/test_island_links.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)

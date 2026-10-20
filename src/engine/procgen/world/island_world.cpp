@@ -166,7 +166,7 @@ json islandTerrainBlock(uint32_t seed, double half) {
     return block;
 }
 
-IslandWorld planIsland(const json& blockIn, double half, double cell) {
+IslandWorld planIsland(const json& blockIn, double half, double cell, const std::vector<IslandSite>& keep) {
     const auto t0 = std::chrono::steady_clock::now();
     IslandWorld w;
     w.terrain = blockIn;
@@ -253,8 +253,34 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
     };
     auto side = [&](const Vec2& q) { const Vec2 d = q - C; return w.axis.x * d.y - w.axis.y * d.x > 0 ? 1 : -1; };
 
-    // 3. SITES. A city on each side of the range: the deepest flat ground, preferring the lowlands.
+    // 3. SITES. KEPT ones first, when asked for: each to the deepest flat ground within 900 m of where it was
+    for (const IslandSite& k : keep) {
+        double best = -1.0;
+        int bi = -1, bj = -1;
+        const int r = static_cast<int>(900.0 / cell);
+        const int ci = static_cast<int>(std::lround((k.at.x + half) / cell)), cj = static_cast<int>(std::lround((k.at.y + half) / cell));
+        for (int j = std::max(0, cj - r); j <= std::min(n - 1, cj + r); ++j)
+            for (int i = std::max(0, ci - r); i <= std::min(n - 1, ci + r); ++i) {
+                const double dd = std::hypot(static_cast<double>(i - ci), static_cast<double>(j - cj)) * cell;
+                if (dd > 900.0) continue;
+                const double score = D(i, j) - 0.05 * dd;   // (the deepest, a little nearer where it was)
+                if (score > best) { best = score; bi = i; bj = j; }
+            }
+        IslandSite s;
+        s.kind = k.kind;
+        s.name = k.name;
+        if (bi < 0) { bi = std::clamp(ci, 0, n - 1); bj = std::clamp(cj, 0, n - 1); }
+        s.at = P(bi, bj);
+        const double d = D(bi, bj);
+        s.radius = s.kind == "city" ? std::clamp(d * 1.6, 600.0, 2000.0) : s.kind == "town" ? std::clamp(d * 1.3, 250.0, 700.0)
+                                                                          : std::clamp(d * 1.4, 150.0, 450.0);
+        s.elevation = H(bi, bj);
+        s.coastal = nearSea(s.at, s.kind == "city" ? 2500.0 : 1600.0);
+        w.sites.push_back(s);
+    }
+    // ...or found: a city on each side of the range, the deepest flat ground, preferring the lowlands
     for (int s : {1, -1}) {
+        if (!keep.empty()) break;
         double best = -1.0;
         int bi = -1, bj = -1;
         for (int j = 0; j < n; ++j)
@@ -279,7 +305,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
             if ((s.at - q).length() < gap + s.radius) return false;
         return true;
     };
-    for (int round = 0; round < 6; ++round) {
+    for (int round = 0; round < (keep.empty() ? 6 : 0); ++round) {
         double best = -1.0;
         int bi = -1, bj = -1;
         for (int j = 0; j < n; j += 2)
@@ -297,7 +323,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         t.coastal = nearSea(t.at, 1600.0);
         w.sites.push_back(t);
     }
-    {
+    if (keep.empty()) {
         double best = -1.0;
         int bi = -1, bj = -1;
         for (int j = 0; j < n; j += 2)
@@ -456,6 +482,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell) {
         const uint32_t worldSeed = static_cast<uint32_t>(w.terrain.value("seed", 0u));
         for (std::size_t k = 0; k < w.sites.size(); ++k) {
             IslandSite& s = w.sites[k];
+            if (!s.name.empty()) { used.insert(s.name); continue; }   // (a kept place keeps its name)
             PlaceTraits t;
             t.city = s.kind == "city";
             t.coastal = s.coastal;
@@ -753,9 +780,48 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
 }
 
 void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength,
-                       const std::vector<std::string>& streets) {
+                       const std::vector<std::string>& streets, double maxGrade, const std::vector<std::pair<Vec2, Vec2>>& cityStreets) {
     // every candidate's nearest freeway point
     struct C { Vec2 at, onto; double d; std::string street; };
+    // A link is a straight road up to the freeway, and the builder grades it at its class's limit: ground that
+    // climbs steeper than that for longer than the profile can smooth (150 m) it can only cut, and the cut
+    // carries on under the freeway to where the diamond's ramps land -- Weyby's link on the rocky island climbed
+    // 11.7 % over its last 330 m, came out 16 m into the hill, and its ramps 16.7 % (ADR-0214).
+    auto tooSteep = [&](const C& c) {
+        if (maxGrade <= 0.0) return false;
+        std::vector<Vec2> line;
+        const int n = std::max(2, static_cast<int>(c.d / 10.0) + 1);
+        for (int i = 0; i <= n; ++i) line.push_back(c.at + (c.onto - c.at) * (static_cast<double>(i) / n));
+        const double g = measureRoute([&w](double x, double z) { return w.heightAt(x, z); }, line, std::min(150.0, 0.9 * c.d)).worstGrade;   // (a short link: over most of its length)
+        if (std::getenv("RT_PLAN_WHY"))
+            std::fprintf(stderr, "[link] %s from (%.0f, %.0f) %.0f m: sustained grade %.1f%%%s\n", w.sites[static_cast<std::size_t>(site)].name.c_str(),
+                         c.at.x, c.at.y, c.d, 100.0 * g, g > maxGrade ? " -- too steep" : "");
+        return g > maxGrade;
+    };
+    // and it keeps clear of the city's streets it runs near-parallel to: Saltwood's link on the rocky island left
+    // its arterial 14 deg off it, and started from the next node over it still ran 5 m beside it -- the two lay on
+    // top of each other for 100 m and the builder read that as an overpass 2.7 m clear (ADR-0214). Past its first
+    // 20 m (the junction mouth) the link stays 15 m from any street within 30 deg of it.
+    auto alongStreet = [&](const C& c) {
+        const Vec2 d = c.onto - c.at;
+        const double L = d.length();
+        if (L < 20.0) return false;
+        const Vec2 u = d * (1.0 / L);
+        for (const auto& sg : cityStreets) {
+            const Vec2 e = sg.second - sg.first;
+            const double el = e.length();
+            if (el < 1e-6 || std::fabs(u.x * e.x + u.y * e.y) / el < std::cos(30.0 * kPi / 180.0)) continue;
+            for (double t = 20.0; t <= L; t += 5.0) {
+                const Vec2 q = c.at + u * t;
+                const double k = std::clamp(((q - sg.first).x * e.x + (q - sg.first).y * e.y) / (el * el), 0.0, 1.0);
+                if ((q - (sg.first + e * k)).length() >= 15.0) continue;
+                if (std::getenv("RT_PLAN_WHY"))
+                    std::fprintf(stderr, "[link] %s from (%.0f, %.0f): runs along a street at %.0f m\n", w.sites[static_cast<std::size_t>(site)].name.c_str(), c.at.x, c.at.y, t);
+                return true;
+            }
+        }
+        return false;
+    };
     std::vector<C> cs;
     for (std::size_t i = 0; i < arterialNodes.size(); ++i) {
         const Vec2 p = arterialNodes[i];
@@ -777,7 +843,7 @@ void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arteri
         if (static_cast<int>(chosen.size()) >= maxLinks) break;
         bool near = false;
         for (const Vec2& q : chosen) if ((q - c.onto).length() < spacing) near = true;
-        if (near) continue;
+        if (near || alongStreet(c) || tooSteep(c)) continue;
         chosen.push_back(c.onto);
         IslandRoad rd;
         rd.kind = "link";
@@ -1320,15 +1386,21 @@ void planIntercityBuses(IslandWorld& w, const std::function<std::vector<Vec2>(in
         else for (std::size_t k = i; k < P.size(); ++k) out.push_back(P[k]);
         return out;
     };
-    // each place's way onto the freeway: its link interchange nearest its centre
+    // each place's way onto the freeway: its link interchange nearest its centre -- or, a place with no link of
+    // its own (every way up from Weyby to the freeway too steep for one on the rocky island), the road it has
+    // that runs into it, the pass (joinPassToTowns), at its interchange
     std::vector<int> access(w.sites.size(), -1);
-    for (std::size_t k = 0; k < w.interchanges.size(); ++k) {
-        const IslandInterchange& ic = w.interchanges[k];
-        if (ic.site < 0 || w.roads[static_cast<std::size_t>(ic.road)].kind != "link") continue;
-        const std::size_t si = static_cast<std::size_t>(ic.site);
-        if (access[si] < 0 || (ic.at - w.centres[si]).length() < (w.interchanges[static_cast<std::size_t>(access[si])].at - w.centres[si]).length())
-            access[si] = static_cast<int>(k);
-    }
+    for (int pass = 0; pass < 2; ++pass)
+        for (std::size_t k = 0; k < w.interchanges.size(); ++k) {
+            const IslandInterchange& ic = w.interchanges[k];
+            if (ic.site < 0) continue;
+            const std::string& kind = w.roads[static_cast<std::size_t>(ic.road)].kind;
+            if (pass == 0 ? kind != "link" : kind != "pass") continue;
+            const std::size_t si = static_cast<std::size_t>(ic.site);
+            if (pass == 1 && access[si] >= 0 && w.roads[static_cast<std::size_t>(w.interchanges[static_cast<std::size_t>(access[si])].road)].kind == "link") continue;
+            if (access[si] < 0 || (ic.at - w.centres[si]).length() < (w.interchanges[static_cast<std::size_t>(access[si])].at - w.centres[si]).length())
+                access[si] = static_cast<int>(k);
+        }
     // centre -> the freeway, and back: its streets, then its link road
     auto toFreeway = [&](int site) {
         const IslandInterchange& ic = w.interchanges[static_cast<std::size_t>(access[static_cast<std::size_t>(site)])];
@@ -1620,8 +1692,10 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
         o << "\"/>\n";
     };
     const double x0 = c.x - half, y0 = -(c.y + half), W = 2 * half;
-    o << "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"" << x0 << ' ' << y0 << ' ' << W << ' ' << W
-      << "\" width=\"2000\" height=\"2000\">\n";
+    const double panel = W * 0.34;   // the legend's panel, beside the map (over it, it hid the towns on the coast)
+    o << "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"" << x0 << ' ' << y0 << ' ' << W + panel << ' ' << W
+      << "\" width=\"" << static_cast<int>(2000 * (W + panel) / W) << "\" height=\"2000\">\n";
+    o << "<rect x=\"" << x0 + W << "\" y=\"" << y0 << "\" width=\"" << panel << "\" height=\"" << W << "\" fill=\"#f4f2ec\"/>\n";
     o << "<style>path{fill:none;stroke-linecap:round;stroke-linejoin:round}"
          ".hair{vector-effect:non-scaling-stroke}"
          "text{font-family:sans-serif;paint-order:stroke;stroke:#fff;stroke-width:0.25em;stroke-linejoin:round}</style>\n";
@@ -1673,6 +1747,7 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
         if (L.casing) { a << "stroke=\"#1f1a14\" stroke-width=\"" << L.widthM + 3.0 << "\""; lines(L.lines, a.str()); a.str(""); }
         a << "stroke=\"" << rgb << "\" stroke-width=\"" << L.widthM << "\"" << (L.widthM < 6.0 ? " class=\"hair\"" : "");
         lines(L.lines, a.str());
+        if (!L.dash.empty()) lines(L.lines, "stroke=\"#ffffff\" stroke-width=\"" + std::to_string(L.widthM * 0.55) + "\" stroke-dasharray=\"" + L.dash + "\"");
         o << "</g>\n";
     }
     // THE ISLAND'S ROADS: freeway (44 m kerb to kerb), its ramps, the pass, the links, the mountain road
@@ -1688,9 +1763,12 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
         lines(roadsOf(kind), "stroke=\"" + col + "\" stroke-width=\"" + std::to_string(wd) + "\"");
     }
     o << "</g>\n<g id=\"freeway\">\n";
-    lines(roadsOf("freeway"), "stroke=\"#1f1a14\" stroke-width=\"47\"");
-    lines(roadsOf("freeway"), "stroke=\"#f8961a\" stroke-width=\"44\"");
-    lines(roadsOf("freeway"), "stroke=\"#ffffff\" stroke-width=\"0.6\" stroke-dasharray=\"12 18\"");   // the median line
+    // as BUILT: the one route the diamonds and the graph were laid on (hairpins cut, rounded), not the legs as first
+    // routed -- those drew corners and a spike to the coast that the road doesn't have
+    const std::vector<std::vector<Vec2>> freeway = w.freewayRoute.size() >= 2 ? std::vector<std::vector<Vec2>>{w.freewayRoute} : roadsOf("freeway");
+    lines(freeway, "stroke=\"#1f1a14\" stroke-width=\"47\"");
+    lines(freeway, "stroke=\"#f8961a\" stroke-width=\"44\"");
+    lines(freeway, "stroke=\"#ffffff\" stroke-width=\"0.6\" stroke-dasharray=\"12 18\"");   // the median line
     o << "</g>\n<g id=\"ramps\">\n";
     lines(w.ramps, "stroke=\"#1f1a14\" stroke-width=\"12\"");
     lines(w.ramps, "stroke=\"#fbb54d\" stroke-width=\"9.5\"");
@@ -1738,7 +1816,74 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
     o << "<path stroke=\"#111\" stroke-width=\"" << W * 0.004 << "\" d=\"M" << bx << ' ' << by << 'L' << bx + bar << ' ' << by << "\"/>\n";
     o << "<text x=\"" << bx << "\" y=\"" << by - W * 0.008 << "\" font-size=\"" << W * 0.014 << "\" fill=\"#111\">"
       << (bar >= 1000 ? std::to_string(static_cast<int>(bar / 1000)) + " km" : std::to_string(static_cast<int>(bar)) + " m") << "</text>\n";
-    o << "</g>\n</svg>\n";
+    o << "</g>\n";
+    // THE LEGEND (Glenn: "so we can see trails, rails, freeways etc."), top right: a row for everything drawn, its swatch
+    // drawn the way the map draws it (widths held to a readable minimum)
+    {
+        struct Row { std::string label; std::vector<std::string> strokes; bool stop = false, sign = false; };
+        std::vector<Row> rows;
+        auto sw = [&](const std::string& col, double wM, const std::string& extra = std::string()) {
+            std::ostringstream a;
+            a << "stroke=\"" << col << "\" stroke-width=\"" << std::max(wM, W * 0.0012) << "\"" << extra;
+            return a.str();
+        };
+        auto has = [&](const std::string& kind) { return !roadsOf(kind).empty(); };
+        if (!freeway.empty())
+            rows.push_back({"Freeway (bus X1 rides it)", {sw("#1f1a14", W * 0.0050), sw("#f8961a", W * 0.0042), sw("#ffffff", W * 0.0003, " stroke-dasharray=\"" + std::to_string(W * 0.002) + " " + std::to_string(W * 0.002) + "\"")}});
+        if (!w.ramps.empty()) rows.push_back({"Freeway ramps", {sw("#1f1a14", W * 0.0026), sw("#fbb54d", W * 0.0020)}});
+        if (has("link")) rows.push_back({"Link roads (town to freeway)", {sw("#1f1a14", W * 0.0024), sw("#fbcc33", W * 0.0018)}});
+        if (has("pass")) rows.push_back({"The pass", {sw("#1f1a14", W * 0.0022), sw("#fbe43f", W * 0.0016)}});
+        if (has("mountain")) rows.push_back({"Mountain road", {sw("#1f1a14", W * 0.0020), sw("#ffffff", W * 0.0014)}});
+        for (const IslandMapLayer& L : view.layers) {
+            if (L.label.empty() || L.lines.empty()) continue;
+            char rgb[8];
+            std::snprintf(rgb, sizeof rgb, "#%02x%02x%02x", static_cast<int>(L.rgb[0] * 255), static_cast<int>(L.rgb[1] * 255), static_cast<int>(L.rgb[2] * 255));
+            const double wd = std::clamp(L.widthM, W * 0.0016, W * 0.0024);
+            Row r{L.label, {}};
+            if (L.casing) r.strokes.push_back(sw("#1f1a14", wd + W * 0.0005));
+            r.strokes.push_back(sw(rgb, wd));
+            if (!L.dash.empty()) r.strokes.push_back(sw("#ffffff", wd * 0.55, " stroke-dasharray=\"" + std::to_string(W * 0.0015) + " " + std::to_string(W * 0.0015) + "\""));
+            rows.push_back(r);
+        }
+        if (w.hydro && !w.hydro->rivers().empty()) rows.push_back({"Rivers", {sw("#3372c4", W * 0.0020)}});
+        // each intercity line in its own colour, as the bus lines above draw them (X1 round the island, X2 over the pass...)
+        bool local = false;
+        {
+            const char* interCols[] = {"#d4004f", "#1a1aff", "#7a00b3"};
+            int ni = 0;
+            for (const IslandBusLine& b : w.busLines) {
+                if (b.kind != "intercity") { local = true; continue; }
+                rows.push_back({b.name + ", stop", {sw(interCols[ni++ % 3], W * 0.0008, " stroke-dasharray=\"" + std::to_string(W * 0.0028) + " " + std::to_string(W * 0.0012) + "\"")}, true});
+            }
+        }
+        if (local) rows.push_back({"Town bus lines (a colour each), stop", {sw("#4363d8", W * 0.0009)}, true});
+        if (!w.signs.empty()) rows.push_back({"Road sign (hover for its legend)", {}, false, true});
+        rows.push_back({"Contours: 20 m, 100 m heavier", {sw("#3a2c1c", W * 0.0003)}});
+        const double rh = W * 0.024, fs = W * 0.012, pad = W * 0.012, swL = W * 0.045;
+        const double bw = W * 0.30, bh = pad * 2 + rh * static_cast<double>(rows.size() + 1);
+        const double lx = x0 + W + (panel - bw) * 0.5, ly = y0 + W * 0.03;
+        o << "<g id=\"legend\">\n<rect x=\"" << lx << "\" y=\"" << ly << "\" width=\"" << bw << "\" height=\"" << bh
+          << "\" fill=\"#ffffff\" fill-opacity=\"0.88\" stroke=\"#333\" stroke-width=\"" << W * 0.0006 << "\" rx=\"" << W * 0.004 << "\"/>\n";
+        o << "<text x=\"" << lx + pad << "\" y=\"" << ly + pad + rh * 0.65 << "\" font-size=\"" << fs * 1.25 << "\" font-weight=\"bold\" fill=\"#111\">Legend</text>\n";
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const double cy = ly + pad + rh * (static_cast<double>(i) + 1.5), sx = lx + pad;
+            // each swatch on a patch of the land's green, as the map shows it (local streets are near white)
+            o << "<rect x=\"" << sx - W * 0.003 << "\" y=\"" << cy - rh * 0.4 << "\" width=\"" << swL + W * 0.006 << "\" height=\"" << rh * 0.8
+              << "\" fill=\"#5f8a48\" rx=\"" << W * 0.002 << "\"/>\n";
+            for (const std::string& st : rows[i].strokes)
+                o << "<path " << st << " d=\"M" << sx << ' ' << cy << "L" << sx + swL << ' ' << cy << "\"/>\n";
+            if (rows[i].stop)
+                o << "<circle cx=\"" << sx + swL * 0.5 << "\" cy=\"" << cy << "\" r=\"" << W * 0.0022 << "\" fill=\"#fff\" stroke=\"#d4004f\" stroke-width=\"" << W * 0.0006 << "\"/>\n";
+            if (rows[i].sign) {
+                const double h = W * 0.004;
+                o << "<path fill=\"#00693f\" stroke=\"#111\" stroke-width=\"" << W * 0.0002 << "\" d=\"M" << sx + swL * 0.5 + h << ' ' << cy << "L" << sx + swL * 0.5 - h * 0.6
+                  << ' ' << cy - h * 0.6 << "L" << sx + swL * 0.5 - h * 0.6 << ' ' << cy + h * 0.6 << "Z\"/>\n";
+            }
+            o << "<text x=\"" << sx + swL + pad * 0.8 << "\" y=\"" << cy + fs * 0.35 << "\" font-size=\"" << fs << "\" fill=\"#111\">" << rows[i].label << "</text>\n";
+        }
+        o << "</g>\n";
+    }
+    o << "</svg>\n";
     std::ofstream f(svgPath);
     if (!f) return false;
     f << o.str();
