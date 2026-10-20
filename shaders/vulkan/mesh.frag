@@ -565,8 +565,10 @@ vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
     // (each layer also stands at its own height over the rock -- Glenn: grass patches and snow "seem painted onto the
     // surface": the soil and turf a layer over the stone, the snow a blanket on top -- so where one meets another the
     // relief shows a LIP, lit one side and shaded the other, not a line of paint)
+    // (the lip from the SMOOTH cover weights, ramping over the metre they blend across: from the crisp height-blend
+    // shares it jumped within a pixel and drew a dark outline round every snowfield)
     gTerrainH = (g.a * kReliefGrass * kg + d.a * kReliefDirt * kd + s.a * kReliefSand * ks + r.a * kReliefRock * kr +
-                 (1.0 - r.a) * 0.01 * kn + 0.16 * kg + 0.10 * kd + 0.04 * ks + 0.35 * kn) / sum;
+                 (1.0 - r.a) * 0.01 * kn) / sum + 0.16 * wg + 0.10 * wd + 0.04 * ws + 0.35 * wsn;
     // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
     c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
     return c;

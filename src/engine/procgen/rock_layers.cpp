@@ -17,6 +17,8 @@ RockLayersParams rockLayersFromJson(const nlohmann::json& j) {
     p.hardK = j.value("hardK", p.hardK);
     p.hardDiffusion = j.value("hardDiffusion", p.hardDiffusion);
     p.toneThicknessM = j.value("toneThickness", p.toneThicknessM);
+    p.fromHeightM = j.value("fromHeight", p.fromHeightM);
+    p.fullHeightM = j.value("fullHeight", p.fullHeightM);
     return p;
 }
 
@@ -77,7 +79,12 @@ double RockLayers::hardness(double x, double z, double h) const {
     const double bed = std::clamp(((hs & 0xFFFFFFu) / 16777216.0 - (1.0 - p_.hard)) / 0.12, 0.0, 1.0);
     const double contact = std::clamp(std::min(t, 1.0 - t) / 0.08, 0.0, 1.0);
     const double lateral = std::clamp((0.5 + 0.5 * n_.fbm2(x / p_.lateralScaleM + 1.7, z / p_.lateralScaleM - 3.1, 2) - 0.3) / 0.25, 0.0, 1.0);
-    return bed * contact * lateral;
+    double high = 1.0;
+    if (p_.fullHeightM > p_.fromHeightM) {
+        const double k = std::clamp((h - p_.fromHeightM) / (p_.fullHeightM - p_.fromHeightM), 0.0, 1.0);
+        high = k * k * (3.0 - 2.0 * k);
+    }
+    return bed * contact * lateral * high;
 }
 
 }  // namespace engine

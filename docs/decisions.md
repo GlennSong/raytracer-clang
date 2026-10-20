@@ -11009,3 +11009,17 @@ into sublayers"; "I'll let you cook".
 - **Two scales:** each layer also read on a ~24 m hex grid, its brightness against the texture's mean (its last mip)
   varying the near sample +-35%.
 - **Palette:** dirt (0.12, 0.085, 0.05) -> (0.078, 0.056, 0.036), damp topsoil, in the island levels and the labs.
+
+## ADR-0211 — The island trial: rock layers in the high ground; island_8_rocky
+
+- **Rock layers over the whole island moved the drainage** the cities stand on: a hilly town's ground by up to 95 m.
+  RockLayersParams gains `fromHeight` / `fullHeight`: no hard beds below the first, all from the second (the island:
+  300 and 550 m). With it the towns move 0.1-2 m on average (Weyby, Port Penwood and Ivycombe up to 13-16 m at their
+  edges), but the inland streams still re-route: 27% of the old channels kept within ~80 m (the same measure on
+  unchanged ground with 10 cm of noise keeps 84%); the coast mouths mostly hold.
+- **So it is its own level**, island_8_rocky.json (island_8_weathered + the lab's D layers, faded, and the facets),
+  terrain only; island_8_weathered and Glenn's island_8_nature are unchanged until the cities are re-planned on it
+  (city_plan island-cities on the new ground). Seen from the mountains: snow-capped crests, cliff walls and broken
+  ridges where the island has rounded grey ridges.
+- The layers' lip in the relief now comes from the smooth cover weights (from the crisp height-blend shares it drew a
+  dark outline round every snowfield). level_tests' water report takes RT_WATER_LEVEL (river mouths of any level).

@@ -32,6 +32,10 @@ struct RockLayersParams {
     double hardK = 0.15;         // a hard bed's erodibility, times the soft beds'
     double hardDiffusion = 0.2;  // ...and its hillslope creep
     double toneThicknessM = 25.0;   // the BANDS a face shows (its colour, the macro map's): beds this thick
+    // ...only in the HIGH ground (an island's trial: layered rock all over moved the rivers the towns stand on --
+    // 35% of the old channels kept -- and up to 95 m of ground in a hilly town): none below fromHeight, all from
+    // fullHeight (m above the sea); both 0: everywhere
+    double fromHeightM = 0.0, fullHeightM = 0.0;
 };
 
 // from a "layers" block (weather.grow.layers)
