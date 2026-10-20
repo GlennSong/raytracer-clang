@@ -10,7 +10,57 @@
 namespace engine {
 namespace roads::lanes {
 
+namespace {
+// a planned profile at a station (linear between its samples, held at its ends)
+double profileAt(const EdgeSpec& e, double s) {
+    const double k = std::max(0.0, s / std::max(e.profileStep, 1e-9));
+    const std::size_t i = std::min(static_cast<std::size_t>(k), e.profile.size() - 1);
+    if (i + 1 >= e.profile.size()) return e.profile.back();
+    const double u = k - static_cast<double>(i);
+    return e.profile[i] * (1.0 - u) + e.profile[i + 1] * u;
+}
+
+// A DESIGNED GRAPH (every road carries its planned profile): the heights as planned, never re-designed -- the ground
+// under each road sampled, each ramp's anchors and free length measured as rampProfile measures them, and the
+// junctions and level crossings measured for the checks, not corrected
+// one planned height a sample of the spine it was designed on: exactly those; else (a spine resampled differently)
+// read along it by station
+void planned(EdgeSpec& e) {
+    if (e.profile.size() == e.s.size()) { e.z = e.profile; return; }
+    e.z.resize(e.s.size());
+    for (std::size_t i = 0; i < e.s.size(); ++i) e.z[i] = profileAt(e, e.s[i]);
+}
+
+DesignReport applyDesign(RoadLabGraph& g, const HeightField& terrain) {
+    DesignReport rep;
+    const Rules& R = g.rules;
+    for (EdgeSpec& e : g.edges) {
+        if (e.isRamp() || e.xy.size() < 2) continue;
+        e.s = stations(e.xy); e.t.resize(e.xy.size());
+        for (std::size_t i = 0; i < e.xy.size(); ++i) e.t[i] = terrain(e.xy[i].x, e.xy[i].y);
+        planned(e);
+    }
+    for (EdgeSpec& e : g.edges) {
+        if (!e.isRamp()) continue;
+        rampProfile(g, e, terrain);   // (its anchors, free length and climb, from its hosts' planned heights)
+        planned(e);
+    }
+    const std::vector<CrossingMeet> meets = crossingMeets(g);
+    NodeMismatchWhere w;
+    const CrossingMeet* xw = nullptr;
+    const double nm = nodeMismatch(g, R.endpointTol, R.bridgeH, &w), xm = crossingMismatch(g, meets, R.bridgeH, R.rampLevelDz, &xw);
+    rep.nodeMismatchBefore = rep.nodeMismatchAfter = std::max(nm, xm);
+    if (nm >= xm && nm > 0.02)
+        rep.nodeMismatchWhere = w.a + (w.atEnd ? " meets " : " ends on ") + w.b + " at (" + std::to_string(static_cast<int>(w.at.x)) + ", " + std::to_string(static_cast<int>(w.at.y)) + ")";
+    else if (xw && xm > 0.02)   // a level crossing whose planned heights do not meet
+        rep.nodeMismatchWhere = g.edges[xw->hi].id + " crosses " + g.edges[xw->lo].id + " at (" + std::to_string(static_cast<int>(xw->p.x)) + ", " + std::to_string(static_cast<int>(xw->p.y)) + ")";
+    rep.undeclared = undeclaredCrossings(g, meets);
+    return rep;
+}
+}  // namespace
+
 DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
+    if (g.designed()) return applyDesign(g, terrain);
     DesignReport rep;
     const Rules& R = g.rules;
     // Which ends are open: nothing else ends there, and no other road's paved band
@@ -117,12 +167,17 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
                     // (the island loop's sections lifted each other 7 m at every joint, and rode on viaducts between)
                     if (std::min(distance(a.xy.front(), p), distance(a.xy.back(), p)) < R.endpointTol &&
                         std::min(distance(b.xy.front(), p), distance(b.xy.back(), p)) < R.endpointTol) continue;
-                    const bool sep = (mi < crossedAB || anyTrack(g, a, b)) && separates(g, a, b);   // a freeway (or a track) crossing is structure at any height; a track's tee too
+                    // AS PLANNED (ADR-0215): a declared level meeting is never lifted, a declared bridge always clears, its
+                    // named road over; with no plan, the kind is read as it always was
+                    const CrossingSpec* planned = g.declaresCrossings ? g.declaredCrossing(a.id, b.id, p) : nullptr;
+                    if (planned && planned->kind == "at_grade") continue;
+                    const bool sep = planned ? true : (mi < crossedAB || anyTrack(g, a, b)) && separates(g, a, b);   // a freeway (or a track) crossing is structure at any height; a track's tee too
                     const double za = projectZ(a, p), zb = projectZ(b, p); if (!sep && std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
                     // which goes over: the higher; for a forced separation, the one the scene asked to (a floor
                     // point over the crossing), else the freeway
                     bool aHi = za > zb;
-                    if (sep) {
+                    if (planned) aHi = planned->over == a.id;
+                    else if (sep) {
                         auto floored = [&](const EdgeSpec& e) { for (const auto& fp : e.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 40.0) return true; return false; };
                         const bool fa = floored(a), fb = floored(b);
                         const bool ta = g.cls(a).track, tb = g.cls(b).track;
@@ -163,7 +218,8 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
                     const bool overTrack = g.cls(hi).track || g.cls(lo).track;
                     // (and a track 0.2 m more: the street under it settles a few cm after the lift, as the agree passes
                     // level its junctions -- Weyby's p1_s115 came 9 cm short under the light rail, link35 7 cm under the loop)
-                    const double need = zLo + R.underClearance + (overTrack ? std::max(g.cls(hi).thick, g.cls(lo).thick) + 0.2 : g.cls(hi).thick) + R.structureDepth;
+                    const double clear = planned && planned->clearance >= 0.0 ? planned->clearance : R.underClearance;
+                    const double need = zLo + clear + (overTrack ? std::max(g.cls(hi).thick, g.cls(lo).thick) + 0.2 : g.cls(hi).thick) + R.structureDepth;
                     const double sts[3] = {std::max(0.0, sHi - span), sHi, std::min(hi.s.back(), sHi + span)};
                     bool low = false; for (double st : sts) if (interp(hi.s, hi.z, st) < need - 0.02) low = true;
                     // A STATION OVER ITS WAY IN (a city's light rail: the way passes under, a flight up to each platform):
@@ -209,6 +265,7 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
     { NodeMismatchWhere w; const double nm = nodeMismatch(g, R.endpointTol, R.bridgeH, &w), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz); chainTrackFloors(g, R.endpointTol); for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e)); rep.nodeMismatchAfter = std::max(nm, xm);
       if (nm >= xm && nm > 0.02) rep.nodeMismatchWhere = w.a + (w.atEnd ? " meets " : " ends on ") + w.b + " at (" + std::to_string(static_cast<int>(w.at.x)) + ", " + std::to_string(static_cast<int>(w.at.y)) + ")"; }
     for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);
+    rep.undeclared = undeclaredCrossings(g, meets);
     return rep;
 }
 

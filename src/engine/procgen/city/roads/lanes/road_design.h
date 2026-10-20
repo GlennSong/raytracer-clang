@@ -12,6 +12,7 @@
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"   // HeightField
 
 #include <string>
+#include <vector>
 
 namespace engine {
 namespace roads::lanes {
@@ -20,6 +21,7 @@ struct DesignReport {
     double nodeMismatchBefore = 0, nodeMismatchAfter = 0;   // the worst node or level crossing, before and after agreeing (m)
     std::string nodeMismatchWhere;                          // the worst node, when it is worth naming
     int lifted = 0;                                         // grade-separated crossings lifted to clear their structure
+    std::vector<std::string> undeclared;                    // a graph that declares its crossings: those it did not ("a / b at (x, y)")
 };
 
 DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain);

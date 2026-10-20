@@ -20,6 +20,22 @@ namespace {
 double secondsSince(const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); }
 }
 
+nlohmann::json designedGraph(const nlohmann::json& spec, const std::string& baseDir, DesignReport* report) {
+    RoadLabGraph g = RoadLabGraph::fromJson(spec, baseDir);
+    const HeightField terrain = makeTerrain(g.terrain, g.bounds());
+    (void)expand(g);   // the ramps compose from their anchors (their spines and gores)
+    const DesignReport dr = designRoads(g, terrain);
+    if (report) *report = dr;
+    nlohmann::json out = spec;
+    for (nlohmann::json& ej : out["edges"]) {
+        const EdgeSpec* e = g.find(ej.value("id", std::string()));
+        if (!e || e->z.size() < 2) continue;
+        // one height a sample of the resampled spine (rules.step apart), as the stage left it -- built again, exactly these
+        ej["profile"] = {{"step", g.rules.step}, {"z", e->z}};
+    }
+    return out;
+}
+
 std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // stage weights = measured metro seconds (lanes 0.1, profiles 13.5, footprints 5.4, surfaces 14.7, terrain 2.8)
     constexpr double kW[5] = {0.01, 0.36, 0.15, 0.40, 0.08}; double cum = 0;
@@ -34,7 +50,7 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // 1. lanes (ramps compose from anchors)
     stage(0, "lanes", 0.0); r.lanes = expand(g); r.timings["lanes"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(1, "profiles", 0.0);
     // 2. profiles: through roads, agree at nodes and crossings (iterated), then ramps, then connector ends
-    { const DesignReport dr = designRoads(g, terrain); r.nodeMismatchBefore = dr.nodeMismatchBefore; r.nodeMismatchAfter = dr.nodeMismatchAfter; r.nodeMismatchWhere = dr.nodeMismatchWhere; }
+    { const DesignReport dr = designRoads(g, terrain); r.nodeMismatchBefore = dr.nodeMismatchBefore; r.nodeMismatchAfter = dr.nodeMismatchAfter; r.nodeMismatchWhere = dr.nodeMismatchWhere; r.undeclaredCrossings = dr.undeclared; }
     for (Lane& l : r.lanes.lanes) if (l.isConnector()) {
         l.z0 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.srcLane)], g, l.xy.front()); l.z1 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.dstLane)], g, l.xy.back());
     }
@@ -276,8 +292,19 @@ std::vector<Check> invariants(const Result& r) {
         if (dist > 0.05) { dove = false; d << " " << e.id << " " << kv.first << " " << kv.second << ": " << dist << " m off"; }
     }
     add("ramps dovetail into their hosts' outer lanes", dove, dove ? "every anchored ramp end sits on the host lane's centreline" : d.str());
-    d.str(""); d << "largest node mismatch " << 100 * r.nodeMismatchAfter << " cm (was " << 100 * r.nodeMismatchBefore << " cm before correction)" << (r.nodeMismatchWhere.empty() ? "" : ": " + r.nodeMismatchWhere);
+    d.str(""); d << "largest node mismatch " << 100 * r.nodeMismatchAfter << " cm";
+    if (r.graph.designed()) d << " (as planned: the heights are the graph's own)";   // ADR-0215: measured, never corrected
+    else d << " (was " << 100 * r.nodeMismatchBefore << " cm before correction)";
+    d << (r.nodeMismatchWhere.empty() ? "" : ": " + r.nodeMismatchWhere);
     add("junction heights consistent", r.nodeMismatchAfter < 0.02, d.str());
+    // A GRAPH THAT DECLARES ITS CROSSINGS (ADR-0215): every meeting of two roads away from a shared node is on its list,
+    // so no kind was read off the heights
+    if (r.graph.declaresCrossings) {
+        d.str("");
+        d << r.undeclaredCrossings.size() << " of the crossings found are not in the plan";
+        for (std::size_t i = 0; i < r.undeclaredCrossings.size() && i < 8; ++i) d << (i ? "; " : ": ") << r.undeclaredCrossings[i];
+        add("crossings are as planned", r.undeclaredCrossings.empty(), r.undeclaredCrossings.empty() ? "every crossing declared (" + std::to_string(r.graph.crossings.size()) + ")" : d.str());
+    }
     d.str(""); bool adj = true; std::set<std::string> touched; for (const auto& p : r.adjacent) { touched.insert(r.lanes.roadOf(p.first, g)); touched.insert(r.lanes.roadOf(p.second, g)); }
     for (const EdgeSpec* e : g.paved()) if (std::max(e->lanes.fwd, e->lanes.back) >= 2 && !touched.count(e->id)) { adj = false; d << " " << e->id; }
     add("multilane roads have derived lane adjacency", adj, std::to_string(r.adjacent.size()) + " adjacent pairs" + (adj ? "" : ", none found for" + d.str()));

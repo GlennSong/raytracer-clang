@@ -6,6 +6,7 @@
 
 #include "engine/procgen/city/roads/lanes/pavement.h"
 #include "engine/procgen/city/roads/lanes/terrain_conform.h"
+#include "engine/procgen/city/roads/lanes/road_design.h"   // DesignReport
 #include <functional>
 #include <stdexcept>
 #include <memory>
@@ -32,6 +33,7 @@ struct Result {
     std::vector<std::pair<int, int>> adjacent;
     double nodeMismatchBefore = 0, nodeMismatchAfter = 0, seconds = 0;
     std::string nodeMismatchWhere;             // the worst node, when it is worth naming
+    std::vector<std::string> undeclaredCrossings;   // a graph that declares its crossings: the ones it did not (ADR-0215)
     std::map<std::string, double> timings;
 };
 
@@ -52,6 +54,11 @@ struct BuildOptions { const BuildProgressFn* progress = nullptr; unsigned thread
 std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts = BuildOptions());   // heap: DeckHeight holds references into the result
 std::vector<Check> invariants(const Result& r);
 std::string summary(const Result& r);
+
+// THE DESIGN ALONE (ADR-0215): `spec` (a lanes graph as JSON) with every road's planned profile written in -- its ramps
+// composed and its elevations designed exactly as build() would, minutes for the island, no meshing. Built again, the
+// result is DESIGNED: the builder takes those heights as given and checks them. `report`: what the design found.
+nlohmann::json designedGraph(const nlohmann::json& spec, const std::string& baseDir = ".", DesignReport* report = nullptr);
 
 }  // namespace roads::lanes
 }  // namespace engine

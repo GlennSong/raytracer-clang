@@ -11128,3 +11128,24 @@ the link 16 m in; the builder reading two overlapping roads 2.7 m apart as an ov
   kind where today it infers one from heights (`crossingConsistency` skips any crossing already `bridge_h` apart), and a
   crossing the plan did not declare is a design error with its place. Then the planner runs the stage and writes the
   result, and the builder checks a designed graph instead of re-designing it.
+- **Step 2: the graph carries intent.**
+  - **Crossings as planned.** A top-level `"crossings": [{"a", "b", "at", "kind": "bridge" | "at_grade", "over",
+    "clearance"}]` list (CrossingSpec). A graph that carries it *declares* its crossings. A planned bridge is
+    separated with its named road over, lifted to its clearance even where the two stood level. A planned level
+    meeting is made to agree however far apart the two stood; before, `crossingConsistency` and `nodeConsistency`
+    took any pair already `bridge_h` apart for a bridge. A crossing the design stage finds that is not on the list
+    fails a new check, "crossings are as planned", named with its place. A graph without the list infers kinds as
+    before (the hand-made lab scenes).
+  - **Elevations as planned.** `lanes_tool design GRAPH OUT` (`designedGraph`) writes each road's designed
+    profile into the graph (`"profile": {"step", "z"}`, one height a spine sample) without meshing. A graph whose
+    roads all carry one is DESIGNED: `designRoads` takes the heights as given (ramps still measure their free
+    length from their hosts) and only measures the junctions and level crossings. The builder checks, never
+    re-designs, and names the worst fault ("a crosses b at (0, 0)").
+  - **Proof.** The 15 scenes without plans: byte-identical again. Four lab scenes (relief, a system interchange,
+    the light rail lab, a viaduct) built through `design` and back: byte-identical meshes.
+  - **Tests** (test_lanes.cpp):
+    - `lanes_a_planned_level_crossing_is_levelled_however_far_apart_it_stood`
+    - `lanes_a_planned_bridge_clears_a_road_it_stood_level_with`
+    - `lanes_a_crossing_the_plan_left_out_is_reported_with_its_place`
+    - `lanes_a_designed_graph_builds_the_heights_it_was_designed_with`
+    - `lanes_a_planned_profile_is_built_as_given_and_its_faults_are_named`

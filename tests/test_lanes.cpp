@@ -795,6 +795,105 @@ TEST_CASE(lanes_a_track_over_a_steep_road_at_a_skew_clears_its_outer_lane) {
     checkInvariants(*r);
 }
 
+// CROSSINGS AS PLANNED (ADR-0215, Glenn: "neither system is guessing"): a graph that declares its crossings gets the
+// kind it planned, not one read off the heights. Two local streets cross at (0, 0); "a" is held 5 m up there.
+namespace {
+nlohmann::json crossingGraph(const nlohmann::json& crossings, bool holdA) {
+    nlohmann::json g;
+    g["name"] = "planned_crossing";
+    nlohmann::json a = {{"id", "a"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{-300, 0}, {300, 0}}}}}};
+    if (holdA) a["floor"] = {{0.0, 0.0, 5.0, 20.0}};
+    g["edges"] = nlohmann::json::array({a, {{"id", "b"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{0, -300}, {0, 300}}}}}}});
+    if (!crossings.is_null()) g["crossings"] = crossings;
+    return g;
+}
+double zAt(const Result& r, const char* id, double s) { const EdgeSpec& e = *r.graph.find(id); return interp(e.s, e.z, s); }
+const Check* checkNamed(const std::vector<Check>& cs, const std::string& n) { for (const Check& c : cs) if (c.name == n) return &c; return nullptr; }
+}
+
+TEST_CASE(lanes_a_planned_level_crossing_is_levelled_however_far_apart_it_stood) {
+    // unplanned, 5 m apart reads as a bridge (>= bridge_h): the streets are left apart
+    const std::unique_ptr<Result> guessed = build(RoadLabGraph::fromJson(crossingGraph(nullptr, true)));
+    const double dzGuessed = std::fabs(zAt(*guessed, "a", 300.0) - zAt(*guessed, "b", 300.0));
+    // planned at grade: they meet
+    const std::unique_ptr<Result> planned = build(RoadLabGraph::fromJson(crossingGraph(
+        nlohmann::json::array({{{"a", "a"}, {"b", "b"}, {"at", {0, 0}}, {"kind", "at_grade"}}}), true)));
+    const double dzPlanned = std::fabs(zAt(*planned, "a", 300.0) - zAt(*planned, "b", 300.0));
+    std::printf("    [planned level] dz unplanned %.2f m, planned %.3f m\n", dzGuessed, dzPlanned);
+    CHECK(dzGuessed > 4.0);
+    CHECK(dzPlanned < 0.05);
+    const std::vector<Check> checks = invariants(*planned);
+    const Check* asPlanned = checkNamed(checks, "crossings are as planned");
+    CHECK(asPlanned != nullptr && asPlanned->ok);
+}
+
+TEST_CASE(lanes_a_planned_bridge_clears_a_road_it_stood_level_with) {
+    const std::unique_ptr<Result> guessed = build(RoadLabGraph::fromJson(crossingGraph(nullptr, false)));
+    const std::unique_ptr<Result> planned = build(RoadLabGraph::fromJson(crossingGraph(
+        nlohmann::json::array({{{"a", "a"}, {"b", "b"}, {"at", {0, 0}}, {"kind", "bridge"}, {"over", "b"}}}), false)));
+    const double dzGuessed = zAt(*guessed, "b", 300.0) - zAt(*guessed, "a", 300.0);
+    const double dzPlanned = zAt(*planned, "b", 300.0) - zAt(*planned, "a", 300.0);
+    std::printf("    [planned bridge] b over a: unplanned %.2f m, planned %.2f m\n", dzGuessed, dzPlanned);
+    CHECK(std::fabs(dzGuessed) < 0.05);   // flat ground, no plan: a level crossing
+    const Rules R;
+    CHECK(dzPlanned >= R.underClearance + 0.5 + R.structureDepth - 0.05);   // b over a, its slab and girders clear
+}
+
+TEST_CASE(lanes_a_crossing_the_plan_left_out_is_reported_with_its_place) {
+    // the graph declares its crossings, but the list is empty: (0, 0) is found and named
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(crossingGraph(nlohmann::json::array(), false)));
+    const std::vector<Check> checks = invariants(*r);
+    const Check* c = checkNamed(checks, "crossings are as planned");
+    CHECK(c != nullptr);
+    if (!c) return;
+    std::printf("    [unplanned] %s\n", c->detail.c_str());
+    CHECK(!c->ok);
+    CHECK(c->detail.find("1 of the crossings found") != std::string::npos && c->detail.find("a / b at (0, 0)") != std::string::npos);
+}
+
+// PLANNED ELEVATIONS (ADR-0215): designedGraph writes every road's profile into the graph; built again, the builder
+// takes the heights as given -- the same decks as building it straight -- and checks them, never re-designs them.
+TEST_CASE(lanes_a_designed_graph_builds_the_heights_it_was_designed_with) {
+    nlohmann::json spec;
+    { std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/lanelab/freeway_cross_relief.json"); f >> spec; }
+    const std::unique_ptr<Result> straight = build(RoadLabGraph::fromJson(spec, std::string(RT_SOURCE_DIR) + "/assets/lanelab"));
+    const nlohmann::json designed = designedGraph(spec, std::string(RT_SOURCE_DIR) + "/assets/lanelab");
+    const std::unique_ptr<Result> planned = build(RoadLabGraph::fromJson(designed, std::string(RT_SOURCE_DIR) + "/assets/lanelab"));
+    CHECK(planned->graph.designed() && !straight->graph.designed());
+    double worst = 0;
+    for (const EdgeSpec& e : straight->graph.edges) {
+        const EdgeSpec* o = planned->graph.find(e.id);
+        CHECK(o != nullptr && o->z.size() == e.z.size());
+        if (!o || o->z.size() != e.z.size()) continue;
+        for (std::size_t i = 0; i < e.z.size(); ++i) worst = std::max(worst, std::fabs(o->z[i] - e.z[i]));
+    }
+    std::printf("    [designed] %zu edges, worst height difference %.6f m\n", straight->graph.edges.size(), worst);
+    CHECK(worst == 0.0);
+    CHECK(planned->pavement.decks.size() == straight->pavement.decks.size());
+}
+
+TEST_CASE(lanes_a_planned_profile_is_built_as_given_and_its_faults_are_named) {
+    nlohmann::json designed = designedGraph(crossingGraph(nullptr, false));
+    // a 3 m hump in "a" over the crossing at its middle: the builder keeps it, and the checks say what is wrong
+    for (nlohmann::json& e : designed["edges"])
+        if (e["id"] == "a") {
+            std::vector<double> z = e["profile"]["z"].get<std::vector<double>>();
+            for (std::size_t i = 0; i < z.size(); ++i) if (std::fabs(static_cast<double>(i) - 300.0) <= 20.0) z[i] += 3.0;
+            e["profile"]["z"] = z;
+        }
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(designed));
+    const double hump = zAt(*r, "a", 300.0) - zAt(*r, "a", 250.0);
+    std::printf("    [as given] a's hump %.2f m at the crossing\n", hump);
+    CHECK(hump > 2.9);   // not re-designed away
+    const std::vector<Check> checks = invariants(*r);
+    const Check* junctions = checkNamed(checks, "junction heights consistent");
+    const Check* grades = checkNamed(checks, "grades within class limits");
+    CHECK(junctions != nullptr && !junctions->ok);   // a and b no longer meet at the crossing
+    CHECK(grades != nullptr && !grades->ok);         // and a climbs 3 m in a metre
+    if (junctions) std::printf("    [as given] %s\n", junctions->detail.c_str());
+    CHECK(junctions != nullptr && junctions->detail.find("at (0, 0)") != std::string::npos);   // named where
+}
+
 // THE LIGHT RAIL LAB: held up over its streets, its stations reached from below -- the way passes under the line at
 // the street's level, and each platform stands level along its length.
 TEST_CASE(lanes_light_rail_lab_reaches_its_stations_from_below) {

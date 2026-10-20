@@ -148,6 +148,25 @@ std::vector<Vec2> resolvePath(const nlohmann::json& p, const RoadLabGraph& g, do
 
 const EdgeSpec* RoadLabGraph::find(const std::string& id) const { auto it = index.find(id); return it == index.end() ? nullptr : &edges[it->second]; }
 EdgeSpec* RoadLabGraph::find(const std::string& id) { auto it = index.find(id); return it == index.end() ? nullptr : &edges[it->second]; }
+bool RoadLabGraph::designed() const {
+    bool any = false;
+    for (const EdgeSpec& e : edges) {
+        if (e.xy.size() < 2 && !e.isRamp()) continue;
+        if (e.profile.empty()) return false;
+        any = true;
+    }
+    return any;
+}
+const CrossingSpec* RoadLabGraph::declaredCrossing(const std::string& a, const std::string& b, const Vec2& p, double within) const {
+    const CrossingSpec* best = nullptr;
+    double bd = within;
+    for (const CrossingSpec& c : crossings) {
+        if (!((c.a == a && c.b == b) || (c.a == b && c.b == a))) continue;
+        const double d = std::hypot(c.at.x - p.x, c.at.y - p.y);
+        if (d <= bd) { bd = d; best = &c; }
+    }
+    return best;
+}
 
 double RoadLabGraph::hw(const EdgeSpec& e) const {
     if (e.laneCount() == 0) return 0.0;
@@ -260,6 +279,7 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             if (P.s1 > P.s0) e.platforms.push_back(P);
         }
         if (ej.contains("z_min")) { e.hasZMin = true; e.zMin = ej["z_min"].get<double>(); }
+        if (ej.contains("profile")) { e.profileStep = ej["profile"].value("step", 1.0); e.profile = ej["profile"].at("z").get<std::vector<double>>(); }
         if (ej.contains("lots_range")) { e.lotsFrom = ej["lots_range"].at(0).get<double>(); e.lotsTo = ej["lots_range"].at(1).get<double>(); }
         if (ej.contains("floor")) for (const auto& fp : ej["floor"]) e.floorPts.push_back({fp.at(0).get<double>(), fp.at(1).get<double>(), fp.at(2).get<double>(), fp.size() > 3 ? fp.at(3).get<double>() : 0.0});
         auto hostLanes = [&](const nlohmann::json& a) { if (a.is_object()) { const EdgeSpec* h = g.find(a.at("edge").get<std::string>()); if (h) return h->lanes; } return e.lanes; };
@@ -270,6 +290,19 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         g.index[e.id] = static_cast<int>(g.edges.size()); g.edges.push_back(std::move(e));
     }
     if (spec.contains("connectors")) for (const auto& c : spec["connectors"]) g.connectors.push_back({c.at("from").get<std::string>(), c.at("to").get<std::string>(), num(c, "to_s", 0.0)});
+    if (spec.contains("crossings")) {
+        g.declaresCrossings = true;
+        for (const auto& c : spec["crossings"]) {
+            CrossingSpec x;
+            x.a = c.at("a").get<std::string>(); x.b = c.at("b").get<std::string>();
+            x.kind = c.value("kind", std::string("at_grade")); x.over = c.value("over", std::string());
+            x.at = Vec2(c.at("at").at(0).get<double>(), c.at("at").at(1).get<double>());
+            x.clearance = num(c, "clearance", -1.0);
+            if (x.kind != "bridge" && x.kind != "at_grade") throw std::runtime_error("crossing " + x.a + "/" + x.b + ": unknown kind " + x.kind);
+            if (x.kind == "bridge" && x.over != x.a && x.over != x.b) throw std::runtime_error("crossing " + x.a + "/" + x.b + ": a bridge names which goes over");
+            g.crossings.push_back(x);
+        }
+    }
     if (g.edges.empty()) throw std::runtime_error("graph has no edges");
     return g;
 }
