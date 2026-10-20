@@ -2,7 +2,7 @@
 
 #include "../src/engine/procgen/terrain_lod.h"
 #include "../src/engine/procgen/noise.h"
-#include "../src/engine/procgen/terrain_normal_map.h"
+#include "../src/engine/procgen/terrain_world_map.h"
 
 #include <algorithm>
 #include <chrono>
@@ -305,17 +305,17 @@ TEST_CASE(baked_tile_normals_follow_their_level_and_morph_to_the_parents) {
 // THE TERRAIN NORMAL MAP (ADR-0205): a tilted plane comes back as its own normal; bumps finer than a texel (but above
 // the bake's half-texel samples) average away -- the far ground shows the hills, not noise; the disk cache round-trips
 // and refuses another key.
-TEST_CASE(terrain_normal_map_holds_the_mean_slope_per_texel) {
+TEST_CASE(terrain_world_map_holds_the_mean_slope_per_texel) {
     auto plane = [](double x, double z) { return 0.2 * x - 0.1 * z; };
-    const TerrainNormalMap pm = bakeTerrainNormalMap(plane, -256, -256, 512, 64);
+    const TerrainWorldMap pm = bakeTerrainNormalMap(plane, -256, -256, 512, 64);
     const Vec3 want = normalize(Vec3(-0.2, 1.0, 0.1));
     double worst = 0;
     for (double z = -200; z <= 200; z += 37)
-        for (double x = -200; x <= 200; x += 41) worst = std::max(worst, std::acos(std::min(1.0, dot(pm.at(x, z), want))));
+        for (double x = -200; x <= 200; x += 41) worst = std::max(worst, std::acos(std::min(1.0, dot(pm.normalAt(x, z), want))));
     CHECK(worst < 0.01);   // (8-bit: ~0.5 deg)
     auto hills = [](double x, double z) { return 30.0 * std::sin(x * 0.006) * std::cos(z * 0.005); };
     auto bumpy = [&](double x, double z) { return hills(x, z) + 0.5 * std::sin(x * 1.0 + 1.0) * std::sin(z * 0.9); };   // (6-7 m)
-    const TerrainNormalMap bm = bakeTerrainNormalMap(bumpy, -512, -512, 1024, 128);   // 8 m texels
+    const TerrainWorldMap bm = bakeTerrainNormalMap(bumpy, -512, -512, 1024, 128);   // 8 m texels
     double off = 0;
     int n = 0;
     for (double z = -400; z <= 400; z += 23)
@@ -323,18 +323,35 @@ TEST_CASE(terrain_normal_map_holds_the_mean_slope_per_texel) {
             const double cx = bm.originX + (std::floor((x - bm.originX) / bm.texel()) + 0.5) * bm.texel();
             const double cz = bm.originZ + (std::floor((z - bm.originZ) / bm.texel()) + 0.5) * bm.texel(), e = 0.5;
             const Vec3 truth = normalize(Vec3(-(hills(cx + e, cz) - hills(cx - e, cz)) / (2 * e), 1.0, -(hills(cx, cz + e) - hills(cx, cz - e)) / (2 * e)));
-            off += std::acos(std::min(1.0, dot(bm.at(x, z), truth)));
+            off += std::acos(std::min(1.0, dot(bm.normalAt(x, z), truth)));
             ++n;
         }
     off /= n;
     std::printf("    [terrain normal map] bumps under an 8 m texel: %.2f deg off the hills\n", off * 57.2958);
     CHECK(off < 1.0 / 57.2958);
-    const std::string path = "/tmp/rt_test_terrain_normal_map.nmap";
-    CHECK(writeTerrainNormalMap(bm, 0x1234u, path));
-    TerrainNormalMap back;
-    CHECK(readTerrainNormalMap(path, 0x1234u, back));
-    CHECK(back.size == bm.size && back.xz == bm.xz && back.extent == bm.extent && back.originX == bm.originX);
-    TerrainNormalMap other;
-    CHECK(!readTerrainNormalMap(path, 0x9999u, other));
+    const std::string path = "/tmp/rt_test_terrain_world_map.nmap";
+    CHECK(writeTerrainWorldMap(bm, 0x1234u, path));
+    TerrainWorldMap back;
+    CHECK(readTerrainWorldMap(path, 0x1234u, back));
+    CHECK(back.size == bm.size && back.texels == bm.texels && back.channels == 2 && back.extent == bm.extent && back.originX == bm.originX);
+    TerrainWorldMap other;
+    CHECK(!readTerrainWorldMap(path, 0x9999u, other));
+    std::remove(path.c_str());
+}
+
+// A WORLD MAP of any channels (ADR-0208, the cover map's): each texel is the function at its centre, and the cache
+// keeps the channel count.
+TEST_CASE(terrain_world_map_bakes_each_texel_at_its_centre) {
+    const TerrainWorldMap m = bakeTerrainWorldMap(4, [](double x, double z, uint8_t* out) {
+        out[0] = static_cast<uint8_t>(std::lround(x)); out[1] = static_cast<uint8_t>(std::lround(z));
+        out[2] = 7; out[3] = 200;
+    }, 0.0, 0.0, 64.0, 16);   // 4 m texels, centres at 2, 6, 10 ...
+    CHECK(m.channels == 4 && m.texels.size() == 16u * 16u * 4u);
+    CHECK(std::fabs(m.at(5.0, 9.0, 0) * 255.0 - 6.0) < 1e-6 && std::fabs(m.at(5.0, 9.0, 1) * 255.0 - 10.0) < 1e-6);
+    CHECK(std::fabs(m.at(63.0, 1.0, 3) * 255.0 - 200.0) < 1e-6);
+    const std::string path = "/tmp/rt_test_terrain_world_map4.wmap";
+    CHECK(writeTerrainWorldMap(m, 0x77u, path));
+    TerrainWorldMap back;
+    CHECK(readTerrainWorldMap(path, 0x77u, back) && back.channels == 4 && back.texels == m.texels);
     std::remove(path.c_str());
 }

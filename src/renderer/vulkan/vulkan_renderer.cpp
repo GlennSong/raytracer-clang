@@ -194,9 +194,13 @@ struct GlobalsUBO {
     float    viewerBoxB[4];
     float    glassMode[4];
     // Terrain normal map (set 0 binding 5, ADR-0205): xy world origin, z 1/extent, w enabled; and x the camera distance
-    // it starts blending in at, y 1/(the blend's length)
+    // it starts blending in at, y 1/(the blend's length), z 1: no surface relief (RT_TERRAIN_DETAIL=0, ADR-0207)
     float    terrainNormal[4];
     float    terrainNormal2[4];
+    // Terrain cover + macro maps (set 0 bindings 6, 7; ADR-0208): xy world origin, z 1/extent, w enabled; and x the
+    // camera distance the cover map blends in from, y 1/(the blend's length)
+    float    terrainSurface[4];
+    float    terrainSurface2[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -676,6 +680,8 @@ struct VulkanRenderer::Impl {
     // map's square). Default texture when none is bound, gated by the UBO's flag.
     VkImageView terrainNormalView = VK_NULL_HANDLE;
     void updateGlobalTerrainNormalDescriptor();
+    // ...and the cover and macro maps (bindings 6, 7; ADR-0208), the same way
+    VkImageView terrainCoverView = VK_NULL_HANDLE, terrainMacroView = VK_NULL_HANDLE;
 
     // Split-sum BRDF integration LUT (set 0 binding 3), baked once at init.
     VkImage brdfLutImage = VK_NULL_HANDLE;
@@ -3570,7 +3576,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3591,10 +3597,12 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[5].binding = 5;   // terrain normal map (ADR-0205)
-    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[5].descriptorCount = 1;
-    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (uint32_t b = 5; b < 8; ++b) {   // terrain normal map (ADR-0205); cover and macro maps (ADR-0208)
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -3621,8 +3629,8 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 2> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + terrain normals
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 5;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 7;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -3728,22 +3736,24 @@ void VulkanRenderer::Impl::updateGlobalEnvDescriptor() {
 }
 
 void VulkanRenderer::Impl::updateGlobalTerrainNormalDescriptor() {
-    VkImageView view = terrainNormalView ? terrainNormalView : defaultTexture.view;
-    if (!view || !textureSampler) return;
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        VkDescriptorImageInfo img{};
-        img.sampler = textureSampler;   // linear, mipped: a far slope reads its mips, not one aliased texel
-        img.imageView = view;
-        img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = descriptorSets[i];
-        write.dstBinding = 5;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &img;
-        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-    }
+    // bindings 5, 6, 7: the terrain's normal, cover and macro maps (the default texture where none is bound)
+    if (!defaultTexture.view || !textureSampler) return;
+    const VkImageView views[3] = {terrainNormalView, terrainCoverView, terrainMacroView};
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t k = 0; k < 3; ++k) {
+            VkDescriptorImageInfo img{};
+            img.sampler = textureSampler;   // linear, mipped: a far slope reads its mips, not one aliased texel
+            img.imageView = views[k] ? views[k] : defaultTexture.view;
+            img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptorSets[i];
+            write.dstBinding = 5 + k;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &img;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
 }
 
 void VulkanRenderer::Impl::updateGlobalHorizonDescriptor() {
@@ -6645,8 +6655,25 @@ void VulkanRenderer::setTerrainNormalMap(TextureHandle map, float originX, float
     impl->cpuGlobals.terrainNormal[3] = on ? 1.0f : 0.0f;
     impl->cpuGlobals.terrainNormal2[0] = fadeStart;
     impl->cpuGlobals.terrainNormal2[1] = 1.0f / std::max(1.0f, fadeEnd - fadeStart);
-    impl->cpuGlobals.terrainNormal2[2] = 0.0f;
-    impl->cpuGlobals.terrainNormal2[3] = 0.0f;
+}
+
+void VulkanRenderer::setTerrainSurfaceMaps(TextureHandle cover, TextureHandle macro, float originX, float originZ, float extent,
+                                           float fadeStart, float fadeEnd) {
+    GpuTexture* c = impl->textures.get(cover);
+    GpuTexture* m = impl->textures.get(macro);
+    const bool on = c && c->view && m && m->view && extent > 0.0f;
+    if ((on ? c->view : VK_NULL_HANDLE) != impl->terrainCoverView || (on ? m->view : VK_NULL_HANDLE) != impl->terrainMacroView) {
+        if (impl->device) vkDeviceWaitIdle(impl->device);   // descriptor in-use safety
+        impl->terrainCoverView = on ? c->view : VK_NULL_HANDLE;
+        impl->terrainMacroView = on ? m->view : VK_NULL_HANDLE;
+        impl->updateGlobalTerrainNormalDescriptor();
+    }
+    impl->cpuGlobals.terrainSurface[0] = originX;
+    impl->cpuGlobals.terrainSurface[1] = originZ;
+    impl->cpuGlobals.terrainSurface[2] = on ? 1.0f / extent : 0.0f;
+    impl->cpuGlobals.terrainSurface[3] = on ? 1.0f : 0.0f;
+    impl->cpuGlobals.terrainSurface2[0] = fadeStart;
+    impl->cpuGlobals.terrainSurface2[1] = 1.0f / std::max(1.0f, fadeEnd - fadeStart);
 }
 
 void VulkanRenderer::removeTexture(TextureHandle handle) {
@@ -6761,6 +6788,9 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     // the grass shaded to its ground's slope (mesh.frag): RT_GRASS_GROUND=0 for the old bend to the sky (w = 1: off)
     static const bool grassGroundOff = [] { const char* e = std::getenv("RT_GRASS_GROUND"); return e && std::string(e) == "0"; }();
     impl->cpuGlobals.terrainHorizon2[3] = grassGroundOff ? 1.0f : 0.0f;
+    // the ground's surface relief (mesh.frag, ADR-0207): RT_TERRAIN_DETAIL=0 for the smooth ground (z = 1: off)
+    static const bool terrainDetailOff = [] { const char* e = std::getenv("RT_TERRAIN_DETAIL"); return e && std::string(e) == "0"; }();
+    impl->cpuGlobals.terrainNormal2[2] = terrainDetailOff ? 1.0f : 0.0f;
     {
         // RT_GLASS=old: the old glass; RT_GLASS=none: panes drawn as nothing (the reference a pane is measured against)
         static const float glassMode = [] {

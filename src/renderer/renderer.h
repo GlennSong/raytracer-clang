@@ -820,12 +820,18 @@ public:
     virtual void setTerrainHorizon(TextureHandle /*map*/, float /*originX*/,
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}
-    // TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_normal_map.h): a two-channel texture of the ground's normal
+    // TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_world_map.h): a two-channel texture of the ground's normal
     // (x, z; 0..1 for -1..1) over the square [originX, originX + extent)^2. The terrain (FLAG_TERRAIN) lights by it
     // instead of its vertex normals beyond the camera distance where its mesh grows coarser than a texel, blended in
     // over [fadeStart, fadeEnd]. An invalid handle switches it off. No-op by default (Vulkan).
     virtual void setTerrainNormalMap(TextureHandle /*map*/, float /*originX*/, float /*originZ*/, float /*extent*/,
                                      float /*fadeStart*/, float /*fadeEnd*/) {}
+    // TERRAIN SURFACE MAPS (ADR-0208, the same square): `cover`, four channels -- the ground-cover weights grass, dirt,
+    // sand, snow (rock the rest) -- which the terrain's layers take over from its vertices' over [fadeStart, fadeEnd];
+    // `macro`, two -- convexity (0.5 flat, 0 a gully, 1 a ridge) and wetness -- shading the ground everywhere. Invalid
+    // handles switch them off. No-op by default (Vulkan).
+    virtual void setTerrainSurfaceMaps(TextureHandle /*cover*/, TextureHandle /*macro*/, float /*originX*/, float /*originZ*/,
+                                       float /*extent*/, float /*fadeStart*/, float /*fadeEnd*/) {}
     virtual RenderStats getRenderStats() const = 0;
     // The newest occlusion depth the GPU has finished (engine/occlusion.h), or null where the
     // backend has none (the caller then culls by frustum only).

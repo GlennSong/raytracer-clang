@@ -10914,3 +10914,43 @@ Glenn (2026-10-19): "let's do the order you suggest so we can do an 8k bake of t
   the ground the island's cities were planned on -- are bit for bit what they were.
 - island_8_weathered and (Glenn's local) island_8_nature both carry it; their weather caches are one bake (the key
   leaves out the cities, trails and forest).
+
+## ADR-0207 — The ground's surface relief; stones, tussocks and slabs in its layers
+
+Glenn (2026-10-19): the terrain "still doesn't look high resolution"; the plan, step 1: surface detail on each ground
+type.
+
+- **Measured why.** The 8192 ground (ADR-0206) reshaped the hills by 1-4 m in 20 m gullies, but under that it is
+  smooth (relief at 2.4 m: 0.1-0.3 m rms), and every layer lit as a smooth sheet ("the ground lights smooth": the
+  layers' heights only ever chose which layer showed).
+- **Texture-scale relief.** terrainLayers now also returns the blended layers' HEIGHT in metres (each layer's alpha by
+  its relief: grass 5 cm, dirt 3.5, sand 2.5, rock 9), and mesh.frag bumps the normal by its screen-space
+  derivatives -- Mikkelsen's surface gradient: no tangent frame, so the triplanar rock bumps too, and the layers' mips
+  fade it with distance.
+- **Mid-scale relief** on the soft ground (grass, dirt, sand): a hummock field at ~5 m and ~1.6 m (22 and 6 cm), each
+  octave faded once a pixel covers too much of it, as the rock's crags (ADR-0120) are.
+- **The layers' recipes** (ground_layers.cpp, kRecipeVersion 4), since the relief shows what they hold: dirt's one
+  size of pale pebble in every cell read as polka dots -- now stones of two sizes in some cells only, warped out of
+  round, gathered in patches, each its own shade, over soil crumbs; grass's height was the strokes' value noise (it
+  bumped as square grain) -- now round tussocks on a smooth roll; rock gained slabs at their own heights (eased to
+  nothing at their edges: a hard step bumped as a dotted seam), grain down to ~4 cm, mineral flecks and pale lichen.
+  RT_GROUND_LAYER_DUMP=dir (test ground_layer_textures) writes the four at 512^2.
+- **Seen** (island_8_weathered, eye level at 07:47): a path reads as gravelly soil with stones in relief, an outcrop's
+  cracks cut in. Nothing changes past a few hundred metres (by design: that is ADR-0208's).
+- A/B: RT_TERRAIN_DETAIL=0 (globals terrainNormal2.z).
+
+## ADR-0208 — The terrain's cover and macro maps; terrain world maps
+
+- **The far ground's layers per texel.** A far tile's cover weights were its vertices', 16-64 m apart: rock, scree
+  and meadow smeared across its triangles. The COVER MAP bakes the same weights (terrainColor's and
+  terrainSnowWeight's: grass, dirt, sand, snow; rock the rest) per texel at twice the normal map's texel (the island:
+  4096^2 at 4.9 m, 64 MB, 2.4 s), and mesh.frag takes it over from the vertices where the mesh grows coarser than a
+  texel. Keyed on the whole terrain block and a code tag (its palette, the forest's litter, the trails and the rivers'
+  shores all paint it).
+- **The MACRO MAP:** the ground maps' convexity and wetness (ADR-0128) at the same texels (0.1 s), read at every
+  distance: gullies and hollows up to 22% darker, ridges 7% paler, wet ground up to 22% darker and less rough. The far
+  slopes show their drainage.
+- **Terrain world maps** (procgen/terrain_world_map.h, was terrain_normal_map.h): one struct and cache format
+  (cache/terrain/<key>.wmap) for any channel count; the normal map is one of them. Set 0 bindings 6 and 7, their square
+  and blend band in the globals (setTerrainSurfaceMaps); four-channel textures upload as RGBA8.
+- A/B: RT_TERRAIN_COVER_MAP=0. Owed: Metal and WebGPU; the 4 m rock texture's repeat shows on mid-distance slopes.

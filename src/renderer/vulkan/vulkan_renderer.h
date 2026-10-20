@@ -38,6 +38,8 @@ public:
                            float encodeLo, float encodeHi) override;
     void setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent, float fadeStart,
                              float fadeEnd) override;
+    void setTerrainSurfaceMaps(TextureHandle cover, TextureHandle macro, float originX, float originZ, float extent,
+                               float fadeStart, float fadeEnd) override;
     void removeTexture(TextureHandle handle) override;
     void submitUi(const std::vector<UiQuad>& quads) override;
     RenderStats getRenderStats() const override;

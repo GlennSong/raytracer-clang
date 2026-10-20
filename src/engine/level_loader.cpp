@@ -1914,31 +1914,68 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }
-        // THE NORMAL MAP (ADR-0205): the drawn ground's slope per texel over the authored world, the far ground's
-        // shading -- a texel of max(2 m, the world / 8192), or the cdlod block's "normalTexel"; cached beside the tiles
+        // THE WORLD MAPS, over the authored world, each cached beside the tiles (cache/terrain/<key>.wmap):
+        //   the NORMAL MAP (ADR-0205): the drawn ground's slope per texel, the far ground's shading -- a texel of
+        //     max(2 m, the world / 8192), or the cdlod block's "normalTexel";
+        //   the COVER MAP (ADR-0208): the ground-cover weights per texel (grass, dirt, sand, snow), the far ground's
+        //     layers -- twice the normal map's texel; keyed on the whole terrain block too (the cover's palette, the
+        //     forest's litter, the trails and the rivers' shores all paint it) and kTerrainCoverCodeTag;
+        //   the MACRO MAP (ADR-0208): the ground maps' convexity and wetness at the cover map's texels (their own grid
+        //     is the weather's, 10 m or 5 m), shading every distance.
         {
-            const auto tn = std::chrono::steady_clock::now();
+            constexpr const char* kTerrainCoverCodeTag = "terrain-cover-map-v1";
             const double extent = 2.0 * cfg.worldHalf;
-            const double texel = std::max(c.value("normalTexel", std::max(2.0 * spec.cell0, extent / 8192.0)), extent / 16384.0);
-            const int size = std::max(16, static_cast<int>(std::ceil(extent / texel)));
-            uint64_t nkey = key;
-            const double np[] = {extent, static_cast<double>(size)};
-            nkey = engine::bundle::fnv1a(np, sizeof(np), nkey);
-            const char tag[] = "terrain-normal-map-v1";
-            nkey = engine::bundle::fnv1a(tag, sizeof(tag), nkey);
-            const std::string nPath = "cache/terrain/" + engine::bundle::hex16(nkey) + ".nmap";
-            auto nm = std::make_shared<TerrainNormalMap>();
-            const bool nHit = useCache && readTerrainNormalMap(nPath, nkey, *nm);
-            if (!nHit) {
-                const std::shared_ptr<const pyramid::Pyramid> pc = pyr;
-                *nm = bakeTerrainNormalMap([pc](double x, double z) { return pc->height(x, z); }, -cfg.worldHalf, -cfg.worldHalf,
-                                           extent, size);
-                if (useCache && !writeTerrainNormalMap(*nm, nkey, nPath)) LOG_WARN << "[terrain] normal map not cached: " << nPath;
+            const double nTexel = std::max(c.value("normalTexel", std::max(2.0 * spec.cell0, extent / 8192.0)), extent / 16384.0);
+            auto worldMap = [&](const char* what, const std::string& tag, int size, uint64_t baseKey,
+                                const std::function<TerrainWorldMap()>& bake) {
+                const auto t0 = std::chrono::steady_clock::now();
+                uint64_t k = baseKey;
+                const double kp[] = {extent, static_cast<double>(size)};
+                k = engine::bundle::fnv1a(kp, sizeof(kp), k);
+                k = engine::bundle::fnv1aStr(tag, k);
+                const std::string path = "cache/terrain/" + engine::bundle::hex16(k) + ".wmap";
+                auto m = std::make_shared<TerrainWorldMap>();
+                const bool hit = useCache && readTerrainWorldMap(path, k, *m);
+                if (!hit) {
+                    *m = bake();
+                    if (useCache && !writeTerrainWorldMap(*m, k, path)) LOG_WARN << "[terrain] " << what << " not cached: " << path;
+                }
+                LOG_INFO << "[terrain] " << what << ": " << m->size << "^2 (" << m->texel() << " m, " << m->channels << " channels), "
+                         << m->texels.size() / 1048576 << " MB, " << (hit ? "read from " : "baked and cached as ") << path << " in "
+                         << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
+                return std::shared_ptr<const TerrainWorldMap>(m);
+            };
+            const std::shared_ptr<const pyramid::Pyramid> pc = pyr;
+            const int nSize = std::max(16, static_cast<int>(std::ceil(extent / nTexel)));
+            cfg.normalMap = worldMap("normal map", "terrain-normal-map-v2", nSize, key, [&] {
+                return bakeTerrainNormalMap([pc](double x, double z) { return pc->height(x, z); }, -cfg.worldHalf, -cfg.worldHalf,
+                                            extent, nSize);
+            });
+            const TerrainParams& tp = cfg.params;
+            if (tp.cover && tp.coverWeights) {
+                const int cSize = std::max(16, nSize / 2);
+                const std::shared_ptr<const TerrainWorldMap> nm = cfg.normalMap;
+                const Noise cnoise(cfg.seed);
+                cfg.coverMap = worldMap("cover map", std::string(kTerrainCoverCodeTag) + t.dump(), cSize, key, [&] {
+                    return bakeTerrainWorldMap(4, [&](double x, double z, uint8_t* out) {
+                        const double y = pc->height(x, z);
+                        const Vec3 n = nm->normalAt(x, z);
+                        const Vec3 w = terrainColor(x, z, y, n.y, cnoise, tp, n.x, n.z);
+                        const double sn = terrainSnowWeight(x, z, y, n.y, tp, n.x, n.z);
+                        auto b = [](double v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); };
+                        out[0] = b(w.x); out[1] = b(w.y); out[2] = b(w.z); out[3] = b(sn);
+                    }, -cfg.worldHalf, -cfg.worldHalf, extent, cSize);
+                });
+                if (const std::shared_ptr<const TerrainMaps> maps = tp.cover->params().maps) {
+                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v1", cSize, key, [&] {
+                        return bakeTerrainWorldMap(2, [&](double x, double z, uint8_t* out) {
+                            const TerrainMapSample ms = maps->at(x, z);
+                            out[0] = static_cast<uint8_t>(std::lround(std::clamp(0.5 + 0.5 * ms.convex, 0.0, 1.0) * 255.0));
+                            out[1] = static_cast<uint8_t>(std::lround(std::clamp(ms.wet, 0.0, 1.0) * 255.0));
+                        }, -cfg.worldHalf, -cfg.worldHalf, extent, cSize);
+                    });
+                }
             }
-            cfg.normalMap = nm;
-            LOG_INFO << "[terrain] normal map: " << size << "^2 (" << nm->texel() << " m), " << nm->xz.size() / 1048576 << " MB, "
-                     << (nHit ? "read from " : "baked and cached as ") << nPath << " in "
-                     << std::chrono::duration<double>(std::chrono::steady_clock::now() - tn).count() << " s";
         }
         const CdlodGeometry g = bakedCdlodGeometry(cfg.worldHalf);
         cfg.worldHalf = static_cast<float>(g.worldHalf);

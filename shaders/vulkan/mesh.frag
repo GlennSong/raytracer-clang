@@ -53,7 +53,10 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none),
                               // y the ceiling over the viewer (0: none)
     vec4  terrainNormal;      // the terrain normal map (binding 5, ADR-0205): xy world origin, z 1/extent, w enabled
-    vec4  terrainNormal2;     // x the camera distance it blends in from, y 1/(the blend's length)
+    vec4  terrainNormal2;     // x the camera distance it blends in from, y 1/(the blend's length),
+                              // z 1: no surface relief (RT_TERRAIN_DETAIL=0, ADR-0207)
+    vec4  terrainSurface;     // the cover + macro maps (bindings 6, 7, ADR-0208): xy world origin, z 1/extent, w enabled
+    vec4  terrainSurface2;    // x the camera distance the cover map blends in from, y 1/(the blend's length)
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
@@ -61,6 +64,8 @@ layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF LUT
 layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
 layout(set = 0, binding = 5) uniform sampler2D terrainNormalMap;    // the ground's slope per texel (ADR-0205)
+layout(set = 0, binding = 6) uniform sampler2D terrainCoverMap;     // its cover weights per texel (ADR-0208)
+layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its convexity and wetness (ADR-0208)
 
 const float ENV_PI = 3.14159265359;
 vec3 sampleEquirect(vec3 dir) {
@@ -401,8 +406,11 @@ vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
     w /= (w.x + w.y + w.z);
     return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
 }
-// The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120).
-float gTerrainRock = 0.0, gTerrainSnow = 0.0;
+// The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120); and the blended layers' HEIGHT
+// in metres (each layer's alpha by its relief), the surface relief's bump (ADR-0207)
+float gTerrainRock = 0.0, gTerrainSnow = 0.0, gTerrainH = 0.0;
+// each layer's relief, metres for its alpha 0..1: a grass sward's clumps, a pebble, a ripple, a slab's crack
+const float kReliefGrass = 0.05, kReliefDirt = 0.035, kReliefSand = 0.025, kReliefRock = 0.09;
 // ROCK AT MOUNTAIN SCALE (ADR-0120, Glenn: "bordering on realism, so better procedural texturing/
 // materials for the rock surfaces and snow"). The 4 m rock texture averages to one grey past a few
 // hundred metres; what reads on a mountain is structure at 5-200 m: STRATA (bedding bands along the
@@ -462,6 +470,8 @@ vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
     vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
               rock * kr + snow * kn) / sum;
     gTerrainRock = kr / sum; gTerrainSnow = kn / sum;
+    gTerrainH = (g.a * kReliefGrass * kg + d.a * kReliefDirt * kd + s.a * kReliefSand * ks + r.a * kReliefRock * kr +
+                 (1.0 - r.a) * 0.01 * kn) / sum;
     // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
     c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
     return c;
@@ -954,8 +964,29 @@ void main() {
     // TERRAIN LAYERS: the texture slots are the ground's layers, not the usual maps.
     const bool layered = pc.surfaceFlags.x == 19u;
     if (layered) {
-        albedo = terrainLayers(inColor, inTexcoord.x, inWorldPos, geomN);
-        roughness = 0.95;
+        // THE COVER MAP (ADR-0208): far off, where a vertex's weights spread over a triangle tens of metres wide, the
+        // weights per texel instead (blended in over the band where the mesh grows coarser than a texel)
+        vec3 cover = inColor;
+        float snowW = inTexcoord.x;
+        vec2 macro = vec2(0.5, 0.0);
+        if (g.terrainSurface.w > 0.5 && (pc.surfaceFlags.y & (1u << 25)) != 0u) {
+            const vec2 suv = (inWorldPos.xz - g.terrainSurface.xy) * g.terrainSurface.z;
+            const vec4 cm = texture(terrainCoverMap, suv);
+            const vec2 mm = texture(terrainMacroMap, suv).rg;
+            if (suv.x >= 0.0 && suv.y >= 0.0 && suv.x <= 1.0 && suv.y <= 1.0) {
+                const float w = clamp((distance(inWorldPos, g.cameraPosition.xyz) - g.terrainSurface2.x) * g.terrainSurface2.y, 0.0, 1.0);
+                cover = mix(cover, cm.rgb, w);
+                snowW = mix(snowW, cm.a, w);
+                macro = mm;
+            }
+        }
+        albedo = terrainLayers(cover, snowW, inWorldPos, geomN);
+        // THE MACRO SHADING (ADR-0208): the ground's own processes, at the scale the eye reads a hillside by -- gullies
+        // and hollows darker (shade, damp, deeper soil), ridges and spurs a touch paler (worn, dry), the ground where
+        // water gathers darker and less rough
+        const float gully = clamp((0.5 - macro.x) * 2.0, 0.0, 1.0), ridge = clamp((macro.x - 0.5) * 2.0, 0.0, 1.0);
+        albedo *= (1.0 - 0.22 * gully) * (1.0 + 0.07 * ridge) * (1.0 - 0.22 * macro.y * (1.0 - gTerrainSnow));
+        roughness = 0.95 - 0.3 * macro.y * (1.0 - gTerrainSnow);   // (wet ground is less rough)
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }
     // WATER (Surface::River, id 20; ADR-0099): one polygon for rivers and lakes. Per vertex: the
@@ -1168,6 +1199,34 @@ void main() {
             // when it bent to the sky, lit as a flat field while the hillside darkened)
             const vec3 up = grassCard && g.terrainHorizon2.w < 0.5 ? vec3(inImpA.x, sqrt(max(1.0 - dot(inImpA.xy, inImpA.xy), 0.0)), inImpA.y) : vec3(0.0, 1.0, 0.0);
             N = normalize(mix(N, up, grassCard ? 0.7 : 0.45));
+        }
+    }
+    // SURFACE RELIEF (ADR-0207; Glenn, 2026-10-19: the ground "doesn't look high resolution" -- every layer lit as a
+    // smooth sheet). Two scales the mesh can't carry: (1) each layer's own texture height -- grass clumps, pebbles,
+    // ripples, a slab's cracks -- bumped through the screen-space derivatives of the blended height (Mikkelsen's
+    // surface gradient: no tangent frame, so the triplanar rock bumps too, and the mips fade it with distance); and
+    // (2) on the soft ground a hummock field at ~5 m and ~1.6 m, the turf and soil a slope is never planed flat by,
+    // each octave faded once a pixel covers too much of it (as the crags below).
+    if (layered && g.terrainNormal2.z < 0.5) {
+        const vec3 dpx = dFdx(inWorldPos), dpy = dFdy(inWorldPos);
+        const vec3 r1 = cross(dpy, N), r2 = cross(N, dpx);
+        const float det = dot(dpx, r1);
+        const vec3 surfGrad = sign(det) * (dFdx(gTerrainH) * r1 + dFdy(gTerrainH) * r2);
+        if (abs(det) > 1e-12) N = normalize(abs(det) * N - surfGrad);
+        const float soft = clamp(1.0 - gTerrainRock - gTerrainSnow, 0.0, 1.0);
+        if (soft > 0.01) {
+            const float pix = length(fwidth(inWorldPos));
+            vec2 grad = vec2(0.0);
+            for (int o = 0; o < 2; ++o) {
+                const float L = o == 0 ? 5.0 : 1.6, amp = o == 0 ? 0.22 : 0.06;
+                const float fade = clamp(1.0 - pix * 6.0 / L, 0.0, 1.0);
+                if (fade <= 0.0) continue;
+                const float f = 1.0 / L, e = 0.15 * L, sx = o == 0 ? 7.3 : -2.9;
+                const float a = fbm2(inWorldPos.x * f + sx, inWorldPos.z * f);
+                grad += vec2(fbm2((inWorldPos.x + e) * f + sx, inWorldPos.z * f) - a,
+                             fbm2(inWorldPos.x * f + sx, (inWorldPos.z + e) * f) - a) / e * amp * fade;
+            }
+            N = normalize(N - vec3(grad.x, 0.0, grad.y) * soft);
         }
     }
     // CRAGS (ADR-0120): the mesh's triangles are the only relief a distant mountain had ("the mountains
