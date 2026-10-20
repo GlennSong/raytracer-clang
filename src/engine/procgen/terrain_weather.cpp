@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <filesystem>
 #include <thread>
 
@@ -201,6 +202,10 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
     p.growBlurM = g.value("blur", p.growBlurM);
     p.grow.K = g.value("K", p.grow.K);
     p.grow.diffusion = g.value("diffusion", p.grow.diffusion);
+    if (g.contains("layers") && g["layers"].is_object()) {
+        p.growLayers = true;
+        p.layers = rockLayersFromJson(g["layers"]);
+    }
     const nlohmann::json wa = w.value("water", nlohmann::json::object());
     ErosionParams& e = p.water;
     e.vulkan = true;
@@ -311,6 +316,14 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
         for (float v : coarse0.h) if (v >= base0) { lo = std::min(lo, v); hi = std::max(hi, v); }
         sp.targetLo = lo;
         sp.targetHi = hi;
+    }
+    // (the rock layers, when the level asks: in the grid's own frame, from its corner)
+    std::unique_ptr<RockLayers> layers;
+    if (w.growLayers) {
+        layers = std::make_unique<RockLayers>(w.layers, seed);
+        sp.layers = layers.get();
+        LOG_INFO << "[weather] rock layers: " << w.layers.thicknessM << " m beds dipping " << w.layers.dipDeg << " deg, " << 100.0 * w.layers.hard
+                 << "% hard (erodibility x" << w.layers.hardK << ", creep x" << w.layers.hardDiffusion << ")";
     }
     auto t0 = std::chrono::steady_clock::now();
     streamPowerErode(coarse, upl, sp, &erod);

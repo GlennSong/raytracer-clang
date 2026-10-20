@@ -31,6 +31,7 @@
 #include "procgen/tree_cache.h"     // ...grown once, kept on disk
 #include "procgen/branch_cards.h"   // the recipe trees' branch cards (one atlas a forest species)
 #include "procgen/terrain_maps.h"
+#include "procgen/rock_layers.h"     // the macro map's rock bands (ADR-0209)
 #include "procgen/terrain_weather.h"
 #include "procgen/trails.h"
 #include "systems/nature_collider_system.h"   // NatureColliders (#55)
@@ -1967,11 +1968,21 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
                     }, -cfg.worldHalf, -cfg.worldHalf, extent, cSize);
                 });
                 if (const std::shared_ptr<const TerrainMaps> maps = tp.cover->params().maps) {
-                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v1", cSize, key, [&] {
-                        return bakeTerrainWorldMap(2, [&](double x, double z, uint8_t* out) {
+                    // ...and, where the ground grew from ROCK LAYERS (ADR-0209), the rock's bands: its tone (the
+                    // light and dark beds a face shows) and how hard it is; mid-grey and soft where there are none
+                    std::unique_ptr<RockLayers> rock;
+                    if (t.contains("weather") && t["weather"].is_object() && t["weather"].contains("grow") &&
+                        t["weather"]["grow"].is_object() && t["weather"]["grow"].contains("layers"))
+                        rock = std::make_unique<RockLayers>(rockLayersFromJson(t["weather"]["grow"]["layers"]), t.value("seed", 0u) + 17u);
+                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v3", cSize, key, [&] {
+                        return bakeTerrainWorldMap(4, [&](double x, double z, uint8_t* out) {
                             const TerrainMapSample ms = maps->at(x, z);
-                            out[0] = static_cast<uint8_t>(std::lround(std::clamp(0.5 + 0.5 * ms.convex, 0.0, 1.0) * 255.0));
-                            out[1] = static_cast<uint8_t>(std::lround(std::clamp(ms.wet, 0.0, 1.0) * 255.0));
+                            auto b = [](double v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); };
+                            out[0] = b(0.5 + 0.5 * ms.convex);
+                            out[1] = b(ms.wet);
+                            const double y = rock ? pc->height(x, z) : 0.0;
+                            out[2] = b(rock ? rock->tone(x, z, y) : 0.5);
+                            out[3] = b(rock ? rock->hardness(x, z, y) : 0.0);
                         }, -cfg.worldHalf, -cfg.worldHalf, extent, cSize);
                     });
                 }

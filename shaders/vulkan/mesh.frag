@@ -65,7 +65,7 @@ layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF 
 layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
 layout(set = 0, binding = 5) uniform sampler2D terrainNormalMap;    // the ground's slope per texel (ADR-0205)
 layout(set = 0, binding = 6) uniform sampler2D terrainCoverMap;     // its cover weights per texel (ADR-0208)
-layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its convexity and wetness (ADR-0208)
+layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its convexity, wetness, rock tone, hardness (ADR-0208, -0209)
 
 const float ENV_PI = 3.14159265359;
 vec3 sampleEquirect(vec3 dir) {
@@ -406,6 +406,9 @@ vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
     w /= (w.x + w.y + w.z);
     return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
 }
+// The rock's BAND TONE from the macro map (ADR-0209: 0 dark .. 1 pale, 0.5 where the ground has no rock layers), set
+// before terrainLayers: a face's beds in light and dark (Banded Peak)
+float gRockTone = 0.5;
 // The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120); and the blended layers' HEIGHT
 // in metres (each layer's alpha by its relief), the surface relief's bump (ADR-0207)
 float gTerrainRock = 0.0, gTerrainSnow = 0.0, gTerrainH = 0.0;
@@ -465,6 +468,8 @@ vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
           kn = max(bn - top, 0.0);
     float sum = max(kg + kd + ks + kr + kn, 1e-5);
     vec3 rock = kr > 0.0 ? rockStructure(pow(r.rgb, vec3(2.2)), wp, n) : vec3(0.0);
+    // (its bed's tone: darker and cooler or paler and warmer, as limestone, shale and sandstone beds alternate)
+    rock *= mix(vec3(0.55, 0.58, 0.64), vec3(1.45, 1.42, 1.36), gRockTone);   // (exactly 1 at 0.5: no layers, no change)
     // snow: brighter on the flats, a faint cold blue where it sits steep or in a hollow of the rock
     snow *= mix(vec3(0.93, 0.96, 1.02), vec3(1.0), smoothstep(0.75, 0.95, n.y));
     vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
@@ -968,11 +973,11 @@ void main() {
         // weights per texel instead (blended in over the band where the mesh grows coarser than a texel)
         vec3 cover = inColor;
         float snowW = inTexcoord.x;
-        vec2 macro = vec2(0.5, 0.0);
+        vec4 macro = vec4(0.5, 0.0, 0.5, 0.0);
         if (g.terrainSurface.w > 0.5 && (pc.surfaceFlags.y & (1u << 25)) != 0u) {
             const vec2 suv = (inWorldPos.xz - g.terrainSurface.xy) * g.terrainSurface.z;
             const vec4 cm = texture(terrainCoverMap, suv);
-            const vec2 mm = texture(terrainMacroMap, suv).rg;
+            const vec4 mm = texture(terrainMacroMap, suv);
             if (suv.x >= 0.0 && suv.y >= 0.0 && suv.x <= 1.0 && suv.y <= 1.0) {
                 const float w = clamp((distance(inWorldPos, g.cameraPosition.xyz) - g.terrainSurface2.x) * g.terrainSurface2.y, 0.0, 1.0);
                 cover = mix(cover, cm.rgb, w);
@@ -980,6 +985,7 @@ void main() {
                 macro = mm;
             }
         }
+        gRockTone = macro.z;
         albedo = terrainLayers(cover, snowW, inWorldPos, geomN);
         // THE MACRO SHADING (ADR-0208): the ground's own processes, at the scale the eye reads a hillside by -- gullies
         // and hollows darker (shade, damp, deeper soil), ridges and spurs a touch paler (worn, dry), the ground where

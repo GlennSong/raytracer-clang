@@ -369,6 +369,57 @@ TEST_CASE(stochastic_routing_follows_the_true_fall_not_the_grid) {
     CHECK(r1 == r2);
 }
 
+// ROCK LAYERS (ADR-0209): a relief grown with hard and soft beds stands steeper on the hard ones -- the erosion,
+// slower there, leaves them as walls and ledges -- and the band tone spans dark to pale.
+TEST_CASE(rock_layers_grow_steeper_ground_on_hard_beds) {
+    RockLayersParams lp;
+    lp.thicknessM = 60.0;
+    lp.dipDeg = 0.0;
+    lp.lateralScaleM = 1e6;   // (no patches along the outcrop: every hard bed hard everywhere)
+    lp.hard = 0.5;
+    lp.hardK = 0.05;
+    lp.hardDiffusion = 0.1;
+    const RockLayers layers(lp, 5);
+    Heightmap hm;
+    hm.n = 257;   // (19.5 m cells, as the island's grow: a bed is three of them)
+    hm.worldSize = 5000.0f;
+    hm.h.resize(static_cast<std::size_t>(hm.n) * hm.n);
+    std::vector<float> up(hm.h.size());
+    for (int z = 0; z < hm.n; ++z)
+        for (int x = 0; x < hm.n; ++x) {
+            const float dx = static_cast<float>(x - 128), dz = static_cast<float>(z - 128);
+            const std::size_t i = static_cast<std::size_t>(z) * hm.n + x;
+            up[i] = std::max(0.0f, 1.0f - std::sqrt(dx * dx + dz * dz) / 120.0f);
+            hm.h[i] = 1.0f + 0.3f * static_cast<float>((x * 7919 + z * 104729) % 97) / 97.0f;
+        }
+    StreamPowerParams p;
+    p.iterations = 160;
+    p.rescale = false;
+    p.layers = &layers;
+    streamPowerErode(hm, up, p);
+    const double cell = hm.worldSize / (hm.n - 1);
+    double sHard = 0, sSoft = 0, tLo = 1, tHi = 0;
+    int nHard = 0, nSoft = 0;
+    for (int z = 2; z < hm.n - 2; ++z)
+        for (int x = 2; x < hm.n - 2; ++x) {
+            const double h = hm.get(x, z);
+            if (up[static_cast<std::size_t>(z) * hm.n + x] < 0.3) continue;
+            const double gx = (hm.get(x + 1, z) - hm.get(x - 1, z)) / (2 * cell), gz = (hm.get(x, z + 1) - hm.get(x, z - 1)) / (2 * cell);
+            const double s = std::sqrt(gx * gx + gz * gz), k = layers.hardness(x * cell, z * cell, h);
+            if (k > 0.5) { sHard += s; ++nHard; }
+            if (k < 0.1) { sSoft += s; ++nSoft; }
+            const double t = layers.tone(x * cell, z * cell, h);
+            tLo = std::min(tLo, t); tHi = std::max(tHi, t);
+        }
+    float hlo = 1e30f, hhi = -1e30f;
+    for (float v : hm.h) { hlo = std::min(hlo, v); hhi = std::max(hhi, v); }
+    std::printf("    [rock layers] relief %.0f..%.0f m; mean slope %.3f on hard rock (%d cells), %.3f on soft (%d); tone %.2f..%.2f\n", hlo, hhi,
+                sHard / std::max(1, nHard), nHard, sSoft / std::max(1, nSoft), nSoft, tLo, tHi);
+    CHECK(nHard > 100 && nSoft > 100);
+    CHECK(sHard / nHard > 1.2 * sSoft / nSoft);
+    CHECK(tLo < 0.1 && tHi > 0.9);
+}
+
 // (review) The weathered ground's one content key: what only paints or stands on the ground leaves it alone;
 // what shapes the ground changes it.
 TEST_CASE(weathered_ground_key_folds_what_shapes_the_ground_and_nothing_else) {

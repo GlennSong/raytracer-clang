@@ -69,6 +69,11 @@ struct WeatherParams {
     double refineIncise = 2.0e-3;
     int refineInciseIterations = 10;
     int refineStochasticFrom = 0;
+    // ROCK LAYERS in the grow (ADR-0209, procgen/rock_layers.h): "grow": { "layers": { ... } } -- the beds make the
+    // erosion uneven while the mountains grow (hard beds stand as cliff bands and slab ridges); absent: the grow as
+    // it was
+    bool growLayers = false;
+    RockLayersParams layers;
 };
 
 WeatherParams weatherFromJson(const nlohmann::json& weather, const nlohmann::json& terrainBlock);

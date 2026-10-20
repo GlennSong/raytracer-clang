@@ -14,6 +14,7 @@
 // the height range it started with (`rescale`). CPU: the sweep is sequential down the tree.
 
 #include "erosion.h"   // Heightmap
+#include "rock_layers.h"
 
 #include <cstdint>
 #include <vector>
@@ -40,6 +41,11 @@ struct StreamPowerParams {
     // follow it on average. Seeded: the same ground every bake. Off by default (every existing ground as it was).
     bool   stochastic = false;
     uint32_t seed = 0;
+    // ROCK LAYERS (ADR-0209): when set, each cell's erodibility and creep are its rock's at its height NOW (re-read
+    // every iteration, so cutting down through a hard bed into a soft one speeds up): times hardK / hardDiffusion
+    // where the rock is hard. Cell (x, z) is at (layerOriginX + x cell, layerOriginZ + z cell). Unset: as it was.
+    const RockLayers* layers = nullptr;
+    double layerOriginX = 0.0, layerOriginZ = 0.0;
 };
 
 // Grow `hm` under `uplift` (n x n, 0..1; the grid's edge and the sea are the outlets, held fixed).

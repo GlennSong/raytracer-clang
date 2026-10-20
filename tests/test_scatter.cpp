@@ -274,6 +274,18 @@ TEST_CASE(ground_layer_textures_tile_without_a_seam) {
         if (sx > worstCol || sy > worstRow) std::printf("    layer %d: x seam %.0f (worst inner %.0f), y seam %.0f (worst inner %.0f)\n", L, sx, worstCol, sy, worstRow);
         CHECK(sx <= worstCol && sy <= worstRow);
     }
+    // RT_GROUND_LAYER_DUMP=dir: each layer at 512^2 in the default palette, raw RGBA (rgb gamma-encoded, a the height)
+    if (const char* dir = std::getenv("RT_GROUND_LAYER_DUMP")) {
+        const engine::GroundCoverParams gp;
+        const engine::Vec3 base[4] = {gp.grass, gp.dirt, gp.sand, gp.rock};
+        for (int L = 0; L < 4; ++L) {
+            const engine::TextureData t = engine::groundLayerTexture(static_cast<engine::GroundLayer>(L), base[L], 512, 3);
+            if (std::FILE* f = std::fopen((std::string(dir) + "/layer" + std::to_string(L) + ".rgba").c_str(), "wb")) {
+                std::fwrite(t.pixels.data(), 1, t.pixels.size(), f);
+                std::fclose(f);
+            }
+        }
+    }
 }
 
 // The rock library (procgen/stylized_rock.h): every family and stone grows a closed-ish, small

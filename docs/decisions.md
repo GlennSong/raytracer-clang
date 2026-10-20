@@ -10954,3 +10954,31 @@ type.
   (cache/terrain/<key>.wmap) for any channel count; the normal map is one of them. Set 0 bindings 6 and 7, their square
   and blend band in the globals (setTerrainSurfaceMaps); four-channel textures upload as RGBA8.
 - A/B: RT_TERRAIN_COVER_MAP=0. Owed: Metal and WebGPU; the 4 m rock texture's repeat shows on mid-distance slopes.
+
+## ADR-0209 — Rock layers in the mountains' growth; the terrain lab
+
+Glenn (2026-10-19): the mountains should look "more rocky"; "I would imagine we'd have slabs or sheets of stone making
+ridges"; then, with reference photos (the Flatirons, Mount Yamnuska, Banded Peak): "Can we do it proper but in
+another test level ... This code would live next to the old one".
+
+- **What failed first, and why.** Instanced cliff pieces (a "cliff" rock family on steep faces) read as rocks stuck
+  on the face. Strata stamped onto the finished ground (9 m, then 22 m sheets, bench + riser) read as nothing, and
+  weathering those by the rock's angle of repose made the mountains SMOOTHER (soft rock slumping fills the gullies).
+  The reference photos showed why: the structure that reads as rock is 50-500 m -- a cliff band, a slab hundreds of
+  metres long -- the scale of the shapes the mountains are GROWN from. All three were removed.
+- **Rock layers** (procgen/rock_layers.h): beds dipping at `dip` toward a direction that wanders over kilometres,
+  warped, `thickness` thick on average; a share `hard` hard, softened at their contacts and in patches along their
+  outcrop. In the GROW (stream power, ADR-0125), each cell's erodibility and creep are its rock's at its height,
+  re-read every iteration (StreamPowerParams::layers): hard beds erode at `hardK`, creep at `hardDiffusion`. The
+  erosion itself leaves the hard beds as walls, buttresses and ledges. Test: a relief grown with 60 m beds stands
+  1.8x steeper on hard rock (1.40 against 0.79).
+- **Banding.** The macro map (ADR-0208) carries the rock's band tone (beds `toneThickness`, default 25 m, each pushed
+  pale or dark) and hardness; mesh.frag tints rock by the tone (x0.55..x1.45, exactly neutral where a level has no
+  layers): the light and dark strata of Banded Peak, following the same beds.
+- **The terrain lab** (terrain_lab.json, terrain_lab_layers.json): the island's pipeline on a 4.4 km mountain island,
+  37 s cold, 9 s cached (the island: 16 min). Variants tried there: 120 m / 25 deg (slabs, ledge bands), 180 m / 45 deg
+  (smooth tilted slabs), 250 m / 10 deg (Yamnuska: a cliff wall and buttress, a jagged crest -- Glenn's pick, D, now
+  terrain_lab_layers.json: hard 0.3, hardK 0.06, hardDiffusion 0.1).
+- **Opt-in:** "weather": { "grow": { "layers": {...} } }. Without it every level grows as before; the island is
+  unchanged until Glenn says. Owed: bedding in the refine stages (the walls are smooth), crisper band edges up close
+  (the 4 m macro map blurs them), then an island trial; the old path is deprecated if it holds.

@@ -103,7 +103,7 @@ void TerrainLodSystem::render(FrameContext& ctx) {
         if (wantCover) {
             const TerrainWorldMap& mm = *cfg->macroMap;
             coverMapTex_ = ctx.renderer.uploadTexture(wantCover->size, wantCover->size, 4, wantCover->texels.data());
-            macroMapTex_ = ctx.renderer.uploadTexture(mm.size, mm.size, 2, mm.texels.data());
+            macroMapTex_ = ctx.renderer.uploadTexture(mm.size, mm.size, mm.channels, mm.texels.data());
             // the vertices' weights hold to where the mesh grows coarser than the cover's texels, as the normal map
             const std::vector<float> r = lodRangesForWorld(cfg->worldHalf, cfg->numLods, cfg->rangeFactor);
             const double cell0 = cfg->baked ? cfg->baked->spec.cell0 : (2.0 * cfg->worldHalf) / (1 << std::max(0, cfg->numLods - 1)) / std::max(2, cfg->gridRes);

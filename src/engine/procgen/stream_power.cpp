@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <queue>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,7 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
     std::vector<int32_t> rec(N), order;
     std::vector<double> area(N), rlen(N);
     std::vector<uint8_t> seen(N);
+    std::vector<float> hard(p.layers ? N : 0);   // the rock's hardness per cell this iteration (ROCK LAYERS)
     order.reserve(N);
     using Item = std::pair<double, int32_t>;
 
@@ -110,6 +112,20 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             for (std::size_t o = 0; o < order.size(); ++o)
                 for (int32_t d = head[static_cast<std::size_t>(order[o])]; d >= 0; d = next[static_cast<std::size_t>(d)]) order.push_back(d);
         }
+        // (the rock under each cell at its height now, every hardware thread a band of rows)
+        if (p.layers) {
+            const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
+            std::vector<std::thread> th;
+            for (int t = 0; t < T; ++t)
+                th.emplace_back([&, t] {
+                    for (int z = t; z < n; z += T)
+                        for (int x = 0; x < n; ++x) {
+                            const std::size_t i = static_cast<std::size_t>(z) * n + x;
+                            hard[i] = outlet[i] ? 0.0f : static_cast<float>(p.layers->hardness(p.layerOriginX + x * cell, p.layerOriginZ + z * cell, h[i]));
+                        }
+                });
+            for (auto& t : th) t.join();
+        }
         // 3. drainage area, accumulated down the tree (donors before receivers: the order reversed)
         std::fill(area.begin(), area.end(), cellArea);
         for (std::size_t o = order.size(); o-- > 0;) {
@@ -121,7 +137,8 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             const std::size_t i = static_cast<std::size_t>(c);
             if (outlet[i] || rec[i] < 0) continue;
             const double hr = h[static_cast<std::size_t>(rec[i])];
-            const double f = p.K * (erodibility ? (*erodibility)[i] : 1.0) * p.dt * std::pow(area[i], p.m) / rlen[i];
+            const double layerK = p.layers ? 1.0 + (p.layers->params().hardK - 1.0) * hard[i] : 1.0;
+            const double f = p.K * (erodibility ? (*erodibility)[i] : 1.0) * layerK * p.dt * std::pow(area[i], p.m) / rlen[i];
             h[i] = (h[i] + f * hr) / (1.0 + f);   // between h and h_r: a hollow below its outlet silts up toward it
         }
         // 5. hillslope diffusion (explicit, sub-stepped for stability)
@@ -136,7 +153,11 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
                         const std::size_t i = static_cast<std::size_t>(z) * n + x;
                         lap[i] = (h[i - 1] + h[i + 1] + h[i - static_cast<std::size_t>(n)] + h[i + static_cast<std::size_t>(n)] - 4.0 * h[i]) / cellArea;
                     }
-                for (std::size_t i = 0; i < N; ++i) if (!outlet[i]) h[i] += p.diffusion * sdt * lap[i];
+                for (std::size_t i = 0; i < N; ++i)
+                    if (!outlet[i]) {
+                        const double layerD = p.layers ? 1.0 + (p.layers->params().hardDiffusion - 1.0) * hard[i] : 1.0;
+                        h[i] += p.diffusion * layerD * sdt * lap[i];
+                    }
             }
         }
     }
