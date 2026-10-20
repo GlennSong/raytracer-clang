@@ -1292,7 +1292,12 @@ void main() {
             impostorCard = true;
             cardBack = dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0;
         } else if (grassCard || leafCard) {
-            if (dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) N = -N;
+            // (a grass blade faces the viewer by its HORIZONTAL facing only: with the vertical in the test, the leaning
+            // blades at the camera's own height flipped from up to down as the eye passed them, and a meadow at eye
+            // level split along a straight line across the screen; Glenn, 2026-10-19: "a straight line ... some kind
+            // of overlying filter over part of the image")
+            const vec3 toEye = g.cameraPosition.xyz - inWorldPos;
+            if (grassCard ? dot(N.xz, toEye.xz) < 0.0 : dot(N, toEye) < 0.0) N = -N;
             // (grass to its GROUND's normal, GrassSystem's: on a slope turned from the sun the field shades with the
             // ground under it -- Glenn, 2026-10-19: the far grass "appear bright and don't blend with the landscape"
             // when it bent to the sky, lit as a flat field while the hillside darkened)
