@@ -19,12 +19,16 @@
 
 namespace engine {
 
-enum class GroundLayer : uint8_t { Grass = 0, Dirt, Sand, Rock };
+enum class GroundLayer : uint8_t { Grass = 0, Dirt, Sand, Rock, RockBroken, Scree, RockLichen };   // (Rock: a cliff face)
 
 // `linearBase` is the layer's mean colour (linear albedo, e.g. GroundCoverParams::grass).
 TextureData groundLayerTexture(GroundLayer layer, const Vec3& linearBase, int size, uint32_t seed);
 // The same through the disk cache (RT_NOCACHE=1 always builds).
 TextureData groundLayerTextureCached(GroundLayer layer, const Vec3& linearBase, int size, uint32_t seed);
+
+// THE ROCK ATLAS (ADR-0210): the rock's four sub-layers -- face, broken, scree, lichen -- each size^2, as one 2x2
+// texture (the material's rock slot), through the per-layer disk cache
+TextureData groundRockAtlasCached(const Vec3& linearBase, int size, uint32_t seed);
 
 // World metres one texture tile spans (the shader's planar scale). Shared with the shader.
 constexpr double kGroundLayerTileMetres = 4.0;

@@ -278,8 +278,8 @@ TEST_CASE(ground_layer_textures_tile_without_a_seam) {
     if (const char* dir = std::getenv("RT_GROUND_LAYER_DUMP")) {
         const engine::GroundCoverParams gp;
         const engine::Vec3 base[4] = {gp.grass, gp.dirt, gp.sand, gp.rock};
-        for (int L = 0; L < 4; ++L) {
-            const engine::TextureData t = engine::groundLayerTexture(static_cast<engine::GroundLayer>(L), base[L], 512, 3);
+        for (int L = 0; L < 7; ++L) {
+            const engine::TextureData t = engine::groundLayerTexture(static_cast<engine::GroundLayer>(L), base[std::min(L, 3)], 512, 3);
             if (std::FILE* f = std::fopen((std::string(dir) + "/layer" + std::to_string(L) + ".rgba").c_str(), "wb")) {
                 std::fwrite(t.pixels.data(), 1, t.pixels.size(), f);
                 std::fclose(f);

@@ -77,9 +77,9 @@
   "groundCover": {
    "beachHeight": 3,
    "dirt": [
-    0.12,
-    0.085,
-    0.05
+    0.078,
+    0.056,
+    0.036
    ],
    "dirtPatches": 0.15,
    "grass": [
@@ -197,6 +197,14 @@
     "incise": 0.012,
     "iterations": 20,
     "stochasticFrom": 2048
+   },
+   "facets": {
+    "cell": 30,
+    "cellFine": 14,
+    "tilt": 14,
+    "tiltLo": 5,
+    "strengthLo": 0.2,
+    "vary": 1200
    }
   },
   "forest": {

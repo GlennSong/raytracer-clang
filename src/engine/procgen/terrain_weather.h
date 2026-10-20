@@ -74,6 +74,18 @@ struct WeatherParams {
     // it was
     bool growLayers = false;
     RockLayersParams layers;
+    // FACETS (ADR-0210; Glenn's reference, a limestone peak of big flat planes meeting at angles): the finished grid's
+    // steep mountain rock cut into irregular cells ~`facetCellM` across, each replaced by ONE PLANE -- its own slope
+    // (fitted over the cell) tilted at random up to `facetTiltDeg` -- so a face breaks into flat planes with real
+    // edges, steps and creases where neighbours disagree; the shape catches light and shadow the way fractured rock
+    // does, which lines painted on the colour never did. "facets": { "cell", "tilt", "slopeLo", "slopeHi", "strength",
+    // and their VARIETY round a mountain (Glenn: "different levels of this result around the mountain"): "cellFine" (a
+    // second, finer set of cells the coarse one blends to), "vary" (m: the scale of the regions that differ), "strengthLo",
+    // "tiltLo" (the least a region gets) }
+    double facetCellM = 0.0;   // 0 = off
+    double facetTiltDeg = 8.0, facetSlopeLoDeg = 30.0, facetSlopeHiDeg = 45.0, facetStrength = 1.0;
+    double facetCellFineM = 0.0;   // 0: one set of cells only
+    double facetVaryM = 1500.0, facetStrengthLo = 1.0, facetTiltLoDeg = -1.0;   // (tiltLo < 0: the tilt everywhere)
 };
 
 WeatherParams weatherFromJson(const nlohmann::json& weather, const nlohmann::json& terrainBlock);

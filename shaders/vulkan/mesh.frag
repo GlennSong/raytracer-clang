@@ -391,20 +391,107 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
 // only layers near the top survive -- so edges are crisp and natural (sand between pebbles,
 // rock through grass) rather than a smear. The ground lights smooth: no bump noise.
 const float kLayerTile = 4.0;   // kGroundLayerTileMetres
-// One layer, world-planar. `mixB` (the anti-tiling blend, computed once a pixel) mixes in a
-// second, rotated sample at another scale, so the tile never visibly repeats.
-vec4 layerPlanar(sampler2D t, vec2 p, float mixB) {
-    vec4 a = texture(t, p / kLayerTile);
-    if (mixB < 0.01) return a;
-    vec2 q = mat2(0.8, -0.6, 0.6, 0.8) * p / (kLayerTile * 2.37) + vec2(0.37, 0.61);
-    return mix(a, texture(t, q), mixB);
+// HEX TILING (ADR-0210; Mikkelsen 2022, "Practical Real-Time Hex-Tiling", after Heitz & Neyret 2018; Glenn: the
+// mountains' surface "a regular repeating pattern"): the plane cut into a triangle grid, each vertex its own random
+// offset into the texture, a pixel the blend of its triangle's three (weights sharpened, so the blend keeps the
+// texture's contrast) -- the 4 m tile never lines up with itself again. The gradients are the unshifted UV's, so the
+// mips agree across the triangles' seams.
+vec4 texHex(sampler2D t, vec2 uv) {
+    const vec2 dx = dFdx(uv), dy = dFdy(uv);
+    const vec2 st = vec2(uv.x - 0.57735027 * uv.y, 1.15470054 * uv.y) * 1.6;   // skewed: a triangle grid, ~0.6 tile
+    const vec2 b = floor(st), f = fract(st);
+    const float z = 1.0 - f.x - f.y;
+    vec2 v0, v1, v2;
+    vec3 w;
+    if (z > 0.0) { v0 = b; v1 = b + vec2(0.0, 1.0); v2 = b + vec2(1.0, 0.0); w = vec3(z, f.y, f.x); }
+    else { v0 = b + vec2(1.0); v1 = b + vec2(1.0, 0.0); v2 = b + vec2(0.0, 1.0); w = vec3(-z, 1.0 - f.y, 1.0 - f.x); }
+    w = pow(max(w, 0.0), vec3(6.0));
+    w /= w.x + w.y + w.z;
+    vec4 c = vec4(0.0);
+    vec2 vs[3] = vec2[3](v0, v1, v2);
+    for (int k = 0; k < 3; ++k) {
+        const vec2 off = vec2(hash21(vs[k].x, vs[k].y), hash21(vs[k].y + 17.3, vs[k].x - 5.1));
+        c += textureGrad(t, uv + off * 7.0, dx, dy) * w[k];
+    }
+    return c;
 }
-// Rock: triplanar where the ground is steep (cliffs don't stretch), planar where it is not.
-vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
-    if (abs(n.y) > 0.85) return layerPlanar(t, wp.xz, mixB);
+// One layer, world-planar, hex-tiled (the old anti-tiling, a second rotated sample at another scale mixed in by
+// `mixB`, still left the 4 m repeat in a grid across a mountainside)
+// TWO SCALES (ADR-0210): one 4 m texture carried a mountainside alone -- uniform from afar however it tiled. Each layer
+// is also read on a ~24 m hex grid of its own (an odd ratio: the two never line up), and that sample's brightness
+// varies the near one by up to ~30%: tens-of-metres patches of lighter and darker ground over the same fine detail
+// (only the brightness: a stone stays a stone's size).
+// (against the texture's MEAN -- its last mip -- not the near sample's: that brightened every dark crack)
+vec4 withMacro(vec4 near, vec4 far, vec4 mean) {
+    const vec3 lw = vec3(0.3, 0.5, 0.2);
+    const float ratio = dot(far.rgb, lw) / max(dot(mean.rgb, lw), 1e-3);
+    return vec4(near.rgb * clamp(1.0 + 0.7 * (ratio - 1.0), 0.65, 1.35), near.a);
+}
+vec4 layerPlanar(sampler2D t, vec2 p, float mixB) {
+    return withMacro(texHex(t, p / kLayerTile), texHex(t, p / (kLayerTile * 5.93) + vec2(0.31, 0.77)), textureLod(t, vec2(0.5), 12.0));
+}
+// THE ROCK ATLAS (ADR-0210, ground_layers.h): the rock slot holds four sub-layers, 2 x 2 -- face (0, 0), broken (1, 0),
+// scree (0, 1), lichen (1, 1). One of them hex-tiled inside its quadrant (each tap wrapped into it, kept a texel off
+// its edges; the gradients halved with it).
+vec4 texHexQuad(sampler2D t, vec2 uv, vec2 q) {
+    const vec2 dx = dFdx(uv) * 0.5, dy = dFdy(uv) * 0.5;
+    const vec2 st = vec2(uv.x - 0.57735027 * uv.y, 1.15470054 * uv.y) * 1.6;
+    const vec2 b = floor(st), f = fract(st);
+    const float z = 1.0 - f.x - f.y;
+    vec2 v0, v1, v2;
+    vec3 w;
+    if (z > 0.0) { v0 = b; v1 = b + vec2(0.0, 1.0); v2 = b + vec2(1.0, 0.0); w = vec3(z, f.y, f.x); }
+    else { v0 = b + vec2(1.0); v1 = b + vec2(1.0, 0.0); v2 = b + vec2(0.0, 1.0); w = vec3(-z, 1.0 - f.y, 1.0 - f.x); }
+    w = pow(max(w, 0.0), vec3(6.0));
+    w /= w.x + w.y + w.z;
+    // (kept clear of the quadrant's edge by a texel of the mip it reads: a fixed texel let the coarser mips bleed the
+    // neighbouring quadrant in as dotted seams)
+    const float lod = max(0.0, log2(max(length(dx), length(dy)) * 1024.0));
+    const float inset = min(0.25, exp2(lod) / 1024.0);
+    vec4 c = vec4(0.0);
+    vec2 vs[3] = vec2[3](v0, v1, v2);
+    for (int k = 0; k < 3; ++k) {
+        const vec2 off = vec2(hash21(vs[k].x, vs[k].y), hash21(vs[k].y + 17.3, vs[k].x - 5.1));
+        const vec2 a = clamp(fract(uv + off * 7.0), vec2(inset), vec2(1.0 - inset)) * 0.5 + q * 0.5;
+        c += textureGrad(t, a, dx, dy) * w[k];
+    }
+    return c;
+}
+// Rock (one sub-layer): triplanar where the ground is steep (cliffs don't stretch), planar where it is not.
+vec4 rockPlane(sampler2D t, vec2 p, vec2 q) {   // (one projection, at both scales; the quadrant's mean from mip 9, 2 x 2)
+    return withMacro(texHexQuad(t, p / kLayerTile, q), texHexQuad(t, p / (kLayerTile * 5.93) + vec2(0.31, 0.77), q),
+                     textureLod(t, q * 0.5 + 0.25, 9.0));
+}
+vec4 layerRockSub(sampler2D t, vec3 wp, vec3 n, vec2 q) {
+    if (abs(n.y) > 0.85) return rockPlane(t, wp.xz, q);
     vec3 w = pow(abs(n), vec3(4.0));
     w /= (w.x + w.y + w.z);
-    return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
+    return rockPlane(t, wp.zy, q) * w.x + rockPlane(t, wp.xz, q) * w.y + rockPlane(t, wp.xy, q) * w.z;
+}
+// The macro map's sample here (convexity, wetness, tone, hardness), set before terrainLayers (the rock's sub-layers
+// read it)
+vec4 gMacro = vec4(0.5, 0.0, 0.5, 0.0);
+// The rock: its sub-layers chosen by the ground -- the FACE on steep rock (over ~50 deg), SCREE in the hollows of
+// moderate slopes, LICHEN where it is wet or turned north, BROKEN rock elsewhere -- height-blended as the layers are
+vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
+    const float steep = 1.0 - n.y;
+    const float face = smoothstep(0.3, 0.45, steep);
+    const float scree = (1.0 - face) * smoothstep(0.48, 0.3, gMacro.x) * smoothstep(0.08, 0.2, steep);
+    const float lichen = (1.0 - scree) * clamp(gMacro.y * 1.6 + max(0.0, -n.z) * 0.45 - 0.25, 0.0, 0.8);
+    const float broken = max(0.0, 1.0 - face - scree - lichen * (1.0 - face));
+    float wf = face * (1.0 - lichen), wb = broken, ws = scree, wl = lichen;
+    const float sum0 = max(wf + wb + ws + wl, 1e-4);
+    wf /= sum0; wb /= sum0; ws /= sum0; wl /= sum0;
+    const vec4 none = vec4(0.0);
+    const vec4 f = wf > 0.02 ? layerRockSub(t, wp, n, vec2(0.0, 0.0)) : none;
+    const vec4 b = wb > 0.02 ? layerRockSub(t, wp, n, vec2(1.0, 0.0)) : none;
+    const vec4 s = ws > 0.02 ? layerRockSub(t, wp, n, vec2(0.0, 1.0)) : none;
+    const vec4 l = wl > 0.02 ? layerRockSub(t, wp, n, vec2(1.0, 1.0)) : none;
+    const float bf = wf > 0.02 ? wf + f.a * 0.5 : -1.0, bb = wb > 0.02 ? wb + b.a * 0.5 : -1.0;
+    const float bs = ws > 0.02 ? ws + s.a * 0.5 : -1.0, bl = wl > 0.02 ? wl + l.a * 0.5 : -1.0;
+    const float top = max(max(bf, bb), max(bs, bl)) - 0.2;
+    const float kf = max(bf - top, 0.0), kb = max(bb - top, 0.0), ks = max(bs - top, 0.0), kl = max(bl - top, 0.0);
+    return (f * kf + b * kb + s * ks + l * kl) / max(kf + kb + ks + kl, 1e-5);
 }
 // The rock's BAND TONE from the macro map (ADR-0209: 0 dark .. 1 pale, 0.5 where the ground has no rock layers), set
 // before terrainLayers: a face's beds in light and dark (Banded Peak)
@@ -475,8 +562,11 @@ vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
     vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
               rock * kr + snow * kn) / sum;
     gTerrainRock = kr / sum; gTerrainSnow = kn / sum;
+    // (each layer also stands at its own height over the rock -- Glenn: grass patches and snow "seem painted onto the
+    // surface": the soil and turf a layer over the stone, the snow a blanket on top -- so where one meets another the
+    // relief shows a LIP, lit one side and shaded the other, not a line of paint)
     gTerrainH = (g.a * kReliefGrass * kg + d.a * kReliefDirt * kd + s.a * kReliefSand * ks + r.a * kReliefRock * kr +
-                 (1.0 - r.a) * 0.01 * kn) / sum;
+                 (1.0 - r.a) * 0.01 * kn + 0.16 * kg + 0.10 * kd + 0.04 * ks + 0.35 * kn) / sum;
     // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
     c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
     return c;
@@ -986,6 +1076,7 @@ void main() {
             }
         }
         gRockTone = macro.z;
+        gMacro = macro;
         albedo = terrainLayers(cover, snowW, inWorldPos, geomN);
         // THE MACRO SHADING (ADR-0208): the ground's own processes, at the scale the eye reads a hillside by -- gullies
         // and hollows darker (shade, damp, deeper soil), ridges and spurs a touch paler (worn, dry), the ground where

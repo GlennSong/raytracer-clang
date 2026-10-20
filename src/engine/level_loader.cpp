@@ -1735,7 +1735,10 @@ static bool applyGroundLayers(RenderMaterial& m, const TerrainParams& p, Rendere
     m.albedoMap = upload(GroundLayer::Grass, gp.grass);
     m.metallicRoughnessMap = upload(GroundLayer::Dirt, gp.dirt);
     m.normalMap = upload(GroundLayer::Sand, gp.sand);
-    m.aoMap = upload(GroundLayer::Rock, gp.rock);
+    {   // the rock: its four sub-layers in one atlas (ADR-0210)
+        const TextureData td = groundRockAtlasCached(gp.rock, size, gp.seed);
+        m.aoMap = renderer->uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    }
     m.albedo = Vec3(1, 1, 1);
     m.roughness = 0.95f;
     m.metallic = 0.0f;

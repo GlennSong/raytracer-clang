@@ -10982,3 +10982,30 @@ another test level ... This code would live next to the old one".
 - **Opt-in:** "weather": { "grow": { "layers": {...} } }. Without it every level grows as before; the island is
   unchanged until Glenn says. Owed: bedding in the refine stages (the walls are smooth), crisper band edges up close
   (the 4 m macro map blurs them), then an island trial; the old path is deprecated if it holds.
+
+## ADR-0210 — Facets, rock sub-layers, hex tiling, lips and snow depth, two scales, darker dirt
+
+Glenn (2026-10-19), with reference photos (a faceted limestone peak; stratified cliffs): the mountains' surface has "a
+regular repeating pattern"; grass patches and snow "seem painted onto the surface"; dirt "too light"; "break it up
+into sublayers"; "I'll let you cook".
+
+- **Painted crack lines were wrong** (a joint-set shader drawing cracks, facets and worn edges into the colour read
+  as graph paper, then as "super weird" lines): cracks show as SHAPE -- recesses that catch shadow, edges where planes
+  meet. Removed.
+- **Facets in the heights** (terrain_weather facetRock, opt-in "facets"): steep mountain rock cut into jittered
+  Voronoi cells, each one plane (its slope over the cell plus a random tilt); where neighbours disagree, real edges and
+  steps. Varied round a mountain (Glenn: "different levels of this result"): coarse (30 m) and fine (14 m) cells blended
+  by region, strength and tilt by region (~1.2 km). In terrain_lab_layers; the island waits on Glenn.
+- **Hex tiling** (Mikkelsen 2022 after Heitz & Neyret 2018): every ground layer sampled on a triangle grid of random
+  offsets, sharpened weights, the unshifted UV's gradients -- the 4 m tile no longer lines up across a mountainside.
+- **Rock sub-layers** (ground_layers.h): face (broad planes, sparse fractures, streaks down), broken (blocks of two
+  sizes, gaps of varied width), scree (packed stones of two sizes), lichen (muted crusts, moss in the low places), as
+  one 2 x 2 atlas in the rock slot; mesh.frag chooses by slope, the macro map's hollows and wetness, and aspect, and
+  height-blends them. The old rock's metre-wide polygon cracks read as dried mud under the relief.
+- **Lips and snow depth:** each layer stands at its own height in the relief (turf 0.16 m over rock, soil 0.10, sand
+  0.04, snow 0.35) -- an edge lit one side and shaded the other where one meets another; and terrain.vert raises the
+  layered ground with the snow's weight (up to 0.6 m), so a snowfield has an edge and buries the rock (RT_TERRAIN_DETAIL=0
+  turns both off).
+- **Two scales:** each layer also read on a ~24 m hex grid, its brightness against the texture's mean (its last mip)
+  varying the near sample +-35%.
+- **Palette:** dirt (0.12, 0.085, 0.05) -> (0.078, 0.056, 0.036), damp topsoil, in the island levels and the labs.
