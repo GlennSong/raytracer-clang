@@ -521,6 +521,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/polyline_ops.cpp
             src/engine/procgen/city/roads/lanes/lane_expand.cpp
             src/engine/procgen/city/roads/lanes/vertical_profile.cpp
+            src/engine/procgen/city/roads/lanes/road_design.cpp
             src/engine/procgen/city/roads/lanes/deck_height.cpp
             src/engine/procgen/city/roads/lanes/pavement.cpp
             src/engine/procgen/city/roads/lanes/terrain_conform.cpp

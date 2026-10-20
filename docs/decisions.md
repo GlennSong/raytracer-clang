@@ -11106,3 +11106,25 @@ citysim edits.
   will do, or the builder inferring what the planner meant. The vertical design (class rules, profiles, junction
   levels, crossing kinds and clearances) moves out of the builder into one shared stage; the planner runs it and writes
   each road's profile and every crossing's kind into the graph; the builder meshes and checks against it.
+
+## ADR-0215 — One road design stage (step 1: out of the builder, unchanged)
+
+Glenn (2026-10-20): "We should make it so that neither system is guessing. We should be able to plan out the road and
+elevations. The planner and builder should know the intent of the roads so it's not guessing and use the same models."
+ADR-0214's fixes were each one side guessing the other: the planner sizing ramps from bare ground while the builder cut
+the link 16 m in; the builder reading two overlapping roads 2.7 m apart as an overpass the plan never meant.
+
+- **The design stage** (`road_design.{h,cpp}`, `designRoads(graph, ground)`): the vertical design that lived inside
+  `lanes::build` -- open ends, through profiles at each class's grade, track holds chained across joints, ramps from
+  their hosts, node and level-crossing agreement (to the best round), clearance lifts, the final settle. build() calls
+  it between expanding the lanes and the footprints; nothing else moved. It reads only the graph and the ground, so the
+  planner can run exactly what the builder runs.
+- **Proof:** lanes_tool on the 12 lab scenes, river_town, the Saltwood island window and metro_planned, before and
+  after: every glb byte-identical, every stats.json identical but its timings, every check line identical.
+- **Measured:** the stage is cheap -- 2-3 min of a 95-min full island build (~11 min building, ~85 min invariants and
+  output). The planner can afford to run it on what it writes.
+- **Next** (plan: ~/.claude/plans/roads-shared-design-stage.md): the graph carries intent -- every crossing declared
+  (junction / bridge, which over, clearance / at grade) and each road's designed profile; the stage uses the declared
+  kind where today it infers one from heights (`crossingConsistency` skips any crossing already `bridge_h` apart), and a
+  crossing the plan did not declare is a design error with its place. Then the planner runs the stage and writes the
+  result, and the builder checks a designed graph instead of re-designing it.
