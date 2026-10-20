@@ -1974,7 +1974,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
                     if (t.contains("weather") && t["weather"].is_object() && t["weather"].contains("grow") &&
                         t["weather"]["grow"].is_object() && t["weather"]["grow"].contains("layers"))
                         rock = std::make_unique<RockLayers>(rockLayersFromJson(t["weather"]["grow"]["layers"]), t.value("seed", 0u) + 17u);
-                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v3", cSize, key, [&] {
+                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v6", cSize, key, [&] {
                         return bakeTerrainWorldMap(4, [&](double x, double z, uint8_t* out) {
                             const TerrainMapSample ms = maps->at(x, z);
                             auto b = [](double v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); };

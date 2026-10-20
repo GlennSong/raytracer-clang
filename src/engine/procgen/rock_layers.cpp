@@ -32,13 +32,34 @@ double RockLayers::bedCoordinate(double x, double z, double h, double thickness)
 }
 
 double RockLayers::tone(double x, double z, double h) const {
-    const double u = bedCoordinate(x, z, h, p_.toneThicknessM);
-    auto bedTone = [&](double f) {
-        uint32_t hs = static_cast<uint32_t>(static_cast<int64_t>(f)) * 0x27D4EB2Fu ^ seed_ * 0x165667B1u;
+    // (Glenn, 2026-10-19: the first banding "looks very regular" -- every bed 25 m, every one as distinct; "I'm sure not
+    // all of those slabs are equal") Real strata are irregular four ways, each here:
+    //  1. TURBULENCE: the beds wave, thicken and pinch out sideways (lenses) -- the bed coordinate warped by noise in
+    //     x, z AND height, not by a sheet of 2D noise;
+    //  2. UNEVEN THICKNESS: the stacking axis itself warped (1D noise along it), so beds come thin and thick;
+    double u = bedCoordinate(x, z, h, p_.toneThicknessM);
+    // (gentle: a bed's warp of half itself over ~230 m scrambled the bands into patches; a third of it over ~500 m keeps
+    // them reading as lines)
+    u += 0.3 * n_.fbm2((x + 0.8 * h) / 500.0 + 5.1, (z - 0.6 * h) / 500.0 - 2.4, 3);
+    u += 0.35 * n_.fbm2(u * 0.37 + 9.3, 1.7, 2);
+    auto hash = [&](int64_t k, uint32_t salt) {
+        uint32_t hs = static_cast<uint32_t>(k) * 0x27D4EB2Fu ^ seed_ * 0x165667B1u ^ salt * 0x9E3779B1u;
         hs ^= hs >> 15; hs *= 0x85EBCA77u; hs ^= hs >> 13; hs *= 0xC2B2AE3Du; hs ^= hs >> 16;
-        // (pushed toward pale or dark: beds read as alternating bands, not a soft grey ramp)
-        const double r = std::clamp(((hs & 0xFFFFFFu) / 16777216.0 - 0.2) / 0.6, 0.0, 1.0);
-        return r * r * (3.0 - 2.0 * r);
+        return (hs & 0xFFFFFFu) / 16777216.0;
+    };
+    //  3. PACKAGES: beds come in formations of ~5 alike (a formation's own tone), each bed departing from it by its
+    //     own CONTRAST -- some boundaries strong, most faint;
+    //  4. NO TWO SLABS ALIKE: each bed paler or darker in its own patches along its outcrop.
+    auto bedTone = [&](double f) {
+        const int64_t b = static_cast<int64_t>(f);
+        const int64_t formation = static_cast<int64_t>(std::floor(f / 5.0 + 0.4 * hash(b / 5, 3)));
+        // (a formation's tone pushed pale or dark, as the first banding's beds were: averaged toward grey, the
+        // irregular bands all but vanished)
+        const double fr = hash(formation, 1), base = fr * fr * (3.0 - 2.0 * fr);
+        const double contrast = std::sqrt(hash(b, 2));                // most beds clear, some faint
+        const double own = hash(b, 4) - 0.5;
+        const double patch = 0.25 * n_.fbm2(x / 380.0 + 1.37 * f, z / 380.0 - 0.71 * f, 2);
+        return std::clamp(base + own * 0.9 * contrast + patch, 0.0, 1.0);
     };
     const double f = std::floor(u), t = u - f;
     // graded over the last 15% of a band into the next (a contact reads as a line, not a step in the texture)
