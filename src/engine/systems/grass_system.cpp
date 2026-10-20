@@ -81,6 +81,13 @@ GrassSystem::Built buildTile(const GrassField& f, const GrassSystem::Key& key, i
             const double hs = f.height ? f.height(x, z) : 1.0;   // mown here, wild there
             if (hs < 0.04) continue;
             Mat4 m = Mat4::trs(Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s * hs, s));
+            if (f.alignToGround) {   // (clutter) tilted to the ground under it, about cross(up, n)
+                const Vec3 n = groundN * (1.0 / std::max(1e-9, groundN.length()));
+                const Vec3 axis = cross(Vec3(0, 1, 0), n);
+                const double al = axis.length();
+                const Quat toGround = al > 1e-6 ? Quat::fromAxisAngle(axis * (1.0 / al), std::acos(std::clamp(n.y, -1.0, 1.0))) : Quat();
+                m = Mat4::trs(Vec3(x, y, z), toGround * Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s));
+            }
             m.m[3][0] = static_cast<Real>(rank);   // the rank rides in the bottom row (mesh.vert reads it)...
             m.m[3][1] = static_cast<Real>(groundN.x);   // ...and the ground's normal (its x and z: it looks up), the
             m.m[3][2] = static_cast<Real>(groundN.z);   // field shaded as the slope it grows on (mesh.frag)

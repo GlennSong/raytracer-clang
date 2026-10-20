@@ -500,7 +500,9 @@ float gRockTone = 0.5;
 // in metres (each layer's alpha by its relief), the surface relief's bump (ADR-0207)
 float gTerrainRock = 0.0, gTerrainSnow = 0.0, gTerrainH = 0.0;
 // each layer's relief, metres for its alpha 0..1: a grass sward's clumps, a pebble, a ripple, a slab's crack
-const float kReliefGrass = 0.05, kReliefDirt = 0.035, kReliefSand = 0.025, kReliefRock = 0.09;
+// (rock none: its texture bump outlined the sub-layers' block edges and the hex tiling's blend seams into a net of
+// stair-stepped lines over every face -- Glenn, 2026-10-20; the rock's shape is the ground's own, ADR-0213)
+const float kReliefGrass = 0.05, kReliefDirt = 0.035, kReliefSand = 0.025, kReliefRock = 0.0;
 // ROCK AT MOUNTAIN SCALE (ADR-0120, Glenn: "bordering on realism, so better procedural texturing/
 // materials for the rock surfaces and snow"). The 4 m rock texture averages to one grey past a few
 // hundred metres; what reads on a mountain is structure at 5-200 m: STRATA (bedding bands along the
@@ -1318,7 +1320,10 @@ void main() {
         const vec3 dpx = dFdx(inWorldPos), dpy = dFdy(inWorldPos);
         const vec3 r1 = cross(dpy, N), r2 = cross(N, dpx);
         const float det = dot(dpx, r1);
-        const vec3 surfGrad = sign(det) * (dFdx(gTerrainH) * r1 + dFdy(gTerrainH) * r2);
+        // (faded as a pixel grows past a few centimetres: at a grazing angle the derivatives of a sharp height
+        // stair-stepped across the screen)
+        const float bumpFade = 1.0 - smoothstep(0.04, 0.2, length(fwidth(inWorldPos)));
+        const vec3 surfGrad = sign(det) * (dFdx(gTerrainH) * r1 + dFdy(gTerrainH) * r2) * bumpFade;
         if (abs(det) > 1e-12) N = normalize(abs(det) * N - surfGrad);
         const float soft = clamp(1.0 - gTerrainRock - gTerrainSnow, 0.0, 1.0);
         if (soft > 0.01) {

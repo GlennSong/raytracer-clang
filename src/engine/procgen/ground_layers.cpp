@@ -107,9 +107,10 @@ Recipe rockBrokenRecipe(const Vec3& base, uint32_t s) {
     const Field2 id = fieldMixBy(fieldWarp(fieldCellId(s + 3, 4), wu, wv, 0.07), fieldWarp(fieldCellId(s + 4, 9), wu, wv, 0.05), region);
     const Field2 grain = fieldTileFbm(s + 19, 12, 3);
     const Field2 gapW = fieldScaleBias(fieldTileFbm(s + 73, 4, 2), 0.1, 0.02);
-    const Field2 body = fieldSmoothstep(fieldAdd(edges, fieldScaleBias(gapW, -1.0, 0.07)), 0.0, 0.06);   // 0 in a gap, 1 on a block
-    return {colorMul(colorConstant(base), fieldMul(brightness({{id, 0.16}, {grain, 0.12}}), fieldScaleBias(body, 0.55, 0.45))),
-            fieldAdd(fieldMul(fieldScaleBias(id, 0.45, 0.35), body), fieldScaleBias(grain, 0.15, 0.0))};
+    // (soft, shallow gaps: dark, deep ones read as a net of lines over every face -- Glenn, 2026-10-20)
+    const Field2 body = fieldSmoothstep(fieldAdd(edges, fieldScaleBias(gapW, -1.0, 0.07)), 0.0, 0.12);   // 0 in a gap, 1 on a block
+    return {colorMul(colorConstant(base), fieldMul(brightness({{id, 0.16}, {grain, 0.12}}), fieldScaleBias(body, 0.22, 0.78))),
+            fieldAdd(fieldMul(fieldScaleBias(id, 0.3, 0.45), fieldScaleBias(body, 0.5, 0.5)), fieldScaleBias(grain, 0.15, 0.0))};
 }
 
 Recipe screeRecipe(const Vec3& base, uint32_t s) {
@@ -126,7 +127,7 @@ Recipe screeRecipe(const Vec3& base, uint32_t s) {
             fieldAdd(fieldMul(fieldScaleBias(id, 0.4, 0.4), body), fieldScaleBias(gravel, 0.12, 0.0))};
 }
 
-constexpr int kRecipeVersion = 6;   // 3: recipes over texture_field; 4: stones and slabs (ADR-0207); 6: the rock's sub-layers (ADR-0210)
+constexpr int kRecipeVersion = 7;   // 3: recipes over texture_field; 4: stones and slabs (ADR-0207); 6: the rock's sub-layers (ADR-0210)
 
 }  // namespace
 

@@ -213,6 +213,10 @@ struct GrassField {
     double cardRadius = 150.0;
     double cardFadeIn = 38.0, cardFadeOut = 40.0;
     double cardTile = 32.0;
+    // CLUTTER LAID ON THE GROUND (ground clutter, ADR-0212): each instance tilted to the ground's normal under it (its
+    // yaw kept), so a stone on a slope rests on it instead of standing upright with its downhill side in the air;
+    // false: upright, as grass
+    bool alignToGround = false;
 };
 
 // THE OCEAN a level draws (its "water" block): the OPEN-sea cells the water mesh covers, at `level`.

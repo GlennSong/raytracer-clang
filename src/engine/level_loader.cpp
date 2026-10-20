@@ -5389,7 +5389,9 @@ bool LevelLoader::load(const std::string& path,
                         return std::clamp((n - clumpCut) * 5.0, 0.0, 1.0);
                     };
                     if (kind == 7) {   // STONES: where the ground is bare -- earth, scree, rock, the pebbly shore -- in clumps
-                        if (!cover) return 0.0;
+                        // (and only where a loose stone can lie: none past ~38 deg -- Glenn, 2026-10-20: on the rocky
+                        // trial's faces "they float instead of adhering to the surface of the mountain")
+                        if (!cover || slopeCos < 0.79) return 0.0;
                         const Cover c = cover->at(x, z, y, slopeCos);
                         double d = 0.08 * c.grass + 0.8 * c.dirt + c.rock + 0.5 * c.sand;
                         if (maps) d += 0.8 * maps->at(x, z).scree;
@@ -5503,6 +5505,7 @@ bool LevelLoader::load(const std::string& path,
                     gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_CLUTTER;
                     gf.material.roughness = 0.9f;
                     gf.bladeHeight = 0.0;
+                    gf.alignToGround = true;
                     if (clutterKind == ClutterKind::Stones)
                         gf.material.albedo = colour("color", tp.cover ? tp.cover->params().rock * 1.1 : Vec3(0.13, 0.12, 0.105));
                 }
