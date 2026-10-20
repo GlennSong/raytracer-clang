@@ -158,6 +158,9 @@ struct RenderMaterial {
     // FLAG_TERRAIN (bit 25): the CDLOD ground, set by the backends' drawTerrain (never by a material) -- the lit pass
     // reads the terrain normal map for it (setTerrainNormalMap). Vulkan.
     static constexpr uint32_t FLAG_TERRAIN = 1u << 25;
+    // FLAG_CLUTTER (bit 26, with FLAG_GRASS): ground clutter planted like grass (GrassSystem: its rank, its fade) but a
+    // SOLID little mesh -- not a blade turned to the viewer and bent to the sky, no light through it. Vulkan.
+    static constexpr uint32_t FLAG_CLUTTER = 1u << 26;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the

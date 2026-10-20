@@ -83,6 +83,7 @@ add_library(engine_core STATIC
     src/engine/procgen/terrain.cpp
     src/engine/procgen/terrain_horizon.cpp
     src/engine/procgen/rock_layers.cpp
+    src/engine/procgen/ground_clutter.cpp
     src/engine/procgen/terrain_world_map.cpp
     src/engine/procgen/terrain_lod.cpp
     src/engine/procgen/height_pyramid.cpp

@@ -11023,3 +11023,20 @@ into sublayers"; "I'll let you cook".
   ridges where the island has rounded grey ridges.
 - The layers' lip in the relief now comes from the smooth cover weights (from the crisp height-blend shares it drew a
   dark outline round every snowfield). level_tests' water report takes RT_WATER_LEVEL (river mouths of any level).
+
+## ADR-0212 — Ground clutter: stones and twigs planted like grass
+
+Glenn's terrain plan, step 5 (and: "some of the pebbling you did earlier also helps").
+
+- **Planted by GrassSystem** from a "grassLayers" entry with "clutter": "stones" or "twigs" -- the same streamed tiles,
+  ranks and fades as the grass, so it costs what a sparse grass layer costs and never swims. FLAG_CLUTTER (bit 26, with
+  FLAG_GRASS) keeps the grass's planting in mesh.vert but lights it as a solid in mesh.frag: no turning to the viewer,
+  no bend to the sky, no light through it; no wind; bladeHeight 0 (no swish underfoot).
+- **The meshes** (procgen/ground_clutter.h, from the shape kit): stones are the rock library's pebbles, sunk a third
+  into the ground, in the cover palette's rock (or "color"); twigs are one to three crooked tapered tubes lying on the
+  ground with a side shoot, bark in the vertex colour.
+- **Where:** stones by the cover's bare ground (dirt, rock, sand, a little in grass), the maps' scree and the shores,
+  never on snow, in clumps; twigs under the canopy (forestCanopy), thickest where it closes. Both off the city's
+  managed blocks, roads and pads.
+- In the island levels and the labs: stones size 0.9 (stones ~10-20 cm), every 0.75 m, out to ~32 m; twigs every 1.1 m
+  out to ~26 m. The grass layers are outside the terrain block: no re-bake.

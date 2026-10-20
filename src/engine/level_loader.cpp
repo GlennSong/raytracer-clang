@@ -32,6 +32,7 @@
 #include "procgen/branch_cards.h"   // the recipe trees' branch cards (one atlas a forest species)
 #include "procgen/terrain_maps.h"
 #include "procgen/rock_layers.h"     // the macro map's rock bands (ADR-0209)
+#include "procgen/ground_clutter.h"  // grass layers of stones and twigs (ADR-0212)
 #include "procgen/terrain_weather.h"
 #include "procgen/trails.h"
 #include "systems/nature_collider_system.h"   // NatureColliders (#55)
@@ -5333,7 +5334,12 @@ bool LevelLoader::load(const std::string& path,
                 const std::string where = gj.value("where", std::string("meadow"));
                 // 0 meadow, 1 tall, 2 reeds, 3 flowers (open meadow patches), 4 clearing (a flower field
                 // in a forest clearing), 5 shore (flowers in clumps along the water)
-                const int kind = where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5
+                // GROUND CLUTTER (ADR-0212, ground_clutter.h): "clutter": "stones" (bare earth, scree, rock) or "twigs"
+                // (under the trees) -- a layer of small solid meshes, planted as the grass is
+                ClutterKind clutterKind = ClutterKind::Stones;
+                const bool clutter = gj.contains("clutter") && clutterKindFromName(gj.value("clutter", std::string()), clutterKind);
+                const int kind = clutter ? (clutterKind == ClutterKind::Stones ? 7 : 8)
+                               : where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5
                                : where == "lawn" ? 6 : 0;
                 const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
                 const double shore = gj.value("shoreBand", 6.0);
@@ -5345,7 +5351,7 @@ bool LevelLoader::load(const std::string& path,
                               sealedRoads, padsRO, lawnsRO, haveLawn, managedRO](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
                     // the wild layers -- tall grass, meadow flowers, clearings -- keep off the city's managed blocks
-                    if ((kind == 1 || kind == 3 || kind == 4) && managedRO->covers(x, z)) return 0.0;
+                    if ((kind == 1 || kind == 3 || kind == 4 || kind == 7 || kind == 8) && managedRO->covers(x, z)) return 0.0;
                     if (!sealedRoads->empty() && sealedRoads->near(x, z, 0.4)) return 0.0;   // the city's sealed ground
                     if (padsRO->covers(x, z)) return 0.0;
                     // LAWNS: the lawn layer only on the parks, every other layer off them
@@ -5360,6 +5366,20 @@ bool LevelLoader::load(const std::string& path,
                         const double n = patches.fbm2(x * clumpScale + salt, z * clumpScale - salt, 3);
                         return std::clamp((n - clumpCut) * 5.0, 0.0, 1.0);
                     };
+                    if (kind == 7) {   // STONES: where the ground is bare -- earth, scree, rock, the pebbly shore -- in clumps
+                        if (!cover) return 0.0;
+                        const Cover c = cover->at(x, z, y, slopeCos);
+                        double d = 0.08 * c.grass + 0.8 * c.dirt + c.rock + 0.5 * c.sand;
+                        if (maps) d += 0.8 * maps->at(x, z).scree;
+                        if (hydro) d = std::max(d, hydro->shore(x, z, y));
+                        d *= 1.0 - c.snow;
+                        return std::clamp(d, 0.0, 1.0) * (0.25 + 0.75 * clumps(23.0));
+                    }
+                    if (kind == 8) {   // TWIGS: under the canopy, thickest where it is closed
+                        if (!cover || !cover->params().forest) return 0.0;
+                        const double here = forestCanopy(*cover->params().forest, sea, maps, x, z, y, slope * 57.2957795);
+                        return std::clamp((here - 0.3) / 0.4, 0.0, 1.0) * (0.3 + 0.7 * clumps(29.0));
+                    }
                     if (kind == 2 || kind == 5) {   // REEDS / SHORE FLOWERS: the fresh water's band, in clumps
                         if (y < sea + 0.6 || slope > 0.25) return 0.0;
                         double d = hydro && hydro->isWet(x, z, shore) ? 1.0 : 0.0;
@@ -5428,7 +5448,10 @@ bool LevelLoader::load(const std::string& path,
                 // Each variant is tinted a little differently (warmer / cooler, lighter / darker), so
                 // the field mottles instead of reading as one flat green.
                 const double tint = gj.value("variantTint", 0.14);
-                for (int v = 0; v < variants; ++v) {
+                for (int v = 0; v < variants && clutter; ++v)
+                    gf.clumps.push_back(assets.acquireMesh(groundClutter(clutterKind, gf.seed * 131u + static_cast<uint32_t>(v), gj.value("size", 0.5)),
+                                                           tag + ":clutter:" + std::to_string(v)));
+                for (int v = 0; v < variants && !clutter; ++v) {
                     GrassClumpParams vp = cp;
                     const double t = variants > 1 ? (static_cast<double>(v) / (variants - 1)) * 2.0 - 1.0 : 0.0;   // -1..1
                     vp.tipColor = Vec3(cp.tipColor.x * (1.0 + tint * t), cp.tipColor.y * (1.0 + tint * 0.4 * t),
@@ -5454,8 +5477,15 @@ bool LevelLoader::load(const std::string& path,
                 gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_WIND | RenderMaterial::FLAG_TWO_SIDED;
                 gf.material.fadeStart = static_cast<float>(gf.fadeStart);
                 gf.material.fadeEnd = static_cast<float>(gf.fadeEnd);
+                if (clutter) {   // solid, still, nothing a leg wades through; stones in the ground's own rock
+                    gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_CLUTTER;
+                    gf.material.roughness = 0.9f;
+                    gf.bladeHeight = 0.0;
+                    if (clutterKind == ClutterKind::Stones)
+                        gf.material.albedo = colour("color", tp.cover ? tp.cover->params().rock * 1.1 : Vec3(0.13, 0.12, 0.105));
+                }
                 // THE FAR FIELD: cards of baked blades beyond the clumps, growing in as they fade
-                if (gj.value("cards", true)) {
+                if (gj.value("cards", !clutter)) {
                     const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp);
                     gf.card = assets.acquireMesh(grassCardMesh(cp), tag + ":card");
                     gf.cardSpacing = gj.value("cardSpacing", gf.cardSpacing);

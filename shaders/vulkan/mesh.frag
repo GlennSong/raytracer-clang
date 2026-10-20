@@ -1285,7 +1285,8 @@ void main() {
     bool impostorCard = false, cardBack = false;
     vec3 cardN = N;
     {
-        const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u;
+        // (clutter, FLAG_CLUTTER bit 26, is planted as grass but lit as the solid it is)
+        const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u && (pc.surfaceFlags.y & (1u << 26)) == 0u;
         // (a tree card: alpha-cut, and banded (the forest) or foliage (FLAG_FOLIAGE, a crown with no band))
         const bool leafCard = (pc.surfaceFlags.y & 2u) != 0u && (pc.surfaceFlags.y & ((1u << 19) | (1u << 22))) != 0u;
         if (leafCard && (texFlags & 4u) != 0u) {
@@ -1468,7 +1469,7 @@ void main() {
     // through thin blades. Strongest looking toward the sun (the backlit glow of a field at
     // dawn and dusk), a little from any angle, more at the thin tips (inTexcoord.y runs 0 root
     // .. 1 tip, procgen/grass.cpp), warmer than the blade, and only where the sun reaches.
-    if ((pc.surfaceFlags.y & (1u << 17)) != 0u) {
+    if ((pc.surfaceFlags.y & (1u << 17)) != 0u && (pc.surfaceFlags.y & (1u << 26)) == 0u) {
         for (int i = 0; i < min(g.counts.x, 32); ++i) {
             if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
             vec3 L = normalize(g.lights[i].directionInner.xyz);
