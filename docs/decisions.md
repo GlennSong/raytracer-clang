@@ -11273,6 +11273,12 @@ green patches so the road is not conforming right".
   shoulder), and the pads clipped to the block, with their feathers, lifted the ground over it. The lab cities had
   34-169 m2 of block over the drawn pavement. `blocksFromHoles` now clips the simplified outline to its own hole: a
   block is simplified only inward (0 m2 over the pavement, 0.1-0.2% of block area given up). Lots tag 2026-10-21.1.
+- **...by tucking the chord, not clipping it.** The clip gave every curve back as the hole's own ~1 m pieces, which
+  the lots' frontage merge (0.75 m) could not join into frontages: 9% of the island's buildings (12237 -> 11128),
+  2% on ring_city. Each chord now moves inward by the most its run of the hole bulged inside it -- across a curve it
+  becomes the tangent behind the sidewalk -- and the hole clips only what a sharp corner leaves. Lots: ring_city 355
+  -> 353, grid_city 178 -> 178, still 0 m2 over the pavement; the test also holds the outline to under 3% in pieces
+  shorter than 4 m (the clip: 12.2% on curve_blocks). Lots tag 2026-10-21.2.
 - Diagnostics: `RT_POKE_SITE` takes several sites ("x,z;x,z") and lists every flatten reaching a sample -- its
   priority, plane, falloff, and whether the sample is inside it or in its feather.
 - Tests: `lanes_a_freeway_at_grade_wears_its_guardrails` (the default rails a flat freeway on both sides; the drop

@@ -970,8 +970,18 @@ TEST_CASE(lanes_a_city_block_stays_behind_its_sidewalk) {
         PolySet all;
         for (const Poly2& b : blocks) { for (Polygon2& pg : fromRing(b)) all.push_back(std::move(pg)); }
         const double over = setArea(intersectSets(unionSets(all, PolySet{}), paved)), area = setArea(unionSets(all, PolySet{}));
-        std::printf("    [blocks] %s: %zu blocks, %.0f m2, %.1f m2 of it over the drawn pavement\n", name, blocks.size(), area, over);
+        // ...and a curve stays a few long frontages: clipping the chords to the hole gave every curve back as
+        // ~1 m pieces no lot could front (9% of the island's buildings).
+        double perim = 0, shortRun = 0;
+        for (const Poly2& b : blocks)
+            for (size_t i = 0; i < b.size(); ++i) {
+                const double L = std::hypot(b[(i + 1) % b.size()].x - b[i].x, b[(i + 1) % b.size()].y - b[i].y);
+                perim += L; if (L < 4.0) shortRun += L;
+            }
+        std::printf("    [blocks] %s: %zu blocks, %.0f m2, %.1f m2 of it over the drawn pavement, %.1f%% of the outline in pieces under 4 m\n",
+                    name, blocks.size(), area, over, 100.0 * shortRun / std::max(perim, 1.0));
         CHECK(over < 1.0);
+        CHECK(shortRun < 0.03 * perim);
     }
 }
 

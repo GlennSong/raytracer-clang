@@ -86,9 +86,40 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
         // ...SIMPLIFIED ONLY INWARD. On the outside of a bend the simplified chord cuts back across the sidewalk
         // (up to the tolerance, 1.5 m), and every pad laid to the block, with its feather, lifted the ground over
         // the sidewalk and the ramps' shoulders -- the island's green patches (Glenn: "there are green patches so
-        // the road is not conforming right"; 34-169 m2 of block over the drawn pavement on the lab cities). Clipped
-        // to its own hole, a block follows the curve where the chord would leave it and keeps the chord elsewhere.
-        for (const Polygon2& pg : intersectSets(fromRing(simple), fromRing(h))) {
+        // the road is not conforming right"; 34-169 m2 of block over the drawn pavement on the lab cities). So each
+        // chord moves inward by the most its run of the hole bulged out past it: across a curve it becomes the
+        // tangent behind the sidewalk, not the chord over it, and stays one long frontage. (Clipping the chords
+        // to the hole instead gave the curve back as ~5 m pieces the lots could not front: 9% of the island's
+        // buildings, 12237 -> 11128.)
+        const size_t m = simple.size();
+        double area2 = 0; for (size_t k = 0; k < m; ++k) { const Vec2& u = simple[k]; const Vec2& v = simple[(k + 1) % m]; area2 += u.x * v.y - v.x * u.y; }
+        const double side = area2 >= 0 ? 1.0 : -1.0;   // +1: CCW, the block on each edge's left
+        std::vector<Vec2> dirs(m), ins(m); std::vector<double> shift(m, 0.0);
+        for (size_t k = 0; k < m; ++k) {
+            const Vec2 a = closed[keep[k]], e = closed[keep[k + 1]] - a; const double L = std::hypot(e.x, e.y);
+            dirs[k] = L > 1e-9 ? Vec2{e.x / L, e.y / L} : Vec2{1, 0};
+            ins[k] = Vec2{-dirs[k].y * side, dirs[k].x * side};
+            for (size_t i = keep[k] + 1; i < keep[k + 1]; ++i) {
+                const Vec2 v = closed[i] - a;
+                shift[k] = std::max(shift[k], v.x * ins[k].x + v.y * ins[k].y);   // how far the hole's edge runs inside the chord
+            }
+        }
+        Poly2 tucked(m);
+        for (size_t k = 0; k < m; ++k) {
+            const size_t j = (k + m - 1) % m;   // corner k joins edge j to edge k: meet the two moved lines
+            const Vec2 pj{simple[k].x + ins[j].x * shift[j], simple[k].y + ins[j].y * shift[j]};
+            const Vec2 pk{simple[k].x + ins[k].x * shift[k], simple[k].y + ins[k].y * shift[k]};
+            const double den = dirs[j].x * dirs[k].y - dirs[j].y * dirs[k].x;
+            Vec2 c{(pj.x + pk.x) * 0.5, (pj.y + pk.y) * 0.5};
+            if (std::fabs(den) > 0.05) {
+                const double t = ((pk.x - pj.x) * dirs[k].y - (pk.y - pj.y) * dirs[k].x) / den;
+                const Vec2 q{pj.x + dirs[j].x * t, pj.y + dirs[j].y * t};
+                if (std::hypot(q.x - simple[k].x, q.y - simple[k].y) < 4.0 * std::max(simplify, 0.5)) c = q;   // a sharp corner's miter runs away
+            }
+            tucked[k] = c;
+        }
+        // The hole stays the last word: whatever a sharp corner left over the pavement is clipped off.
+        for (const Polygon2& pg : intersectSets(fromRing(tucked), fromRing(h))) {
             if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 135.0) continue;
             Poly2 poly(pg.outer.begin(), pg.outer.end());
             double a = 0; for (size_t i = 0; i < poly.size(); ++i) { const Vec2& u = poly[i]; const Vec2& v = poly[(i + 1) % poly.size()]; a += u.x * v.y - v.x * u.y; }
