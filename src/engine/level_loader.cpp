@@ -5892,21 +5892,27 @@ bool LevelLoader::load(const std::string& path,
                                 // RT_POKE_SITE="x,z": full autopsy of samples
                                 // within 3 m of the given point — deck source,
                                 // corner heights, and what the corner clamp saw.
+                                // Several sites: "x,z;x,z;...".
                                 if (const char* site = std::getenv("RT_POKE_SITE")) {
-                                    double sx = 0, sz = 0;
-                                    if (sscanf(site, "%lf,%lf", &sx, &sz) == 2 &&
-                                        std::hypot(q.x - sx, q.y - sz) < 3.0 && lvl == 0) {
+                                    bool near = false;
+                                    for (const char* c = site; c && *c; c = std::strchr(c, ';') ? std::strchr(c, ';') + 1 : nullptr) {
+                                        double sx = 0, sz = 0;
+                                        if (sscanf(c, "%lf,%lf", &sx, &sz) == 2 && std::hypot(q.x - sx, q.y - sz) < 3.0) { near = true; break; }
+                                    }
+                                    if (near && lvl == 0) {
                                         LOG_INFO << "[poke-site] q=(" << q.x << "," << q.y
                                                  << ") gh=" << gh << " deck=" << deck
                                                  << " ownDeck=" << ownDeck
                                                  << " dd=" << dd << " chain=" << si
                                                  << " hw=" << spines[si].halfWidth;
-                                        // every priority-1 region covering q (dilated):
+                                        // every region reaching q, inside or by its feather (a road's, a pad's, a
+                                        // terrace's: the lanes sidewalk is no region, so a pad's feather lifts it):
                                         for (std::size_t ri = 0; ri < tpFull.flatten.size(); ++ri) {
                                             const TerrainFlatten& r = tpFull.flatten[ri];
-                                            if (r.priority != kRoadFlattenPriority || r.polygon.size() < 3) continue;
-                                            if (q.x < r.minX - dil || q.x > r.maxX + dil ||
-                                                q.y < r.minZ - dil || q.y > r.maxZ + dil) continue;
+                                            if (r.polygon.size() < 3) continue;
+                                            const double reach = r.falloff + dil;
+                                            if (q.x < r.minX - reach || q.x > r.maxX + reach ||
+                                                q.y < r.minZ - reach || q.y > r.maxZ + reach) continue;
                                             auto inPoly = [&](double px, double pz) {
                                                 bool in = false;
                                                 size_t np = r.polygon.size();
@@ -5938,11 +5944,13 @@ bool LevelLoader::load(const std::string& path,
                                                 return bd;
                                             };
                                             const bool insideR = inPoly(q.x, q.y);
-                                            if (!insideR && distPoly(q.x, q.y) > dil) continue;
+                                            const double dR = insideR ? 0.0 : distPoly(q.x, q.y);
+                                            if (!insideR && dR > reach) continue;
                                             LOG_INFO << "[poke-site]   region#" << ri
-                                                     << " owner=" << r.owner
-                                                     << " plane=" << r.planeY(q.x, q.y)
-                                                     << (insideR ? " INSIDE" : " (dilated)");
+                                                     << " priority=" << r.priority << " owner=" << r.owner
+                                                     << " plane=" << r.planeY(q.x, q.y) << " falloff=" << r.falloff
+                                                     << (insideR ? " INSIDE" : dR <= dil ? " (dilated)" : " feather d=") << (insideR || dR <= dil ? std::string() : std::to_string(dR))
+                                                     << " bbox x[" << r.minX << "," << r.maxX << "] z[" << r.minZ << "," << r.maxZ << "] verts " << r.polygon.size();
                                         }
                                         int mine = 0;
                                         for (std::size_t ri = 0; ri < tpFull.flatten.size(); ++ri) {

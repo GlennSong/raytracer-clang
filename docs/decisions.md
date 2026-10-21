@@ -11255,3 +11255,25 @@ platform and trains as they go by"; "cars also signal the wrong light when you t
   opposite side. Head, tail and both truck tails swapped back.
 - Tests: `a_tree_keeps_out_of_the_trains_room` (beside a track, under a viaduct, on a cutting's lip);
   `every_drivable_car_names_its_lamps_by_their_side` (all 13 drivable recipes; it caught the truck tails too).
+
+## ADR-0220 — Guardrails along the freeway, blocks behind the sidewalk
+
+Glenn, 2026-10-20, on island_8_nature: "freeways don't have railguards anymore. Neither do the onramps"; "there are
+green patches so the road is not conforming right".
+
+- **The guardrails were never built.** `lanes_tool build … --walls` now prints the census per edge role and the
+  barrier metres per class: of 109.6 km of at-grade freeway, ramp and mountain edge, 1.4 km carried a rail -- 990 m
+  on the freeway, 29 m on every ramp. The island scene had given the freeway and its ramps the open roads' drop rule
+  (10-09: a rail only where the ground 5 m out falls 2.5 m), and the grading holds the ground beside them at the
+  deck, so the rule never fired. The freeway and its ramps keep the class default now, a guardrail the whole way
+  along at grade; the rural roads keep the drop rule. (The graph asset carries the classes: its freeway and ramp
+  `at_grade` entries were taken out with it.)
+- **The green patches were blocks over the sidewalk.** A block is the hole in the drawn pavement, inset 0.3 m and
+  simplified at 1.5 m; on the outside of a bend the simplified chord cut back across the sidewalk (and a ramp's
+  shoulder), and the pads clipped to the block, with their feathers, lifted the ground over it. The lab cities had
+  34-169 m2 of block over the drawn pavement. `blocksFromHoles` now clips the simplified outline to its own hole: a
+  block is simplified only inward (0 m2 over the pavement, 0.1-0.2% of block area given up). Lots tag 2026-10-21.1.
+- Diagnostics: `RT_POKE_SITE` takes several sites ("x,z;x,z") and lists every flatten reaching a sample -- its
+  priority, plane, falloff, and whether the sample is inside it or in its feather.
+- Tests: `lanes_a_freeway_at_grade_wears_its_guardrails` (the default rails a flat freeway on both sides; the drop
+  rule builds none); `lanes_a_city_block_stays_behind_its_sidewalk` (curve_blocks, ring_city, grid_city).

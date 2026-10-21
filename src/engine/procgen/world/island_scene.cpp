@@ -68,10 +68,13 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
                       {"elevated", {{"kind", "guardrail"}}}, {"at_grade", {{"kind", "guardrail"}, {"min_drop", 2.0}}}};
         scene["classes"]["mountain"] = m;
     }
-    // ROAD EDGES (the city's next ten #5; Glenn's guardrails, "in places"): the freeway, its ramps and the roads
-    // between towns get a guardrail at grade where the ground 5 m out drops 2.5 m or more -- an embankment, a bank
-    // above a river, a cut's far side -- and nowhere else. Their other edges keep their defaults.
-    for (const char* k : {"freeway", "ramp", "rural"})
+    // ROAD EDGES (the city's next ten #5; Glenn's guardrails, "in places"): the roads between towns get a guardrail
+    // at grade where the ground 5 m out drops 2.5 m or more -- an embankment, a bank above a river, a cut's far
+    // side -- and nowhere else. Their other edges keep their defaults.
+    // The freeway and its ramps keep the default, a guardrail the whole way along at grade (2026-10-21, Glenn:
+    // "freeways don't have railguards anymore. Neither do the onramps"): the drop rule built 1.0 km of rail on
+    // their 110 km of at-grade edge, the ground beside them being held at the deck by the grading
+    for (const char* k : {"rural"})
         if (scene.contains("classes") && scene["classes"].contains(k) && !(scene["classes"][k].contains("edges") &&
                                                                            scene["classes"][k]["edges"].contains("at_grade")))
             scene["classes"][k]["edges"]["at_grade"] = {{"kind", "guardrail"}, {"min_drop", 2.5}};

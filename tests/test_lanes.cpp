@@ -934,6 +934,47 @@ TEST_CASE(lanes_the_crossing_policy_plans_each_meeting_by_what_meets) {
         if (c["kind"] == "bridge") CHECK(!c.value("over", std::string()).empty());
 }
 
+// A FREEWAY AT GRADE WEARS ITS GUARDRAILS (2026-10-21, Glenn: "freeways don't have railguards anymore. Neither do
+// the onramps"): left to the class defaults, a freeway on flat ground carries a guardrail down both outer edges;
+// the drop rule the island's open roads author (a rail only where the ground 5 m out falls 2.5 m) builds none.
+TEST_CASE(lanes_a_freeway_at_grade_wears_its_guardrails) {
+    auto railMetres = [](const nlohmann::json& g) {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        ParapetCensus census;
+        double rail = 0;
+        for (const ParapetRun& run : parapetRuns(*r, &census))
+            if (run.kind == BarrierKind::Guardrail)
+                for (size_t i = 0; i + 1 < run.pts.size(); ++i) rail += distance(run.pts[i], run.pts[i + 1]);
+        std::printf("    [rails] at grade %.0f of %.0f m built, guardrail %.0f m\n", census.built[static_cast<size_t>(EdgeRole::AtGrade)],
+                    census.metres[static_cast<size_t>(EdgeRole::AtGrade)], rail);
+        return rail;
+    };
+    nlohmann::json g;
+    g["name"] = "rails";
+    g["edges"] = nlohmann::json::array({{{"id", "fwy"}, {"class", "freeway"}, {"path", {{"type", "polyline"}, {"points", {{-300, 0}, {300, 0}}}}}}});
+    CHECK(railMetres(g) > 2 * 600 * 0.9);   // both sides, nearly end to end
+    g["classes"]["freeway"]["edges"]["at_grade"] = {{"kind", "guardrail"}, {"min_drop", 2.5}};
+    CHECK(railMetres(g) < 1.0);             // flat ground: nowhere to fall
+}
+
+// A CITY BLOCK STAYS BEHIND ITS SIDEWALK (2026-10-21, Glenn: "there are green patches so the road is not conforming
+// right"): a block is the hole in the drawn pavement, inset a little and simplified -- and the simplified outline may
+// not cut back across the sidewalk on the outside of a bend, or every pad and its feather laid to it lifts the ground
+// over the sidewalk.
+TEST_CASE(lanes_a_city_block_stays_behind_its_sidewalk) {
+    for (const char* name : {"curve_blocks", "ring_city", "grid_city"}) {
+        const Result& r = scene(name);
+        const PolySet paved = unionSets(unionSets(r.pavement.surface, r.pavement.shoulder), r.pavement.sidewalk);
+        const std::vector<Ring> holes = pavementHoles(r, 2000.0);
+        const std::vector<Poly2> blocks = blocksFromHoles(holes, 1.5, kBlockMarginBehindSidewalk, kMinBlockWidth);
+        PolySet all;
+        for (const Poly2& b : blocks) { for (Polygon2& pg : fromRing(b)) all.push_back(std::move(pg)); }
+        const double over = setArea(intersectSets(unionSets(all, PolySet{}), paved)), area = setArea(unionSets(all, PolySet{}));
+        std::printf("    [blocks] %s: %zu blocks, %.0f m2, %.1f m2 of it over the drawn pavement\n", name, blocks.size(), area, over);
+        CHECK(over < 1.0);
+    }
+}
+
 // THE LIGHT RAIL LAB: held up over its streets, its stations reached from below -- the way passes under the line at
 // the street's level, and each platform stands level along its length.
 TEST_CASE(lanes_light_rail_lab_reaches_its_stations_from_below) {

@@ -81,11 +81,20 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
     for (const Ring& h : rings) {
         Ring closed = h; closed.push_back(h.front());   // DP wants an open run: split the loop at its first point
         std::vector<size_t> keep = dpKeep(closed, simplify);
-        Poly2 poly; for (size_t i : keep) if (i + 1 < closed.size()) poly.push_back(closed[i]);
-        if (poly.size() < 3) continue;
-        double a = 0; for (size_t i = 0; i < poly.size(); ++i) { const Vec2& u = poly[i]; const Vec2& v = poly[(i + 1) % poly.size()]; a += u.x * v.y - v.x * u.y; }
-        if (a < 0) std::reverse(poly.begin(), poly.end());   // CCW, as extractBlocks would hand them
-        blocks.push_back(std::move(poly));
+        Poly2 simple; for (size_t i : keep) if (i + 1 < closed.size()) simple.push_back(closed[i]);
+        if (simple.size() < 3) continue;
+        // ...SIMPLIFIED ONLY INWARD. On the outside of a bend the simplified chord cuts back across the sidewalk
+        // (up to the tolerance, 1.5 m), and every pad laid to the block, with its feather, lifted the ground over
+        // the sidewalk and the ramps' shoulders -- the island's green patches (Glenn: "there are green patches so
+        // the road is not conforming right"; 34-169 m2 of block over the drawn pavement on the lab cities). Clipped
+        // to its own hole, a block follows the curve where the chord would leave it and keeps the chord elsewhere.
+        for (const Polygon2& pg : intersectSets(fromRing(simple), fromRing(h))) {
+            if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 135.0) continue;
+            Poly2 poly(pg.outer.begin(), pg.outer.end());
+            double a = 0; for (size_t i = 0; i < poly.size(); ++i) { const Vec2& u = poly[i]; const Vec2& v = poly[(i + 1) % poly.size()]; a += u.x * v.y - v.x * u.y; }
+            if (a < 0) std::reverse(poly.begin(), poly.end());   // CCW, as extractBlocks would hand them
+            blocks.push_back(std::move(poly));
+        }
     }
     return blocks;
 }

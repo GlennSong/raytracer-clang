@@ -12,6 +12,8 @@
 #include "engine/procgen/city/polygon.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include <set>
+#include <map>
+#include <array>
 #include <tuple>
 #include <algorithm>
 #include <cmath>
@@ -397,6 +399,19 @@ int main(int argc, char** argv) {
                 if (pavedAt(gap, run.z[i]) || contains(r.pavement.shoulder, gap) || contains(r.pavement.median, gap)) ++gapPaved; else ++gapBare;
             }
         }
+        // how much of each kind of edge carries a barrier, and what the barriers are, per road class
+        std::printf("--walls: edge metres built / seen:");
+        for (size_t k = 0; k < static_cast<size_t>(EdgeRole::Count_); ++k)
+            std::printf(" %s %.0f/%.0f", edgeRoleName(static_cast<EdgeRole>(k)), census.built[k], census.metres[k]);
+        std::printf("\n");
+        std::map<std::string, std::array<double, 3>> byClass;   // class -> metres of none/wall/guardrail
+        for (const ParapetRun& run : runs) {
+            if (run.lane < 0 || r.lanes.lanes[static_cast<size_t>(run.lane)].parent < 0) continue;
+            double len = 0; for (size_t i = 0; i + 1 < run.pts.size(); ++i) len += distance(run.pts[i], run.pts[i + 1]);
+            const EdgeSpec& e = r.graph.edges[static_cast<size_t>(r.lanes.lanes[static_cast<size_t>(run.lane)].parent)];
+            byClass[e.isRamp() ? std::string("ramp") : e.cls][static_cast<size_t>(run.kind)] += len;
+        }
+        for (const auto& [cls, m] : byClass) std::printf("         %-10s wall %.0f m, guardrail %.0f m\n", cls.c_str(), m[1], m[2]);
         std::printf("--walls: the wall stands on: deck edge %d, shoulder %d, median %d, LANE %d, BARE GROUND %d\n", onDeckEdge, onShoulder, onMedian, onLane, onNothing);
         std::printf("         between the deck edge and the wall: paved %d, bare %d\n", gapPaved, gapBare);
         for (const engine::Vec2& q : nowhereAt) std::printf("    on bare ground at (%7.1f, %7.1f)\n", q.x, q.y);
