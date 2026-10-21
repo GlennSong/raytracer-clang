@@ -299,7 +299,8 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
             x.at = Vec2(c.at("at").at(0).get<double>(), c.at("at").at(1).get<double>());
             x.clearance = num(c, "clearance", -1.0);
             if (x.kind != "bridge" && x.kind != "at_grade") throw std::runtime_error("crossing " + x.a + "/" + x.b + ": unknown kind " + x.kind);
-            if (x.kind == "bridge" && x.over != x.a && x.over != x.b) throw std::runtime_error("crossing " + x.a + "/" + x.b + ": a bridge names which goes over");
+            // (a bridge may leave `over` empty: the design stage chooses by its own rule, and designedGraph writes the choice in)
+            if (x.kind == "bridge" && !x.over.empty() && x.over != x.a && x.over != x.b) throw std::runtime_error("crossing " + x.a + "/" + x.b + ": over names neither road");
             g.crossings.push_back(x);
         }
     }

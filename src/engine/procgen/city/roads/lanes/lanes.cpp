@@ -33,6 +33,16 @@ nlohmann::json designedGraph(const nlohmann::json& spec, const std::string& base
         // one height a sample of the resampled spine (rules.step apart), as the stage left it -- built again, exactly these
         ej["profile"] = {{"step", g.rules.step}, {"z", e->z}};
     }
+    // a planned bridge that left its upper road to the design: named now, as designed (the higher there)
+    if (out.contains("crossings"))
+        for (nlohmann::json& c : out["crossings"]) {
+            if (c.value("kind", std::string()) != "bridge" || !c.value("over", std::string()).empty()) continue;
+            const EdgeSpec* a = g.find(c.value("a", std::string()));
+            const EdgeSpec* b = g.find(c.value("b", std::string()));
+            if (!a || !b || a->z.size() < 2 || b->z.size() < 2) continue;
+            const Vec2 p(c["at"][0].get<double>(), c["at"][1].get<double>());
+            c["over"] = projectZ(*a, p) >= projectZ(*b, p) ? a->id : b->id;
+        }
     return out;
 }
 

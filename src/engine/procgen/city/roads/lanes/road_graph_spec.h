@@ -49,7 +49,8 @@ struct ConnectorSpec { std::string from, to; double toS = 0; };
 
 // A CROSSING AS PLANNED (ADR-0215, Glenn: "the planner and builder should know the intent of the roads so it's not
 // guessing"): where two roads cross or one ends on the other away from a shared node, what the plan means there --
-//   "bridge"    grade-separated: `over` goes over the other, clearing it by the rules' clearance (or `clearance` m)
+//   "bridge"    grade-separated: `over` goes over the other, clearing it by the rules' clearance (or `clearance` m);
+//               `over` left empty: the design stage chooses by its own rule, and the designed graph names it
 //   "at_grade"  the two meet level: their heights are made to agree there, however far apart they stand
 // Authored at the graph's top level: "crossings": [{"a": "link9", "b": "p0_s191", "at": [x, y], "kind": "bridge",
 // "over": "link9"}]. A graph that carries the list DECLARES its crossings: one the design stage finds that is not on

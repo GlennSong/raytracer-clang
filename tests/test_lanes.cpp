@@ -894,6 +894,46 @@ TEST_CASE(lanes_a_planned_profile_is_built_as_given_and_its_faults_are_named) {
     CHECK(junctions != nullptr && junctions->detail.find("at (0, 0)") != std::string::npos);   // named where
 }
 
+// THE PLANNER'S CROSSING POLICY (ADR-0215 step 3): each meeting of two roads gets its kind from what the two are --
+// a freeway or a track is crossed on a bridge, a footway crosses on one but meets the street it starts from at grade,
+// two streets meet at grade -- and designing the graph names each bridge's upper road.
+TEST_CASE(lanes_the_crossing_policy_plans_each_meeting_by_what_meets) {
+    nlohmann::json g;
+    g["name"] = "policy";
+    g["rules"] = {{"freeway_separates", true}};
+    auto line = [](const char* id, const char* cls, std::vector<std::array<double, 2>> pts) {
+        nlohmann::json p = nlohmann::json::array();
+        for (const auto& q : pts) p.push_back({q[0], q[1]});
+        return nlohmann::json{{"id", id}, {"class", cls}, {"path", {{"type", "polyline"}, {"points", p}}}};
+    };
+    g["edges"] = nlohmann::json::array({
+        line("fwy", "freeway", {{-600, 0}, {600, 0}}),
+        line("main", "arterial", {{0, -400}, {0, 400}}),                 // crosses the freeway
+        line("side", "local", {{-300, 200}, {0, 200}}),                  // ends on main's interior: a tee
+        line("rail", "rail", {{-400, -200}, {400, -200}}),               // crosses main
+        line("way", "footway", {{0, -150}, {150, -150}, {150, -260}})});  // starts on main, crosses the rail
+    const nlohmann::json planned = planCrossings(RoadLabGraph::fromJson(g));
+    std::map<std::string, std::string> kind;
+    for (const auto& c : planned) {
+        std::string a = c["a"], b = c["b"];
+        if (b < a) std::swap(a, b);
+        kind[a + "/" + b] = c["kind"];
+        std::printf("    [policy] %s / %s at (%.0f, %.0f): %s\n", a.c_str(), b.c_str(), c["at"][0].get<double>(), c["at"][1].get<double>(), c["kind"].get<std::string>().c_str());
+    }
+    CHECK(kind["fwy/main"] == "bridge");
+    CHECK(kind["main/side"] == "at_grade");
+    CHECK(kind["main/rail"] == "bridge");
+    CHECK(kind["main/way"] == "at_grade");   // the footway's way in starts at the street
+    CHECK(kind["rail/way"] == "bridge");     // and crosses the track on a footbridge
+    // designed: every bridge names its upper road, and nothing is left out of the plan
+    g["crossings"] = planned;
+    DesignReport rep;
+    const nlohmann::json designed = designedGraph(g, ".", &rep);
+    CHECK(rep.undeclared.empty());
+    for (const auto& c : designed["crossings"])
+        if (c["kind"] == "bridge") CHECK(!c.value("over", std::string()).empty());
+}
+
 // THE LIGHT RAIL LAB: held up over its streets, its stations reached from below -- the way passes under the line at
 // the street's level, and each platform stands level along its length.
 TEST_CASE(lanes_light_rail_lab_reaches_its_stations_from_below) {

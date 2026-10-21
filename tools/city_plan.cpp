@@ -18,6 +18,8 @@
 #include "engine/procgen/world/road_sign_build.h"
 #include "engine/procgen/world/island_scene.h"
 #include "engine/procgen/world/island_rail.h"
+#include "engine/procgen/city/roads/lanes/lanes.h"         // designedGraph: the scene designed before it is written
+#include "engine/procgen/city/roads/lanes/road_design.h"   // planCrossings: the planner's crossing policy
 #include "engine/procgen/city/street_names.h"
 #include "engine/ai/nav_graph.h"
 #include "engine/ai/pathfind.h"
@@ -57,6 +59,19 @@ static int usage() {
 static bool haveCommand(const char* cmd) {
     const std::string probe = std::string("command -v ") + cmd + " >/dev/null 2>&1";
     return std::system(probe.c_str()) == 0;
+}
+
+// THE SCENE DESIGNED (ADR-0215 step 3, Glenn: "neither system is guessing"): every crossing given its planned kind
+// (planCrossings, the planner's policy), then every road's elevation designed by the shared stage and written in
+// (designedGraph). The builder takes those heights as given and checks them.
+static void designScene(nlohmann::json& scene) {
+    const auto t0 = std::chrono::steady_clock::now();
+    scene["crossings"] = engine::roads::lanes::planCrossings(engine::roads::lanes::RoadLabGraph::fromJson(scene));
+    engine::roads::lanes::DesignReport rep;
+    scene = engine::roads::lanes::designedGraph(scene, ".", &rep);
+    std::printf("designed: %zu crossings planned, node mismatch %.1f cm, %d lifted to clear, %zu not in the plan (%.0f s)\n", scene["crossings"].size(),
+                100 * rep.nodeMismatchAfter, rep.lifted, rep.undeclared.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    for (std::size_t i = 0; i < rep.undeclared.size() && i < 10; ++i) std::printf("  not in the plan: %s\n", rep.undeclared[i].c_str());
 }
 
 // THE ISLAND LOOP into a lanes graph (island_rail.h islandRailLoop): a station at every town (the level's hubs),
@@ -444,8 +459,9 @@ int main(int argc, char** argv) {
             if (rail && sceneOpt.windowHalf <= 0.0) {
                 addIslandRail(scene, level, engine::IslandRailOptions{});
                 addCityRail(scene, level, engine::CityRailOptions{});
-                std::ofstream(scenePath) << scene.dump(1) << "\n";
             }
+            designScene(scene);
+            std::ofstream(scenePath) << scene.dump(1) << "\n";
             finishedScene = scene;
             std::printf("level: assets/levels/%s.json (scene %s: %zu edges; %zu signs) in %.1f s\n", levelName.c_str(), scenePath.c_str(), scene["edges"].size(),
                         signs.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
@@ -511,6 +527,7 @@ int main(int argc, char** argv) {
         }
         addIslandRail(graph, level, ro);
         if (!write) return 0;
+        designScene(graph);   // its crossings planned again (the track's too) and the whole graph designed
         std::ofstream out(argv[2]);
         out << graph.dump(1) << "\n";
         std::printf("wrote %s\n", argv[2]);
@@ -531,6 +548,7 @@ int main(int argc, char** argv) {
         }
         addCityRail(graph, level, co);
         if (!write) return 0;
+        designScene(graph);
         std::ofstream out(argv[2]);
         out << graph.dump(1) << "\n";
         std::printf("wrote %s\n", argv[2]);

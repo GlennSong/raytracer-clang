@@ -1,10 +1,12 @@
 #include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "engine/procgen/city/roads/lanes/lane_expand.h"   // expand: the ramps compose from their anchors
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <tuple>
 #include <vector>
 
 namespace engine {
@@ -58,6 +60,49 @@ DesignReport applyDesign(RoadLabGraph& g, const HeightField& terrain) {
     return rep;
 }
 }  // namespace
+
+nlohmann::json planCrossings(const RoadLabGraph& spec) {
+    nlohmann::json out = nlohmann::json::array();
+    // geometry only: the ramps composed from their anchors, every road a placeholder height (the meets read none)
+    RoadLabGraph g = spec;
+    (void)expand(g);
+    for (EdgeSpec& e : g.edges)
+        if (e.xy.size() >= 2 && e.z.size() < 2) { e.s = stations(e.xy); e.z.assign(e.xy.size(), 0.0); }
+    auto kindOf = [&](const EdgeSpec& a, const EdgeSpec& b, bool aEndsOnB, bool bEndsOnA) {
+        if (g.cls(a).track || g.cls(b).track) return "bridge";
+        if ((a.cls == "freeway" && !b.isRamp()) || (b.cls == "freeway" && !a.isRamp())) return "bridge";
+        if (g.cls(a).footway || g.cls(b).footway) {
+            const bool footEnds = (g.cls(a).footway && aEndsOnB) || (g.cls(b).footway && bEndsOnA);
+            return footEnds ? "at_grade" : "bridge";
+        }
+        return "at_grade";
+    };
+    auto endsOn = [&](const EdgeSpec& e, const EdgeSpec& o, const Vec2& p) {
+        const double tol = g.hw(o) + g.hw(e) + 1.0;
+        return std::min(distance(e.xy.front(), p), distance(e.xy.back(), p)) <= tol && project(o.xy, o.s, p).distance <= tol;
+    };
+    std::vector<std::tuple<std::string, std::string, Vec2>> seen;
+    auto add = [&](const EdgeSpec& a, const EdgeSpec& b, const Vec2& p) {
+        for (const auto& [sa, sb, sp] : seen)
+            if (((sa == a.id && sb == b.id) || (sa == b.id && sb == a.id)) && distance(sp, p) < 1.0) return;   // (found by each segment pair at a shared vertex)
+        seen.emplace_back(a.id, b.id, p);
+        out.push_back({{"a", a.id}, {"b", b.id}, {"at", {std::round(p.x * 100.0) / 100.0, std::round(p.y * 100.0) / 100.0}},
+                       {"kind", kindOf(a, b, endsOn(a, b, p), endsOn(b, a, p))}});
+    };
+    for (const CrossingMeet& m : crossingMeets(g)) add(g.edges[m.hi], g.edges[m.lo], m.p);
+    // an end ON another road's centreline away from its ends (nodeConsistency's tee; crossingMeets leaves those to it)
+    for (const EdgeSpec& e : g.edges) {
+        if (e.isRamp() || e.xy.size() < 2) continue;
+        for (const Vec2& q : {e.xy.front(), e.xy.back()})
+            for (const EdgeSpec& h : g.edges) {
+                if (&h == &e || h.isRamp() || h.xy.size() < 2) continue;
+                if (project(h.xy, h.s, q).distance > g.rules.endpointTol) continue;
+                if (std::min(distance(h.xy.front(), q), distance(h.xy.back(), q)) <= g.rules.endpointTol) continue;   // a shared node
+                add(e, h, q);
+            }
+    }
+    return out;
+}
 
 DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
     if (g.designed()) return applyDesign(g, terrain);
@@ -176,7 +221,7 @@ DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain) {
                     // which goes over: the higher; for a forced separation, the one the scene asked to (a floor
                     // point over the crossing), else the freeway
                     bool aHi = za > zb;
-                    if (planned) aHi = planned->over == a.id;
+                    if (planned && !planned->over.empty()) aHi = planned->over == a.id;
                     else if (sep) {
                         auto floored = [&](const EdgeSpec& e) { for (const auto& fp : e.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 40.0) return true; return false; };
                         const bool fa = floored(a), fb = floored(b);

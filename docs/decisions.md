@@ -11149,3 +11149,21 @@ the link 16 m in; the builder reading two overlapping roads 2.7 m apart as an ov
     - `lanes_a_crossing_the_plan_left_out_is_reported_with_its_place`
     - `lanes_a_designed_graph_builds_the_heights_it_was_designed_with`
     - `lanes_a_planned_profile_is_built_as_given_and_its_faults_are_named`
+- **Step 3: the planner designs.**
+  - **Crossing policy** (`planCrossings(graph)`, shared, in road_design): every meeting of two roads the design
+    stage would find gets a kind from what meets. Track and anything: bridge. The freeway and anything but its own
+    ramps: bridge. A footway across a road: bridge; a footway ending on one: at grade. Streets: at grade. A bridge
+    may leave `over` empty, meaning "the design chooses"; `designedGraph` then writes in whichever road it set
+    higher, so a designed graph names every upper road.
+  - **The island planner writes a designed scene.** `city_plan island-cities` (and `island-rail` / `city-rail`
+    with `--write`) plans the crossings, runs the design stage and writes the profiles before the scene goes out
+    (`designScene`). `lanes_tool design --plan-crossings` does the same for any graph.
+  - **Island 8:** 182 crossings planned (116 bridges, 66 at grade), none left out; 96 roads lifted to clear (99 when
+    inferred); 224 s. The full build of the designed graph fails the same four checks with the same numbers as the
+    last inferred build (24 town deck cracks, p1_s83/p1_s99 at 9 % against 8 %, the 13.6 cm tee at p7_s0/p7_s71,
+    22 thin lanes) and passes the new "crossings are as planned"; 754 grade-separated pairs against 761.
+  - **Not yet:** the link and ramp choices still use their own margins (9 % links, ramp length from bare ground,
+    the along-a-street rule) and the planner's grade constants are still its own; both are to read the design stage
+    and the class table.
+  - **Proof.** The 15 scenes without plans: every glb and stats.json identical to step 2.
+  - **Test:** `lanes_the_crossing_policy_plans_each_meeting_by_what_meets`.

@@ -133,18 +133,24 @@ int main(int argc, char** argv) {
         nlohmann::json spec;
         { std::ifstream f(argv[2]); if (!f) { std::fprintf(stderr, "lanes_tool: cannot read %s\n", argv[2]); return 1; } f >> spec; }
         const std::string dir = std::filesystem::path(argv[2]).parent_path().string();
+        // --plan-crossings: every crossing given its planned kind by the planner's policy first (planCrossings)
+        for (int i = 4; i < argc; ++i)
+            if (std::strcmp(argv[i], "--plan-crossings") == 0) {
+                spec["crossings"] = planCrossings(RoadLabGraph::fromJson(spec, dir.empty() ? "." : dir));
+                std::printf("planned %zu crossings\n", spec["crossings"].size());
+            }
         DesignReport rep;
         const nlohmann::json out = designedGraph(spec, dir.empty() ? "." : dir, &rep);
         std::ofstream(argv[3]) << out.dump(1) << "\n";
         std::printf("designed %s -> %s in %.1f s: node mismatch %.1f cm (was %.1f), %d crossings lifted, %zu not in the plan\n", argv[2], argv[3],
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), 100 * rep.nodeMismatchAfter, 100 * rep.nodeMismatchBefore,
                     rep.lifted, rep.undeclared.size());
-        for (std::size_t i = 0; i < rep.undeclared.size() && i < 20; ++i) std::printf("  not in the plan: %s\n", rep.undeclared[i].c_str());
+        for (std::size_t i = 0; i < rep.undeclared.size() && (i < 20 || std::getenv("LANES_ALL_UNDECLARED")); ++i) std::printf("  not in the plan: %s\n", rep.undeclared[i].c_str());
         return 0;
     }
     if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "from-level") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
-                             "       lanes_tool design <graph.json> <out.json>   (the graph with every road's planned profile; built again, taken as given)\n"
+                             "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
                              "       lanes_tool from-level <level.json> --out <dir> [--diamonds N] [--no-freeway]   (writes <dir>/<name>_lanelab.json + terrain grid)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;

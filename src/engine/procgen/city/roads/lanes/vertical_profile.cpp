@@ -318,7 +318,7 @@ std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g) {
                 m.declared = true;
                 m.sep = c->kind == "bridge";
                 m.level = !m.sep;
-                if (m.sep && g.edges[m.hi].id != c->over) {
+                if (m.sep && !c->over.empty() && g.edges[m.hi].id != c->over) {
                     std::swap(m.hi, m.lo);
                     m.sHi = project(g.edges[m.hi].xy, g.edges[m.hi].s, p).station;
                     m.sLo = project(g.edges[m.lo].xy, g.edges[m.lo].s, p).station;

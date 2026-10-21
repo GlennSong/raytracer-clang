@@ -26,6 +26,17 @@ struct DesignReport {
 
 DesignReport designRoads(RoadLabGraph& g, const HeightField& terrain);
 
+// THE PLANNER'S CROSSING POLICY (ADR-0215 step 3): every place two of the graph's roads meet away from a shared node --
+// their centrelines crossing, or one ending on the other's interior -- found with the design stage's own geometry, and
+// what the plan means there, by what the two roads are:
+//   a track and anything        a bridge (there are no level crossings)
+//   the freeway and a road      a bridge (nothing meets the freeway at grade; its ramps join it at their gores)
+//   a footway crossing a road   a bridge (a footbridge); a footway ENDING on a road meets it at grade (its way in)
+//   any two streets             at grade (a junction: the planner made them meet)
+// A bridge's upper road is left to the design stage, which names it in the designed graph. The result is the graph's
+// "crossings" list (CrossingSpec as JSON). `g` needs its spines resolved (fromJson), not its heights.
+nlohmann::json planCrossings(const RoadLabGraph& g);
+
 }  // namespace roads::lanes
 }  // namespace engine
 
