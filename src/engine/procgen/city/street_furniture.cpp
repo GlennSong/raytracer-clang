@@ -90,6 +90,39 @@ StreetPlanting choosePlanting(const StreetCharacter& c, RoadClass klass, Real u,
     return pl;
 }
 
+KerbLine::KerbLine(const std::vector<Poly2>* loops, Real reach) : loops_(loops), reach_(reach) {
+    if (!loops_) return;
+    for (const Poly2& L : *loops_) {
+        Box b{Real(1e30), Real(1e30), Real(-1e30), Real(-1e30)};
+        for (const Vec2& q : L) { b.x0 = std::min(b.x0, q.x); b.z0 = std::min(b.z0, q.y); b.x1 = std::max(b.x1, q.x); b.z1 = std::max(b.z1, q.y); }
+        box_.push_back(b);
+    }
+}
+
+Real KerbLine::depth(const Vec2& at) const {
+    if (!loops_) return 0;
+    bool inside = false;
+    for (std::size_t k = 0; k < box_.size(); ++k) {
+        const Box& b = box_[k];
+        if (at.x < b.x0 || at.x > b.x1 || at.y < b.z0 || at.y > b.z1) continue;
+        if (pointInPolygon((*loops_)[k], at)) inside = !inside;
+    }
+    if (!inside) return 0;
+    Real best = reach_;   // (the edges further off than this cannot be nearest to what is being asked about)
+    for (std::size_t k = 0; k < box_.size(); ++k) {
+        const Box& b = box_[k];
+        if (at.x < b.x0 - reach_ || at.x > b.x1 + reach_ || at.y < b.z0 - reach_ || at.y > b.z1 + reach_) continue;
+        const Poly2& L = (*loops_)[k];
+        for (std::size_t i = 0; i < L.size(); ++i) {
+            const Vec2 a = L[i], c = L[(i + 1) % L.size()], ac = c - a;
+            const Real l2 = ac.lengthSquared();
+            const Real u = l2 < Real(1e-12) ? Real(0) : std::clamp(dot(at - a, ac) / l2, Real(0), Real(1));
+            best = std::min(best, (a + ac * u - at).length());
+        }
+    }
+    return best;
+}
+
 StreetFurniturePlan planStreetFurniture(
     const NavGraph& nav, const std::function<Real(Real, Real)>& ground,
     const StreetFurnitureParams& p) {
@@ -106,18 +139,23 @@ StreetFurniturePlan planStreetFurniture(
     // belongs to (its kerb normal); stepping along that keeps a pole on its own corner
     // and a lamp on its own verge instead of teleporting it somewhere arbitrary.
     // Returns how deep it still is when it gives up — 0 means clear.
+    const KerbLine kerb(p.kerbLoops);
+    auto kerbDepth = [&](const Vec2& at) { return kerb.depth(at); };
     auto walkOffDeck = [&](Vec2& at, const Vec2& out, Real limit) -> Real {
-        if (!p.deck) return 0;
+        if (!p.deck && !p.kerbLoops) return 0;
+        auto depthAt = [&](const Vec2& q) {
+            return std::max(p.deck ? static_cast<Real>(p.deck->depthInside(q.x, q.y)) : Real(0), kerbDepth(q));
+        };
         Real moved = 0;
         for (int i = 0; i < 24; ++i) {
-            const Real depth = static_cast<Real>(p.deck->depthInside(at.x, at.y));
+            const Real depth = depthAt(at);
             if (depth <= 0) return 0;
             const Real step = std::min(Real(0.5) + depth, limit - moved);
             if (step <= Real(1e-3)) return depth;
             at = at + out * step;
             moved += step;
         }
-        return static_cast<Real>(p.deck->depthInside(at.x, at.y));
+        return depthAt(at);
     };
 
     // Every link bucketed by cell, so "what asphalt is near this point" is a few dozen
@@ -447,6 +485,7 @@ StreetFurniturePlan planStreetFurniture(
             // crossing behind it. Lamps are sampled every 2.5 m along a kerb, so
             // dropping one costs nothing; a signal pole gets walked out instead.
             if (p.deck && p.deck->depthInside(sp.x, sp.y) > 0.0) continue;
+            if (kerb.depth(sp) > 0.0) continue;   // (the junction corners the deck field does not hold)
             if (tooClose(sp, dir)) continue;
             const Real y = gy(sp.x, sp.y) + L.layer * kLayerLift;
             out.lampBases.push_back(Vec3(sp.x, y, sp.y));

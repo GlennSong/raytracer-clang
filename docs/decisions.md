@@ -11183,3 +11183,28 @@ trees in there as well." ADR-0197's switch was all or nothing.
 - island_8_nature takes `"recipes": 0.5`. No re-bake: the forest grows at load (the recipe levels from the tree cache).
 - Test `a_forest_mixed_with_recipe_trees_keeps_its_trees_and_grows_the_share_as_recipes`: 0 trees moved, 0 changed
   kind, shares 0.41 / 0.40 / 0.39 asked 0.4 (oak, spruce, the shrub as hawthorn).
+
+## ADR-0217 — The metro gates measure the lane-built city (poke report, signal poles)
+
+Glenn, 2026-10-20: "I'll let you figure that stuff out first" -- five metro level cases red since metro_v2_test moved
+to the lanes builder (87a8da93, 10-14); each was written against the lattice's model of the road.
+
+- **The poke gate was blind.** `metro_road_decks_are_never_poked_by_the_drawn_terrain` read 0 of 0 samples: the
+  city's own `shape: road` entity (builder lanes) still parses as a lattice net, welds to nothing, and its empty set
+  kept the report from reading the published deck. A net that welds to nothing is skipped. On a published deck the
+  deck at a point is the carriageway it is nearest to (distance past the half-width), not the nearest centreline --
+  that took a ramp in the cut 2 m off its edge for the freeway terrace above and called the slope between them a 5 m
+  poke (shot at (-857, -456): clean) -- and a sidewalk band is sampled beside streets only. RT_POKE_DUMP also writes
+  the lateral offset, half-width, class, deck and the ground without its flattens.
+  Measured now (LOD0): 12536 of 1.43 M samples, worst 3.11 m. Still red: the lot pads' feather lies ON the sidewalk
+  (the office lot at (-201, -208) stands 3.1 m over its street; its grass bank buries the sidewalk to the parking
+  lane, shot). That is a grading fix (a wall at the back of the sidewalk), owed.
+- **Poles and lamps off the kerb line.** A lane city's deck field holds each road at its carriageway width, so the
+  asphalt filling a junction's corners read as clear and corner poles stood on it (7 of 280, the worst 3.75 m in, at
+  a wedge between two streets; shots). `KerbLine` (street_furniture.h) answers how deep a point is inside the drawn
+  driving surface (RoadBandDebug::loops, even-odd); the planner walks poles off it and drops lamp samples on it, and
+  `metro_signal_poles_stand_off_the_asphalt` measures against it where a city publishes one (the graph's straight
+  chords put a pole on a sidewalk tip 0.37 m "inside"). Now 280 poles and 459 lamps, none on the asphalt; the
+  lamp fixture bound 500 -> 400 (the lattice metro planted 1739, the lane metro 464).
+- Still red, diagnosed: traffic rides 0.1-0.3 m over the drawn pavement in places (the published spines carry each
+  edge's centreline height; the drawn surface blends to its partner); parking and the bus share not yet looked at.

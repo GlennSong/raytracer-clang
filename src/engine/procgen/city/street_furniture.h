@@ -57,6 +57,21 @@ const char* plantingSchemeName(StreetPlanting::Scheme s);
 // planting along its length).
 StreetPlanting choosePlanting(const StreetCharacter& c, RoadClass klass, Real u, Real v);
 
+// THE KERB LINE as a query: how deep a point stands inside the drawn driving surface (RoadBandDebug::loops,
+// outers and holes alike, even-odd), 0 outside; distances are found within `reach` of the point. The furniture
+// planner walks its placements off it, and the level gates measure them against it -- one surface, not a model.
+class KerbLine {
+public:
+    explicit KerbLine(const std::vector<Poly2>* loops, Real reach = 40);
+    bool empty() const { return !loops_ || loops_->empty(); }
+    Real depth(const Vec2& at) const;
+private:
+    struct Box { Real x0, z0, x1, z1; };
+    const std::vector<Poly2>* loops_ = nullptr;
+    std::vector<Box> box_;
+    Real reach_ = 40;
+};
+
 struct StreetFurnitureParams {
     // Sidewalk band width (RoadLook::sidewalk): the junction PAD spans
     // verge-to-verge, i.e. carriageway half-width + THIS, so a pole placed
@@ -74,6 +89,12 @@ struct StreetFurnitureParams {
     // be wrong about where the road is: given it, a placement that lands on asphalt is
     // walked out along its own kerb normal. Null = width-only, as before.
     const RoadDeckField* deck = nullptr;
+    // ...and its KERB LINE (RoadBandDebug::loops, even-odd): the boundary of the whole driving surface. A lane
+    // city's deck field holds each road at its carriageway width, so the asphalt FILLING A JUNCTION'S CORNERS --
+    // no one road's carriageway -- read as clear, and a corner pole stood on it, past the end of the sidewalk
+    // (metro_v2_test, 2026-10-20: 7 of 280 poles, the worst 3.75 m in, at a wedge between two streets). Given
+    // the loops, a placement is walked off them too. Null = the deck alone.
+    const std::vector<Poly2>* kerbLoops = nullptr;
     // 26 m between lamps: close enough that the 34 m pools OVERLAP rather
     // than leaving a dark gap between every pair (device: "it's pretty dark
     // in the city at night").

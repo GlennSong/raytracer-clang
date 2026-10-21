@@ -989,6 +989,14 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     if (!graph || !sf) return;
     const RoadGraph& g = *graph;
     const int N = static_cast<int>(g.nodes.size());
+    // A CITY THAT PUBLISHES ITS KERB LINE (a lane-built one) is measured against the surface it drew -- junction
+    // corners included -- not against the lattice mesher's pads and straight ribbons between graph nodes, which
+    // on its curves put a pole standing on the sidewalk's tip 0.37 m "inside" (2026-10-20).
+    const std::vector<Poly2>* kerbLoops = nullptr;
+    world.each<engine::RoadBandDebug>([&](Entity, engine::RoadBandDebug& b) {
+        if (!kerbLoops && !b.loops.empty()) kerbLoops = &b.loops;
+    });
+    const engine::KerbLine kerb(kerbLoops);
 
     // The mesher's junction model.
     std::vector<int> deg(N, 0);
@@ -1068,6 +1076,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
             bodyDepth = std::max(bodyDepth,
                                  e.width * 0.5 - distSeg(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
+        if (!kerb.empty()) { padDepth = 0; compDepth = 0; bodyDepth = kerb.depth(p); }
         const char* kind = nullptr;
         double depth = 0;
         if (padDepth > 0.05) { kind = "pad"; depth = padDepth; ++inPad; }
@@ -1106,6 +1115,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
             depth = std::max(depth,
                              e.width * 0.5 - distSeg(q, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
+        if (!kerb.empty()) depth = kerb.depth(q);
         if (depth > 0.05) {
             ++lampInBody;
             if (depth > lampWorst) { lampWorst = depth; lampWorstAt = q; }
@@ -1113,7 +1123,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     }
     std::printf("    [lamps] %d lamps: %d inside a carriageway; worst %.2f m at (%.1f, %.1f)\n",
                 lampTotal, lampInBody, lampWorst, lampWorstAt.x, lampWorstAt.y);
-    CHECK(lampTotal > 500);
+    CHECK(lampTotal > 400);   // the fixture must bite (the lane-built metro plants 464; the lattice's planted 1739)
     CHECK(lampInBody == 0);
 }
 

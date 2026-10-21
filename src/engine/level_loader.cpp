@@ -5552,6 +5552,8 @@ bool LevelLoader::load(const std::string& path,
             pGridRes = c.gridRes;
         });
         Noise pnNoise(root["terrain"].value("seed", 0u));
+        TerrainParams pokeBare = tpFull;   // (RT_POKE_DUMP: the ground without any flatten, to tell a stamp from the grid)
+        pokeBare.flatten.clear(); pokeBare.flattenIndex.reset();
         float pWorldHalf = root["terrain"]["cdlod"].value("worldHalf", 1024.0);
         for (int lvl = 0; lvl < 3; ++lvl) {
             const double nodeSize = pWorldHalf * 2.0 / std::pow(2.0, pNumLods - 1 - lvl);
@@ -5584,6 +5586,13 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<UnionSpine> spines;
                 std::vector<std::vector<double>> profs;
                 double sidewalk = 3.5, lift = 0.08;
+                // A PUBLISHED deck (a lane-built city): its carriageways stand side by side at different heights
+                // (a freeway's terraces, a ramp in the cut below it), so the deck at a point is the one whose
+                // CARRIAGEWAY is nearest (distance past its half-width), not the nearest centreline -- which took
+                // a ramp 2 m off its edge for the freeway the point stood on and called the cut slope between
+                // them a 5 m poke. And only a street has a sidewalk beside it: past a freeway's, a ramp's, a
+                // track's or a footway's edge is its slope, not a deck.
+                bool published = false;
             };
             std::vector<PokeSet> pokeSets;
             for (const engine::RoadEntity& net : preNets) {
@@ -5600,7 +5609,9 @@ bool LevelLoader::load(const std::string& path,
                     ps.spines, levelGround, 0.0, /*maxGrade=*/0.08,
                     net.look.sidewalk + 4.0,
                     net.look.perClassGrade ? &pokeRules : nullptr);
-                pokeSets.push_back(std::move(ps));
+                // (a net that welds to nothing -- a lane-built city's leftover recipe since the lattice retired --
+                // measures nothing, and must not stand in for the city's published deck below)
+                if (!ps.spines.empty()) pokeSets.push_back(std::move(ps));
             }
 #ifdef RT_ROADS_LANES
             // ...from the BUNDLE, not from the world. This report runs in the terrain section,
@@ -5614,8 +5625,9 @@ bool LevelLoader::load(const std::string& path,
                 if (engine::roads::lanes::readCityProducts(*g_lanes.bundle, 0, cp, &pokeErr) &&
                     !cp.deck.spines.empty()) {
                     PokeSet ps;
-                    ps.sidewalk = g_lanes.sidewalk;
+                    ps.sidewalk = g_lanes.pavedSidewalk > 0.0 ? g_lanes.pavedSidewalk : g_lanes.sidewalk;   // (the drawn band)
                     ps.lift = 0.0;               // a published deck's yAbs IS the surface
+                    ps.published = true;
                     ps.spines = cp.deck.spines;
                     ps.profs.reserve(ps.spines.size());
                     for (const UnionSpine& sp : ps.spines) ps.profs.push_back(sp.yAbs);
@@ -5680,6 +5692,10 @@ bool LevelLoader::load(const std::string& path,
                                 double tt = L2 < 1e-12 ? 0.0
                                     : std::max(0.0, std::min(1.0, dot(q - pp[sr.i], ab) / L2));
                                 double d2 = (q - (pp[sr.i] + ab * tt)).lengthSquared();
+                                if (pokeSet.published) {   // (signed: distance past the carriageway's edge)
+                                    const double de = std::sqrt(d2) - spines[sr.si].halfWidth;
+                                    d2 = de < 0.0 ? -de * de : de * de;
+                                }
                                 if (d2 < bestD2) {
                                     bestD2 = d2;
                                     h = profs[sr.si][sr.i] +
@@ -5824,7 +5840,9 @@ bool LevelLoader::load(const std::string& path,
                 for (std::size_t si = 0; si < spines.size(); ++si) {
                     const auto& pts = spines[si].points;
                     if (profs[si].size() < 2) continue;
-                    const double hw = spines[si].halfWidth + pokeSet.sidewalk - 0.3;
+                    const bool kerbside = !pokeSet.published ||
+                        (!spines[si].authoredDeck && spines[si].use == UnionSpine::Use::Road);
+                    const double hw = spines[si].halfWidth + (kerbside ? pokeSet.sidewalk : 0.0) - 0.3;
                     for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
                         Vec2 d2v = pts[i + 1] - pts[i];
                         const double L = d2v.length();
@@ -5960,7 +5978,10 @@ bool LevelLoader::load(const std::string& path,
                                         // last ~125 LOD2 sites).
                                         pf << lvl << "," << q.x << "," << q.y << ","
                                            << dd << "," << si << ","
-                                           << spines[si].points.size() << std::endl;
+                                           << spines[si].points.size() << "," << hw * li / (double)lats << ","
+                                           << spines[si].halfWidth << "," << static_cast<int>(spines[si].klass) << ","
+                                           << deck << "," << terrainHeight(pokeBare, pnNoise, q.x, q.y, dil) << ","
+                                           << tpFull.flatten.size() << std::endl;
                                     }
                                     if (dd > worst) { worst = dd; wx = q.x; wz = q.y; }
                                     if (dd > 0.3) {
@@ -7818,6 +7839,10 @@ bool LevelLoader::load(const std::string& path,
                     // only thing that cannot be wrong about where the road is.
                     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
                         if (!fp.deck && !d.field.spines.empty()) fp.deck = &d.field;
+                    });
+                    // ...and the kerb line round all of it, junction corners included (a lane city's)
+                    world.each<engine::RoadBandDebug>([&](Entity, engine::RoadBandDebug& b) {
+                        if (!fp.kerbLoops && !b.loops.empty()) fp.kerbLoops = &b.loops;
                     });
                     fp.kerbLife = !std::getenv("RT_NO_KERB_LIFE");   // A/B: lamps and signals only
                     // EACH STREET ITS OWN PLANTING (RT_ONE_PLANTING=1: the three broadleaves everywhere, as before): its
