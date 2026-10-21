@@ -317,12 +317,14 @@ function kit.lamps(P, car, S)
   local hy, ty = P.lamp_y, P.tail_y
   local hx = (lens.head_x or 0.70) * P.half_width(half - 0.25)
   local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.14)
+  -- SIDE NAMES ARE PHYSICAL (car_mesh.cpp): forward +Z, up +Y, the driver's LEFT is +X. These were swapped (+X
+  -- tagged "_r"), so every kit body blinked the opposite indicator (Glenn, 2026-10-20: "It uses the opposite light").
   for _, sx in ipairs({ 1, -1 }) do
     local part, at = kit.attach(S, { from = { sx * hx, hy[2] - hhei * 0.5, half + 1.0 }, dir = { 0, 0, -1 },
                                      size = { hwid, hhei, 0.045 }, embed = 0.012, mat = "lamp" })
     if part then
       car.polys[#car.polys + 1] = part
-      car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_r" or "headlight_l", pos = at }
+      car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_l" or "headlight_r", pos = at }
     end
   end
   if ty[1] < P.height then
@@ -333,7 +335,7 @@ function kit.lamps(P, car, S)
                                        size = { twid, thei, 0.045 }, embed = 0.012, mat = "lamp_red" })
       if part then
         car.polys[#car.polys + 1] = part
-        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = at }
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = at }
       end
     end
   end
@@ -583,7 +585,7 @@ S.small_truck = function()
       car.markers = car.markers or {}
       for _, sx in ipairs({ 1, -1 }) do
         car.polys[#car.polys + 1] = kit.box_part({ 0.22, 0.14, 0.05 }, { sx * 0.90, 1.05, boxBack + 0.005 }, 2.5, "lamp_red")
-        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = { sx * 0.90, 1.05, boxBack + 0.01 } }
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = { sx * 0.90, 1.05, boxBack + 0.01 } }
       end
       car.polys[#car.polys + 1] = kit.box_part({ 1.0, 0.25, boxL + 1.2 }, { 0, 0.72, -1.15 - boxL * 0.5 + 0.4 }, 1.0, "trim")
     end }
@@ -638,7 +640,7 @@ S.fire_engine = function()
       car.markers = car.markers or {}
       for _, sx in ipairs({ 1, -1 }) do
         add(kit.box_part({ 0.22, 0.16, 0.05 }, { sx * 0.95, bodyY + 0.30, zB1 - 0.005 }, 2.5, "lamp_red"))
-        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = { sx * 0.95, bodyY + 0.30, zB1 - 0.01 } }
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = { sx * 0.95, bodyY + 0.30, zB1 - 0.01 } }
         add(kit.box_part({ 0.10, 0.26, bodyL + 0.6 }, { sx * 0.45, 0.80, zc + 0.3 }, 3, "chassis"))
       end
       add(kit.box_part({ 2.30, 0.14, 0.12 }, { 0, 0.62, zB1 + 0.10 }, 3, "chrome"))   -- rear step

@@ -7,6 +7,7 @@
 #include "../src/engine/procgen/ground_layers.h"
 #include "../src/engine/procgen/stylized_rock.h"
 #include "../src/engine/procgen/hydrology.h"
+#include "../src/engine/drawn_road.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -700,4 +701,25 @@ TEST_CASE(a_forest_mixed_with_recipe_trees_keeps_its_trees_and_grows_the_share_a
         CHECK(n[k] > 200);
         CHECK(std::fabs(double(asRecipe[k]) / n[k] - 0.4) < 0.05);
     }
+}
+
+// THE TRAIN'S ROOM (Glenn, 2026-10-20: trees "go through the elevated train platform and trains as they go by"): a tree
+// whose crown reaches the swept train beside an at-grade track is blocked, one standing clear of it with its crown is
+// not; under an elevated track a short tree that stays below the rails is fine and a tall one is not; and a tree whose
+// foot is above the train (on a cutting's lip high over the line) is clear.
+TEST_CASE(a_tree_keeps_out_of_the_trains_room) {
+    DrawnRoad dr;
+    dr.addRail(Vec2(0, 0), Vec2(100, 0), 10.0, 10.0, 1.6);        // at grade, rails at 10 m
+    dr.addRail(Vec2(0, 50), Vec2(100, 50), 20.0, 20.0, 1.6);      // on a viaduct, rails at 20 m over ground at 10
+    const double envelope = 1.6 + DrawnRoad::kTrainHalfWidth + DrawnRoad::kRailClearance;   // 4.35 m off the centreline
+    // beside the at-grade track: a 10 m tree with a 3 m crown
+    CHECK(dr.blocksTree(50, envelope + 2.0, 10.0, 10.0, 3.0));    // its crown reaches over the train
+    CHECK(!dr.blocksTree(50, envelope + 3.5, 10.0, 10.0, 3.0));   // it stands back by more than its crown
+    CHECK(!dr.blocksTree(50, 2.0, 16.5, 10.0, 3.0));              // its foot above the train's roof (a cutting's lip)
+    // under the viaduct
+    CHECK(!dr.blocksTree(50, 50, 10.0, 6.0, 1.8));                // a 6 m tree stays under the rails at 20
+    CHECK(dr.blocksTree(50, 50, 10.0, 15.0, 4.5));                // a 15 m one grows up through the train
+    // far off every track
+    CHECK(!dr.blocksTree(50, 25, 10.0, 20.0, 6.0));
+    CHECK(!dr.inTrainEnvelope(200, 0, -1e30, 1e30, 3.0));         // past the track's end
 }

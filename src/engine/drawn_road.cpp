@@ -91,6 +91,47 @@ bool DrawnRoad::overhead(double x, double z, double footY, double topY, double r
     return false;
 }
 
+void DrawnRoad::addRail(const Vec2& a, const Vec2& b, double ya, double yb, double half) {
+    RailRun r;
+    r.a = a; r.b = b;
+    r.ya = static_cast<float>(ya); r.yb = static_cast<float>(yb);
+    r.half = static_cast<float>(std::min(4.0, half));   // (a track's own width; a wide spine is bounded by the query's reach)
+    const int idx = static_cast<int>(rails.size());
+    rails.push_back(r);
+    const int x0 = static_cast<int>(std::floor(std::min(a.x, b.x) / kCell)), x1 = static_cast<int>(std::floor(std::max(a.x, b.x) / kCell));
+    const int z0 = static_cast<int>(std::floor(std::min(a.y, b.y) / kCell)), z1 = static_cast<int>(std::floor(std::max(a.y, b.y) / kCell));
+    for (int cx = x0; cx <= x1; ++cx)
+        for (int cz = z0; cz <= z1; ++cz) railCells[cellKey(cx, cz)].push_back(idx);
+}
+
+bool DrawnRoad::inTrainEnvelope(double x, double z, double footY, double topY, double radius) const {
+    if (rails.empty()) return false;
+    const Vec2 p(x, z);
+    const double reach = radius + kTrainHalfWidth + kRailClearance + 4.0;   // (+ a track's own half-width, bounded)
+    const int cx0 = static_cast<int>(std::floor((x - reach) / kCell)), cx1 = static_cast<int>(std::floor((x + reach) / kCell));
+    const int cz0 = static_cast<int>(std::floor((z - reach) / kCell)), cz1 = static_cast<int>(std::floor((z + reach) / kCell));
+    for (int cx = cx0; cx <= cx1; ++cx)
+        for (int cz = cz0; cz <= cz1; ++cz) {
+            auto it = railCells.find(cellKey(cx, cz));
+            if (it == railCells.end()) continue;
+            for (int ri : it->second) {
+                const RailRun& r = rails[static_cast<std::size_t>(ri)];
+                const Vec2 ab = r.b - r.a;
+                const double l2 = ab.lengthSquared();
+                const double t = l2 > 1e-12 ? std::clamp(dot(p - r.a, ab) / l2, 0.0, 1.0) : 0.0;
+                if ((p - (r.a + ab * t)).length() >= r.half + kTrainHalfWidth + kRailClearance + radius) continue;
+                const double y = r.ya + (r.yb - r.ya) * t;
+                if (topY < y || footY > y + kTrainHeight) continue;   // wholly under the rails (a viaduct's) or over the train
+                return true;
+            }
+        }
+    return false;
+}
+
+bool DrawnRoad::blocksTree(double x, double z, double footY, double height, double crown) const {
+    return overhead(x, z, footY, footY + height, crown) || inTrainEnvelope(x, z, footY, footY + height, crown);
+}
+
 bool DrawnRoad::covers(double x, double z) const {
     auto it = cells.find(cellKey(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
     if (it == cells.end()) return false;
@@ -122,6 +163,14 @@ bool DrawnRoad::near(double x, double z, double margin) const {
 
 DrawnRoad gatherDrawnRoad(World& world, bool withHeights) {
     DrawnRoad rp;
+    // the tracks the city published, for the train's room (always: a few hundred segments)
+    world.each<RoadDeck>([&](Entity, RoadDeck& d) {
+        for (const UnionSpine& sp : d.field.spines) {
+            if (sp.use != UnionSpine::Use::Track || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+            for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+                rp.addRail(sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], sp.halfWidth);
+        }
+    });
     world.each<Renderable>([&](Entity e, Renderable& r) {
         if (!(r.renderLayer & LayerRoads)) return;
         const MeshCollider* mc = world.get<MeshCollider>(e);

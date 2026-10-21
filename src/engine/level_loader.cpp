@@ -2507,7 +2507,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
     std::vector<const RoadDeckField*> decks;
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { if (!d.field.spines.empty()) decks.push_back(&d.field); });
-    const engine::DrawnRoad drawnRoad = engine::gatherDrawnRoad(world);
+    const engine::DrawnRoad drawnRoad = engine::gatherDrawnRoad(world, /*withHeights=*/true);   // (heights: what stands over a crown)
     const double margin = fj.value("clearMargin", 4.0);
     const TrailNetwork* trails = terrain.cover ? terrain.cover->params().trails.get() : nullptr;
     // ...and off the city lots' SEALED ground (a park's walks, a playground, a garden, a yard): the grass already
@@ -2551,7 +2551,17 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     };
     const GroundCover* cover = terrain.cover.get();
     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
-    const std::vector<ForestTree> trees = placeForest(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, vps);
+    std::vector<ForestTree> trees = placeForest(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, vps);
+    {   // ...AND CLEAR OF WHAT A CROWN WOULD REACH (Glenn, 2026-10-20: trees through the elevated platform and the trains):
+        // the margin above is in plan only; a tree is its height and a crown 0.3 of it, and nothing drawn over it or a
+        // train's room may be inside that (DrawnRoad::blocksTree, the street and lot trees' question too)
+        const std::size_t before = trees.size();
+        trees.erase(std::remove_if(trees.begin(), trees.end(), [&](const ForestTree& t) {
+            const double h = vars[t.variant].tree.height * t.scale;
+            return drawnRoad.blocksTree(t.pos.x, t.pos.z, t.pos.y, h, 0.3 * h);
+        }), trees.end());
+        if (trees.size() != before) LOG_INFO << "[forest] " << (before - trees.size()) << " trees left out under decks and in the trains' room";
+    }
     {   // THE CENSUS (Glenn, 2026-10-19: "we don't plant a lot of spruces"): each species' share and its altitudes, and
         // with RT_FOREST_DUMP=path every tree as `x z alt species` (a map of what grows where)
         std::vector<std::vector<float>> alts(fp.species.size());
@@ -3269,13 +3279,14 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             if (d->coversAny(x, z, footway)) return true;
         return false;
     };
-    if (!terrain.flatten.empty() || !decks->empty() || !drawnRoad->empty()) {
+    if (!terrain.flatten.empty() || !decks->empty() || !drawnRoad->empty() || !drawnRoad->rails.empty()) {
         if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
         const TerrainParams& tp = terrain;
         scatter.exclude = [&tp, &keepOut, margin, decks, drawnRoad](double x, double z) {
             for (const RoadDeckField* d : *decks)
                 if (d->coversAny(x, z, margin)) return true;
             if (drawnRoad->near(x, z, margin)) return true;
+            if (drawnRoad->inTrainEnvelope(x, z, -1e30, 1e30, margin)) return true;   // (the train's room, at any height)
             return !tp.flatten.empty() && flattenCovers(keepOut, tp.flatten, x, z, margin);
         };
     }
@@ -6929,14 +6940,14 @@ bool LevelLoader::load(const std::string& path,
                     if (!lotRecipeKits.empty()) {   // (a recipe tree: an instance in its cell's group)
                         const std::size_t ki = th % lotRecipeKits.size();
                         const double h = lotRecipeKits[ki].height;
-                        if (lotRoad.overhead(tPos.x, tPos.z, tPos.y, tPos.y + h * scale, 0.3 * h * scale)) { ++lotTreesOnRoad; return; }
+                        if (lotRoad.blocksTree(tPos.x, tPos.z, tPos.y, h * scale, 0.3 * h * scale)) { ++lotTreesOnRoad; return; }
                         lotRecipeCells[{static_cast<int>(std::floor(tPos.x / 280.0)), static_cast<int>(std::floor(tPos.z / 280.0))}][ki].push_back(
                             Mat4::trs(tPos, Quat::fromAxisAngle(Vec3(0, 1, 0), (th % 628u) / 100.0), Vec3(scale, scale, scale)));
                         return;
                     }
                     const TreeKit& kit = treeKit(th % 3u);
                     // ...and never up through what is drawn over it (a track, a viaduct): see the street trees
-                    if (lotRoad.overhead(tPos.x, tPos.z, tPos.y, tPos.y + kit.height * scale, 0.3 * kit.height * scale)) { ++lotTreesOnRoad; return; }
+                    if (lotRoad.blocksTree(tPos.x, tPos.z, tPos.y, kit.height * scale, 0.3 * kit.height * scale)) { ++lotTreesOnRoad; return; }
                     Transform tt;
                     tt.position = tPos;
                     tt.scale = Vec3(scale, scale, scale);
@@ -7920,7 +7931,7 @@ bool LevelLoader::load(const std::string& path,
                         const std::size_t before = planned.trees.size();
                         planned.trees.erase(std::remove_if(planned.trees.begin(), planned.trees.end(), [&](const engine::StreetTree& st) {
                             const double h = streetTreeHeight(st.species) * st.scale;
-                            return drawnRoads->overhead(st.base.x, st.base.z, st.base.y, st.base.y + h, 0.3 * h);
+                            return drawnRoads->blocksTree(st.base.x, st.base.z, st.base.y, h, 0.3 * h);
                         }), planned.trees.end());
                         if (planned.trees.size() != before)
                             LOG_INFO << "[furniture] " << (before - planned.trees.size()) << " street trees left out under decks and tracks";

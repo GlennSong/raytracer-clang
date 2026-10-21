@@ -11237,3 +11237,21 @@ them with the new palms?"
   it. No re-bake: street and lot trees are planted at load.
 - Test: `a_palm_wears_its_crown_at_the_top` takes the royal palm: its crownshaft lies within its length under the
   trunk's top and its top stands within 1.5 m of its foot (0.30 m).
+
+## ADR-0219 — The trains' room, and the indicators on their own side
+
+Glenn, 2026-10-20, on island_8_nature: "some trees that are close to the train line and go through the elevated train
+platform and trains as they go by"; "cars also signal the wrong light when you try to turn left and right".
+
+- **The trains' room** (DrawnRoad::inTrainEnvelope): a passing train is drawn nowhere, so the overhead check could not
+  see it. Every track the city publishes (deck spines of use Track: centreline and rail height) carries the swept
+  train -- 1.75 m each side of the track's own half-width plus 1 m for branches, 5.5 m over the rails.
+  `DrawnRoad::blocksTree(x, z, foot, height, crown)` (overhead || the trains' room) is every tree placer's one
+  question: the street trees and the lot trees (were overhead only), the forest (was a plan margin only; now each
+  tree at its variant's height, crown 0.3 of it), and the old scatter layer (any height, its 3 m margin as the crown).
+  island_8_nature: 1063 forest trees and 182 street trees left out under decks and in the trains' room.
+- **The indicators**: fleet v2's kit bodies (vehicle_kit.lua, 09-27) tagged the +X lamps "_r"; the driver's left is
+  +X (car_mesh.cpp, measured in the driving lab), so every kit car -- the player's and the traffic -- blinked the
+  opposite side. Head, tail and both truck tails swapped back.
+- Tests: `a_tree_keeps_out_of_the_trains_room` (beside a track, under a viaduct, on a cutting's lip);
+  `every_drivable_car_names_its_lamps_by_their_side` (all 13 drivable recipes; it caught the truck tails too).
