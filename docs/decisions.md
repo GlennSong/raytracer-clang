@@ -11206,5 +11206,16 @@ to the lanes builder (87a8da93, 10-14); each was written against the lattice's m
   `metro_signal_poles_stand_off_the_asphalt` measures against it where a city publishes one (the graph's straight
   chords put a pole on a sidewalk tip 0.37 m "inside"). Now 280 poles and 459 lamps, none on the asphalt; the
   lamp fixture bound 500 -> 400 (the lattice metro planted 1739, the lane metro 464).
-- Still red, diagnosed: traffic rides 0.1-0.3 m over the drawn pavement in places (the published spines carry each
-  edge's centreline height; the drawn surface blends to its partner); parking and the bus share not yet looked at.
+- **The grass blobs on metro's streets: cause confirmed, not fixed** (Glenn: confirm only). Shots show flat grass
+  patches across lanes, bays and sidewalks near junctions, the markings running over them. In places the lanes
+  builder DRAWS the pavement 0.1-0.3 m below the heights the city PUBLISHES as its deck (RoadDeckField, each edge's
+  `deckRoad` at its centreline). The ground finish holds the ground 0.10 m under the published deck, so where the
+  drawn road is lower the ground stands over it; cars ride the published deck and float. Measured at three of the
+  traffic gate's offenders (published deck / ground / drawn road collider): (-491.2, -73.6) 21.74 / 21.64 / 21.43;
+  (-545.9, 158.7) 21.80 / 21.70 / 21.63; (-128.1, 201.6) 0.99 / 0.89 / 0.87. Not the junction corners (a probe of the
+  ground function over the drawn surface found nothing there) and not a stale ground pyramid (metro draws the
+  formula). Why the drawn and published heights part -- a lane pulled by its partner, a tee's blend -- is the next
+  question; the fix is to publish what was drawn, a city bake change (every lanes level re-bakes).
+- The parking census names its first heaps and junction cars: metro's are one pair of bays on two converging
+  streets 2.7 m apart at (-482, -707), and one bay 8.7 m from a junction's node at (15, 365). The bus share (36 % of
+  streets with a bus, against 50 %) is not yet looked at.

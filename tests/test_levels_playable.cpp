@@ -1638,6 +1638,7 @@ namespace {
 struct ParkCensus {
     int drivers = 0, bays = 0, parked = 0, inBay = 0, verge = 0, stacked = 0,
         atJunction = 0, offStreet = 0;
+    std::vector<std::string> where;   // the first few heaps and junction cars, with their bay and the street's width
 };
 ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
     ParkCensus c;
@@ -1647,6 +1648,7 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
     std::vector<Vec2> parkedAt;
     std::vector<Real> parkedY;       // a garage stall's deck (else 0: the street)
     std::vector<char> inGarage;
+    std::vector<int> parkedBay;
     for (std::size_t ai = 0; ai < sim.agents().size(); ++ai) {
         const auto& a = sim.agents()[ai];
         if (a.archetype != citysim::Agent::Mode::Driver) continue;
@@ -1663,6 +1665,7 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
         parkedAt.push_back(a.vehicle >= 0 ? a.pos : v.pos);
         const bool g = a.parkedBay >= 0 && sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].garage >= 0;
         inGarage.push_back(g ? 1 : 0);
+        parkedBay.push_back(a.parkedBay);
         parkedY.push_back(g ? sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].y : 0.0);
     }
     for (std::size_t i = 0; i < parkedAt.size(); ++i) {
@@ -1674,12 +1677,31 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
             // neighbouring stalls, and the cars on the decks above, as heaps)
             const bool both = inGarage[i] && inGarage[j];
             const Real dy = parkedY[i] - parkedY[j];
-            if (both ? (d.x * d.x + d.y * d.y + dy * dy < 2.0 * 2.0) : (d.x * d.x + d.y * d.y < 3.0 * 3.0)) { ++c.stacked; break; }
+            if (both ? (d.x * d.x + d.y * d.y + dy * dy < 2.0 * 2.0) : (d.x * d.x + d.y * d.y < 3.0 * 3.0)) {
+                ++c.stacked;
+                if (c.where.size() < 8) {
+                    char b[160];
+                    std::snprintf(b, sizeof b, "heap at (%.1f, %.1f) with (%.1f, %.1f), %.1f m apart, bays %d and %d",
+                                  parkedAt[i].x, parkedAt[i].y, parkedAt[j].x, parkedAt[j].y, d.length(), parkedBay[i], parkedBay[j]);
+                    c.where.push_back(b);
+                }
+                break;
+            }
         }
         for (int n = 0; n < nav.nodeCount(); ++n) {
             if (!nav.isJunction(n)) continue;
             const Vec2 d = parkedAt[i] - nav.nodes[static_cast<std::size_t>(n)];
-            if (d.x * d.x + d.y * d.y < 10.0 * 10.0) { ++c.atJunction; break; }
+            if (d.x * d.x + d.y * d.y < 10.0 * 10.0) {
+                ++c.atJunction;
+                if (c.where.size() < 8) {
+                    char b[160];
+                    std::snprintf(b, sizeof b, "in a junction at (%.1f, %.1f), %.1f m from its node (%.1f, %.1f), bay %d",
+                                  parkedAt[i].x, parkedAt[i].y, d.length(), nav.nodes[static_cast<std::size_t>(n)].x,
+                                  nav.nodes[static_cast<std::size_t>(n)].y, parkedBay[i]);
+                    c.where.push_back(b);
+                }
+                break;
+            }
         }
     }
     return c;
@@ -1690,6 +1712,7 @@ void printPark(const char* when, const ParkCensus& c) {
                 "junction | %d off-street\n",
                 when, c.drivers, c.bays, c.parked, c.inBay, c.verge, c.stacked,
                 c.atJunction, c.offStreet);
+    for (const std::string& w : c.where) std::printf("      %s\n", w.c_str());
 }
 }  // namespace
 
