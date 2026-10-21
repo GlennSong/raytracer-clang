@@ -657,3 +657,47 @@ TEST_CASE(a_forest_region_grows_its_own_mix_below_the_species_band) {
     CHECK(inSpruce > in * 9 / 10);
     CHECK(outSpruce == 0);
 }
+
+// A FOREST MIXED WITH THE RECIPE TREES (Glenn, 2026-10-20: "we should mix the new trees in there as well"): with
+// "recipes": 0.4 every tree stands where it stood and stays its kind, about 0.4 of each kind's trees grow as its recipe
+// (its twin, listed after the kinds), and the twin is never a kind's tree for itself
+TEST_CASE(a_forest_mixed_with_recipe_trees_keeps_its_trees_and_grows_the_share_as_recipes) {
+    const char* kForest = R"({
+        "seed": 3, "spacing": 7.5, "coverage": 1.0,
+        "species": [{"kind": "oak", "altLo": 0, "altHi": 400}, {"kind": "spruce", "altLo": 0, "altHi": 400},
+                    {"kind": "shrub", "understory": true}]})";
+    nlohmann::json j = nlohmann::json::parse(kForest);
+    const ForestParams real = forestFromJson(j);
+    j["recipes"] = 0.4;
+    const ForestParams mixed = forestFromJson(j);
+    CHECK(real.species.size() == 3 && mixed.species.size() == 6);
+    for (int s = 0; s < 3; ++s) {
+        CHECK(mixed.species[s].recipe.empty() && mixed.species[s].twin == 3 + s);
+        CHECK(mixed.species[3 + s].twinOnly && !mixed.species[3 + s].recipe.empty());
+        CHECK(mixed.species[3 + s].kind == mixed.species[s].kind);
+    }
+    CHECK(mixed.species[5].recipe == "hawthorn" && mixed.species[5].understory);
+    auto vpsOf = [](const ForestParams& p) { int v = 1; for (const ForestSpecies& s : p.species) v = std::max(v, s.variants); return v; };
+    const int vr = vpsOf(real), vm = vpsOf(mixed);
+    auto flat = [](double, double) { return 100.0; };
+    const auto a = placeForest(real, 700.0, 0.0, nullptr, nullptr, flat, {}, vr);
+    const auto b = placeForest(mixed, 700.0, 0.0, nullptr, nullptr, flat, {}, vm);
+    CHECK(a.size() == b.size() && a.size() > 3000);
+    if (a.size() != b.size()) return;
+    int moved = 0, changedKind = 0, n[3] = {}, asRecipe[3] = {};
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        moved += (a[i].pos - b[i].pos).length() > 1e-9;
+        const int ka = a[i].variant / vr, sb = b[i].variant / vm, kb = sb >= 3 ? sb - 3 : sb;
+        changedKind += ka != kb;
+        ++n[ka];
+        asRecipe[ka] += sb >= 3;
+    }
+    for (int k = 0; k < 3; ++k)
+        std::printf("    [forest mix] %s: %d trees, %d as the recipe (%.2f)\n", mixed.species[k].kind.c_str(), n[k], asRecipe[k],
+                    n[k] ? double(asRecipe[k]) / n[k] : 0.0);
+    CHECK(moved == 0 && changedKind == 0);
+    for (int k = 0; k < 3; ++k) {
+        CHECK(n[k] > 200);
+        CHECK(std::fabs(double(asRecipe[k]) / n[k] - 0.4) < 0.05);
+    }
+}

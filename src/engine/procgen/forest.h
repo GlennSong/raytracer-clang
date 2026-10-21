@@ -50,6 +50,11 @@ struct ForestSpecies {
     std::vector<std::pair<std::string, double>> ageMix;
     double scale = 1.0;                // its trees' size on top of the placement's spread
     std::string kind;                  // its name in the level ("spruce"; a region names species by it)
+    // A KIND GROWN BOTH WAYS ("recipes": a share, Glenn 2026-10-20): the kind's `twin` (its recipe, listed after every
+    // kind) takes `twinShare` of its trees; a twin is never picked for itself (`twinOnly`)
+    int twin = -1;
+    double twinShare = 0.0;
+    bool twinOnly = false;
 };
 
 // ROCKS (ADR-0131, Glenn: "scattered rocks"): layers placed by the same fast grid, each by what the

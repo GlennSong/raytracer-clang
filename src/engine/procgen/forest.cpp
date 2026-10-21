@@ -68,9 +68,19 @@ ForestParams forestFromJson(const nlohmann::json& j) {
     // island"): "recipes": true -- or RT_FOREST_RECIPES=1 (=0 off: the A/B) -- grows each `kind` as its recipe
     // (tree_recipes.lua), at "recipeAge" (default mature: real sizes, ADR-0196; RT_FOREST_RECIPE_AGE overrides): the
     // willow a weeping willow, the shrub a hawthorn; beech, fir, aspen and alder their own recipes (derived from their
-    // kin); a kind with no recipe stays real_tree
-    bool recipes = j.value("recipes", false);
-    if (const char* e = std::getenv("RT_FOREST_RECIPES")) recipes = std::string(e) != "0";
+    // kin); a kind with no recipe stays real_tree.
+    // ...or MIXED (Glenn, 2026-10-20: "we should mix the new trees in there as well"): "recipes": 0.4 (or
+    // RT_FOREST_RECIPES=0.4) grows that share of each kind's trees as its recipe and the rest as real_tree. The kind
+    // keeps one place in the pick (its band, weight, stands, regions), so the forest stands where it stood; its recipe
+    // twin, listed after every kind, takes a tree where the twin's clumps fall (placeForest)
+    double recipeShare = 0.0;
+    if (j.contains("recipes"))
+        recipeShare = j["recipes"].is_boolean() ? (j["recipes"].get<bool>() ? 1.0 : 0.0) : j["recipes"].get<double>();
+    if (const char* e = std::getenv("RT_FOREST_RECIPES")) {
+        const double v = std::atof(e);
+        recipeShare = std::string(e) == "0" ? 0.0 : v > 0.0 && v < 1.0 ? v : 1.0;
+    }
+    recipeShare = std::clamp(recipeShare, 0.0, 1.0);
     std::string recipeAge = j.value("recipeAge", std::string("mature"));
     if (const char* e = std::getenv("RT_FOREST_RECIPE_AGE")) recipeAge = e;
     // (and in a stand, of mixed ages: "recipeForm" (default stand), "ageMix" { age = weight } (default young 1, mature 2,
@@ -86,40 +96,59 @@ ForestParams forestFromJson(const nlohmann::json& j) {
         {"oak", "oak"}, {"maple", "maple"}, {"beech", "beech"}, {"birch", "birch"}, {"aspen", "aspen"},
         {"willow", "weeping_willow"}, {"alder", "alder"}, {"pine", "pine"}, {"spruce", "spruce"}, {"fir", "fir"},
         {"shrub", "hawthorn"}};
+    // one level species, grown as its recipe (`asRecipe`, where its kind has one) or as the level wrote it
+    auto speciesOf = [&](const nlohmann::json& s, bool asRecipe, ForestSpecies& fs) {
+        fs.recipe = s.value("recipe", std::string());
+        fs.age = s.value("age", std::string());
+        if (asRecipe && fs.recipe.empty()) {
+            const auto it = kRecipeOf.find(s.value("kind", std::string("spruce")));
+            if (it != kRecipeOf.end()) {
+                fs.recipe = it->second;
+                if (fs.age.empty() && !s.value("understory", false)) {
+                    fs.age = recipeAge;
+                    fs.ageMix = recipeMix;
+                    fs.form = recipeForm;
+                    fs.formByDensity = !recipeForm.empty();
+                }
+            }
+        }
+        if (s.contains("form")) fs.form = s.value("form", std::string());
+        if (s.contains("ageMix") && s["ageMix"].is_object()) {
+            fs.ageMix.clear();
+            for (auto it = s["ageMix"].begin(); it != s["ageMix"].end(); ++it) fs.ageMix.emplace_back(it.key(), it.value().get<double>());
+        }
+        if (fs.recipe.empty() && !realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) return false;
+        fs.scale = s.value("scale", fs.scale);
+        fs.variants = std::clamp(s.value("variants", fs.variants), 1, 16);
+        if (fs.formByDensity) fs.variants = std::min(16, 2 * fs.variants);   // (open-grown, then in the stand)
+        fs.altLo = s.value("altLo", fs.altLo);
+        fs.altHi = s.value("altHi", fs.altHi);
+        fs.weight = s.value("weight", fs.weight);
+        fs.wet = s.value("wet", fs.wet);
+        fs.understory = s.value("understory", fs.understory);
+        fs.kind = s.value("kind", fs.recipe);
+        return true;
+    };
+    std::vector<std::pair<std::size_t, ForestSpecies>> twins;   // (the kind's index, its recipe twin)
     if (j.contains("species") && j["species"].is_array())
         for (const auto& s : j["species"]) {
             ForestSpecies fs;
-            fs.recipe = s.value("recipe", std::string());
-            fs.age = s.value("age", std::string());
-            if (recipes && fs.recipe.empty()) {
-                const auto it = kRecipeOf.find(s.value("kind", std::string("spruce")));
-                if (it != kRecipeOf.end()) {
-                    fs.recipe = it->second;
-                    if (fs.age.empty() && !s.value("understory", false)) {
-                        fs.age = recipeAge;
-                        fs.ageMix = recipeMix;
-                        fs.form = recipeForm;
-                        fs.formByDensity = !recipeForm.empty();
-                    }
+            if (!speciesOf(s, recipeShare >= 1.0, fs)) continue;
+            const bool hasRecipe = s.value("recipe", std::string()).empty() && kRecipeOf.count(s.value("kind", std::string("spruce")));
+            if (recipeShare > 0.0 && recipeShare < 1.0 && hasRecipe) {
+                ForestSpecies tw;
+                if (speciesOf(s, true, tw)) {
+                    tw.twinOnly = true;
+                    fs.twinShare = recipeShare;
+                    twins.emplace_back(p.species.size(), std::move(tw));
                 }
             }
-            if (s.contains("form")) fs.form = s.value("form", std::string());
-            if (s.contains("ageMix") && s["ageMix"].is_object()) {
-                fs.ageMix.clear();
-                for (auto it = s["ageMix"].begin(); it != s["ageMix"].end(); ++it) fs.ageMix.emplace_back(it.key(), it.value().get<double>());
-            }
-            if (fs.recipe.empty() && !realSpeciesFromName(s.value("kind", std::string("spruce")), fs.species)) continue;
-            fs.scale = s.value("scale", fs.scale);
-            fs.variants = std::clamp(s.value("variants", fs.variants), 1, 16);
-            if (fs.formByDensity) fs.variants = std::min(16, 2 * fs.variants);   // (open-grown, then in the stand)
-            fs.altLo = s.value("altLo", fs.altLo);
-            fs.altHi = s.value("altHi", fs.altHi);
-            fs.weight = s.value("weight", fs.weight);
-            fs.wet = s.value("wet", fs.wet);
-            fs.understory = s.value("understory", fs.understory);
-            fs.kind = s.value("kind", fs.recipe);
             p.species.push_back(fs);
         }
+    for (auto& [of, tw] : twins) {
+        p.species[of].twin = static_cast<int>(p.species.size());
+        p.species.push_back(std::move(tw));
+    }
     // "regions": [{ "name", "at": [x, z], "radius", "edge", "altLo", "species": { kind: weight }, "others" }]
     if (j.contains("regions") && j["regions"].is_array())
         for (const auto& r : j["regions"]) {
@@ -269,7 +298,7 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                         double bw = -1e9;
                         for (std::size_t s = 0; s < p.species.size(); ++s) {
                             const ForestSpecies& fs = p.species[s];
-                            if (fs.understory != under) continue;
+                            if (fs.understory != under || fs.twinOnly) continue;
                             double altLo = fs.altLo, regionK = 1.0;
                             for (std::size_t r = 0; r < nRegions; ++r) {
                                 if (inRegion[r] <= 0.0) continue;
@@ -285,6 +314,13 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                             if (w > bw) { bw = w; best = static_cast<int>(s); }
                         }
                         if (best < 0) continue;
+                        // (a kind grown both ways: its recipe twin takes the tree where the twin's clumps fall --
+                        // groves of tens of metres, ragged at their edges, about `twinShare` of the kind's trees)
+                        if (const ForestSpecies& k = p.species[best]; k.twin >= 0) {
+                            // (the clumps' noise is near normal, sd 0.19, measured; its CDF makes the share exact)
+                            const double c = sn.fbm2(x * 0.02 + 31.0 * best, z * 0.02 - 23.0 * best, 2) + 0.08 * (unit(h ^ 0x7E7Eu) - 0.5);
+                            if (0.5 * std::erfc(-c / (0.191 * std::sqrt(2.0))) < k.twinShare) best = k.twin;
+                        }
                         const ForestSpecies& fs = p.species[best];
                         ForestTree tr;
                         tr.pos = Vec3(x, y, z);

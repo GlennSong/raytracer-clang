@@ -11167,3 +11167,19 @@ the link 16 m in; the builder reading two overlapping roads 2.7 m apart as an ov
     and the class table.
   - **Proof.** The 15 scenes without plans: every glb and stats.json identical to step 2.
   - **Test:** `lanes_the_crossing_policy_plans_each_meeting_by_what_meets`.
+
+## ADR-0216 — A forest mixed with the recipe trees
+
+Glenn, 2026-10-20, walking the designed island: "I notice that it's using the old trees?" ... "we should mix the new
+trees in there as well." ADR-0197's switch was all or nothing.
+
+- A real_tree forest block's `"recipes"` may be a share (or RT_FOREST_RECIPES=0.5): that share of each kind's trees
+  grows as its recipe, the rest as real_tree. `true` / 1 is ADR-0197's swap, 0 or absent the real_tree forest.
+- The kind keeps its one place in the pick -- band, weight, its stand field, the regions that name it -- so every tree
+  stands where it stood and stays its kind. Its recipe twin (ForestSpecies `twin` / `twinOnly`) is listed after every
+  kind, so the kinds' indices and stand fields are unchanged, and is never picked for itself: it takes a tree where its
+  clumps fall (2-octave noise at 50 m, ragged by a per-tree jitter, put through its measured CDF -- near normal, sd
+  0.19 -- so the share is exact). Groves of tens of metres, not a salad.
+- island_8_nature takes `"recipes": 0.5`. No re-bake: the forest grows at load (the recipe levels from the tree cache).
+- Test `a_forest_mixed_with_recipe_trees_keeps_its_trees_and_grows_the_share_as_recipes`: 0 trees moved, 0 changed
+  kind, shares 0.41 / 0.40 / 0.39 asked 0.4 (oak, spruce, the shrub as hawthorn).
