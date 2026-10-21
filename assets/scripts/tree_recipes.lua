@@ -753,6 +753,31 @@ tree_recipes = {
                color = { {0.17, 0.31, 0.08}, {0.24, 0.38, 0.10} }, rachis_color = {0.48, 0.44, 0.26} },
   },
 
+  -- ROYAL PALM (Roystonea regia; Glenn, 2026-10-20: the street palms' old leaves -- "replace them with the new
+  -- palms"): a straight smooth pale-grey column swollen at the foot, a glossy green crownshaft under the crown, and a
+  -- head of long arching feather fronds whose leaflets hang in several planes. ~15 m, a boulevard tree.
+  royal_palm = {
+    axiom = "T($len,$segs)",
+    iterations = 26,
+    rules = {
+      { "T(l,n):n>0",  "F(l)&($bend)/(11)T(l*0.997,n-1)" },
+      { "T(l,n):n<=0", "F(l*0.4)A(l)" },
+    },
+    vars = { len = {0.62, 0.72}, segs = {19, 22}, bend = {0.0, 0.5} },
+    params = {
+      droop = 0, light = 0.0, meander = 0.01, lean = {0, 2}, angleJitter = 0.3,
+      flare = 0.7, nodeSwell = 0.0, barkNoise = 0.01, twist = 0, rootCount = 0, collar = 0, joints = 0,
+      tipRadius = 0.2, pipeExponent = 2.0, radiusScale = 1.0, ringSegments = 14, barkVScale = 3.0,
+      foliage = 4,
+    },
+    bark = "smooth",
+    bark_color = { {0.60, 0.59, 0.56}, {0.68, 0.67, 0.63} },
+    fronds = { count = 16, length = 3.9, arch = 1.25, rachis = 0.035, leaflets = 52, leaflet_length = 0.9,
+               leaflet_width = 0.04, leaflet_angle = 62, leaflet_droop = 1.0, pitch_young = 12, pitch_old = 100,
+               crownshaft = 1.9, crownshaft_radius = 1.2, crownshaft_color = { {0.30, 0.45, 0.17}, {0.36, 0.52, 0.21} },
+               color = { {0.15, 0.30, 0.08}, {0.21, 0.37, 0.10} }, rachis_color = {0.40, 0.42, 0.22} },
+  },
+
   -- FAN PALM (Washingtonia): a tall straight trunk, a crown of round fan leaves on long petioles, and a skirt of
   -- dead brown fronds hanging under it.
   fan_palm = {

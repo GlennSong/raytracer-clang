@@ -250,6 +250,23 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
     const Vec3 up = normalize(upIn);
     const Vec3 ref = std::fabs(up.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
     const Vec3 e1 = normalize(cross(up, ref)), e2 = cross(up, e1);
+    // THE CROWNSHAFT: a sleeve from `crownshaft` below the crown to a little above it, swelling from the trunk's
+    // radius to crownshaftRadius x it a third of the way up and narrowing into the fronds
+    if (sp.crownshaft > 0.0) {
+        std::vector<Vec3> pts;
+        std::vector<double> radii;
+        const int rings = 8;
+        for (int i = 0; i <= rings; ++i) {
+            const double t = static_cast<double>(i) / rings;
+            pts.push_back(top + up * (sp.crownshaft * (t * 1.12 - 1.0)));
+            const double swell = t < 0.35 ? t / 0.35 : 1.0 - 0.45 * (t - 0.35) / 0.65;
+            radii.push_back(trunkRadius * (1.02 + (sp.crownshaftRadius - 1.02) * std::clamp(swell, 0.0, 1.0)));
+        }
+        const RenderMesh tube = MeshBuilder::tube(pts, radii, 12);
+        const uint32_t b0 = static_cast<uint32_t>(wood.vertices.size());
+        for (Vertex v : tube.vertices) { v.color = sp.crownshaftColor; wood.vertices.push_back(v); }
+        for (uint32_t ix : tube.indices) wood.indices.push_back(b0 + ix);
+    }
     auto frond = [&](double pitchDeg, double az, double lengthScale, const Vec3& colour, bool dead) {
         const Vec3 out = e1 * std::cos(az) + e2 * std::sin(az);
         const double pitch = pitchDeg * pi / 180.0;

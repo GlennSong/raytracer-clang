@@ -305,10 +305,13 @@ bool readTreeRecipes(ScriptVM& vm, TreeRecipeBook& out, std::string* err) {
             f.pitchYoung = numField(L, ft, "pitch_young", f.pitchYoung);
             f.pitchOld = numField(L, ft, "pitch_old", f.pitchOld);
             f.skirt = std::max(0, static_cast<int>(numField(L, ft, "skirt", f.skirt)));
+            f.crownshaft = std::max(0.0, numField(L, ft, "crownshaft", f.crownshaft));
+            f.crownshaftRadius = numField(L, ft, "crownshaft_radius", f.crownshaftRadius);
             readColour(L, ft, "color", f.color, f.colorHi);
             Vec3 hi;
             readColour(L, ft, "rachis_color", f.rachisColor, hi);
             readColour(L, ft, "skirt_color", f.skirtColor, hi);
+            readColour(L, ft, "crownshaft_color", f.crownshaftColor, hi);
         }
         lua_pop(L, 1);
         lua_getfield(L, t, "blades");

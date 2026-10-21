@@ -11219,3 +11219,21 @@ to the lanes builder (87a8da93, 10-14); each was written against the lattice's m
 - The parking census names its first heaps and junction cars: metro's are one pair of bays on two converging
   streets 2.7 m apart at (-482, -707), and one bay 8.7 m from a junction's node at (15, 365). The bus share (36 % of
   streets with a bus, against 50 %) is not yet looked at.
+
+## ADR-0218 — The royal palm, and the city's recipe trees as a level setting
+
+Glenn, 2026-10-20, on island_8_nature: "The old palm tree needs to get the leaves fixed. Maybe it's better to replace
+them with the new palms?"
+
+- **The crownshaft** (FrondSpec `crownshaft`, `crownshaft_radius`, `crownshaft_color`; foliage_kit addFrondCrown): the
+  sheathing frond bases under a palm's crown, a smooth sleeve swelling from the trunk's radius and narrowing into the
+  fronds. 0 (the default) draws none, so the coconut and the fan palm are unchanged.
+- **`royal_palm`** (tree_recipes.lua): a straight smooth pale-grey column swollen at the foot, a 1.9 m green
+  crownshaft, 16 long arching feather fronds with hanging leaflets; ~13 m of trunk, ~16 m to the crown's top. In the
+  tree lab beside the coconut and fan palms (tree_lab.json, royal_palm_1..3).
+- **The city's recipe trees are a level setting**: `citysim.recipeTrees` (cityRecipeTrees), with RT_STREET_RECIPES=1/0
+  over it for the A/B; both readers (the street trees and the parks' and yards' trees) ask it. The street royal palm
+  now maps to the recipe, so a city with recipe trees has no real_tree palms left. island_8_nature (untracked) sets
+  it. No re-bake: street and lot trees are planted at load.
+- Test: `a_palm_wears_its_crown_at_the_top` takes the royal palm: its crownshaft lies within its length under the
+  trunk's top and its top stands within 1.5 m of its foot (0.30 m).

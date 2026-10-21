@@ -2178,6 +2178,15 @@ static std::vector<RecipeTreePart> recipeTreeParts(const std::vector<RecipeTreeL
     return parts;
 }
 
+// THE CITY'S RECIPE TREES, ON OR OFF: the level's `citysim.recipeTrees` (Glenn, 2026-10-20: the island's street palms
+// "replace them with the new palms"), RT_STREET_RECIPES=1 / =0 over it (the A/B). Off by default: a city grown before
+// keeps its trees.
+static bool cityRecipeTrees(const json& root) {
+    bool on = root.contains("citysim") && root["citysim"].is_object() && root["citysim"].value("recipeTrees", false);
+    if (const char* e = std::getenv("RT_STREET_RECIPES")) on = std::string(e) == "1";
+    return on;
+}
+
 #ifdef RT_ENABLE_SCRIPTING
 // THE CITY'S RECIPE TREES (RT_STREET_RECIPES=1: the street trees and the parks' and yards'; Glenn, 2026-10-18:
 // "everything needs to be in proportion"): a recipe at an age grown from each of `seeds` at the city's bands (hero to
@@ -6383,7 +6392,7 @@ bool LevelLoader::load(const std::string& path,
             std::vector<TreeKit> treeKits;
             // ...or, RT_STREET_RECIPES=1, the recipe trees (cityRecipeKits): a park's mix -- oaks young and grown, a maple,
             // a sakura, a birch, a young beech -- instanced by 280 m cell, each level a group, as the street trees are
-            const bool lotRecipes = std::getenv("RT_STREET_RECIPES") && std::string(std::getenv("RT_STREET_RECIPES")) == "1";
+            const bool lotRecipes = cityRecipeTrees(root);
             std::vector<CityRecipeKit> lotRecipeKits;
             std::map<std::pair<int, int>, std::map<std::size_t, std::vector<Mat4>>> lotRecipeCells;
 #ifdef RT_ENABLE_SCRIPTING
@@ -8165,10 +8174,10 @@ bool LevelLoader::load(const std::string& path,
                 // street age (an oak or a beech young, ~10 m: three storeys), at their levels, banded out to the kerb's
                 // draw distance and kept in the tree cache; the kinds with none (the island's palms and flowering trees)
                 // stay real_tree.h's
-                const bool streetRecipes = std::getenv("RT_STREET_RECIPES") && std::string(std::getenv("RT_STREET_RECIPES")) == "1";
+                const bool streetRecipes = cityRecipeTrees(root);
                 static const std::map<std::string, std::pair<std::string, std::string>> kStreetRecipe = {
                     {"oak", {"oak", "young"}}, {"beech", {"beech", "young"}}, {"maple", {"maple", ""}},
-                    {"coconut_palm", {"coconut_palm", ""}}};
+                    {"coconut_palm", {"coconut_palm", ""}}, {"royal_palm", {"royal_palm", ""}}};
                 std::vector<std::vector<RecipeTreePart>> recipeKits(kits.size());
                 std::vector<double> recipeTall(kits.size(), 0.0);
                 for (int kd = 0; kd < kKinds; ++kd) {

@@ -771,9 +771,11 @@ TEST_CASE(blade_plants_are_clumps_of_strap_leaves) {
 // PALMS (Glenn: "the palm leaves ... don't quite look like palm leaves or trunks"): a ringed stem with a CROWN of fronds
 // at its top -- every blade of the crown above half the trunk (old fronds and the skirt hang below the crown, but
 // not to the ground), the crown wider than tall, the youngest fronds rising above the top, the oldest hanging below it.
+// A ROYAL PALM (2026-10-20, the island's street palms) also stands straight and wears its green CROWNSHAFT just under
+// the crown: crownshaft-coloured wood from about its length below the trunk's top to just above it, and nowhere else.
 TEST_CASE(a_palm_wears_its_crown_at_the_top) {
     const TreeRecipeBook book = shipped();
-    for (const char* name : {"coconut_palm", "fan_palm"}) {
+    for (const char* name : {"coconut_palm", "fan_palm", "royal_palm"}) {
         const TreeRecipe* r = book.find(name);
         CHECK(r && r->fronds.set);
         if (!r) continue;
@@ -792,6 +794,20 @@ TEST_CASE(a_palm_wears_its_crown_at_the_top) {
         CHECK(lo > trunkTop * 0.45);   // (old coconut fronds hang metres down; a skirt to under half way)
         CHECK(hi > trunkTop + 0.5);
         CHECK(reach > 1.2 * (hi - trunkTop));
+        if (r->fronds.crownshaft > 0.0) {
+            const Vec3 cs = r->fronds.crownshaftColor;
+            int n = 0;
+            Real sLo = 1e9, sHi = -1e9;
+            for (const Vertex& v : t.branches.vertices)
+                if ((v.color - cs).length() < 1e-4) { ++n; sLo = std::min(sLo, v.position.y); sHi = std::max(sHi, v.position.y); }
+            const Vec3 foot = t.limbs.front().a, crown = t.limbs.back().b;
+            std::printf("    [palm] %-12s crownshaft %d verts, %.1f .. %.1f m (trunk top %.1f); the top %.2f m off the foot\n", name, n,
+                        sLo, sHi, trunkTop, std::hypot(crown.x - foot.x, crown.z - foot.z));
+            CHECK(n > 0);
+            CHECK(sLo > trunkTop - r->fronds.crownshaft - 0.5 && sLo < trunkTop - 0.5 * r->fronds.crownshaft);
+            CHECK(sHi < trunkTop + 0.5);
+            CHECK(std::hypot(crown.x - foot.x, crown.z - foot.z) < 1.5);   // a column, not a coconut's lean
+        }
     }
 }
 

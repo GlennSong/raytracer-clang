@@ -1482,6 +1482,48 @@
       }
     },
     {
+      "id": 122,
+      "name": "royal_palm_1",
+      "shape": "tree",
+      "position": [
+        46.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "royal_palm",
+        "seed": 1
+      }
+    },
+    {
+      "id": 123,
+      "name": "royal_palm_2",
+      "shape": "tree",
+      "position": [
+        58.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "royal_palm",
+        "seed": 2
+      }
+    },
+    {
+      "id": 124,
+      "name": "royal_palm_3",
+      "shape": "tree",
+      "position": [
+        70.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "royal_palm",
+        "seed": 3
+      }
+    },
+    {
       "id": 98,
       "name": "multistem_1",
       "shape": "tree",

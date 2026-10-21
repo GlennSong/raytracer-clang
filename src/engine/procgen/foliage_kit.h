@@ -137,6 +137,11 @@ struct FrondSpec {
     double petiole = 0.55;                      // a fan frond: the petiole's share of its length
     double pitchYoung = 25.0, pitchOld = 105.0; // off upright (deg): the newest frond, the oldest
     int skirt = 0;                              // dead fronds hanging down the trunk
+    // A CROWNSHAFT (a royal palm's; Glenn, 2026-10-20: the old palms' leaves want fixing -- "replace them with the new
+    // palms"): the sheathing frond bases, a smooth green sleeve this long (m) under the crown, swelling to
+    // crownshaftRadius x the trunk's radius. 0: none (the coconut, the fan palm)
+    double crownshaft = 0.0, crownshaftRadius = 1.25;
+    Vec3 crownshaftColor{0.33, 0.47, 0.20};
     Vec3 color{0.18, 0.32, 0.09}, colorHi{0.18, 0.32, 0.09};
     Vec3 rachisColor{0.45, 0.40, 0.22};
     Vec3 skirtColor{0.33, 0.25, 0.16};
