@@ -102,6 +102,8 @@ std::string simLevelPath() {
 // THE HEAVY LEVELS: over a minute each to build cold on a CI runner (measured on the 2026-09-26 macOS run:
 // metro_mountain 366 s, metro_planned 323 s, island_8_weathered 168 s, island_8_saltwood 159 s, piedmont 99 s --
 // with them the gate never finished inside ctest's 30 minutes, so CI was red on a timeout, not on a finding).
+// island_8_rocky (tracked 2026-10-19) and island_8_nature (2026-10-21) joined them when the push runs timed out
+// again: the island's cold bake is minutes, and four print cases below load island_8_nature once it exists.
 // RT_LEVEL_TESTS_SKIP_HEAVY=1 (the push workflow) leaves them out; the nightly workflow runs everything.
 bool skipHeavy() {
     const char* e = std::getenv("RT_LEVEL_TESTS_SKIP_HEAVY");
@@ -109,7 +111,7 @@ bool skipHeavy() {
 }
 bool isHeavyLevel(const std::string& name) {
     static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "island_8_saltwood.json",
-                                   "piedmont.json"};
+                                   "piedmont.json", "island_8_rocky.json", "island_8_nature.json"};
     for (const char* h : kHeavy) if (name == h || (name.size() > std::strlen(h) && name.compare(name.size() - std::strlen(h), std::string::npos, h) == 0 && name[name.size() - std::strlen(h) - 1] == '/')) return true;
     return false;
 }
@@ -3532,6 +3534,7 @@ TEST_CASE(level_print_road_edges_meet_the_ground) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3737,6 +3740,7 @@ TEST_CASE(level_print_entrance_steps_meet_the_ground) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3791,6 +3795,7 @@ TEST_CASE(level_print_buildings_by_the_freeway) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3840,6 +3845,7 @@ TEST_CASE(level_print_skyline_by_recipe) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
