@@ -520,6 +520,31 @@ LevelFacts inspect(const std::string& name) {
                             if (pointInPolygon(poly, c)) { ++padsAtCentre; padY = fl.planeY(c.x, c.y); }
                         }
                         std::printf(" | pads covering its centre: %d (plane %.2f)\n", padsAtCentre, padY);
+                        // A GAP is the other end: the LOWEST wall point, and every region whose reach covers it.
+                        double low = 1e30; Vec2 lowAt(0, 0);
+                        for (std::size_t i = 0; i < prism.plan.size(); ++i) {
+                            const Vec2& a = prism.plan[i];
+                            const Vec2& b = prism.plan[(i + 1) % prism.plan.size()];
+                            const int steps = std::max(1, static_cast<int>(std::ceil((b - a).length())));
+                            for (int st = 0; st <= steps; ++st) {
+                                const Vec2 q = a + (b - a) * (static_cast<double>(st) / steps);
+                                const double g = meshGround(q.x, q.y);
+                                if (g < low) { low = g; lowAt = q; }
+                            }
+                        }
+                        std::printf("    [census]     lowest wall ground %.2f m (%.2f under the base) at (%.1f, %.1f):\n",
+                                    low, baseY - low, lowAt.x, lowAt.y);
+                        for (const TerrainFlatten& fl : cfg.params.flatten) {
+                            if (lowAt.x < fl.minX - fl.falloff || lowAt.x > fl.maxX + fl.falloff ||
+                                lowAt.y < fl.minZ - fl.falloff || lowAt.y > fl.maxZ + fl.falloff) continue;
+                            Poly2 poly;
+                            for (const Vec3& v : fl.polygon) poly.push_back(Vec2(v.x, v.z));
+                            const Vec2 pc = centroid(poly);
+                            std::printf("    [census]       p%d owner %d %s plane %.2f, %.0f m2 centred (%.1f, %.1f), falloff %.1f %s\n",
+                                        fl.priority, fl.owner, pointInPolygon(poly, lowAt) ? "IN" : "near",
+                                        fl.planeY(lowAt.x, lowAt.y), std::fabs(area(poly)), pc.x, pc.y, fl.falloff,
+                                        fl.falloffMode == TerrainFlatten::Falloff::DaylightBatter ? "batter" : "smooth");
+                        }
                     }
                 }
                 if (buried) ++f.censusBurials;
