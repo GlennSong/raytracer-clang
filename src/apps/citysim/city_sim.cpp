@@ -420,7 +420,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     // counted separately, because "0 bays" on its own says nothing about which
     // one rejected it.
     int dbgChains = 0, dbgShortChain = 0, dbgNoBand = 0, dbgLayer = 0,
-        dbgNoFrontage = 0, dbgPlaced = 0, dbgCrowded = 0;
+        dbgNoFrontage = 0, dbgPlaced = 0, dbgCrowded = 0, dbgNearBox = 0;
     // ONE CAR A BAY (metro_cars_park_in_spaces_not_heaps, 2026-10-22): bays are 7 m apart ALONG a chain, but the
     // kerb offset on a tight bend, or two streets converging, puts bays 2 m apart on the ground -- three cars parked
     // in a heap at (-67, -233). A bay whose centre is nearer than a parked car's length to one already laid is not laid.
@@ -436,6 +436,26 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
                 if (it == bayGrid.end()) continue;
                 for (const engine::Vec2& q : it->second)
                     if ((q - at).lengthSquared() < kBayGap * kBayGap) return true;
+            }
+        return false;
+    };
+    // CLEAR OF EVERY BOX, NOT JUST ITS OWN STREET'S (2026-10-22): the 22 m setback is measured along the bay's own
+    // chain, so a street running past ANOTHER street's junction parked 8.7 m from it at (15, 365) on metro. A bay
+    // within 10 m of any junction node is not laid.
+    constexpr Real kBayJunctionClear = 10.0;
+    std::unordered_map<std::int64_t, std::vector<engine::Vec2>> junctionCells;
+    auto clearCell = [](Real v) { return static_cast<std::int64_t>(std::floor(v / kBayJunctionClear)); };
+    for (int n = 0; n < graph.nodeCount(); ++n)
+        if (graph.isJunction(n))
+            junctionCells[bayKey(clearCell(graph.nodes[n].x), clearCell(graph.nodes[n].y))].push_back(graph.nodes[n]);
+    auto inJunction = [&](const engine::Vec2& at) {
+        const std::int64_t cx = clearCell(at.x), cz = clearCell(at.y);
+        for (std::int64_t dx = -1; dx <= 1; ++dx)
+            for (std::int64_t dz = -1; dz <= 1; ++dz) {
+                const auto it = junctionCells.find(bayKey(cx + dx, cz + dz));
+                if (it == junctionCells.end()) continue;
+                for (const engine::Vec2& q : it->second)
+                    if ((q - at).lengthSquared() < kBayJunctionClear * kBayJunctionClear) return true;
             }
         return false;
     };
@@ -473,6 +493,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             b.link = li;
             b.station = local;
             b.pos = graph.pointOnLink(li, local / L.length) + right * L.parkOffset;
+            if (inJunction(b.pos)) { ++dbgNearBox; continue; }
             if (crowded(b.pos)) { ++dbgCrowded; continue; }
             bayGrid[bayKey(bayCell(b.pos.x), bayCell(b.pos.y))].push_back(b.pos);
             b.heading = dir;
@@ -504,9 +525,9 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     if (std::getenv("RT_PARK_DEBUG"))
         std::fprintf(stderr,
                      "[park] links=%d chains=%d  short-chain=%d  no-band=%d  "
-                     "layer=%d  no-frontage=%d  crowded=%d  bays=%zu\n",
+                     "layer=%d  no-frontage=%d  crowded=%d  near-box=%d  bays=%zu\n",
                      graph.linkCount(), dbgChains, dbgShortChain, dbgNoBand, dbgLayer,
-                     dbgNoFrontage, dbgCrowded, bays_.size());
+                     dbgNoFrontage, dbgCrowded, dbgNearBox, bays_.size());
     twinOf_.assign(graph.linkCount(), -1);
     departScale_.assign(graph.linkCount(), 1.0);
     for (int li = 0; li < graph.linkCount(); ++li)
