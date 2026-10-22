@@ -6554,6 +6554,34 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     if (bp.fireEscape && dbg->attachedAt.size() < 4) dbg->attachedAt.push_back(centroid(plan));
                 }
             }
+            // THE DOOR STEPS ONTO ITS OWN LOT OR THE STREET, never into a neighbour's (front_doors_face_their_street,
+            // metro 2026-10-22): faceDir aims at the nearest street point from the lot's centre, and on a wedge lot by
+            // a curving street that point lies off its side -- a corner shop's door faced the rowhouse 0.5 m away.
+            // Where the door edge's step lands in another lot of the block, the door turns to the lot's frontage.
+            if (planOk && plan.size() >= 3 && lot.frontage.length() > Real(1e-6)) {
+                Poly2 cp = plan;
+                ensureCCW(cp);
+                auto stepBlocked = [&](const BuildingParams& q) {
+                    const std::size_t e = entranceEdgeFor(cp, q);
+                    const Vec2 a = cp[e], d = cp[(e + 1) % cp.size()] - a;
+                    const Real len = d.length();
+                    if (len < Real(1e-6)) return false;
+                    const Vec2 n(d.y / len, -d.x / len);
+                    for (const Real t : {Real(0.2), Real(0.5), Real(0.8)}) {   // the door may sit anywhere along it
+                        const Vec2 step = a + d * t + n * Real(1.2);
+                        for (const LotCand& o : cands)
+                            if (&o != &cand && o.block == cand.block && o.lot.footprint.size() >= 3 &&
+                                pointInPolygon(o.lot.footprint, step)) return true;
+                    }
+                    return false;
+                };
+                if (stepBlocked(bp)) {
+                    BuildingParams alt = bp;
+                    const Vec2 fd = normalize(lot.frontage);
+                    alt.faceDir = Vec3(fd.x, 0, fd.y);
+                    if (!stepBlocked(alt)) bp.faceDir = alt.faceDir;
+                }
+            }
             if (planOk) {
                 if (wantsDoorway(plan, bp)) bp.openDoorway = true;
                 bm = growPlanBuilding(plan, bp, b.baseY);

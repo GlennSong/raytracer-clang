@@ -420,7 +420,25 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     // counted separately, because "0 bays" on its own says nothing about which
     // one rejected it.
     int dbgChains = 0, dbgShortChain = 0, dbgNoBand = 0, dbgLayer = 0,
-        dbgNoFrontage = 0, dbgPlaced = 0;
+        dbgNoFrontage = 0, dbgPlaced = 0, dbgCrowded = 0;
+    // ONE CAR A BAY (metro_cars_park_in_spaces_not_heaps, 2026-10-22): bays are 7 m apart ALONG a chain, but the
+    // kerb offset on a tight bend, or two streets converging, puts bays 2 m apart on the ground -- three cars parked
+    // in a heap at (-67, -233). A bay whose centre is nearer than a parked car's length to one already laid is not laid.
+    constexpr Real kBayGap = 4.5;
+    std::unordered_map<std::int64_t, std::vector<engine::Vec2>> bayGrid;
+    auto bayCell = [](Real v) { return static_cast<std::int64_t>(std::floor(v / kBayGap)); };
+    auto bayKey = [](std::int64_t cx, std::int64_t cz) { return (cx << 32) ^ (cz & 0xffffffff); };
+    auto crowded = [&](const engine::Vec2& at) {
+        const std::int64_t cx = bayCell(at.x), cz = bayCell(at.y);
+        for (std::int64_t dx = -1; dx <= 1; ++dx)
+            for (std::int64_t dz = -1; dz <= 1; ++dz) {
+                const auto it = bayGrid.find(bayKey(cx + dx, cz + dz));
+                if (it == bayGrid.end()) continue;
+                for (const engine::Vec2& q : it->second)
+                    if ((q - at).lengthSquared() < kBayGap * kBayGap) return true;
+            }
+        return false;
+    };
     auto layChain = [&](int first) {
         std::vector<int> chain;
         for (int li = first; li != -1 && !seen[li]; li = nextOf[li]) {
@@ -455,6 +473,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
             b.link = li;
             b.station = local;
             b.pos = graph.pointOnLink(li, local / L.length) + right * L.parkOffset;
+            if (crowded(b.pos)) { ++dbgCrowded; continue; }
+            bayGrid[bayKey(bayCell(b.pos.x), bayCell(b.pos.y))].push_back(b.pos);
             b.heading = dir;
             b.width = L.parkWidth;
             // EVERY BAY IS BORN FREE. This used to seed ~55% of them with
@@ -484,9 +504,9 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     if (std::getenv("RT_PARK_DEBUG"))
         std::fprintf(stderr,
                      "[park] links=%d chains=%d  short-chain=%d  no-band=%d  "
-                     "layer=%d  no-frontage=%d  bays=%zu\n",
+                     "layer=%d  no-frontage=%d  crowded=%d  bays=%zu\n",
                      graph.linkCount(), dbgChains, dbgShortChain, dbgNoBand, dbgLayer,
-                     dbgNoFrontage, bays_.size());
+                     dbgNoFrontage, dbgCrowded, bays_.size());
     twinOf_.assign(graph.linkCount(), -1);
     departScale_.assign(graph.linkCount(), 1.0);
     for (int li = 0; li < graph.linkCount(); ++li)
