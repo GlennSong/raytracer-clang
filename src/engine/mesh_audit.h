@@ -335,16 +335,21 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
                 auto it = grid.find({i, k});
                 if (it == grid.end()) continue;
                 for (const Tri& t : it->second) {   // Moller-Trumbore, two-sided
+                    // ...with the edges shared: a look that runs exactly along the seam of two triangles (an eye on
+                    // the grid line a quad was split on, looking along it) may round outside BOTH by an ulp, and the
+                    // face beyond read as a see-through -- the macOS build did on light_rail_lab (2 looks), Linux's not. The
+                    // nearest hit takes either; (the winding count below must not, or it would count one edge twice)
+                    constexpr double kEdge = 1e-9;
                     const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
                     const double det = dot(e1, p);
                     if (std::fabs(det) < 1e-12) continue;
                     const double inv = 1.0 / det;
                     const Vec3 s = o - t.a;
                     const double u = dot(s, p) * inv;
-                    if (u < 0 || u > 1) continue;
+                    if (u < -kEdge || u > 1 + kEdge) continue;
                     const Vec3 q = cross(s, e1);
                     const double v = dot(d, q) * inv;
-                    if (v < 0 || u + v > 1) continue;
+                    if (v < -kEdge || u + v > 1 + kEdge) continue;
                     const double tt = dot(e2, q) * inv;
                     if (tt > 1e-4 && tt < tHit) { tHit = tt; face = cross(t.c - t.a, t.b - t.a); hitMesh = t.mesh; }
                 }

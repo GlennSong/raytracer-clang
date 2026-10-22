@@ -385,7 +385,13 @@ TEST_CASE(a_rebake_shares_its_unchanged_sections_with_the_last_one) {
     }
     cellB[123] ^= 1u;   // one cell changed
     BundleWriter w; CHECK(w.openFile(dir + "/b.bundle", &err));
-    CHECK(w.addCloneSource(dir + "/a.bundle"));
+    // (block cloning is Linux's FICLONERANGE: elsewhere a clone source is refused and every section is written)
+    const bool canClone = w.addCloneSource(dir + "/a.bundle");
+#ifdef __linux__
+    CHECK(canClone);
+#else
+    CHECK(!canClone);
+#endif
     CHECK(w.add("lots/cell/0_0/parts/2", cellA.data(), cellA.size() * 4));
     CHECK(w.add("lots/cell/1_0/parts/2", cellB.data(), cellB.size() * 4));
     CHECK(w.add("lots/cell/2_0/parts/2", cellC.data(), cellC.size() * 4));

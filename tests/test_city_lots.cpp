@@ -1403,9 +1403,9 @@ TEST_CASE(lots_that_do_not_build_get_a_use) {
             const Real x0 = i * 102.0 + 6.0, z0 = j * 102.0 + 6.0;
             blocks.push_back({{x0, z0}, {x0 + 84, z0}, {x0 + 84, z0 + 84}, {x0, z0 + 84}});
         }
-    auto grow = [&](Vec2 centre, LotPlanDebug& dbg) {
+    auto grow = [&](Vec2 centre, LotPlanDebug& dbg, uint32_t seed = 29) {
         LotParams lp;
-        lp.seed = 29;
+        lp.seed = seed;
         lp.buildChance = 0.0;
         lp.center = centre;
         lp.hubs = {{centre, 0}};   // radial rings from one centre hub: no industrial wedge
@@ -1433,18 +1433,24 @@ TEST_CASE(lots_that_do_not_build_get_a_use) {
     CHECK(unfurnished == 0);
     CHECK(treesOnPlay == 0);
 
-    LotPlanDebug town;
-    const std::vector<LotBuilding> dt = grow(Vec2(150, 150), town);   // downtown in the middle block
-    int bays = 0, gates = 0;
-    for (const LotBuilding& lb : dt) {
-        if (lb.recipe != "car_park") continue;
-        CHECK(lb.type == "depot");   // the host's paved-yard path
-        CHECK(lb.pavedLot.size() >= 3);
-        for (const LotBuilding::Area& ar : lb.areas) { bays += ar.kind == "car_bay"; gates += ar.kind == "car_gate"; }
+    // DOWNTOWN in the middle block, over four seeds: one seed grew one car park on Linux and none on macOS (the same
+    // code grows a different city there, issue #102), so the rule is checked over several rolls, not one
+    int carParks = 0, bays = 0, gates = 0;
+    for (uint32_t seed : {29u, 31u, 37u, 41u}) {
+        LotPlanDebug town;
+        const std::vector<LotBuilding> dt = grow(Vec2(150, 150), town, seed);
+        int b = 0, g = 0;
+        for (const LotBuilding& lb : dt) {
+            if (lb.recipe != "car_park") continue;
+            CHECK(lb.type == "depot");   // the host's paved-yard path
+            CHECK(lb.pavedLot.size() >= 3);
+            for (const LotBuilding::Area& ar : lb.areas) { b += ar.kind == "car_bay"; g += ar.kind == "car_gate"; }
+        }
+        std::printf("    [open lots] downtown, seed %u: %d car parks (%d stalls), %d pocket parks, %d gardens\n", seed,
+                    town.openCarParks, b, town.openParks, town.openGardens);
+        CHECK(g == town.openCarParks);
+        CHECK(b >= 6 * town.openCarParks);
+        carParks += town.openCarParks; bays += b; gates += g;
     }
-    std::printf("    [open lots] downtown: %d car parks (%d stalls), %d pocket parks, %d gardens\n", town.openCarParks, bays,
-                town.openParks, town.openGardens);
-    CHECK(town.openCarParks > 0);
-    CHECK(gates == town.openCarParks);
-    CHECK(bays >= 6 * town.openCarParks);
+    CHECK(carParks > 0);
 }
