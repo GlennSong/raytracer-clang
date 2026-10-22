@@ -1510,6 +1510,18 @@ public:
         externalHalf_ = std::move(halfLengths);
         externalHalf_.resize(externalObstacles_.size(), Real(0));
     }
+    // THE PHYSICAL TIER'S BODIES OFF THEIR GHOSTS (#23; CI's packed junction, 2026-10-22): a possessed car's chassis
+    // that a crash left metres from its ghost is where the car IS, and the sim's drivers never saw it -- a passing car's
+    // kinematic box drove into it and laid it on its side. The bridge reports each such body (with the agent it
+    // belongs to, which does not brake for itself), and drivers hold short of it as of the player's car.
+    void setBodyObstacles(std::vector<engine::Vec2> at, std::vector<Real> halfLengths, std::vector<int> owners) {
+        bodyObstacles_ = std::move(at);
+        bodyHalf_ = std::move(halfLengths);
+        bodyOwner_ = std::move(owners);
+        bodyHalf_.resize(bodyObstacles_.size(), Real(2.15));
+        bodyOwner_.resize(bodyObstacles_.size(), -1);
+    }
+    std::size_t bodyObstacleCount() const { return bodyObstacles_.size(); }
 
     // World-space (XZ) static obstacles pedestrians steer around and never stand
     // inside — chiefly the signal poles on the sidewalks (injected once by the host
@@ -1659,7 +1671,15 @@ private:
     // An injected body's half length when it is a vehicle (sensed id -(1+k)), else 0
     Real externalHalfOf(int id) const {
         const int k = -id - 1;
-        return id < 0 && k < static_cast<int>(externalHalf_.size()) ? externalHalf_[static_cast<std::size_t>(k)] : Real(0);
+        if (id >= 0) return 0;
+        if (k < static_cast<int>(externalHalf_.size())) return externalHalf_[static_cast<std::size_t>(k)];
+        const int b = k - static_cast<int>(externalHalf_.size());   // the bridge's bodies follow the host's points
+        return b < static_cast<int>(bodyHalf_.size()) ? bodyHalf_[static_cast<std::size_t>(b)] : Real(0);
+    }
+    // The agent an injected body belongs to (a possessed car's own chassis), else -1
+    int externalOwnerOf(int id) const {
+        const int b = -id - 1 - static_cast<int>(externalHalf_.size());
+        return id < 0 && b >= 0 && b < static_cast<int>(bodyOwner_.size()) ? bodyOwner_[static_cast<std::size_t>(b)] : -1;
     }
     void arriveOrChain(Agent& a, Real vArrive);   // arrival: chain, park, or rest
     void labelDriverState(Agent& a, Real seenAhead, Real gap, int legCount) const;
@@ -1769,6 +1789,9 @@ private:
                                         // (lets grid candidates map back to ghosts)
     std::vector<engine::Vec2> externalObstacles_;   // host-injected (the live player)
     std::vector<Real> externalHalf_;                // parallel: a vehicle's half length, 0 = a person
+    std::vector<engine::Vec2> bodyObstacles_;       // the physical tier's chassis off their ghosts (setBodyObstacles)
+    std::vector<Real> bodyHalf_;
+    std::vector<int> bodyOwner_;
     struct StaticObstacle { engine::Vec2 p; Real clearance; };
     std::vector<StaticObstacle> staticObstacles_;     // host-injected, static (setStaticObstacles / addStaticObstacles)
     std::unordered_map<int64_t, std::vector<int>> obstacleCells_;   // by 8 m cell

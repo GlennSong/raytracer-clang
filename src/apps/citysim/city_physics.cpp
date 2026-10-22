@@ -24,6 +24,7 @@ using engine::BodyMotion;
 namespace {
 // The ambient sedan every possessed car is (see possessTier's VehicleConfig).
 constexpr Real kBodyHalfX = 0.92, kBodyHalfZ = 2.15;
+constexpr Real kBodyOffGhost = 1.5;   // metres: past this a body is reported to the sim's drivers as an obstacle
 
 struct Footprint { engine::Vec2 c, ax, az; Real hx, hz; };
 Footprint footprint(engine::Vec2 c, Real yaw, Real hx, Real hz) {
@@ -364,6 +365,23 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                 possessed_.push_back(np);
             }
         }
+    }
+    // THE BODIES OFF THEIR GHOSTS, told to the sim's drivers (#23): a chassis a crash left metres from its ghost is
+    // where the car is, and without this a passing car's kinematic box drove into it and rolled it (CI's packed
+    // junction under GCC, 2026-10-22). A body on its ghost is already the car the drivers follow.
+    {
+        std::vector<engine::Vec2> at;
+        std::vector<Real> half;
+        std::vector<int> owner;
+        for (const Possessed& p : possessed_) {
+            const Vec3 bp = pw.vehiclePosition(p.vid);
+            const engine::Vec2 b(bp.x, bp.z);
+            if ((agents[p.agent].pos - b).length() < kBodyOffGhost) continue;
+            at.push_back(b);
+            half.push_back(kBodyHalfZ);
+            owner.push_back(p.agent);
+        }
+        city_.simMutable().setBodyObstacles(std::move(at), std::move(half), std::move(owner));
     }
     // Drive each body at the sim's own plan: chase the kinematic ghost's
     // lane frame and speed — the brains stay tier-invariant.

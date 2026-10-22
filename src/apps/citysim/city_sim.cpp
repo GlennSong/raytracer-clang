@@ -352,6 +352,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     agents_.clear();
     vehicles_.clear();
     sensed_.clear();
+    bodyObstacles_.clear(); bodyHalf_.clear(); bodyOwner_.clear();
     externalObstacles_.clear();   // a REBUILD must not keep the previous level's
     staticObstacles_.clear();     // player/pole positions as phantom obstacles
     obstacleCells_.clear();
@@ -4963,6 +4964,7 @@ Real CitySim::senseAhead(Agent& a) {
         // host — skip the height gate rather than invent one for them.
         for (const SensedGhost& g : sensed_) {
             if (g.id >= 0) continue;   // agent ghosts handled via the grid above
+            if (externalOwnerOf(g.id) == indexOf(a)) continue;   // its own chassis, trailing it
             if (externalHalfOf(g.id) > 0 ? inLaneAhead(g.pos) : engine::sees(sensor, g.pos, 0.0))
                 a.memory.observe(g.id, g.pos, simSeconds_);
         }
@@ -4975,7 +4977,7 @@ Real CitySim::senseAhead(Agent& a) {
         // A CAR ahead (the player's): in the lane corridor, held short by both bodies, not a person's clearance
         const Real oh = externalHalfOf(t.id);
         if (oh > 0) {
-            if (!inLaneAhead(t.pos)) continue;
+            if (!inLaneAhead(t.pos) || externalOwnerOf(t.id) == indexOf(a)) continue;
             const Real extra = ownHalf + oh + kCarBuffer - kPedClearance;
             Real fd = (t.pos.x - a.pos.x) * dir.x + (t.pos.y - a.pos.y) * dir.y;
             seenAhead = std::min(seenAhead, std::max(Real(0), fd - extra));
@@ -5271,7 +5273,12 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             a.holdTimer = 0;      // reset at creep speed sawtoothed the escape
         const bool gridlocked =
             a.holdTimer > 6.0 + static_cast<Real>(a.brain % 4u) * 1.5;
-        if (gridlocked && !redAhead && a.crashTimer <= 0 && a.speed < 0.7)
+        // ...but never INTO the car ahead in its own lane (Glenn, 2026-10-22: "cars shouldn't climb a stopped body...
+        // they should stop behind it"). The creep unpicks a standoff across the junction; nosing into a queue's tail
+        // unpicks nothing, and with a physical car stopped there the creeping box climbed its boot and rolled it (the
+        // packed junction, seed 15). Queued at the bumper gap there is no room, so it waits behind.
+        const bool roomAhead = gap >= 1e8 || gap - minGap > 0.5;
+        if (gridlocked && roomAhead && !redAhead && a.crashTimer <= 0 && a.speed < 0.7)
             a.speed = 0.7;   // creep — the hard line clamp below still applies
     }
 
@@ -7111,6 +7118,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // The live player (host-injected) is a body too — cars brake for it.
     for (std::size_t k = 0; k < externalObstacles_.size(); ++k)
         sensed_.push_back({externalObstacles_[k], 0.0, -(1 + static_cast<int>(k))});
+    // ...and the physical tier's bodies off their ghosts, numbered on from the host's points
+    for (std::size_t k = 0; k < bodyObstacles_.size(); ++k)
+        sensed_.push_back({bodyObstacles_[k], 0.0, -(1 + static_cast<int>(externalObstacles_.size() + k))});
 
     // Pass 2: leading gaps. Pass 3: advance. `advanced` records who really ran
     // advance() (and so had refreshPose re-anchor its base position) this tick —
