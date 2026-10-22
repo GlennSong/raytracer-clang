@@ -104,6 +104,8 @@ std::string simLevelPath() {
 // with them the gate never finished inside ctest's 30 minutes, so CI was red on a timeout, not on a finding).
 // island_8_rocky (tracked 2026-10-19) and island_8_nature (2026-10-21) joined them when the push runs timed out
 // again: the island's cold bake is minutes, and four print cases below load island_8_nature once it exists.
+// Then (2026-10-22 run, cold, Linux / macOS) piedmont_roads 578 / 418 s, tree_lab 193 s (macOS), scale_lab 169 /
+// 172 s -- and scale_lab grows its hero trees on EVERY load (156 s again warm), in every case that walks the levels.
 // RT_LEVEL_TESTS_SKIP_HEAVY=1 (the push workflow) leaves them out; the nightly workflow runs everything.
 bool skipHeavy() {
     const char* e = std::getenv("RT_LEVEL_TESTS_SKIP_HEAVY");
@@ -111,7 +113,8 @@ bool skipHeavy() {
 }
 bool isHeavyLevel(const std::string& name) {
     static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "island_8_saltwood.json",
-                                   "piedmont.json", "island_8_rocky.json", "island_8_nature.json"};
+                                   "piedmont.json", "island_8_rocky.json", "island_8_nature.json", "piedmont_roads.json",
+                                   "tree_lab.json", "scale_lab.json"};
     for (const char* h : kHeavy) if (name == h || (name.size() > std::strlen(h) && name.compare(name.size() - std::strlen(h), std::string::npos, h) == 0 && name[name.size() - std::strlen(h) - 1] == '/')) return true;
     return false;
 }
