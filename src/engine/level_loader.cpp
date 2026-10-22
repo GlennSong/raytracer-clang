@@ -1801,7 +1801,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // THE BAKED GROUND'S CONTENT KEY (ADR-0095): everything the field reads -- the whole level JSON
 // (terrain, roads, grading, earthwork all come from it), the lane city's bundle (the carved grid),
 // every flatten the loader assembled, and a code tag bumped when the height code changes.
-static constexpr const char* kBakedGroundCodeTag = "2026-09-26.1";   // .1: the snowline wanders (lobes, aspect, tongues; ADR-0118)
+static constexpr const char* kBakedGroundCodeTag = "2026-10-21.2";   // 10-21.2: the road grid in a corridor along the roads, the full-resolution ground beyond (ADR-0221)   // 09-26.1: .1: the snowline wanders (lobes, aspect, tongues; ADR-0118)
 static constexpr const char* kHydroCarveCodeTag = "2026-09-25.shelf";   // sea mouths carry their channel across the shelf
 static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     using namespace engine::bundle;
@@ -4153,7 +4153,7 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.nav = cp.lotNav;        // the streets a door faces, at the lot clearance widths (the sim routes on cp.nav)
             g_lanes.pavedSidewalk = cp.bands.sidewalkWidth;   // the band a door walks to
             LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks published for the terrain pre-pass";
-            sharedEroded = engine::roads::lanes::laneErodedBase(root, grid, sharedEroded);
+            sharedEroded = engine::roads::lanes::laneErodedBase(root, grid, sharedEroded, &g_lanes.deck);
             const double bx1 = grid->x0 + grid->res * (grid->nx - 1), by1 = grid->y0 + grid->res * (grid->ny - 1);
             LOG_INFO << "[lanelab] CDLOD terrain from the lab's conformed grid: " << grid->nx << " x " << grid->ny
                      << " @ " << grid->res << " m, " << (bx1 - grid->x0) << " x " << (by1 - grid->y0) << " m";

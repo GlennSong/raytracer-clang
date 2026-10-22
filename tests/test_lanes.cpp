@@ -47,6 +47,8 @@ TEST_CASE(lanes_constrained_triangulation_splits_crossing_constraints_and_keeps_
 
 #include "engine/procgen/city/roads/lanes/lane_expand.h"
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
+#include "engine/level_params.h"
+#include "engine/procgen/terrain.h"
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 
@@ -983,6 +985,37 @@ TEST_CASE(lanes_a_city_block_stays_behind_its_sidewalk) {
         CHECK(over < 1.0);
         CHECK(shortRun < 0.03 * perim);
     }
+}
+
+// THE ROADS KEEP THEIR GROUND, THE HILLS GET THEIRS (ADR-0221, Glenn: "the hills aren't smooth even after all this
+// work to increase the terrain detail"): the road build conforms its own copy of the ground at its grid's cell (20 m
+// on the island), and the terrain drawn from that copy lost everything finer. The ground a lane city stands on is the
+// build's grid in a corridor along the roads (the nodes it changed, or a deck reaches) and the natural ground's full
+// detail away from them.
+TEST_CASE(lanes_the_road_grid_keeps_a_corridor_and_the_hills_their_detail) {
+    nlohmann::json root;
+    root["terrain"] = {{"seed", 3}, {"heightScale", 40.0}, {"noiseScale", 0.02}, {"octaves", 6}};
+    const TerrainParams tp = readTerrainParams(root["terrain"]);
+    const Noise nz(3);
+    auto natural = [&](double x, double z) { return terrainHeight(tp, nz, x, z); };
+    auto grid = std::make_shared<HeightGrid>();
+    grid->x0 = 0; grid->y0 = 0; grid->res = 20; grid->nx = 31; grid->ny = 31;
+    grid->z.resize(static_cast<std::size_t>(grid->nx) * grid->ny);
+    for (int j = 0; j < grid->ny; ++j)
+        for (int i = 0; i < grid->nx; ++i) grid->at(i, j) = natural(i * 20.0, j * 20.0);
+    grid->at(15, 15) += 3.0;   // a road's fill at one node
+    const auto base = laneErodedBase(root, grid, nullptr);
+    CHECK(std::fabs((*base)(300, 300) - grid->at(15, 15)) < 1e-3);           // the road's node: the grid exactly
+    CHECK(std::fabs((*base)(305.3, 296.1) - grid->sample(305.3, 296.1)) < 1e-3);   // in its corridor: the build's ground
+    double lost = 0, kept = 0;   // far from the road (and the edge band): the natural ground, not the grid's blur
+    for (double z = 61.3; z < 160; z += 7.1)
+        for (double x = 62.9; x < 160; x += 6.7) {
+            lost = std::max(lost, std::fabs(grid->sample(x, z) - natural(x, z)));
+            kept = std::max(kept, std::fabs((*base)(x, z) - natural(x, z)));
+        }
+    std::printf("    [road grid] away from the road: the grid alone was off the natural ground by up to %.3f m, now %.5f m\n", lost, kept);
+    CHECK(lost > 0.05);   // the terrain has detail finer than the grid...
+    CHECK(kept < 1e-3);   // ...and keeps it
 }
 
 // THE LIGHT RAIL LAB: held up over its streets, its stations reached from below -- the way passes under the line at

@@ -14,12 +14,15 @@
 
 #include <chrono>
 #include <memory>
+#include <thread>
+#include <algorithm>
+#include <cmath>
 
 namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-10-21.2";   // 10-21.2: the inward chords tuck behind a curve instead of following it (the lots the clip cost come back)   // 10-21.1: blocks simplified only inward (no block, pad or feather over the drawn sidewalk)   // 10-16.1: tower tops face out (the lantern, the screen glass, the pyramid, the slope, the frame beam closed)   // 10-15.7: wide openings between cells and the mall as cells (ADR-0180: mall_complex, a commercial block landmark; params v23)   // 10-15.6: openings between cells (ADR-0179: shared lobbies through every whole party wall, twin towers with a sky bridge, one crown per bundle; params v22: links)   // 10-15.5: the envelope as a skin (veil_tower; the sculpted tower half veiled; plate railings; params v21: skin, skinGap)   // 10-15.4: the sculpted tower (the mesh mass, assets/masses) in the financial table; params v20 (massMesh)   // 10-15.3: the toolkit's forms in the district tables (twisted, lens, leaning, twisted taper, wavy, stacked, rounded, bundled tubes, ring, courtyard blocks); ruled skins; the wave as plates   // 10-15.2: the complex (bundled tubes, courtyard block; params v16: four party walls with tops and doors)   // 10-15.1: the roof exit (the core stairs climb into a bulkhead, the roof slab cut over them; the crown keeps off it)   // 10-14.2: packMesh drops triangles with no area in float   // 10-14.1: the lot sculptors on one plan frame (SiteFrame, Scope::inFrame / standing, emitPlanRect), the drape fans through triFacing, closed cabinets   // 10-13.6: the mesh library (boxes on frames, plan prisms walling their holes, the one lathe)   // 10-13.5: the mesh audit (no-area triangles dropped at the emitters, lathe creases, tube frames)   // 10-13.4: konbini (two in three small grocers)   // 10-13.3: a hotel's entrance face is its lobby   // 10-13.2: factories and warehouses open their loading bays   // 10-13.1: fire stations open their bays (lots v5)   // 10-09.4: a depot for every town   // 10-09.3: shopfronts by trade   // 10-09.2: open lots (car parks, playgrounds, community gardens, pocket parks)   // .6: bus depots   // .5: rows back to back off each aisle   // .4: parking rows along a shallow lot   // .3: a lot behind the mall too   // .2: mall layouts tried in turn, wings shrunk to fit   // 10-08.1: the American mall has its parking lot in front   // .14: Japanese towers: department stores + restaurant floors (params v13)   // .13: mall marble floors   // .12: a mall whose wings do not fit is the box mall   // .11: the American mall (bigBox 6, params v12)   // .10: paseo stairs on end walls (shopfronts on the street)   // .9: paseos graded flat, shops both sides   // .8: drivable parking garages, mall names   // .7: indoor malls (bigBox 5), paseo paving   // .6: open-air malls (paseo blocks)   // .5: trades take their widths, streets their mix, nightlife strips (params v11)   // .4: a shop's outside walls in its trade's paint   // .3: shop units seeded in plan (sign = room = facade)   // .2: buildings over shops are enterable (their shops stream)  //   // 10-07.1: shop units draw their trade from trades.h (restaurants, bars, clubs)   // .2: a big box whose layout fails is no building, not a lot-filling box   // 10-06.1: big boxes only on blocks flat along their streets (2 m) and deep enough for store + lot (62 m)   // .5: lawns as activity areas, a fountain rim to sit on (lots v13)   // .4: a pitch as an activity area (lots v12)   // .3: a track's loop to run (lots v11)   // .2: parks' and the quad's walks recorded as lines (lots v10)   // 10-05.1: campus halls have a door onto the quad (params.backDoor; a stair wall's StairDoor), walks to them   // .7: the quad (fountain, walks, avenue), sealed park walks (lots v9)   // .2: the dorm block, the running track   // 10-04.1: campus halls of any height open   // .5: trees round the field   // .4: smaller pitches fit   // .3: the campus sports field   // .2: the university campus   // 10-03.1: park paths at most a kerb high   // .14: café terraces   // .13: outdoor library furniture (lots v9)   // .7: big-box frontage summed per side   // .6: big-box stores on whole blocks with parking lots (params v9); open-plan rows fixed   // .5: back doors marked on the door record (lots v7)   // .4: attached buildings (party walls, back doors, fire escapes; params v8)   // .3: shops: storefronts, shop doors, fascia signs   // .2: flats over shops are residential   // 10-01.1: params v7 (residential), apartments   // .16: no stick-thin windows (blank narrow bays)   // .15: the furniture finish parts shift the draped slots   // .14: parapets only on exposed roof edges   // .13: PartId::Furniture shifts the draped slots   // .12: tower tops, masonry depth (params v6)   // .11: storey heights by use, mechanical floors   // .10: glass colour per building (white glass material, packed lit panes)   // .9: NYC skyscraper envelopes + curtain styles (params v5)   // .7: freeway clearance from the drawn decks   // .6: 6 m clear   // .5: 4 m clear of freeways and ramps; landmarks stay in their block   // .4: a stoop reaches its own pad   // .3: street strips stop short of lower elevated decks   // .2: buildings face at-grade city streets only   // 2026-09-30.1: the earthwork field holds the ground under elevated decks   // .8: pads clipped and feathered 1 m, not 2   // .7: the finish strip stops short of the narrowest sidewalk   // .6: the streets' own strips finish the ground   // .5: a pad takes the height of the street it faces   // .4: lots grow on the earthwork field pinned to the streets, no block terraces   // .3: a lot must lie inside its block as it came (the road push can fold it)   // .2: no lots laid along a freeway or ramp edge   // 2026-09-29.1: buildings never front a freeway or a ramp   // 2026-09-26.1: grows on roads/lotnav (the clearance widths), not the sim graph
+const char* const kLotsBuildTag = "2026-10-21.4";   // 10-21.4: the road grid in a corridor along the roads, the full-resolution ground beyond (ADR-0221)   // 10-21.2: the inward chords tuck behind a curve instead of following it (the lots the clip cost come back)   // 10-21.1: blocks simplified only inward (no block, pad or feather over the drawn sidewalk)   // 10-16.1: tower tops face out (the lantern, the screen glass, the pyramid, the slope, the frame beam closed)   // 10-15.7: wide openings between cells and the mall as cells (ADR-0180: mall_complex, a commercial block landmark; params v23)   // 10-15.6: openings between cells (ADR-0179: shared lobbies through every whole party wall, twin towers with a sky bridge, one crown per bundle; params v22: links)   // 10-15.5: the envelope as a skin (veil_tower; the sculpted tower half veiled; plate railings; params v21: skin, skinGap)   // 10-15.4: the sculpted tower (the mesh mass, assets/masses) in the financial table; params v20 (massMesh)   // 10-15.3: the toolkit's forms in the district tables (twisted, lens, leaning, twisted taper, wavy, stacked, rounded, bundled tubes, ring, courtyard blocks); ruled skins; the wave as plates   // 10-15.2: the complex (bundled tubes, courtyard block; params v16: four party walls with tops and doors)   // 10-15.1: the roof exit (the core stairs climb into a bulkhead, the roof slab cut over them; the crown keeps off it)   // 10-14.2: packMesh drops triangles with no area in float   // 10-14.1: the lot sculptors on one plan frame (SiteFrame, Scope::inFrame / standing, emitPlanRect), the drape fans through triFacing, closed cabinets   // 10-13.6: the mesh library (boxes on frames, plan prisms walling their holes, the one lathe)   // 10-13.5: the mesh audit (no-area triangles dropped at the emitters, lathe creases, tube frames)   // 10-13.4: konbini (two in three small grocers)   // 10-13.3: a hotel's entrance face is its lobby   // 10-13.2: factories and warehouses open their loading bays   // 10-13.1: fire stations open their bays (lots v5)   // 10-09.4: a depot for every town   // 10-09.3: shopfronts by trade   // 10-09.2: open lots (car parks, playgrounds, community gardens, pocket parks)   // .6: bus depots   // .5: rows back to back off each aisle   // .4: parking rows along a shallow lot   // .3: a lot behind the mall too   // .2: mall layouts tried in turn, wings shrunk to fit   // 10-08.1: the American mall has its parking lot in front   // .14: Japanese towers: department stores + restaurant floors (params v13)   // .13: mall marble floors   // .12: a mall whose wings do not fit is the box mall   // .11: the American mall (bigBox 6, params v12)   // .10: paseo stairs on end walls (shopfronts on the street)   // .9: paseos graded flat, shops both sides   // .8: drivable parking garages, mall names   // .7: indoor malls (bigBox 5), paseo paving   // .6: open-air malls (paseo blocks)   // .5: trades take their widths, streets their mix, nightlife strips (params v11)   // .4: a shop's outside walls in its trade's paint   // .3: shop units seeded in plan (sign = room = facade)   // .2: buildings over shops are enterable (their shops stream)  //   // 10-07.1: shop units draw their trade from trades.h (restaurants, bars, clubs)   // .2: a big box whose layout fails is no building, not a lot-filling box   // 10-06.1: big boxes only on blocks flat along their streets (2 m) and deep enough for store + lot (62 m)   // .5: lawns as activity areas, a fountain rim to sit on (lots v13)   // .4: a pitch as an activity area (lots v12)   // .3: a track's loop to run (lots v11)   // .2: parks' and the quad's walks recorded as lines (lots v10)   // 10-05.1: campus halls have a door onto the quad (params.backDoor; a stair wall's StairDoor), walks to them   // .7: the quad (fountain, walks, avenue), sealed park walks (lots v9)   // .2: the dorm block, the running track   // 10-04.1: campus halls of any height open   // .5: trees round the field   // .4: smaller pitches fit   // .3: the campus sports field   // .2: the university campus   // 10-03.1: park paths at most a kerb high   // .14: café terraces   // .13: outdoor library furniture (lots v9)   // .7: big-box frontage summed per side   // .6: big-box stores on whole blocks with parking lots (params v9); open-plan rows fixed   // .5: back doors marked on the door record (lots v7)   // .4: attached buildings (party walls, back doors, fire escapes; params v8)   // .3: shops: storefronts, shop doors, fascia signs   // .2: flats over shops are residential   // 10-01.1: params v7 (residential), apartments   // .16: no stick-thin windows (blank narrow bays)   // .15: the furniture finish parts shift the draped slots   // .14: parapets only on exposed roof edges   // .13: PartId::Furniture shifts the draped slots   // .12: tower tops, masonry depth (params v6)   // .11: storey heights by use, mechanical floors   // .10: glass colour per building (white glass material, packed lit panes)   // .9: NYC skyscraper envelopes + curtain styles (params v5)   // .7: freeway clearance from the drawn decks   // .6: 6 m clear   // .5: 4 m clear of freeways and ramps; landmarks stay in their block   // .4: a stoop reaches its own pad   // .3: street strips stop short of lower elevated decks   // .2: buildings face at-grade city streets only   // 2026-09-30.1: the earthwork field holds the ground under elevated decks   // .8: pads clipped and feathered 1 m, not 2   // .7: the finish strip stops short of the narrowest sidewalk   // .6: the streets' own strips finish the ground   // .5: a pad takes the height of the street it faces   // .4: lots grow on the earthwork field pinned to the streets, no block terraces   // .3: a lot must lie inside its block as it came (the road push can fold it)   // .2: no lots laid along a freeway or ramp edge   // 2026-09-29.1: buildings never front a freeway or a ramp   // 2026-09-26.1: grows on roads/lotnav (the clearance widths), not the sim graph
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
@@ -156,20 +159,94 @@ void registerLotsProducer() { bundle::registerProducer(std::make_unique<LotsProd
 
 std::shared_ptr<const std::function<double(double, double)>> laneErodedBase(
     const nlohmann::json& root, std::shared_ptr<const HeightGrid> grid,
-    std::shared_ptr<const std::function<double(double, double)>> levelEroded) {
+    std::shared_ptr<const std::function<double(double, double)>> levelEroded, const RoadDeckField* deck) {
     auto fbTp = std::make_shared<TerrainParams>(readTerrainParams(root["terrain"]));
     fbTp->erodedBase = std::move(levelEroded);   // the fallback keeps whatever base the level had; no recursion
     auto fbNoise = std::make_shared<Noise>(root["terrain"].value("seed", 0u));
     const double bx1 = grid->x0 + grid->res * (grid->nx - 1), by1 = grid->y0 + grid->res * (grid->ny - 1);
+    // THE ROADS KEEP THEIR GROUND, THE HILLS GET THEIRS (ADR-0221). The road build conforms its own copy of the ground
+    // at the grid's cell (20 m on the island), and the terrain drawn from that copy threw away everything finer: the
+    // weathered ground is 2.44 m, with its refine detail and rock relief, and island_8_nature's hills came out in 20 m
+    // blocks of cover (Glenn: "the hills aren't smooth even after all this work to increase the terrain detail").
+    // Laying the whole natural ground back under the roads was measured: the detail between the grid's nodes rose
+    // through the decks (the island's poke census 3713 -> 120203 samples, worst 20 m), and by the mountain road the
+    // build's copy is up to 349 m off today's peaks (it was sampled before the weathering grew them). So the grid
+    // stays the ground in a CORRIDOR along the roads -- every node a deck reaches or the build changed (the cities'
+    // graded ground among them) -- and the natural ground's detail (natural minus its own bilinear at the nodes)
+    // fades in beyond it, all of it by kDetailFull. The roads stand on exactly the ground they were built on; the
+    // rest of the island gets the full ground. (Holding every city block to the grid too took 43% of the island
+    // out of the detail and moved the poke census not one sample: 4486 either way.)
+    constexpr double kCorridorPad = 40.0, kDetailFull = 100.0;   // metres from the corridor: no detail / all of it
+    const int nx = grid->nx, ny = grid->ny;
+    const std::size_t nn = static_cast<std::size_t>(nx) * ny;
+    auto natNodes = std::make_shared<std::vector<float>>(nn);
+    auto detailW = std::make_shared<std::vector<float>>(nn);
+    {
+        std::vector<char> road(nn, 0);
+        const unsigned nt = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+        std::vector<std::thread> workers;
+        for (unsigned t = 0; t < nt; ++t)
+            workers.emplace_back([&, t] {
+                for (int j = static_cast<int>(t); j < ny; j += static_cast<int>(nt))
+                    for (int i = 0; i < nx; ++i) {
+                        const std::size_t k = static_cast<std::size_t>(j) * nx + i;
+                        const double x = grid->x0 + i * grid->res, z = grid->y0 + j * grid->res;
+                        (*natNodes)[k] = static_cast<float>(terrainHeight(*fbTp, *fbNoise, x, z));
+                        road[k] = std::fabs(grid->z[k] - (*natNodes)[k]) > 0.05 || (deck && deck->coversAny(x, z, 0.75 * grid->res));
+                    }
+            });
+        for (auto& th : workers) th.join();
+        // distance to the corridor, in metres (a two-pass chamfer on the grid: 1 and sqrt 2 cells)
+        std::vector<float> dist(nn, 1e9f);
+        for (std::size_t k = 0; k < nn; ++k) if (road[k]) dist[k] = 0.0f;
+        const float a = static_cast<float>(grid->res), b = static_cast<float>(grid->res * std::sqrt(2.0));
+        auto relax = [&](int i, int j, int di, int dj, float w) {
+            const int u = i + di, v = j + dj;
+            if (u < 0 || v < 0 || u >= nx || v >= ny) return;
+            float& d = dist[static_cast<std::size_t>(j) * nx + i];
+            d = std::min(d, dist[static_cast<std::size_t>(v) * nx + u] + w);
+        };
+        for (int j = 0; j < ny; ++j)
+            for (int i = 0; i < nx; ++i) { relax(i, j, -1, 0, a); relax(i, j, 0, -1, a); relax(i, j, -1, -1, b); relax(i, j, 1, -1, b); }
+        for (int j = ny - 1; j >= 0; --j)
+            for (int i = nx - 1; i >= 0; --i) { relax(i, j, 1, 0, a); relax(i, j, 0, 1, a); relax(i, j, 1, 1, b); relax(i, j, -1, 1, b); }
+        std::size_t corridor = 0, full = 0, changed = 0, far = 0; double worst = 0.0, worstFar = 0.0;
+        for (std::size_t k = 0; k < nn; ++k) {
+            const double u = std::clamp((dist[k] - kCorridorPad) / (kDetailFull - kCorridorPad), 0.0, 1.0);
+            (*detailW)[k] = static_cast<float>(u * u * (3 - 2 * u));
+            const double c = std::fabs(grid->z[k] - (*natNodes)[k]);
+            if (road[k]) ++corridor;
+            if ((*detailW)[k] >= 1.0f) ++full;
+            if (c > 0.05) ++changed;
+            worst = std::max(worst, c);
+            if ((*detailW)[k] > 0.0f && c > 1.0) { ++far; worstFar = std::max(worstFar, c); }
+        }
+        LOG_INFO << "[lanelab] road ground: " << nx << " x " << ny << " @ " << grid->res << " m; the build changed "
+                 << changed << " nodes by > 5 cm (" << 100.0 * changed / std::max<std::size_t>(1, nn) << "%, worst " << worst
+                 << " m); corridor " << corridor << " nodes (" << 100.0 * corridor / std::max<std::size_t>(1, nn)
+                 << "%), full natural detail on " << 100.0 * full / std::max<std::size_t>(1, nn) << "%; " << far
+                 << " nodes off the build's ground by > 1 m where detail shows (worst " << worstFar << " m)";
+    }
+    auto bilinear = [grid](const std::vector<float>& v, double x, double z) {
+        const double fx = std::clamp((x - grid->x0) / grid->res, 0.0, grid->nx - 1.001), fz = std::clamp((z - grid->y0) / grid->res, 0.0, grid->ny - 1.001);
+        const int i = static_cast<int>(fx), j = static_cast<int>(fz);
+        const double u = fx - i, w = fz - j;
+        auto C = [&](int p, int q) { return static_cast<double>(v[static_cast<std::size_t>(q) * grid->nx + p]); };
+        return (C(i, j) * (1 - u) + C(i + 1, j) * u) * (1 - w) + (C(i, j + 1) * (1 - u) + C(i + 1, j + 1) * u) * w;
+    };
     return std::make_shared<const std::function<double(double, double)>>(
-        [grid, fbTp, fbNoise, bx1, by1](double x, double z) {
+        [fbTp, fbNoise, bx1, by1, grid, natNodes, detailW, bilinear](double x, double z) {
             const double band = 60.0;   // blend to the level's own terrain over the last 60 m of the grid
             const double inset = std::min(std::min(x - grid->x0, bx1 - x), std::min(z - grid->y0, by1 - z));
             if (inset <= 0.0) return terrainHeight(*fbTp, *fbNoise, x, z);
-            const double lab = grid->sample(x, z);
+            double lab = grid->sample(x, z);
+            const double w = bilinear(*detailW, x, z);
+            const bool needNatural = w > 0.0 || inset < band;
+            const double natural = needNatural ? terrainHeight(*fbTp, *fbNoise, x, z) : 0.0;
+            if (w > 0.0) lab += w * (natural - bilinear(*natNodes, x, z));   // the detail finer than the grid
             if (inset >= band) return lab;
-            const double u = inset / band, w = u * u * (3 - 2 * u);
-            return terrainHeight(*fbTp, *fbNoise, x, z) * (1 - w) + lab * w;
+            const double u = inset / band, s = u * u * (3 - 2 * u);
+            return natural * (1 - s) + lab * s;
         });
 }
 
@@ -187,7 +264,7 @@ NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInput
         grid->x0 = city.ground.x0; grid->y0 = city.ground.y0; grid->res = city.ground.res; grid->nx = city.ground.nx; grid->ny = city.ground.ny; grid->z = city.ground.z;
         if (in.level.contains("terrain")) {
             auto tp = std::make_shared<TerrainParams>(readTerrainParams(in.level["terrain"]));
-            tp->erodedBase = laneErodedBase(in.level, grid, readErodedBase(in.level));
+            tp->erodedBase = laneErodedBase(in.level, grid, readErodedBase(in.level), &city.deck);
             // THE STREETS SET THE GROUND: the same earthwork field the loader installs (lanesEarthworkField),
             // over the same natural ground, so every pad is fitted to the ground the terrain will show.
             {

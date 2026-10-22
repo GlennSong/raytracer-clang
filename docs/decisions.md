@@ -11283,3 +11283,41 @@ green patches so the road is not conforming right".
   priority, plane, falloff, and whether the sample is inside it or in its feather.
 - Tests: `lanes_a_freeway_at_grade_wears_its_guardrails` (the default rails a flat freeway on both sides; the drop
   rule builds none); `lanes_a_city_block_stays_behind_its_sidewalk` (curve_blocks, ring_city, grid_city).
+
+## ADR-0221 — The road builder's ground is a corridor, not the island
+
+Glenn, 2026-10-21, on island_8_nature: "the hills aren't smooth even after all this work to increase the terrain
+detail ... I saw it improves on the other island 8"; then, "We should catalog this information so we know that the
+road builder doesn't run at the highest resolution ... it feels like most of the terrain is untouched by the road
+builder".
+
+- **The road builder does not run at the ground's resolution.** The lanes build conforms its own copy of the ground,
+  the graph's `terrain.res` grid: 20 m on the island (`island_scene.h` `gridRes`, ADR-0112, chosen when the island's
+  terrain was itself ~19.5 m). The weathered ground is 2.44 m (ADR-0126 onward: refine detail, facets, rock relief).
+  Road decisions -- cut and fill, elevations, piers, the build's own checks -- see the 20 m ground.
+- **The loader drew that copy as the ground.** `laneErodedBase` (ADR-0095, from the lane lab) put the conformed grid
+  in place of the level's terrain over the grid's whole extent -- 630 x 863 nodes, 12.6 x 17.2 km, nearly the whole
+  island -- so on any level with lane cities the 2.44 m ground never reached the screen. island_8_rocky (no cities)
+  showed it; island_8_nature did not: the heights agree at the 20 m nodes and nowhere between, the cover map (rock,
+  grass, dirt by slope) came out in 20 m axis-aligned blocks, and the baked pyramid refined less (L0 5688 tiles vs
+  6600). Rebuilding rocky's ground with today's code gave byte-identical files: no regression, an old path.
+- **Most of the island is untouched by the roads.** 6.9% of the grid's nodes differ from the natural ground by more
+  than 5 cm, along the roads and in the cities. Four blobs by the mountain road differ by up to 349 m: the build's
+  copy was sampled before the weathering grew those peaks, and the mountain road was designed on it.
+- **Measured, not guessed: the whole natural ground under the roads pokes through them.** Laying the grid as a change
+  over the full ground everywhere raised the island's poke census from 3713 to 120203 samples (worst 20.5 m).
+- **So the grid is the ground in a corridor, the natural ground everywhere else.** The corridor is every node a deck
+  reaches (`RoadDeckField::coversAny`) or the build changed by > 5 cm (the cities' graded ground among them), plus
+  40 m; the natural ground's detail (natural minus its own bilinear at the nodes) fades in over the next 60 m. The
+  roads stand on exactly the ground they were built on. On the island: corridor 8.0% of the nodes, full detail on
+  84.5%, no node off the build's ground by > 1 m where detail shows; the poke census 4486 samples (worst 2.71 m, the
+  old mountain-road site), against 5428 before today's block fix and 3713 on the clipped blocks, which grew 1130 fewer
+  buildings and so fewer pad stamps. Holding every city block to the grid as well took 43% of the island out of the
+  detail and moved the census not one sample.
+- What is owed: the build itself at fidelity where it matters -- fine ground in the road corridors only (corridor
+  tiles, or sampling the full ground along each road), not a 2.44 m whole-island grid (67x the cells). The
+  `[lanelab] road ground:` log line counts the corridor, the changed nodes and any node off the build's ground by
+  more than 1 m where detail shows.
+- Test: `lanes_the_road_grid_keeps_a_corridor_and_the_hills_their_detail` (the grid exactly in a road's corridor; the
+  natural ground to 1 mm away from it, where the grid alone was 8 m off). Ground code tag 2026-10-21.2, lots tag
+  2026-10-21.4.
